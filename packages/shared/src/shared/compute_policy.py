@@ -10,7 +10,7 @@ from pydantic import Field, JsonValue, model_validator
 from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.routing import BackendRouteTransport, PrivatePoolFallback
+from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -41,12 +41,12 @@ class ComputeCapacityMode(StringEnum):
     Pooled = "pooled"
 
 
-class ComputePoolVisibility(StringEnum):
+class ComputeUnitVisibility(StringEnum):
     Public = "public"
     Internal = "internal"
 
 
-class ComputePoolPhase(StringEnum):
+class ComputeUnitPhase(StringEnum):
     Provisioning = "provisioning"
     Ready = "ready"
     Updating = "updating"
@@ -122,7 +122,7 @@ class WorkspaceComputePolicy(ContractModel):
     updated_at: datetime
 
 
-class ComputePoolProviderState(ContractModel):
+class ComputeUnitProviderState(ContractModel):
     resource_id: str = Field(default="", max_length=2048)
     attributes: dict[str, JsonValue] = Field(default_factory=dict)
     degraded_reason: str | None = Field(default=None, min_length=1, max_length=512)
@@ -143,7 +143,7 @@ class ComputePoolProviderState(ContractModel):
     """
 
 
-class ComputePoolRecord(CapacityOwnerIdentity):
+class ComputeUnitRecord(CapacityOwnerIdentity):
     """One provisioning unit: a single source of machines a workspace draws on.
 
     An AWS unit owns exactly one Auto Scaling group and one launch template, so
@@ -161,17 +161,17 @@ class ComputePoolRecord(CapacityOwnerIdentity):
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     name: UnitName = Field(min_length=1, max_length=240)
-    machine_pool: MachinePool = Field(min_length=1, max_length=240)
+    pool: MachinePool = Field(min_length=1, max_length=240)
     provider: str = Field(default="local", min_length=1, max_length=120)
     selector: str = Field(default="", max_length=255)
-    status: str = Field(default=ComputePoolPhase.Ready.value, max_length=80)
+    status: str = Field(default=ComputeUnitPhase.Ready.value, max_length=80)
     source: str = Field(default="autosolver", max_length=80)
     config: dict[str, JsonValue] = Field(default_factory=dict)
     expires_at: datetime | None = None
     provider_ref: str = Field(default="", max_length=160)
     provider_connection_id: str | None = Field(default=None, pattern=_UUID_PATTERN)
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
-    visibility: ComputePoolVisibility = ComputePoolVisibility.Public
+    visibility: ComputeUnitVisibility = ComputeUnitVisibility.Public
     region: str = Field(default="", max_length=64)
     offer_id: str = Field(default="", max_length=255)
     capability_key: str = Field(default="", max_length=255)
@@ -181,8 +181,8 @@ class ComputePoolRecord(CapacityOwnerIdentity):
     max_machines: int = Field(default=0, ge=0)
     observed_machines: int = Field(default=0, ge=0)
     generation: int = Field(default=1, ge=1)
-    phase: ComputePoolPhase = ComputePoolPhase.Ready
-    provider_state: ComputePoolProviderState = Field(default_factory=ComputePoolProviderState)
+    phase: ComputeUnitPhase = ComputeUnitPhase.Ready
+    provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
     scaling_enabled: bool = False
     default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
@@ -202,16 +202,16 @@ class ComputePoolRecord(CapacityOwnerIdentity):
     workspace_machine_limit: int = Field(default=0, ge=0)
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
-    fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
+    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     created_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
-    def validate_capacity(self) -> ComputePoolRecord:
+    def validate_capacity(self) -> ComputeUnitRecord:
         if not self.min_machines <= self.desired_machines <= self.max_machines:
             raise ValueError("compute pool capacity must satisfy min <= desired <= max")
         if not self.min_machines <= self.initial_machines <= self.max_machines:
             raise ValueError("compute pool capacity must satisfy min <= initial <= max")
-        internal = self.visibility is ComputePoolVisibility.Internal
+        internal = self.visibility is ComputeUnitVisibility.Internal
         if internal and (
             not self.provider_ref
             or self.provider_connection_id is None
@@ -230,7 +230,7 @@ class ComputePoolRecord(CapacityOwnerIdentity):
         return self
 
     @model_validator(mode="after")
-    def validate_worker_shape(self) -> ComputePoolRecord:
+    def validate_worker_shape(self) -> ComputeUnitRecord:
         if (self.worker_gpu_type == "") != (self.worker_gpu_count == 0):
             raise ValueError("worker GPU type and count must be configured together")
         if not self.worker_runtimes:
@@ -271,11 +271,11 @@ __all__ = [
     "LAZYCLOUD_MACHINE_POOL",
     "AwsWorkspaceComputePolicy",
     "ComputeCapacityMode",
-    "ComputePoolPhase",
-    "ComputePoolProviderState",
-    "ComputePoolRecord",
-    "ComputePoolVisibility",
     "ComputeResourceRequirements",
+    "ComputeUnitPhase",
+    "ComputeUnitProviderState",
+    "ComputeUnitRecord",
+    "ComputeUnitVisibility",
     "MachinePool",
     "UnitName",
     "WorkspaceComputePolicy",

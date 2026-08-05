@@ -347,7 +347,7 @@ class _WorkerRepository:
         return WorkerCapacityPlan(
             worker=SchedulerWorkerRecord(
                 worker_id=worker_id,
-                pool_name="test",
+                pool="test",
                 capacity_owner_id=_CAPACITY_OWNER_ID,
             ),
             change=change,

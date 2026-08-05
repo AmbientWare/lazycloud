@@ -126,7 +126,7 @@ def test_agent_liveness_and_disconnect_decisions_match_heartbeat_rules() -> None
     now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
     fresh = AgentTelemetryState(
         workspace_id="workspace",
-        pool_name="pool",
+        pool="pool",
         machine_id="machine",
         last_heartbeat_at=now - timedelta(seconds=10),
     )

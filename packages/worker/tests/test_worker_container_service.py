@@ -511,7 +511,7 @@ def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Pa
             workspace_id="workspace-1",
             machine_id="machine-1",
             worker_id="worker-1",
-            pool_name="pool-1",
+            pool="pool-1",
             route_local_target_host="agent.internal",
         )
     )
@@ -641,7 +641,7 @@ def _instance(
     stub_id: str = "stub-1",
     worker_id: str = "worker-1",
     machine_id: str = "",
-    pool_name: str = "",
+    pool: str = "",
     route_local_target_host: str = "",
 ) -> WorkerContainerServiceInstance:
     (root / "workspace").mkdir(parents=True, exist_ok=True)
@@ -658,6 +658,6 @@ def _instance(
         stub_id=stub_id,
         worker_id=worker_id,
         machine_id=machine_id,
-        pool_name=pool_name,
+        pool=pool,
         route_local_target_host=route_local_target_host,
     )

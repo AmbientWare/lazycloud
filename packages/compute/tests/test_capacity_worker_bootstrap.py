@@ -44,7 +44,7 @@ def test_registered_worker_boundaries_reject_invalid_capacity_owner_id(
     with pytest.raises(ValidationError, match="capacity_owner_id"):
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool_name="default",
+            pool="default",
             capacity_owner_id=capacity_owner_id,
         )
 
@@ -55,7 +55,7 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
     raw_token = generate_compute_token()
     slot = ComputeAgentWorkerSlotState(
         workspace_id=str(uuid4()),
-        pool_name=MachinePool("default"),
+        pool=MachinePool("default"),
         machine_id=str(uuid4()),
         worker_id=worker_id,
         capacity_owner_id=str(uuid4()),

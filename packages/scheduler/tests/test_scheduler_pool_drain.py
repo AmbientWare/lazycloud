@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from compute.state import ComputePoolState, RedisComputeStateRepository
+from compute.state import ComputeUnitState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from scheduler.capacity_reservations import (
     CapacityReservationService,
@@ -25,7 +25,7 @@ from scheduler.state import (
 )
 from shared.capacity import CapacityPoolSizingSnapshot
 from shared.compute_policy import (
-    ComputePoolRecord,
+    ComputeUnitRecord,
     MachinePool,
     UnitName,
 )
@@ -55,20 +55,20 @@ class _Compute:
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         return CapacityPoolSizingSnapshot(capacity_owner_id=capacity_owner_id)
 
-    def release_internal_pool_machine(
+    def release_internal_unit_machine(
         self,
         workspace_id: str,
-        pool_name: str,
+        pool: str,
         machine_id: str,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         _ = workspace_id
-        self.released.append((pool_name, machine_id))
-        return ComputePoolRecord(
+        self.released.append((pool, machine_id))
+        return ComputeUnitRecord(
             id=PROVIDER_OWNER_ID,
             capacity_owner_id=PROVIDER_OWNER_ID,
             workspace_id=WORKSPACE_ID,
-            name=UnitName(pool_name),
-            machine_pool=MachinePool(POOL),
+            name=UnitName(pool),
+            pool=MachinePool(POOL),
             desired_machines=0,
             observed_machines=0,
         )
@@ -81,8 +81,8 @@ def _seed_pool_state(
     active_machines: int,
     min_machines: int = 0,
 ) -> None:
-    compute_states.save_pool_state(
-        ComputePoolState(
+    compute_states.save_unit_state(
+        ComputeUnitState(
             workspace_id=WORKSPACE_ID,
             name=UnitName(POOL),
             capacity_owner_id=capacity_owner_id,
@@ -110,7 +110,7 @@ def _add_worker(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool_name=POOL,
+            pool=POOL,
             capacity_owner_id=capacity_owner_id,
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,

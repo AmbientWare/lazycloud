@@ -22,7 +22,7 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import RedisClient, redis_text
 from database.context import ServiceContext
-from database.repositories.compute import ComputePoolRepository
+from database.repositories.compute import ComputeUnitRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -423,7 +423,7 @@ class WorkerRepositoryService:
                     worker_id,
                     workspace_id=private_principal.workspace_id,
                 )
-                if durable_worker is None or durable_worker.pool != worker.pool_name:
+                if durable_worker is None or durable_worker.pool != worker.pool:
                     raise ConflictError(
                         f"worker {worker_id} enrollment does not match scheduler state"
                     )
@@ -436,7 +436,7 @@ class WorkerRepositoryService:
         *,
         principal: WorkerRepositoryPrincipal | None,
     ) -> None:
-        if request.pool_selector and request.pool_selector != worker.pool_name:
+        if request.pool_selector and request.pool_selector != worker.pool:
             raise ConflictError(
                 f"worker {worker.worker_id} does not belong to requested pool "
                 f"{request.pool_selector}"
@@ -696,14 +696,14 @@ class WorkerRepositoryService:
             # two failures stay distinct: a pool no unit feeds yet is a pool that
             # may still be provisioning and is worth retrying, while an owner that
             # does not feed the pool it claims can never succeed.
-            units = ComputePoolRepository(session)
-            feeding = units.list_for_machine_pool(principal.workspace_id, worker.pool_name)
+            units = ComputeUnitRepository(session)
+            feeding = units.list_for_machine_pool(principal.workspace_id, worker.pool)
             if not feeding:
                 raise UpstreamUnavailableError(
-                    f"worker capacity pool is unavailable: {worker.pool_name}"
+                    f"worker capacity pool is unavailable: {worker.pool}"
                 )
             if all(unit.capacity_owner_id != worker.capacity_owner_id for unit in feeding):
-                raise ConflictError(f"worker capacity owner does not match pool {worker.pool_name}")
+                raise ConflictError(f"worker capacity owner does not match pool {worker.pool}")
             if not principal.is_private_worker:
                 return
             if not worker.machine_id or not worker.requires_pool_selector:
@@ -725,10 +725,7 @@ class WorkerRepositoryService:
                 raise ConflictError(
                     f"worker {worker.worker_id} does not belong to registration workspace"
                 )
-            if (
-                durable_worker.machine_id != worker.machine_id
-                or durable_worker.pool != worker.pool_name
-            ):
+            if durable_worker.machine_id != worker.machine_id or durable_worker.pool != worker.pool:
                 raise ConflictError(
                     f"worker {worker.worker_id} enrollment does not match registration"
                 )
@@ -759,7 +756,7 @@ class WorkerRepositoryService:
                 durable_worker.model_copy(
                     update={
                         "machine_id": worker.machine_id,
-                        "pool": worker.pool_name,
+                        "pool": worker.pool,
                         "last_seen_at": now,
                     }
                 ),
@@ -1054,7 +1051,7 @@ class WorkerRepositoryService:
                 continue
             if compute.delete_agent_route_state(
                 route.workspace_id,
-                route.pool_name,
+                route.pool,
                 route.machine_id,
                 route.route_id,
             ):
@@ -1115,7 +1112,7 @@ class WorkerRepositoryService:
             return
         repository = RedisComputeStateRepository(self.redis)
         for route in routes:
-            if not (route.route_id and route.workspace_id and route.pool_name and route.machine_id):
+            if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
                 continue
             repository.save_agent_route_state(route)
 
@@ -1124,14 +1121,14 @@ class WorkerRepositoryService:
             return
         repository = RedisComputeStateRepository(self.redis)
         unique_routes = {
-            (route.workspace_id, route.pool_name, route.machine_id, route.route_id)
+            (route.workspace_id, route.pool, route.machine_id, route.route_id)
             for route in routes
-            if route.route_id and route.workspace_id and route.pool_name and route.machine_id
+            if route.route_id and route.workspace_id and route.pool and route.machine_id
         }
-        for workspace_id, pool_name, machine_id, route_id in sorted(unique_routes):
+        for workspace_id, pool, machine_id, route_id in sorted(unique_routes):
             repository.delete_agent_route_state(
                 workspace_id,
-                pool_name,
+                pool,
                 machine_id,
                 route_id,
             )

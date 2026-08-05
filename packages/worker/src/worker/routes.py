@@ -27,7 +27,7 @@ class WorkerRouteRegistrationPlan(ContractModel):
 
 class WorkerRouteContext(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool: str
     machine_id: str
     worker_id: str
     container_id: str
@@ -98,7 +98,7 @@ def build_agent_backend_route(
             port=port,
         ),
         workspace_id=context.workspace_id,
-        pool_name=context.pool_name,
+        pool=context.pool,
         machine_id=context.machine_id,
         worker_id=context.worker_id,
         container_id=context.container_id,

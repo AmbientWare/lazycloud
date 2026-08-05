@@ -58,7 +58,7 @@ class ContainerWorkerArguments(argparse.Namespace):
     """
 
     worker_id: str | None = None
-    pool_name: str | None = None
+    pool: str | None = None
     machine_id: str | None = None
     pod_address: str | None = None
     container_service_port: int | None = None
@@ -167,7 +167,7 @@ class WorkerRetentionLoop:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=CONTAINER_WORKER_PROCESS_NAME)
     parser.add_argument("--worker-id")
-    parser.add_argument("--pool", dest="pool_name", default=None)
+    parser.add_argument("--pool", dest="pool", default=None)
     parser.add_argument("--machine-id")
     parser.add_argument("--pod-address")
     parser.add_argument("--container-service-port", type=int)
@@ -588,7 +588,7 @@ def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
     loaded = WorkerSettings()
     return WorkerSettings(
         worker_id=_override(args.worker_id, loaded.worker_id),
-        pool_name=_override(args.pool_name, loaded.pool_name),
+        pool=_override(args.pool, loaded.pool),
         machine_id=_override(args.machine_id, loaded.machine_id),
         pod_address=_override(args.pod_address, loaded.pod_address),
         container_service_port=_override(

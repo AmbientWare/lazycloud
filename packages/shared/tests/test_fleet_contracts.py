@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputeUnitRecord
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
 from shared.provider_config import ProviderConfig, ProviderKind
@@ -14,13 +14,13 @@ _UNIT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _WORKSPACE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 
-def _unit(name: str, **overrides: object) -> ComputePoolRecord:
-    return ComputePoolRecord.model_validate(
+def _unit(name: str, **overrides: object) -> ComputeUnitRecord:
+    return ComputeUnitRecord.model_validate(
         {
             "id": _UNIT_ID,
             "workspace_id": _WORKSPACE_ID,
             "name": name,
-            "machine_pool": name,
+            "pool": name,
             **overrides,
         }
     )
@@ -30,7 +30,7 @@ def test_compute_pool_capacity_policy_rejects_ambiguous_ownership_and_shape() ->
     with pytest.raises(ValidationError, match="requires source 'managed'"):
         _unit(
             "invalid-owner",
-            capacity_owner_kind=CapacityOwnerKind.ManagedPool,
+            capacity_owner_kind=CapacityOwnerKind.ManagedUnit,
             capacity_owner_source=CapacityOwnerSource.Agent,
         )
 

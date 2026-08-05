@@ -347,7 +347,7 @@ def _route(
     return AgentBackendRoute(
         route_id=route_id,
         workspace_id="workspace-one",
-        pool_name="gpu",
+        pool="gpu",
         machine_id="machine-one",
         state=state,
         proxy_target=proxy_target,

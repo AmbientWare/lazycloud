@@ -166,7 +166,7 @@ def _service(state_dir: Path, gateway: _Gateway) -> AgentDaemonService:
         AgentState(
             gateway_url="https://control.example.com",
             workspace_id="workspace-one",
-            pool_name="pool-one",
+            pool="pool-one",
             machine_id="machine-one",
             agent_token="agent-secret",
             credential_id="credential-one",
@@ -219,7 +219,7 @@ def test_daemon_cordons_current_session_before_bounded_worker_shutdown(
         AgentState(
             gateway_url="https://control.example.com",
             workspace_id="workspace-one",
-            pool_name="pool-one",
+            pool="pool-one",
             machine_id="machine-one",
             agent_token="agent-secret",
             credential_id="credential-one",

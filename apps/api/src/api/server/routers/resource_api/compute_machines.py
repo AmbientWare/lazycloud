@@ -11,7 +11,7 @@ from shared.http.compute import (
     MachineJoinCommandResponse,
     MachineListResponse,
     MachineResponse,
-    PoolMachineListResponse,
+    UnitMachineListResponse,
 )
 
 from api.server.auth import (
@@ -41,7 +41,7 @@ def list_machines(
 
 @router.get(
     "/api/v1/machines/pool",
-    response_model=PoolMachineListResponse,
+    response_model=UnitMachineListResponse,
     operation_id="list_pool_machines_by_group",
 )
 def list_machines_in_pool(
@@ -50,18 +50,18 @@ def list_machines_in_pool(
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
-) -> PoolMachineListResponse:
+) -> UnitMachineListResponse:
     """Machines in one pool, self-hosted by default."""
     machines = sorted(
         (
             item
             for item in gateway.machine_views(workspace_id)
-            if item.pool_name == pool and item.id > cursor
+            if item.pool == pool and item.id > cursor
         ),
         key=lambda item: item.id,
     )
     selected = machines[:limit]
-    return PoolMachineListResponse(
+    return UnitMachineListResponse(
         data=selected,
         next=selected[-1].id if len(machines) > limit else "",
     )

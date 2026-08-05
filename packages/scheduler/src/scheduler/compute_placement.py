@@ -43,7 +43,7 @@ class SchedulerComputePlacement:
                 ),
             )
         )
-        return request.model_copy(update={"pool_selector": result.machine_pool})
+        return request.model_copy(update={"pool_selector": result.pool})
 
 
 __all__ = ["SchedulerComputePlacement"]

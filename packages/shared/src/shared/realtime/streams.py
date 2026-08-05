@@ -240,8 +240,8 @@ class EventStreamPlanner:
             return self.stub_stream_name(metadata.workspace_id, metadata.stub_id)
         if metadata.workspace_id:
             return self.workspace_stream_name(metadata.workspace_id)
-        if metadata.pool_name:
-            return self.worker_pool_stream_name(metadata.pool_name)
+        if metadata.pool:
+            return self.worker_pool_stream_name(metadata.pool)
         return self.type_stream_name(event_type_text)
 
     def stream_names_for_event(
@@ -513,8 +513,8 @@ class EventStreamPlanner:
     def worker_stream_name(self, worker_id: str) -> str:
         return f"{self.stream_prefix}/workers/{event_stream_part(worker_id)}"
 
-    def worker_pool_stream_name(self, pool_name: str) -> str:
-        return f"{self.stream_prefix}/worker-pools/{event_stream_part(pool_name)}"
+    def worker_pool_stream_name(self, pool: str) -> str:
+        return f"{self.stream_prefix}/worker-pools/{event_stream_part(pool)}"
 
     def workspace_stream_name(self, workspace_id: str) -> str:
         return f"{self.stream_prefix}/workspaces/{event_stream_part(workspace_id)}"
@@ -662,7 +662,7 @@ def event_headers(
         "service": metadata.service_name,
         "instance_id": metadata.instance_id,
         "app_id": metadata.app_id,
-        "pool_name": metadata.pool_name,
+        "pool": metadata.pool,
     }
     headers.update({key: value for key, value in metadata_headers.items() if value})
     return headers

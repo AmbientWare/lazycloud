@@ -70,7 +70,7 @@ class JoinAgentRequest(HttpModel):
 
 class JoinAgentResponse(HttpModel):
     workspace_id: str = ""
-    pool_name: str = ""
+    pool: str = ""
     machine_id: str = ""
     agent_token: str = ""
     credential_id: str = ""
@@ -93,7 +93,7 @@ class LeaveAgentResponse(HttpModel):
 class AgentRoute(HttpModel):
     route_id: str
     workspace_id: str
-    pool_name: str
+    pool: str
     machine_id: str
     worker_id: str = ""
     container_id: str = ""
@@ -164,7 +164,7 @@ class UpdateAgentRouteStatusResponse(HttpModel):
 class AgentWorkerSlot(HttpModel):
     worker_id: str
     worker_token: str = ""
-    pool_name: str = ""
+    pool: str = ""
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     cpu: int = 0

@@ -19,7 +19,7 @@ class RecordingProviderMachine:
     id: str
     name: str
     machine_id: str
-    pool_name: str
+    pool: str
     status: str = ProviderMachineStatus.Active
 
 
@@ -35,9 +35,9 @@ class RecordingDirectMachineProvider:
     def launch_machine(self, request: DirectMachineLaunchRequest) -> ProviderMachineReference:
         machine = RecordingProviderMachine(
             id=request.machine_id,
-            name=f"{self.name}-{request.pool_name}-{request.machine_id}",
+            name=f"{self.name}-{request.pool}-{request.machine_id}",
             machine_id=request.machine_id,
-            pool_name=request.pool_name,
+            pool=request.pool,
         )
         self.machines.append(machine)
         return ProviderMachineReference(
@@ -48,24 +48,22 @@ class RecordingDirectMachineProvider:
             storage_volume_ids=(f"volume-{machine.id}",),
         )
 
-    def list_machines(self, pool_name: str) -> list[RecordingProviderMachine]:
+    def list_machines(self, pool: str) -> list[RecordingProviderMachine]:
         return [
             machine
             for machine in self.machines
-            if machine.pool_name == pool_name and machine.status != ProviderMachineStatus.Terminated
+            if machine.pool == pool and machine.status != ProviderMachineStatus.Terminated
         ]
 
     def reconcile_machines(
         self,
-        pool_name: str,
+        pool: str,
         expected_machine_ids: set[str],
         *,
         terminate_stale: bool = False,
     ) -> ProviderReconcileResult:
-        known_ids = {
-            machine.machine_id for machine in self.machines if machine.pool_name == pool_name
-        }
-        live_ids = {machine.machine_id for machine in self.list_machines(pool_name)}
+        known_ids = {machine.machine_id for machine in self.machines if machine.pool == pool}
+        live_ids = {machine.machine_id for machine in self.list_machines(pool)}
         stale = sorted(live_ids - expected_machine_ids)
         terminated: list[str] = []
         if terminate_stale:
@@ -82,7 +80,7 @@ class RecordingDirectMachineProvider:
                     status=machine.status,
                     storage_volume_ids=(f"volume-{machine.id}",),
                 )
-                for machine in self.list_machines(pool_name)
+                for machine in self.list_machines(pool)
                 if machine.machine_id in expected_machine_ids
             ],
             missing_machine_ids=sorted((expected_machine_ids & known_ids) - live_ids),
@@ -97,7 +95,7 @@ class RecordingDirectMachineProvider:
                     id=machine.id,
                     name=machine.name,
                     machine_id=machine.machine_id,
-                    pool_name=machine.pool_name,
+                    pool=machine.pool,
                     status=ProviderMachineStatus.Terminated,
                 )
                 return

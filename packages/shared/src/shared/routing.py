@@ -14,7 +14,7 @@ class BackendRouteTransport(StringEnum):
     LocalDirect = "local_direct"
 
 
-class PrivatePoolFallback(StringEnum):
+class PrivateUnitFallback(StringEnum):
     """What a workload does when the unit it named has no capacity to give it."""
 
     Internal = "internal"
@@ -50,7 +50,7 @@ class RoutePrewarmDecision(StringEnum):
 class AgentBackendRoute(ContractModel):
     route_id: str
     workspace_id: str = ""
-    pool_name: str = ""
+    pool: str = ""
     machine_id: str = ""
     worker_id: str = ""
     container_id: str = ""
@@ -88,7 +88,7 @@ __all__ = [
     "BackendRouteProtocol",
     "BackendRouteState",
     "BackendRouteTransport",
-    "PrivatePoolFallback",
+    "PrivateUnitFallback",
     "RoutePrewarmDecision",
     "parse_backend_route_address",
 ]

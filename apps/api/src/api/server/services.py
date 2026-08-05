@@ -272,7 +272,7 @@ class SchedulerAgentCapacityInterruptionSink:
                 enrollment_id=state.credential_id,
                 credential_generation=state.credential_generation,
                 workspace_id=state.workspace_id,
-                pool_name=state.pool_name,
+                pool=state.pool,
                 machine_id=state.machine_id,
                 state=state.capacity_state,
                 reason=state.capacity_reason,

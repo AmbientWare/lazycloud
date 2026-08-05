@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from foundation.ids import try_uuid
+from shared.compute_policy import MachinePool
 from shared.errors import NotFoundError
 
 
@@ -13,7 +14,7 @@ class MachineDeletionGateway(Protocol):
         machine_id: str,
         *,
         workspace_id: str,
-        pool_name: str = "",
+        pool: MachinePool = MachinePool(""),
     ) -> None: ...
 
 
@@ -36,7 +37,7 @@ class MachineLifecycleService:
         machine_id: str,
         *,
         workspace_id: str,
-        pool_name: str = "",
+        pool: MachinePool = MachinePool(""),
     ) -> None:
         if try_uuid(machine_id) is None:
             # Machine ids are UUIDs; malformed ids are indistinguishable from
@@ -51,7 +52,7 @@ class MachineLifecycleService:
         self.gateway.delete_machine(
             machine_id,
             workspace_id=workspace_id,
-            pool_name=pool_name,
+            pool=pool,
         )
 
 

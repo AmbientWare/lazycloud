@@ -120,7 +120,7 @@ class WorkerUnavailableReason(StringEnum):
 
 class SchedulerWorkerRecord(ContractModel):
     worker_id: str
-    pool_name: str
+    pool: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending

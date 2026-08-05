@@ -8,7 +8,7 @@ from scheduler.pool_sizing import (
     plan_worker_pool_sizing,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource, CapacityPoolSizingSnapshot
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputeUnitRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -16,15 +16,15 @@ WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _pool(**updates: object) -> ComputePoolRecord:
+def _pool(**updates: object) -> ComputeUnitRecord:
     values: dict[str, object] = {
         "id": OWNER_ID,
         "workspace_id": WORKSPACE_ID,
         "capacity_owner_id": OWNER_ID,
-        "capacity_owner_kind": CapacityOwnerKind.ManagedPool,
+        "capacity_owner_kind": CapacityOwnerKind.ManagedUnit,
         "capacity_owner_source": CapacityOwnerSource.Managed,
         "name": "cpu",
-        "machine_pool": "cpu",
+        "pool": "cpu",
         "provider": "managed",
         "initial_machines": 2,
         "desired_machines": 1,
@@ -38,7 +38,7 @@ def _pool(**updates: object) -> ComputePoolRecord:
         "worker_memory_mib": 8_192,
     }
     values.update(updates)
-    return ComputePoolRecord.model_validate(values)
+    return ComputeUnitRecord.model_validate(values)
 
 
 def _state(**updates: object) -> CapacityPoolSizingSnapshot:
@@ -58,7 +58,7 @@ def _worker(
     return SchedulerWorkerRecord(
         worker_id=worker_id,
         capacity_owner_id=OWNER_ID,
-        pool_name="cpu",
+        pool="cpu",
         status=status,
         runtime_classes=["runc"],
         free_cpu_millicores=free_cpu,

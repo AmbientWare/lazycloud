@@ -7,7 +7,7 @@ from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.compute_policy import MachinePool, UnitName
-from shared.http.compute import PoolMachineListResponse
+from shared.http.compute import UnitMachineListResponse
 from shared.identity import TokenKind
 
 
@@ -24,11 +24,11 @@ def test_self_hosted_collection_is_static_workspace_scoped_and_excludes_managed_
 
     initial = client.get("/api/v1/machines/pool?pool=self-hosted&limit=250", headers=headers)
     assert initial.status_code == 200
-    assert PoolMachineListResponse.model_validate_json(initial.content) == PoolMachineListResponse()
+    assert UnitMachineListResponse.model_validate_json(initial.content) == UnitMachineListResponse()
 
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("managed-pool"),
-        machine_pool=MachinePool("lazycloud"),
+        pool=MachinePool("lazycloud"),
         provider="local",
     )
     isolated_services.compute.create_machine(pool="lazycloud", provider="local")
@@ -36,8 +36,8 @@ def test_self_hosted_collection_is_static_workspace_scoped_and_excludes_managed_
 
     assert after_managed_machine.status_code == 200
     assert (
-        PoolMachineListResponse.model_validate_json(after_managed_machine.content)
-        == PoolMachineListResponse()
+        UnitMachineListResponse.model_validate_json(after_managed_machine.content)
+        == UnitMachineListResponse()
     )
 
 
@@ -75,14 +75,14 @@ def test_canonical_capacity_routes_enforce_workspace_and_admin_authority(
     )
     assert (
         client.delete(
-            "/api/v1/pools/missing",
+            "/api/v1/units/missing",
             headers=workspace_headers,
         ).status_code
         == 403
     )
     assert (
         client.delete(
-            "/api/v1/pools/missing",
+            "/api/v1/units/missing",
             headers=admin_headers,
         ).status_code
         == 404

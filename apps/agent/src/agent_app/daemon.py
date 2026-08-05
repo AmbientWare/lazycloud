@@ -244,7 +244,7 @@ class AgentDaemonOptions(ContractModel):
 
 class AgentDaemonRunResult(ContractModel):
     workspace_id: str = ""
-    pool_name: str = ""
+    pool: str = ""
     machine_id: str = ""
     stream_iterations: int = 0
     route_count: int = 0
@@ -834,7 +834,7 @@ class AgentDaemonService:
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
-            pool_name=state.pool_name,
+            pool=state.pool,
             machine_id=state.machine_id,
         )
         route_proxy: AgentRouteProxyService | None = None
@@ -1010,7 +1010,7 @@ class AgentDaemonService:
         )
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
-            pool_name=state.pool_name,
+            pool=state.pool,
             machine_id=state.machine_id,
             stream_iterations=current_iterations,
             route_count=route_count,
@@ -1811,7 +1811,7 @@ def _agent_slot_from_gateway(slot: http.AgentWorkerSlot) -> AgentWorkerSlot:
     return AgentWorkerSlot(
         worker_id=slot.worker_id,
         worker_token=slot.worker_token,
-        pool_name=slot.pool_name,
+        pool=slot.pool,
         capacity_owner_id=slot.capacity_owner_id,
         machine_id=slot.machine_id,
         cpu_millicores=slot.cpu,
@@ -1859,7 +1859,7 @@ def _agent_state_from_join_response(
     return AgentState(
         gateway_url=gateway_url,
         workspace_id=response.workspace_id,
-        pool_name=response.pool_name,
+        pool=response.pool,
         machine_id=response.machine_id,
         agent_token=response.agent_token,
         credential_id=response.credential_id,
@@ -1911,7 +1911,7 @@ def _capacity_interruption_result(
 ) -> AgentDaemonRunResult:
     return AgentDaemonRunResult(
         workspace_id=state.workspace_id,
-        pool_name=state.pool_name,
+        pool=state.pool,
         machine_id=state.machine_id,
         stream_iterations=current_iterations,
         tailnet_started=tailnet_started,

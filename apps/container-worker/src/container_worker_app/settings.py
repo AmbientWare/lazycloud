@@ -105,7 +105,7 @@ class WorkerSettings(BaseSettings):
         default=30.0,
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
     )
-    pool_name: str = Field(
+    pool: str = Field(
         default="default",
         validation_alias="WORKER_POOL",
     )

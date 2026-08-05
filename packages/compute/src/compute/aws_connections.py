@@ -9,7 +9,7 @@ from uuid import uuid4
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
-    ComputePoolRepository,
+    ComputeUnitRepository,
 )
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -25,7 +25,7 @@ from shared.aws_connections import (
     AwsAuthorizationCleanupStatus,
     AwsAuthorizationCleanupTombstone,
 )
-from shared.compute_policy import ComputePoolPhase
+from shared.compute_policy import ComputeUnitPhase
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -891,9 +891,9 @@ class AwsAccountConnectionService:
     def _complete_connection_cleanup(self, claimed: AwsAccountConnection) -> bool:
         with self.context.database.session() as session:
             connections = AwsAccountConnectionRepository(session)
-            pools = ComputePoolRepository(session)
+            pools = ComputeUnitRepository(session)
             dependent = pools.list_for_provider_connection(claimed.id)
-            if any(pool.phase is not ComputePoolPhase.Deleted for pool in dependent):
+            if any(pool.phase is not ComputeUnitPhase.Deleted for pool in dependent):
                 raise ConflictError("AWS account connection still has active compute pools")
             for pool in dependent:
                 pools.records.delete(pool.id, workspace_id=pool.workspace_id)

@@ -100,7 +100,7 @@ def compute_instances(
 
 
 @compute_app.command("pools")
-def compute_pools(
+def compute_units(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:

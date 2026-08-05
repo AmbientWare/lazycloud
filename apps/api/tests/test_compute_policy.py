@@ -21,9 +21,9 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
@@ -58,9 +58,9 @@ from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     LAZYCLOUD_MACHINE_POOL,
     ComputeCapacityMode,
-    ComputePoolRecord,
-    ComputePoolVisibility,
     ComputeResourceRequirements,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
     MachinePool,
     UnitName,
 )
@@ -235,19 +235,19 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     ready_machine_id = str(uuid4())
     now = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
-        ComputePoolRepository(session).upsert(
-            ComputePoolRecord(
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
                 id=pool_id,
                 capacity_owner_id=pool_id,
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
                 name=UnitName("current-aws-inventory"),
-                machine_pool=MachinePool("aws"),
+                pool=MachinePool("aws"),
                 provider_ref=f"aws:{connection.id}",
                 provider_connection_id=connection.id,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                visibility=ComputePoolVisibility.Internal,
+                visibility=ComputeUnitVisibility.Internal,
                 region="us-east-1",
                 offer_id="us-east-1:i4i.xlarge",
                 capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
@@ -269,7 +269,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
-                pool_name=MachinePool("current-aws-inventory"),
+                pool=MachinePool("current-aws-inventory"),
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -322,7 +322,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=agent_machine_worker_id(ready_machine_id),
-            pool_name="current-aws-inventory",
+            pool="current-aws-inventory",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=ready_machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -407,10 +407,10 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
         ("unit-a", "10000000-0000-4000-8000-000000000001"),
         ("unit-b", "20000000-0000-4000-8000-000000000002"),
     ):
-        isolated_services.compute.create_pool(
+        isolated_services.compute.create_unit(
             UnitName(name),
             workspace=workspace_id,
-            machine_pool=MachinePool("shared-pool"),
+            pool=MachinePool("shared-pool"),
             provider="agent",
             capacity_owner_id=owner,
             worker_cpu_millicores=4_000,
@@ -431,7 +431,7 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
         )
     )
 
-    assert result.machine_pool == "shared-pool"
+    assert result.pool == "shared-pool"
     # A unit in the pool already hosts this shape, so nothing is provisioned.
     assert recorder.requests == []
 
@@ -453,7 +453,7 @@ def test_placement_defaults_to_the_platform_pool_without_a_connection(
         )
     )
 
-    assert result.machine_pool == LAZYCLOUD_MACHINE_POOL
+    assert result.pool == LAZYCLOUD_MACHINE_POOL
     # Nothing provisions into a pool no connected account feeds.
     assert recorder.requests == []
 
@@ -471,16 +471,16 @@ def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
     control = ControlPlaneService(isolated_services.context)
     caller = control.upsert_workspace("pool-listing-caller")
     other = control.upsert_workspace("pool-listing-other")
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("caller-unit"),
         workspace=caller.id,
-        machine_pool=MachinePool("caller-pool"),
+        pool=MachinePool("caller-pool"),
         provider="agent",
     )
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("other-unit"),
         workspace=other.id,
-        machine_pool=MachinePool("other-pool"),
+        pool=MachinePool("other-pool"),
         provider="agent",
     )
     token, _record = AuthService(isolated_services.context).create_token(
@@ -543,7 +543,7 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
     )
 
     assert persisted_original.pool == LAZYCLOUD_MACHINE_POOL
-    assert scheduled_original.machine_pool == LAZYCLOUD_MACHINE_POOL
+    assert scheduled_original.pool == LAZYCLOUD_MACHINE_POOL
     assert created_after.pool == "aws"
 
 
@@ -562,21 +562,21 @@ class _RecordingPooledCapacity:
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         del root_volume_gib, idle_timeout_seconds, allowed_instance_types
         self.requests.append(requirements)
-        return ComputePoolRecord(
+        return ComputeUnitRecord(
             id="11111111-1111-4111-8111-111111111111",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Provider,
             workspace_id=workspace,
             name=UnitName("internal-aws-cpu"),
-            machine_pool=MachinePool("aws"),
+            pool=MachinePool("aws"),
             provider_ref="aws:22222222-2222-4222-8222-222222222222",
             provider_connection_id="22222222-2222-4222-8222-222222222222",
             capacity_mode=ComputeCapacityMode.Pooled,
-            visibility=ComputePoolVisibility.Internal,
+            visibility=ComputeUnitVisibility.Internal,
             region=region,
             offer_id="us-east-1:i4i.xlarge",
             capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",

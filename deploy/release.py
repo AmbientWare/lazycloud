@@ -368,7 +368,7 @@ select json_build_object(
           where i.pool_id = p.id and i.status not in ('deleted', 'failed')
         ), '[]'::json)
       ) as pool
-      from compute_pools p
+      from compute_units p
       where p.phase <> 'deleted'
     ) pools
   ), '[]'::json)

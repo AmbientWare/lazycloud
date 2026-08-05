@@ -170,7 +170,7 @@ class AgentMachineMetrics(ContractModel):
 
 class AgentTelemetryState(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool: str
     machine_id: str
     executor: str = ""
     os: str = ""
@@ -193,7 +193,7 @@ class AgentTelemetryState(ContractModel):
 def agent_telemetry_state(state: ComputeAgentTokenState) -> AgentTelemetryState:
     return AgentTelemetryState(
         workspace_id=state.workspace_id,
-        pool_name=state.pool_name,
+        pool=state.pool,
         machine_id=state.machine_id,
         executor=state.executor,
         os=state.os,
@@ -459,7 +459,7 @@ def agent_node_usage_metadata(
     effective = metrics or state.metrics
     return {
         "workspace_id": state.workspace_id,
-        "pool_name": state.pool_name,
+        "pool": state.pool,
         "machine_id": state.machine_id,
         "node_type": node_type.value,
         "capacity_source": pool_state.source.value,

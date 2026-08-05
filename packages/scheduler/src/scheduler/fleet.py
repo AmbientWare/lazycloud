@@ -45,7 +45,7 @@ class SchedulerRetryReason(StrEnum):
 class SchedulerWorkerSnapshot(ContractModel):
     worker_id: str
     status: SchedulerWorkerStatus
-    pool_name: str
+    pool: str
     active_containers: list[str] = Field(default_factory=list)
 
 
@@ -63,7 +63,7 @@ class SchedulerMachineSnapshot(ContractModel):
 
 class WorkerPoolStateSnapshot(ContractModel):
     capacity_owner_id: str = ""
-    pool_name: str = ""
+    pool: str = ""
     status: WorkerPoolStatus = WorkerPoolStatus.Healthy
     scheduling_latency_ms: int = 0
     pending_workers: int = 0

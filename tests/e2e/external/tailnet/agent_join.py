@@ -30,14 +30,14 @@ def main() -> int:
         token=token,
         workspace=workspace,
     )
-    pools = [pool for pool in resources.list_pools().pools if pool.name == args.pool_name]
+    pools = [unit for unit in resources.list_units().pools if unit.name == args.pool]
     if len(pools) != 1 or pools[0].labels.get("transport") != "tsnet_restricted":
         raise RuntimeError("guarded pool is not the prepared Tailnet-backed pool")
     workers = [worker for worker in resources.list_workers().workers if worker.id == args.worker_id]
     if len(workers) != 1:
         raise RuntimeError("guarded Tailnet worker is not publicly observable")
     worker = workers[0]
-    if worker.machine_id != args.machine_id or worker.pool_name != args.pool_name:
+    if worker.machine_id != args.machine_id or worker.pool != args.pool:
         raise RuntimeError("Tailnet worker is attached to the wrong machine or pool")
     if worker.status != SchedulerWorkerStatus.Available.value:
         raise RuntimeError(f"Tailnet worker is not available: {worker.status}")
@@ -45,7 +45,7 @@ def main() -> int:
     matches = [
         machine
         for machine in machines
-        if machine.id == args.machine_id and machine.pool == args.pool_name
+        if machine.id == args.machine_id and machine.pool == args.pool
     ]
     if len(matches) != 1:
         raise RuntimeError("Tailnet pool does not retain the guarded machine identity")
@@ -53,7 +53,7 @@ def main() -> int:
         json.dumps(
             {
                 "accepted": True,
-                "pool": args.pool_name,
+                "pool": args.pool,
                 "worker_id": worker.id,
                 "machine_id": matches[0].id,
                 "worker_status": worker.status,

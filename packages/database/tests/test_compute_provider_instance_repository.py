@@ -4,14 +4,14 @@ from uuid import uuid4
 
 from api.server.services import ApiServices
 from database.repositories.compute import (
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.orchestration import MachineRepository
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
-    ComputePoolRecord,
+    ComputeUnitRecord,
     MachinePool,
     UnitName,
 )
@@ -22,13 +22,13 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        pool = ComputePoolRecord(
+        pool = ComputeUnitRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name=UnitName("provider-binding"),
-            machine_pool=MachinePool("provider-binding"),
+            pool=MachinePool("provider-binding"),
         )
-        ComputePoolRepository(session).upsert(pool)
+        ComputeUnitRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(
             id=str(uuid4()),
             provider="aws",
@@ -66,13 +66,13 @@ def test_unbinding_releases_only_the_machine_it_names(
     """
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        pool = ComputePoolRecord(
+        pool = ComputeUnitRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name=UnitName("provider-unbinding"),
-            machine_pool=MachinePool("provider-unbinding"),
+            pool=MachinePool("provider-unbinding"),
         )
-        ComputePoolRepository(session).upsert(pool)
+        ComputeUnitRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(
             id=str(uuid4()),
             provider="aws",

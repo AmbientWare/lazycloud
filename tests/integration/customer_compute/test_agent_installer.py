@@ -630,7 +630,7 @@ def test_status_validates_state_and_never_outputs_agent_token(
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -690,7 +690,7 @@ def test_leave_removes_service_and_private_state(
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -767,7 +767,7 @@ def test_remote_leave_authenticates_with_saved_machine_credential() -> None:
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -794,7 +794,7 @@ def test_leave_cache_destruction_receipt_survives_gateway_retry(tmp_path: Path) 
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -822,7 +822,7 @@ def test_remote_leave_sends_exact_cache_destruction_session() -> None:
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -852,7 +852,7 @@ def test_remote_leave_treats_revoked_credential_as_already_absent() -> None:
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="revoked-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -887,7 +887,7 @@ def test_remote_leave_surfaces_upstream_failure_and_preserves_local_state(
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool_name="customer-cpu",
+        pool="customer-cpu",
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,

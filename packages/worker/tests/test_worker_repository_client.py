@@ -30,7 +30,7 @@ _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
 def test_worker_repository_client_preserves_session_auth_and_scoped_credentials() -> None:
     worker = SchedulerWorkerRecord(
         worker_id="worker-1",
-        pool_name="default",
+        pool="default",
         capacity_owner_id=_CAPACITY_OWNER_ID,
     )
     transport = _FakeWorkerRepositoryTransport(

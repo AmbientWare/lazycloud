@@ -16,8 +16,8 @@ from database.tables.compute import (
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
     ComputeMachineEnrollmentTable,
-    ComputePoolTable,
     ComputeProviderInstanceTable,
+    ComputeUnitTable,
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
@@ -39,10 +39,10 @@ from shared.compute_enrollment import (
     TailnetEnrollmentPhase,
 )
 from shared.compute_policy import (
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
-    ComputePoolVisibility,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
     MachinePool,
     WorkspaceComputePolicy,
 )
@@ -127,7 +127,7 @@ class ComputeJoinCredentialRecord(ContractModel):
     A machine joining with it is bought by that unit, which is what keeps an
     auto-scaling drain from selecting a machine some other unit owns.
     """
-    pool_name: MachinePool
+    pool: MachinePool
     """Pool the joining machine lands in, not the issuing unit's name."""
     machine_id: str = ""
     created_by_token_id: str | None = None
@@ -145,7 +145,7 @@ class ComputeJoinCredentialRecord(ContractModel):
             token_hash=self.token_hash,
             workspace_id=self.workspace_id,
             capacity_owner_id=self.capacity_owner_id,
-            pool_name=self.pool_name,
+            pool=self.pool,
             machine_id=self.machine_id,
             created_by_token_id=self.created_by_token_id,
             status=ComputeCredentialStatus.Revoked,
@@ -163,7 +163,7 @@ class ComputeJoinCredentialRecord(ContractModel):
             token_hash=self.token_hash,
             workspace_id=self.workspace_id,
             capacity_owner_id=self.capacity_owner_id,
-            pool_name=self.pool_name,
+            pool=self.pool,
             machine_id=self.machine_id,
             created_by_token_id=self.created_by_token_id,
             status=self.status,
@@ -180,7 +180,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
     workspace_id: str
     capacity_owner_id: str
-    pool_name: MachinePool
+    pool: MachinePool
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -228,7 +228,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
 class ComputeMachineEnrollmentCreate(ContractModel):
     workspace_id: str
     capacity_owner_id: str
-    pool_name: MachinePool
+    pool: MachinePool
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -280,7 +280,7 @@ class ComputeMachineEnrollmentCreate(ContractModel):
             id=existing.id,
             workspace_id=self.workspace_id,
             capacity_owner_id=self.capacity_owner_id,
-            pool_name=self.pool_name,
+            pool=self.pool,
             machine_id=self.machine_id,
             machine_fingerprint_hash=self.machine_fingerprint_hash,
             join_credential_id=self.join_credential_id,
@@ -327,23 +327,23 @@ class ComputeMachineEnrollmentCreate(ContractModel):
 
 
 @dataclass(slots=True)
-class ComputePoolRepository:
+class ComputeUnitRepository:
     session: Session
 
     @property
-    def records(self) -> WorkspaceTableRepository[ComputePoolRecord]:
+    def records(self) -> WorkspaceTableRepository[ComputeUnitRecord]:
         return WorkspaceTableRepository(
             self.session,
-            TableRepositoryConfig(ComputePoolTable, ComputePoolRecord),
+            TableRepositoryConfig(ComputeUnitTable, ComputeUnitRecord),
         )
 
-    def upsert(self, record: ComputePoolRecord) -> ComputePoolRecord:
+    def upsert(self, record: ComputeUnitRecord) -> ComputeUnitRecord:
         # The immutability comparison below is by identity, and it runs before the
         # store's own validation, so the record has to be typed by the time it
         # gets there or an unchanged owner reads as a changed one. `dict(record)`
         # rather than `model_dump`: dumping serializes, and a drifted record would
         # raise the serializer warning here instead of where it was introduced.
-        record = ComputePoolRecord.model_validate(dict(record))
+        record = ComputeUnitRecord.model_validate(dict(record))
         current = self.get(record.id, for_update=True)
         if current is not None:
             # The row owns its creation time; a caller rebuilding the record
@@ -370,50 +370,50 @@ class ComputePoolRepository:
         name: str,
         *,
         for_update: bool = False,
-    ) -> ComputePoolRecord | None:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.workspace_id == workspace_id,
-            ComputePoolTable.name == name,
+    ) -> ComputeUnitRecord | None:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.workspace_id == workspace_id,
+            ComputeUnitTable.name == name,
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def get_by_capacity_owner_id(
         self,
         capacity_owner_id: str,
         *,
         for_update: bool = False,
-    ) -> ComputePoolRecord | None:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.capacity_owner_id == capacity_owner_id
+    ) -> ComputeUnitRecord | None:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.capacity_owner_id == capacity_owner_id
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def delete_for_workspace_deletion(self, pool_id: str, *, workspace_id: str) -> bool:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
         if workspace.status is not WorkspaceStatus.Deleting:
             raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
         result = self.session.execute(
-            delete(ComputePoolTable).where(
-                ComputePoolTable.id == pool_id,
-                ComputePoolTable.workspace_id == workspace_id,
+            delete(ComputeUnitTable).where(
+                ComputeUnitTable.id == pool_id,
+                ComputeUnitTable.workspace_id == workspace_id,
             )
         )
         self.session.flush()
         return isinstance(result, CursorResult) and result.rowcount > 0
 
-    def get(self, pool_id: str, *, for_update: bool = False) -> ComputePoolRecord | None:
+    def get(self, pool_id: str, *, for_update: bool = False) -> ComputeUnitRecord | None:
         """System lookup by pool id for placement/capacity reconciliation."""
-        statement = select(ComputePoolTable).where(ComputePoolTable.id == pool_id)
+        statement = select(ComputeUnitTable).where(ComputeUnitTable.id == pool_id)
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def get_by_identity(
         self,
@@ -424,7 +424,7 @@ class ComputePoolRepository:
         capability_key: str,
         root_volume_gib: int,
         for_update: bool = False,
-    ) -> ComputePoolRecord | None:
+    ) -> ComputeUnitRecord | None:
         """Look up a provisioning unit by everything AWS pins to one ASG.
 
         `root_volume_gib` belongs to the identity because it feeds the launch
@@ -432,83 +432,83 @@ class ComputePoolRepository:
         alternate the template version on every reconcile and no node would
         ever settle.
         """
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.workspace_id == workspace_id,
-            ComputePoolTable.provider_ref == provider_ref,
-            ComputePoolTable.region == region,
-            ComputePoolTable.capability_key == capability_key,
-            ComputePoolTable.root_volume_gib == root_volume_gib,
-            ComputePoolTable.visibility == ComputePoolVisibility.Internal.value,
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.workspace_id == workspace_id,
+            ComputeUnitTable.provider_ref == provider_ref,
+            ComputeUnitTable.region == region,
+            ComputeUnitTable.capability_key == capability_key,
+            ComputeUnitTable.root_volume_gib == root_volume_gib,
+            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def list_for_machine_pool(
         self,
         workspace_id: str,
-        machine_pool: str,
-    ) -> list[ComputePoolRecord]:
+        pool: str,
+    ) -> list[ComputeUnitRecord]:
         """Every unit feeding one scheduling group, best candidate first."""
         statement = (
-            select(ComputePoolTable)
+            select(ComputeUnitTable)
             .where(
-                ComputePoolTable.workspace_id == workspace_id,
-                ComputePoolTable.machine_pool == machine_pool,
+                ComputeUnitTable.workspace_id == workspace_id,
+                ComputeUnitTable.pool == pool,
             )
-            .order_by(ComputePoolTable.priority.desc(), ComputePoolTable.id)
+            .order_by(ComputeUnitTable.priority.desc(), ComputeUnitTable.id)
         )
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
-    def list_for_workspace(self, workspace_id: str) -> list[ComputePoolRecord]:
+    def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = (
-            select(ComputePoolTable)
-            .where(ComputePoolTable.workspace_id == workspace_id)
-            .order_by(ComputePoolTable.created_at, ComputePoolTable.id)
+            select(ComputeUnitTable)
+            .where(ComputeUnitTable.workspace_id == workspace_id)
+            .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
-    def list_across_workspaces(self) -> list[ComputePoolRecord]:
+    def list_across_workspaces(self) -> list[ComputeUnitRecord]:
         """System listing every unit, for scheduler controller construction."""
-        statement = select(ComputePoolTable).order_by(
-            ComputePoolTable.workspace_id,
-            ComputePoolTable.id,
+        statement = select(ComputeUnitTable).order_by(
+            ComputeUnitTable.workspace_id,
+            ComputeUnitTable.id,
         )
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
-    def list_internal(self, *, workspace_id: str) -> list[ComputePoolRecord]:
+    def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
         return self._list_internal(workspace_id=workspace_id)
 
-    def list_internal_across_workspaces(self) -> list[ComputePoolRecord]:
+    def list_internal_across_workspaces(self) -> list[ComputeUnitRecord]:
         """System listing over every workspace's internal placement pools."""
         return self._list_internal(workspace_id=None)
 
-    def _list_internal(self, *, workspace_id: str | None) -> list[ComputePoolRecord]:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.visibility == ComputePoolVisibility.Internal.value
+    def _list_internal(self, *, workspace_id: str | None) -> list[ComputeUnitRecord]:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value
         )
         if workspace_id is not None:
-            statement = statement.where(ComputePoolTable.workspace_id == workspace_id)
-        statement = statement.order_by(ComputePoolTable.updated_at, ComputePoolTable.id)
+            statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
+        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
-    def list_for_provider_connection(self, connection_id: str) -> list[ComputePoolRecord]:
+    def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
-            select(ComputePoolTable)
-            .where(ComputePoolTable.provider_connection_id == connection_id)
-            .order_by(ComputePoolTable.created_at, ComputePoolTable.id)
+            select(ComputeUnitTable)
+            .where(ComputeUnitTable.provider_connection_id == connection_id)
+            .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
     def update_capacity(
@@ -519,9 +519,9 @@ class ComputePoolRepository:
         desired_machines: int,
         max_machines: int,
         observed_machines: int,
-        phase: ComputePoolPhase,
-        provider_state: ComputePoolProviderState,
-    ) -> ComputePoolRecord | None:
+        phase: ComputeUnitPhase,
+        provider_state: ComputeUnitProviderState,
+    ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != expected_generation:
             return None
@@ -544,9 +544,9 @@ class ComputePoolRepository:
         *,
         generation: int,
         observed_machines: int,
-        phase: ComputePoolPhase,
-        provider_state: ComputePoolProviderState,
-    ) -> ComputePoolRecord | None:
+        phase: ComputeUnitPhase,
+        provider_state: ComputeUnitProviderState,
+    ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != generation:
             return None
@@ -560,9 +560,9 @@ class ComputePoolRepository:
         )
         return self.upsert(updated)
 
-    def _write_columns(self, record: ComputePoolRecord) -> None:
+    def _write_columns(self, record: ComputeUnitRecord) -> None:
         row = self.session.scalars(
-            select(ComputePoolTable).where(ComputePoolTable.id == record.id).with_for_update()
+            select(ComputeUnitTable).where(ComputeUnitTable.id == record.id).with_for_update()
         ).one()
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
@@ -574,7 +574,7 @@ class ComputePoolRepository:
         row.region = record.region
         row.offer_id = record.offer_id
         row.capability_key = record.capability_key
-        row.machine_pool = record.machine_pool
+        row.pool = record.pool
         row.provider = record.provider
         row.desired_machines = record.desired_machines
         row.initial_machines = record.initial_machines
@@ -956,7 +956,7 @@ class ComputeJoinCredentialRepository:
         token_hash: str,
         workspace_id: str,
         capacity_owner_id: str,
-        pool_name: str,
+        pool: MachinePool,
         machine_id: str = "",
         created_by_token_id: str | None,
         max_uses: int,
@@ -967,7 +967,7 @@ class ComputeJoinCredentialRepository:
                 "token_hash": token_hash,
                 "workspace_id": workspace_id,
                 "capacity_owner_id": capacity_owner_id,
-                "pool_name": pool_name,
+                "pool": pool,
                 "machine_id": machine_id,
                 "created_by_token_id": created_by_token_id,
                 "status": ComputeCredentialStatus.Active,
@@ -982,10 +982,10 @@ class ComputeJoinCredentialRepository:
     def lock_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
         """Fence the unit a credential is minted against for the mint's duration."""
         statement = (
-            select(ComputePoolTable.id)
+            select(ComputeUnitTable.id)
             .where(
-                ComputePoolTable.workspace_id == workspace_id,
-                ComputePoolTable.capacity_owner_id == capacity_owner_id,
+                ComputeUnitTable.workspace_id == workspace_id,
+                ComputeUnitTable.capacity_owner_id == capacity_owner_id,
             )
             .with_for_update()
         )
@@ -1199,15 +1199,15 @@ class ComputeMachineEnrollmentRepository:
         workspace_id: str,
         machine_id: str,
         *,
-        pool_name: str = "",
+        pool: str = "",
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
         statement = select(ComputeMachineEnrollmentTable).where(
             ComputeMachineEnrollmentTable.workspace_id == workspace_id,
             ComputeMachineEnrollmentTable.machine_id == machine_id,
         )
-        if pool_name:
-            statement = statement.where(ComputeMachineEnrollmentTable.pool_name == pool_name)
+        if pool:
+            statement = statement.where(ComputeMachineEnrollmentTable.pool == pool)
         return self._one(statement, for_update=for_update)
 
     def list_for_unit(
@@ -1268,7 +1268,7 @@ class TailnetCleanupTombstoneRepository:
         self,
         *,
         workspace_id: str,
-        pool_name: str,
+        pool: str,
         machine_id: str,
         generations: list[int],
         auth_key_ids: list[str],
@@ -1279,7 +1279,7 @@ class TailnetCleanupTombstoneRepository:
         candidate = TailnetCleanupTombstone(
             id=str(uuid4()),
             workspace_id=workspace_id,
-            pool_name=pool_name,
+            pool=pool,
             machine_id=machine_id,
             generations=_unique_positive_integers(generations),
             auth_key_ids=_unique_nonempty_strings(auth_key_ids),
@@ -1302,7 +1302,7 @@ class TailnetCleanupTombstoneRepository:
         tombstone = current.model_copy(
             update={
                 "workspace_id": workspace_id,
-                "pool_name": pool_name,
+                "pool": pool,
                 "generations": _unique_positive_integers(
                     [*current.generations, *candidate.generations]
                 ),
@@ -1508,7 +1508,7 @@ class AwsAccountConnectionRepository:
             workspace_id=connection.workspace_id,
             account_id=connection.account_id,
             external_id=connection.external_id,
-            machine_pool=connection.machine_pool,
+            pool=connection.pool,
             phase=connection.phase.value,
             revision=connection.revision,
             next_reconcile_at=connection.next_reconcile_at,
@@ -1684,7 +1684,7 @@ class AwsAccountConnectionRepository:
         row.workspace_id = connection.workspace_id
         row.account_id = connection.account_id
         row.external_id = connection.external_id
-        row.machine_pool = connection.machine_pool
+        row.pool = connection.pool
         row.phase = connection.phase.value
         row.revision = connection.revision
         row.next_reconcile_at = connection.next_reconcile_at
@@ -1702,10 +1702,10 @@ class AwsAccountConnectionRepository:
         return int(
             self.session.scalar(
                 select(func.count())
-                .select_from(ComputePoolTable)
+                .select_from(ComputeUnitTable)
                 .where(
-                    ComputePoolTable.provider_connection_id == connection_id,
-                    ComputePoolTable.phase != ComputePoolPhase.Deleted.value,
+                    ComputeUnitTable.provider_connection_id == connection_id,
+                    ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
                 )
             )
             or 0

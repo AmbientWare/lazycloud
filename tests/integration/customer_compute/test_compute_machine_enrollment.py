@@ -50,9 +50,12 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     PreflightSeverity,
 )
-from shared.compute_policy import UnitName
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.errors import ConflictError, InvalidInputError
-from shared.http.compute import MachineJoinCommandRequest, PoolMachineResponse
+from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.routing import BackendRouteTransport
@@ -124,11 +127,11 @@ def _gateway(
 
 def _create_join_token(
     gateway: GatewayControlService,
-    pool_name: str,
+    pool: str,
     workspace_id: str,
 ):
-    return gateway.pool_state_coordinator.create_pool_join_token(
-        pool_name,
+    return gateway.unit_state_coordinator.create_unit_join_token(
+        UnitName(pool),
         workspace_id=workspace_id,
         owner_token_id="local-cli",
     )
@@ -136,12 +139,10 @@ def _create_join_token(
 
 def _pool_machines(
     gateway: GatewayControlService,
-    pool_name: str,
+    pool: str,
     workspace_id: str,
-) -> list[PoolMachineResponse]:
-    return [
-        machine for machine in gateway.machine_views(workspace_id) if machine.pool_name == pool_name
-    ]
+) -> list[UnitMachineResponse]:
+    return [machine for machine in gateway.machine_views(workspace_id) if machine.pool == pool]
 
 
 def _bind_tailnet(gateway: GatewayControlService, agent_token: str, machine_id: str) -> str:
@@ -194,7 +195,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("customer-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -227,7 +228,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool_name="customer-machines",
+            pool="customer-machines",
         )
         worker = WorkerRepository(session).get_across_workspaces(
             agent_machine_worker_id(joined.machine_id)
@@ -264,7 +265,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         rotated = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             rejoined.machine_id,
-            pool_name="customer-machines",
+            pool="customer-machines",
         )
         credential = ComputeJoinCredentialRepository(session).get_by_hash(
             hash_compute_token(bootstrap.token)
@@ -282,7 +283,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("preemptible-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -315,7 +316,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool_name="preemptible-machines",
+            pool="preemptible-machines",
         )
     assert enrollment is not None
     assert not enrollment.schedulable
@@ -340,7 +341,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("cleanup-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -372,7 +373,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,
                 first.machine_id,
-                pool_name="cleanup-machines",
+                pool="cleanup-machines",
             )
             is None
         )
@@ -388,7 +389,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         gateway.delete_machine(
             second.machine_id,
             workspace_id=workspace_id,
-            pool_name="cleanup-machines",
+            pool=MachinePool("cleanup-machines"),
         )
     assert (
         gateway.compute_states.get_agent_token_state(hash_compute_token(second.agent_token))
@@ -406,7 +407,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,
                 second.machine_id,
-                pool_name="cleanup-machines",
+                pool="cleanup-machines",
             )
             is not None
         )
@@ -416,7 +417,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("cache-decommission"),
         provider="agent",
         workspace=workspace_id,
@@ -468,7 +469,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool_name="cache-decommission",
+            pool="cache-decommission",
         )
     assert retired is not None
     assert retired.storage_destroyed_at is not None
@@ -480,7 +481,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
     real_redis_actors: RealRedisActors,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    unit = isolated_services.compute.create_pool(
+    unit = isolated_services.compute.create_unit(
         UnitName("deleted-machine-pool"),
         provider="agent",
         workspace=workspace_id,
@@ -498,9 +499,9 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
 
     with pytest.raises(ConflictError, match="lazycloud-agent leave"):
-        gateway.delete_pool("deleted-machine-pool", workspace_id=workspace_id)
+        gateway.delete_unit("deleted-machine-pool", workspace_id=workspace_id)
 
-    assert gateway.compute_states.get_pool_state(workspace_id, "deleted-machine-pool") is not None
+    assert gateway.compute_states.get_unit_state(workspace_id, "deleted-machine-pool") is not None
     assert gateway.compute_states.get_join_token_state(join_token_hash) is not None
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
     with isolated_services.context.database.session() as session:
@@ -542,7 +543,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         workspace_id=default_workspace.id,
     )
     workspace = control.upsert_workspace("enrolled-customer")
-    unit = services.compute.create_pool(
+    unit = services.compute.create_unit(
         UnitName("workspace-machine-pool"),
         provider="agent",
         workspace=workspace.id,
@@ -589,7 +590,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         )
 
     assert control.get_workspace(workspace.id).status is WorkspaceStatus.Active
-    assert gateway.compute_states.get_pool_state(workspace.id, "workspace-machine-pool") is not None
+    assert gateway.compute_states.get_unit_state(workspace.id, "workspace-machine-pool") is not None
     assert gateway.compute_states.get_join_token_state(join_token_hash) is not None
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
     assert gateway.compute_states.redis.get(orphan_revision) == "1"
@@ -637,7 +638,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("metered-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -670,7 +671,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         failed = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool_name="metered-machines",
+            pool="metered-machines",
         )
     assert failed is not None
     assert not failed.heartbeat_confirmed
@@ -688,7 +689,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         saved = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool_name="metered-machines",
+            pool="metered-machines",
         )
     assert saved is not None
     assert saved.heartbeat_confirmed
@@ -699,7 +700,7 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_pool(
+    isolated_services.compute.create_unit(
         UnitName("rotated-bootstrap"),
         provider="agent",
         workspace=workspace_id,
@@ -727,9 +728,9 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
 
     assert gateway.gateway_endpoint.http_url in first.command
     fleets = [
-        pool
-        for pool in isolated_services.compute.list_pools(workspace=workspace_id)
-        if pool.name == SELF_HOSTED_FLEET_POOL_NAME
+        unit
+        for unit in isolated_services.compute.list_units(workspace=workspace_id)
+        if unit.name == SELF_HOSTED_FLEET_POOL_NAME
     ]
     assert len(fleets) == 1
     assert fleets[0].provider == "agent"
@@ -748,9 +749,9 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
 
     assert second.command
     fleets = [
-        pool
-        for pool in isolated_services.compute.list_pools(workspace=workspace_id)
-        if pool.name == SELF_HOSTED_FLEET_POOL_NAME
+        unit
+        for unit in isolated_services.compute.list_units(workspace=workspace_id)
+        if unit.name == SELF_HOSTED_FLEET_POOL_NAME
     ]
     assert len(fleets) == 1
     assert fleets[0].worker_gpu_type == "A10G"

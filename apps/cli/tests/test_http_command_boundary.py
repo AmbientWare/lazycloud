@@ -10,7 +10,7 @@ from cli.main import build_admin_cli
 from pydantic import JsonValue
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.http.apps import AppResponse
-from shared.http.compute import ContainerWithAppPageResponse, PoolResponse
+from shared.http.compute import ContainerWithAppPageResponse, UnitResponse
 from shared.http.system import AuthTokenResponse
 from shared.http_transport import HttpChannel
 from typer.testing import CliRunner
@@ -43,12 +43,12 @@ class _RecordingHttpChannel(HttpChannel):
                 workspace_id="workspace-provider-acceptance",
                 created_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
             ).model_dump(mode="json")
-        return PoolResponse(
+        return UnitResponse(
             capacity_owner_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Provider,
             name="gpu-pool",
-            machine_pool="aws",
+            pool="aws",
             created_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
         ).model_dump(mode="json")
 

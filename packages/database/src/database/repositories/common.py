@@ -564,7 +564,7 @@ def _column_values(
         "event_type",
         "provider",
         "pool",
-        "pool_name",
+        "pool",
         "cron_job",
         "source",
         "target",

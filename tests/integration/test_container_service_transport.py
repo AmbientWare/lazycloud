@@ -88,7 +88,7 @@ class _ReadyRouteResolver:
         return AgentBackendRoute(
             route_id=route_id,
             workspace_id="workspace-1",
-            pool_name="default",
+            pool="default",
             machine_id="machine-1",
             worker_id="worker-1",
             proxy_target="worker.internal:8910",

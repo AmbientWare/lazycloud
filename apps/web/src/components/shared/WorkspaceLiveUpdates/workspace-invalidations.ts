@@ -74,7 +74,7 @@ export function workspaceInvalidationTargets(
         { queryKey: workspaceQueryKeys.sandboxes.root(workspaceId) },
         { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
       ]);
-    case "compute.pools":
+    case "compute.units":
       return [{ queryKey: workspaceQueryKeys.compute.instances(workspaceId) }];
     case "compute.machines":
       return [

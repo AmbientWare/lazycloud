@@ -17,7 +17,7 @@ class DatabaseTailnetCleanupStore:
         self,
         *,
         workspace_id: str,
-        pool_name: str,
+        pool: str,
         machine_id: str,
         generations: list[int],
         auth_key_ids: list[str],
@@ -28,7 +28,7 @@ class DatabaseTailnetCleanupStore:
         with self.context.database.session() as session:
             return TailnetCleanupTombstoneRepository(session).schedule(
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                pool=pool,
                 machine_id=machine_id,
                 generations=generations,
                 auth_key_ids=auth_key_ids,

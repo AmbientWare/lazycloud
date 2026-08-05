@@ -16,7 +16,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import ComputePoolPhase
+from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
@@ -26,7 +26,7 @@ from shared.http.stubs import StubResponse
 from shared.tasks import TaskStatus
 
 
-class PoolPolicy(HttpModel):
+class UnitPolicy(HttpModel):
     """The worker shape and scaling policy a provisioning unit publishes.
 
     Stated here rather than inherited from the durable record: the wire
@@ -55,25 +55,25 @@ class PoolPolicy(HttpModel):
     registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
 
 
-class PoolCreateRequest(PoolPolicy):
+class UnitCreateRequest(UnitPolicy):
     name: str
-    machine_pool: str = ""
+    pool: str = ""
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-class PoolResponse(PoolPolicy):
+class UnitResponse(UnitPolicy):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
     name: str
-    machine_pool: str
+    pool: str
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
 
     @model_validator(mode="after")
-    def validate_capacity_owner(self) -> PoolResponse:
+    def validate_capacity_owner(self) -> UnitResponse:
         CapacityOwnerIdentity.model_validate(
             {
                 "capacity_owner_id": self.capacity_owner_id,
@@ -84,20 +84,20 @@ class PoolResponse(PoolPolicy):
         return self
 
 
-class PoolListResponse(HttpModel):
-    pools: list[PoolResponse] = Field(default_factory=list)
+class UnitListResponse(HttpModel):
+    pools: list[UnitResponse] = Field(default_factory=list)
 
 
-class PoolScaleRequest(HttpModel):
+class UnitScaleRequest(HttpModel):
     desired_machines: int = Field(ge=0)
 
 
-class PoolScaleResponse(HttpModel):
+class UnitScaleResponse(HttpModel):
     name: str
     desired_machines: int = Field(ge=0)
     max_machines: int = Field(ge=0)
     observed_machines: int = Field(ge=0)
-    phase: ComputePoolPhase
+    phase: ComputeUnitPhase
     status: str
     degraded_reason: str | None = None
 
@@ -159,7 +159,7 @@ class WorkerContainerResponse(HttpModel):
 class WorkerResponse(HttpModel):
     id: str
     status: str
-    pool_name: str
+    pool: str
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -181,25 +181,25 @@ class WorkerListResponse(HttpModel):
     workers: list[WorkerResponse] = Field(default_factory=list)
 
 
-class PoolJoinTokenRequest(HttpModel):
+class UnitJoinTokenRequest(HttpModel):
     ttl: str = ""
 
 
-class PoolJoinTokenResponse(HttpModel):
+class UnitJoinTokenResponse(HttpModel):
     token: str
     expires_at: datetime
 
 
-class PoolJoinCommandRequest(HttpModel):
+class UnitJoinCommandRequest(HttpModel):
     ttl: str = ""
 
 
-class PoolJoinCommandResponse(HttpModel):
+class UnitJoinCommandResponse(HttpModel):
     command: str
     expires_at: datetime
 
 
-class PoolMachineMetricsResponse(HttpModel):
+class UnitMachineMetricsResponse(HttpModel):
     total_cpu_available: int = 0
     total_memory_available: int = 0
     cpu_utilization_pct: float = 0.0
@@ -218,14 +218,14 @@ class PoolMachineMetricsResponse(HttpModel):
     disk_usage_pct: float = 0.0
 
 
-class PoolMachineResponse(HttpModel):
+class UnitMachineResponse(HttpModel):
     id: str
     cpu: int = 0
     memory: int = 0
     gpu: str = ""
     gpu_count: int = 0
     status: str = ""
-    pool_name: str
+    pool: str
     provider_name: str = "agent"
     readiness_phase: MachineReadinessPhase = MachineReadinessPhase.Joining
     readiness_message: str = "Waiting for the agent to connect"
@@ -239,11 +239,11 @@ class PoolMachineResponse(HttpModel):
     last_seen_at: datetime | None = None
     created_at: datetime | None = None
     agent_version: str = ""
-    machine_metrics: PoolMachineMetricsResponse = Field(default_factory=PoolMachineMetricsResponse)
+    machine_metrics: UnitMachineMetricsResponse = Field(default_factory=UnitMachineMetricsResponse)
 
 
-class PoolMachineListResponse(HttpModel):
-    data: list[PoolMachineResponse] = Field(default_factory=list)
+class UnitMachineListResponse(HttpModel):
+    data: list[UnitMachineResponse] = Field(default_factory=list)
     next: str = ""
 
 
@@ -333,19 +333,19 @@ __all__ = [
     "MachineJoinCommandResponse",
     "MachineListResponse",
     "MachineResponse",
-    "PoolCreateRequest",
-    "PoolJoinCommandRequest",
-    "PoolJoinCommandResponse",
-    "PoolJoinTokenRequest",
-    "PoolJoinTokenResponse",
-    "PoolListResponse",
-    "PoolMachineListResponse",
-    "PoolMachineMetricsResponse",
-    "PoolMachineResponse",
-    "PoolPolicy",
-    "PoolResponse",
-    "PoolScaleRequest",
-    "PoolScaleResponse",
+    "UnitCreateRequest",
+    "UnitJoinCommandRequest",
+    "UnitJoinCommandResponse",
+    "UnitJoinTokenRequest",
+    "UnitJoinTokenResponse",
+    "UnitListResponse",
+    "UnitMachineListResponse",
+    "UnitMachineMetricsResponse",
+    "UnitMachineResponse",
+    "UnitPolicy",
+    "UnitResponse",
+    "UnitScaleRequest",
+    "UnitScaleResponse",
     "WorkerContainerResponse",
     "WorkerDrainResponse",
     "WorkerListResponse",

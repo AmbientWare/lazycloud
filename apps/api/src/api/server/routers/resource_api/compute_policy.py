@@ -209,7 +209,7 @@ def list_workspace_compute_pools(
                 unit_count=item.unit_count,
                 gpu_types=item.gpu_types,
             )
-            for item in service.machine_pools(workspace=workspace_id)
+            for item in service.pools(workspace=workspace_id)
         ],
         next="",
     )

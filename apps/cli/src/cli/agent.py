@@ -18,7 +18,7 @@ agent_app = typer.Typer(help="Manage agents and leases.")
 def agent_install(
     ctx: typer.Context,
     name: Annotated[str, typer.Option("--name")] = "agent",
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
+    pool: Annotated[str, typer.Option("--pool")] = "default",
     endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:9000",
     version: Annotated[str, typer.Option("--version")] = "local",
     join_token: Annotated[str, typer.Option("--join-token")] = "",
@@ -45,7 +45,7 @@ def agent_install(
         result = install_agent_service(
             AgentInstallRequest(
                 name=name,
-                pool=pool_name,
+                pool=pool,
                 endpoint=endpoint,
                 version=version,
                 join_token=join_token,
@@ -68,7 +68,7 @@ def agent_install(
 def agent_join(
     ctx: typer.Context,
     name: Annotated[str, typer.Option("--name")] = "agent",
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
+    pool: Annotated[str, typer.Option("--pool")] = "default",
     endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:9000",
     version: Annotated[str, typer.Option("--version")] = "local",
     token_secret: Annotated[str | None, typer.Option("--token-secret")] = None,
@@ -81,7 +81,7 @@ def agent_join(
 
     request = AgentJoinRequest(
         name=name,
-        pool=pool_name,
+        pool=pool,
         endpoint=endpoint,
         version=version,
         token_secret=token_secret,
@@ -90,7 +90,7 @@ def agent_join(
     record = admin_api_client().register_agent(
         AgentRegisterRequest(
             name=name,
-            pool=pool_name,
+            pool=pool,
             version=version,
             labels=request.labels,
         )
@@ -130,11 +130,11 @@ def agent_status(ctx: typer.Context) -> None:
 def agent_register(
     ctx: typer.Context,
     name: str,
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
+    pool: Annotated[str, typer.Option("--pool")] = "default",
     version: Annotated[str, typer.Option("--version")] = "local",
 ) -> None:
     record = admin_api_client().register_agent(
-        AgentRegisterRequest(name=name, pool=pool_name, version=version)
+        AgentRegisterRequest(name=name, pool=pool, version=version)
     )
     print_payload(ctx, record.model_dump(mode="json"))
 

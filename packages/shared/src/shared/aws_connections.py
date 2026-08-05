@@ -159,7 +159,7 @@ class AwsAccountConnection(ContractModel):
         pattern=r"^[A-Za-z0-9+=,.@:_/-]+$",
         repr=False,
     )
-    machine_pool: str = Field(default="aws", min_length=1, max_length=240)
+    pool: str = Field(default="aws", min_length=1, max_length=240)
     """Pool every unit provisioned on this connection stamps.
 
     The customer's override point: units are created on demand per capability

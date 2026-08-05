@@ -16,14 +16,14 @@ from shared.http.compute import (
     MachineCreateRequest,
     MachineListResponse,
     MachineResponse,
-    PoolCreateRequest,
-    PoolJoinCommandRequest,
-    PoolJoinCommandResponse,
-    PoolJoinTokenRequest,
-    PoolJoinTokenResponse,
-    PoolListResponse,
-    PoolResponse,
-    PoolScaleResponse,
+    UnitCreateRequest,
+    UnitJoinCommandRequest,
+    UnitJoinCommandResponse,
+    UnitJoinTokenRequest,
+    UnitJoinTokenResponse,
+    UnitListResponse,
+    UnitResponse,
+    UnitScaleResponse,
     WorkerListResponse,
 )
 from shared.http.concurrency import (
@@ -263,49 +263,49 @@ class AdminApiClient:
             self._workspace_path(f"/api/v1/containers/{url_path_segment(container_id)}")
         )
 
-    def list_pools(self) -> PoolListResponse:
-        return PoolListResponse.model_validate(
-            self.channel.get(self._workspace_path("/api/v1/pools"))
+    def list_units(self) -> UnitListResponse:
+        return UnitListResponse.model_validate(
+            self.channel.get(self._workspace_path("/api/v1/units"))
         )
 
-    def create_pool(self, request: PoolCreateRequest) -> PoolResponse:
-        return PoolResponse.model_validate(
+    def create_unit(self, request: UnitCreateRequest) -> UnitResponse:
+        return UnitResponse.model_validate(
             self.channel.post(
-                self._workspace_path("/api/v1/pools"),
+                self._workspace_path("/api/v1/units"),
                 request.model_dump(mode="json"),
             )
         )
 
-    def delete_pool(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}"))
+    def delete_unit(self, unit_id: str) -> None:
+        self.channel.delete(self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}"))
 
-    def clear_pool_degradation(self, name: str) -> PoolScaleResponse:
-        return PoolScaleResponse.model_validate(
+    def clear_unit_degradation(self, unit_id: str) -> UnitScaleResponse:
+        return UnitScaleResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/clear-degradation")
+                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/clear-degradation")
             )
         )
 
-    def create_pool_join_token(
+    def create_unit_join_token(
         self,
-        name: str,
-        request: PoolJoinTokenRequest,
-    ) -> PoolJoinTokenResponse:
-        return PoolJoinTokenResponse.model_validate(
+        unit_id: str,
+        request: UnitJoinTokenRequest,
+    ) -> UnitJoinTokenResponse:
+        return UnitJoinTokenResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/join-token"),
+                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/join-token"),
                 request.model_dump(mode="json"),
             )
         )
 
-    def pool_join_command(
+    def unit_join_command(
         self,
-        name: str,
-        request: PoolJoinCommandRequest,
-    ) -> PoolJoinCommandResponse:
-        return PoolJoinCommandResponse.model_validate(
+        unit_id: str,
+        request: UnitJoinCommandRequest,
+    ) -> UnitJoinCommandResponse:
+        return UnitJoinCommandResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/join-command"),
+                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/join-command"),
                 request.model_dump(mode="json"),
             )
         )

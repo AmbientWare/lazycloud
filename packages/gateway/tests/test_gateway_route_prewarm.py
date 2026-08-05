@@ -190,7 +190,7 @@ def _agent() -> ComputeAgentTokenState:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="hash",
         workspace_id="workspace-one",
-        pool_name=MachinePool("pool-one"),
+        pool=MachinePool("pool-one"),
         machine_id="machine-one",
     )
 
@@ -202,7 +202,7 @@ def _route(
     return AgentBackendRoute(
         route_id="route-one",
         workspace_id="workspace-one",
-        pool_name="pool-one",
+        pool="pool-one",
         machine_id="machine-one",
         worker_id="worker-one",
         container_id="container-one",

@@ -70,7 +70,7 @@ class SchedulerPoolStateService:
             self._register_capacity_owner(
                 pool_names_by_owner,
                 capacity_owner_id=config.capacity_owner_id,
-                pool_name=config.pool_name,
+                pool=config.pool,
             )
             existing = configs_by_owner.setdefault(config.capacity_owner_id, config)
             if existing != config:
@@ -81,13 +81,13 @@ class SchedulerPoolStateService:
             self._register_capacity_owner(
                 pool_names_by_owner,
                 capacity_owner_id=worker.capacity_owner_id,
-                pool_name=worker.pool_name,
+                pool=worker.pool,
             )
         states: dict[str, WorkerPoolStateSnapshot] = {}
         for capacity_owner_id in sorted(pool_names_by_owner):
             state = self.refresh_pool(
                 capacity_owner_id,
-                pool_name=pool_names_by_owner[capacity_owner_id],
+                pool=pool_names_by_owner[capacity_owner_id],
                 agent_pool_config=configs_by_owner.get(capacity_owner_id),
                 now=now,
             )
@@ -98,19 +98,19 @@ class SchedulerPoolStateService:
         self,
         capacity_owner_id: str,
         *,
-        pool_name: str,
+        pool: str,
         agent_pool_config: AgentPoolConfig | None = None,
         now: datetime | None = None,
     ) -> WorkerPoolStateSnapshot:
         self._require_capacity_owner(capacity_owner_id)
         workers = self.workers.list_workers_for_capacity_owner(capacity_owner_id)
-        if any(worker.pool_name != pool_name for worker in workers):
+        if any(worker.pool != pool for worker in workers):
             raise RuntimeError(
                 f"capacity owner {capacity_owner_id!r} contains multiple pool display names"
             )
         if agent_pool_config is not None and (
             agent_pool_config.capacity_owner_id != capacity_owner_id
-            or agent_pool_config.pool_name != pool_name
+            or agent_pool_config.pool != pool
         ):
             raise RuntimeError(
                 f"agent pool config does not match capacity owner {capacity_owner_id!r}"
@@ -123,7 +123,7 @@ class SchedulerPoolStateService:
                 SchedulerWorkerSnapshot(
                     worker_id=worker.worker_id,
                     status=worker.status,
-                    pool_name=worker.pool_name,
+                    pool=worker.pool,
                     active_containers=[
                         container.container_id
                         for container in containers_by_worker[worker.worker_id]
@@ -149,7 +149,7 @@ class SchedulerPoolStateService:
         ).model_copy(
             update={
                 "capacity_owner_id": capacity_owner_id,
-                "pool_name": pool_name,
+                "pool": pool,
             }
         )
         return self.pool_states.set_state(capacity_owner_id, state)
@@ -160,11 +160,11 @@ class SchedulerPoolStateService:
         pool_names_by_owner: dict[str, str],
         *,
         capacity_owner_id: str,
-        pool_name: str,
+        pool: str,
     ) -> None:
         cls._require_capacity_owner(capacity_owner_id)
-        existing_pool_name = pool_names_by_owner.setdefault(capacity_owner_id, pool_name)
-        if existing_pool_name != pool_name:
+        existing_pool_name = pool_names_by_owner.setdefault(capacity_owner_id, pool)
+        if existing_pool_name != pool:
             raise RuntimeError(
                 f"capacity owner {capacity_owner_id!r} contains multiple pool display names"
             )
@@ -189,7 +189,7 @@ class SchedulerPoolStateService:
             )
             for machine in self.agent_machines.list_agent_token_states(
                 config.workspace_id,
-                config.pool_name,
+                config.pool,
             )
         ]
 

@@ -165,7 +165,7 @@ class RouteTable(IdPayloadTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="SET NULL"),
         nullable=True,
     )
-    pool_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    pool: Mapped[str | None] = mapped_column(String(240), nullable=True)
     machine_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("machines.id", ondelete="SET NULL"),

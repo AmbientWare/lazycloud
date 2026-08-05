@@ -4,18 +4,18 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.service import GatewayControlService
-from shared.compute_policy import ComputePoolRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.http.compute import (
-    PoolCreateRequest,
-    PoolJoinCommandRequest,
-    PoolJoinCommandResponse,
-    PoolJoinTokenRequest,
-    PoolJoinTokenResponse,
-    PoolListResponse,
-    PoolMachineListResponse,
-    PoolResponse,
-    PoolScaleRequest,
-    PoolScaleResponse,
+    UnitCreateRequest,
+    UnitJoinCommandRequest,
+    UnitJoinCommandResponse,
+    UnitJoinTokenRequest,
+    UnitJoinTokenResponse,
+    UnitListResponse,
+    UnitMachineListResponse,
+    UnitResponse,
+    UnitScaleRequest,
+    UnitScaleResponse,
 )
 
 from api.server.auth import admin_access, write_token
@@ -26,8 +26,8 @@ from api.server.services import ApiServices
 router = APIRouter()
 
 
-def _pool_state_response(pool: ComputePoolRecord) -> PoolScaleResponse:
-    return PoolScaleResponse(
+def _unit_state_response(pool: ComputeUnitRecord) -> UnitScaleResponse:
+    return UnitScaleResponse(
         name=pool.name,
         desired_machines=pool.desired_machines,
         max_machines=pool.max_machines,
@@ -38,37 +38,37 @@ def _pool_state_response(pool: ComputePoolRecord) -> PoolScaleResponse:
     )
 
 
-@router.get("/api/v1/pools", response_model=PoolListResponse, operation_id="list_pools")
-def list_pools(
+@router.get("/api/v1/units", response_model=UnitListResponse, operation_id="list_units")
+def list_units(
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
-) -> PoolListResponse:
-    return PoolListResponse(
+) -> UnitListResponse:
+    return UnitListResponse(
         pools=[
-            PoolResponse.model_validate(item)
-            for item in services.compute.list_pools(workspace=workspace_id)
+            UnitResponse.model_validate(item)
+            for item in services.compute.list_units(workspace=workspace_id)
         ]
     )
 
 
 @router.post(
-    "/api/v1/pools",
-    response_model=PoolResponse,
+    "/api/v1/units",
+    response_model=UnitResponse,
     status_code=status.HTTP_201_CREATED,
-    operation_id="create_pool",
+    operation_id="create_unit",
 )
-def create_pool(
-    request: PoolCreateRequest,
+def create_unit(
+    request: UnitCreateRequest,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     services: ApiServices = Depends(current_services),
-) -> PoolResponse:
-    return PoolResponse.model_validate(
-        services.compute.create_pool(
+) -> UnitResponse:
+    return UnitResponse.model_validate(
+        services.compute.create_unit(
             UnitName(request.name),
             workspace=workspace_id,
-            machine_pool=MachinePool(request.machine_pool) if request.machine_pool else None,
+            pool=MachinePool(request.pool) if request.pool else None,
             provider=request.provider,
             initial_machines=request.initial_machines,
             min_machines=request.min_machines,
@@ -94,126 +94,121 @@ def create_pool(
 
 
 @router.put(
-    "/api/v1/pools/{pool_name}/scale",
-    response_model=PoolScaleResponse,
-    operation_id="scale_pool",
+    "/api/v1/units/{unit_id}/scale",
+    response_model=UnitScaleResponse,
+    operation_id="scale_unit",
 )
-def scale_pool(
-    pool_name: str,
-    request: PoolScaleRequest,
+def scale_unit(
+    unit_id: str,
+    request: UnitScaleRequest,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
-) -> PoolScaleResponse:
-    pool = gateway.scale_pool(
-        pool_name,
+) -> UnitScaleResponse:
+    pool = gateway.scale_unit(
+        unit_id,
         request.desired_machines,
         workspace_id=workspace_id,
     )
-    return _pool_state_response(pool)
+    return _unit_state_response(pool)
 
 
 @router.get(
-    "/api/v1/pools/{pool_name}/state",
-    response_model=PoolScaleResponse,
-    operation_id="get_pool_state",
+    "/api/v1/units/{unit_id}/state",
+    response_model=UnitScaleResponse,
+    operation_id="get_unit_state",
 )
-def get_pool_state(
-    pool_name: str,
+def get_unit_state(
+    unit_id: str,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
-) -> PoolScaleResponse:
-    return _pool_state_response(gateway.pool_state(pool_name, workspace_id=workspace_id))
+) -> UnitScaleResponse:
+    return _unit_state_response(gateway.unit_state(unit_id, workspace_id=workspace_id))
 
 
 @router.post(
-    "/api/v1/pools/{pool_name}/clear-degradation",
-    response_model=PoolScaleResponse,
-    operation_id="clear_pool_degradation",
+    "/api/v1/units/{unit_id}/clear-degradation",
+    response_model=UnitScaleResponse,
+    operation_id="clear_unit_degradation",
 )
-def clear_pool_degradation(
-    pool_name: str,
+def clear_unit_degradation(
+    unit_id: str,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
-    services: ApiServices = Depends(current_services),
-) -> PoolScaleResponse:
-    return _pool_state_response(
-        services.compute.clear_capacity_degradation(
-            workspace=workspace_id,
-            pool_name=pool_name,
-        )
-    )
+    gateway: GatewayControlService = Depends(gateway_service),
+) -> UnitScaleResponse:
+    return _unit_state_response(gateway.clear_unit_degradation(unit_id, workspace_id=workspace_id))
 
 
 @router.delete(
-    "/api/v1/pools/{name}",
+    "/api/v1/units/{unit_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    operation_id="delete_pool",
+    operation_id="delete_unit",
 )
-def delete_pool(
-    name: str,
+def delete_unit(
+    unit_id: str,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> None:
-    gateway.delete_pool(name, workspace_id=workspace_id)
+    gateway.delete_unit(unit_id, workspace_id=workspace_id)
 
 
 @router.post(
-    "/api/v1/pools/{pool_name}/join-token",
-    response_model=PoolJoinTokenResponse,
+    "/api/v1/units/{unit_id}/join-token",
+    response_model=UnitJoinTokenResponse,
     status_code=status.HTTP_201_CREATED,
-    operation_id="create_pool_join_token",
+    operation_id="create_unit_join_token",
 )
-def create_pool_join_token(
-    pool_name: str,
-    request: PoolJoinTokenRequest,
+def create_unit_join_token(
+    unit_id: str,
+    request: UnitJoinTokenRequest,
     _auth: admin_access,
     token: write_token,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
-) -> PoolJoinTokenResponse:
-    plan = gateway.create_pool_join_token(
-        pool_name,
+) -> UnitJoinTokenResponse:
+    plan = gateway.create_unit_join_token(
+        unit_id,
         workspace_id=workspace_id,
         owner_token_id=token.id,
         ttl=request.ttl,
     )
-    return PoolJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
+    return UnitJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
 
 
 @router.delete(
-    "/api/v1/pools/{pool_name}/join-token",
+    "/api/v1/units/{unit_id}/join-token",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    operation_id="revoke_pool_join_token",
+    operation_id="revoke_unit_join_token",
 )
-def revoke_pool_join_token(
-    pool_name: str,
+def revoke_unit_join_token(
+    unit_id: str,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> None:
-    gateway.revoke_pool_join_token(pool_name, workspace_id=workspace_id)
+    gateway.revoke_unit_join_token(unit_id, workspace_id=workspace_id)
 
 
 @router.post(
-    "/api/v1/pools/{pool_name}/join-command",
-    response_model=PoolJoinCommandResponse,
-    operation_id="get_pool_join_command",
+    "/api/v1/units/{unit_id}/join-command",
+    response_model=UnitJoinCommandResponse,
+    operation_id="get_unit_join_command",
 )
-def get_pool_join_command(
-    pool_name: str,
-    request: PoolJoinCommandRequest,
+def get_unit_join_command(
+    unit_id: str,
+    request: UnitJoinCommandRequest,
     _auth: admin_access,
     token: write_token,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     gateway: GatewayControlService = Depends(gateway_service),
-) -> PoolJoinCommandResponse:
-    return gateway.pool_join_command(
-        pool_name,
+) -> UnitJoinCommandResponse:
+    return gateway.unit_join_command(
+        unit_id,
         workspace_id=workspace_id,
         owner_token_id=token.id,
         ttl=request.ttl,
@@ -221,20 +216,20 @@ def get_pool_join_command(
 
 
 @router.get(
-    "/api/v1/pools/{pool_name}/machines",
-    response_model=PoolMachineListResponse,
-    operation_id="list_pool_machines",
+    "/api/v1/units/{unit_id}/machines",
+    response_model=UnitMachineListResponse,
+    operation_id="list_unit_machines",
 )
-def list_pool_machines(
-    pool_name: str,
+def list_unit_machines(
+    unit_id: str,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
-) -> PoolMachineListResponse:
-    return gateway.pool_machine_views(
-        pool_name,
+) -> UnitMachineListResponse:
+    return gateway.unit_machine_views(
+        unit_id,
         workspace_id=workspace_id,
         limit=limit,
         cursor=cursor,

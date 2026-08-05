@@ -30,10 +30,10 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
-    ComputePoolVisibility,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
     MachinePool,
     UnitName,
 )
@@ -123,11 +123,11 @@ def _scalable_pool(
     services: ApiServices,
     *,
     workspace_id: str,
-    pool_name: str,
+    pool: str,
     capacity_owner_id: str,
-) -> ComputePoolRecord:
-    services.compute.create_pool(
-        UnitName(pool_name),
+) -> ComputeUnitRecord:
+    services.compute.create_unit(
+        UnitName(pool),
         workspace=workspace_id,
         provider="aws:test-connection",
         capacity_owner_id=capacity_owner_id,
@@ -138,18 +138,18 @@ def _scalable_pool(
         worker_cpu_millicores=4_000,
         worker_memory_mib=8_192,
     )
-    return ComputePoolRecord(
+    return ComputeUnitRecord(
         id=capacity_owner_id,
         workspace_id=workspace_id,
         capacity_owner_id=capacity_owner_id,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
-        name=UnitName(pool_name),
-        machine_pool=MachinePool(pool_name),
+        name=UnitName(pool),
+        pool=MachinePool(pool),
         provider_ref="aws:test-connection",
         provider_connection_id="11111111-1111-4111-8111-111111111111",
         capacity_mode=ComputeCapacityMode.Pooled,
-        visibility=ComputePoolVisibility.Internal,
+        visibility=ComputeUnitVisibility.Internal,
         region="us-east-1",
         offer_id="us-east-1:test.instance",
         capability_key="aws:us-east-1:test.instance:amd64:runc",
@@ -157,35 +157,35 @@ def _scalable_pool(
         min_machines=0,
         max_machines=2,
         observed_machines=1,
-        phase=ComputePoolPhase.Ready,
-        provider_state=ComputePoolProviderState(resource_id="test-pool"),
+        phase=ComputeUnitPhase.Ready,
+        provider_state=ComputeUnitProviderState(resource_id="test-pool"),
     )
 
 
 def _install_recording_scale(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    current: ComputePoolRecord,
+    current: ComputeUnitRecord,
     guard: _RecordingCapacityReservationGuard,
     mutation_calls: list[tuple[str, str, int]],
 ) -> None:
-    def scale_internal_pool(
+    def scale_internal_unit(
         _compute: ComputeService,
         workspace_id: str,
-        pool_name: str,
+        unit_name: str,
         desired_machines: int,
         *,
-        before_mutation: Callable[[ComputePoolRecord], None],
+        before_mutation: Callable[[ComputeUnitRecord], None],
         now: datetime | None = None,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         del now
         with guard.mutation_lock(current.capacity_owner_id):
             guard.events.append("intent-read")
-            assert (workspace_id, pool_name) == (current.workspace_id, current.name)
+            assert (workspace_id, unit_name) == (current.workspace_id, current.name)
             before_mutation(current)
             assert guard.active_capacity_owner_id == current.capacity_owner_id
             guard.events.append("compute-scale")
-            mutation_calls.append((workspace_id, pool_name, desired_machines))
+            mutation_calls.append((workspace_id, unit_name, desired_machines))
         return current.model_copy(
             update={
                 "desired_machines": desired_machines,
@@ -193,7 +193,7 @@ def _install_recording_scale(
             }
         )
 
-    monkeypatch.setattr(ComputeService, "scale_internal_pool", scale_internal_pool)
+    monkeypatch.setattr(ComputeService, "scale_internal_unit", scale_internal_unit)
 
 
 def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(
@@ -201,12 +201,12 @@ def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "stateful-scale-pool"
+    pool = "stateful-scale-pool"
     capacity_owner_id = "11111111-2222-4333-8444-555555555555"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
@@ -219,10 +219,10 @@ def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(
         mutation_calls=mutation_calls,
     )
 
-    scaled = gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
+    scaled = gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert scaled.desired_machines == 0
-    assert mutation_calls == [(workspace_id, pool_name, 0)]
+    assert mutation_calls == [(workspace_id, pool, 0)]
     assert guard.locked_capacity_owner_ids == [capacity_owner_id]
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
     assert guard.events == [
@@ -239,12 +239,12 @@ def test_pool_scale_refuses_open_reservation_before_compute_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "reserved-scale-pool"
+    pool = "reserved-scale-pool"
     capacity_owner_id = "22222222-3333-4444-8555-666666666666"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
@@ -258,7 +258,7 @@ def test_pool_scale_refuses_open_reservation_before_compute_mutation(
     )
 
     with pytest.raises(ConflictError, match="active capacity reservations"):
-        gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
+        gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert mutation_calls == []
     assert guard.events == [
@@ -274,12 +274,12 @@ def test_pool_scale_zero_refuses_active_reservation_when_stored_capacity_is_zero
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "zero-state-repair-pool"
+    pool = "zero-state-repair-pool"
     capacity_owner_id = "24444444-3555-4666-8777-888888888888"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
     ).model_copy(update={"desired_machines": 0, "observed_machines": 0})
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
@@ -293,7 +293,7 @@ def test_pool_scale_zero_refuses_active_reservation_when_stored_capacity_is_zero
     )
 
     with pytest.raises(ConflictError, match="active capacity reservations"):
-        gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
+        gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert mutation_calls == []
     assert guard.events == [
@@ -309,12 +309,12 @@ def test_pool_scale_zero_refuses_unassigned_pending_workspace_container(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "unassigned-pending-pool"
+    pool = "unassigned-pending-pool"
     capacity_owner_id = "25444444-3555-4666-8777-888888888888"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
     )
     with isolated_services.context.database.session() as session:
@@ -338,7 +338,7 @@ def test_pool_scale_zero_refuses_unassigned_pending_workspace_container(
     )
 
     with pytest.raises(ConflictError, match="pending or running containers"):
-        gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
+        gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert mutation_calls == []
 
@@ -348,19 +348,19 @@ def test_pool_scale_zero_disables_owner_worker_before_compute_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "dispatch-fenced-zero-pool"
+    pool = "dispatch-fenced-zero-pool"
     capacity_owner_id = "26444444-3555-4666-8777-888888888888"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-dispatch-fence")
     worker = SchedulerWorkerRecord(
         worker_id="idle-provider-worker",
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
         status=SchedulerWorkerStatus.Available,
     )
@@ -392,10 +392,10 @@ def test_pool_scale_zero_disables_owner_worker_before_compute_mutation(
         mutation_calls=mutation_calls,
     )
 
-    gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
+    gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert disabled == [worker.worker_id]
-    assert mutation_calls == [(workspace_id, pool_name, 0)]
+    assert mutation_calls == [(workspace_id, pool, 0)]
     assert guard.events.index("worker-disabled") < guard.events.index("compute-scale")
 
 
@@ -404,20 +404,20 @@ def test_pool_state_refuses_mismatched_durable_capacity_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "isolated-state-pool"
+    pool = "isolated-state-pool"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id="25555555-3666-4777-8888-999999999999",
     )
 
-    def get_internal_pool(
+    def get_internal_unit(
         _compute: ComputeService,
         requested_workspace_id: str,
         requested_pool_name: str,
-    ) -> ComputePoolRecord:
-        assert (requested_workspace_id, requested_pool_name) == (workspace_id, pool_name)
+    ) -> ComputeUnitRecord:
+        assert (requested_workspace_id, requested_pool_name) == (workspace_id, pool)
         return current.model_copy(
             update={
                 "id": "26666666-3777-4888-8999-000000000000",
@@ -425,12 +425,12 @@ def test_pool_state_refuses_mismatched_durable_capacity_owner(
             }
         )
 
-    monkeypatch.setattr(ComputeService, "get_internal_pool", get_internal_pool)
+    monkeypatch.setattr(ComputeService, "get_internal_unit", get_internal_unit)
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-state-owner-isolation")
 
     with pytest.raises(ConflictError, match="capacity ownership does not match"):
-        gateway.pool_state(pool_name, workspace_id=workspace_id)
+        gateway.unit_state(current.id, workspace_id=workspace_id)
 
 
 @pytest.mark.parametrize(
@@ -443,12 +443,12 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     container_status: SchedulerContainerStatus,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = f"active-{container_status.value}-pool"
+    pool = f"active-{container_status.value}-pool"
     capacity_owner_id = "33333333-4444-4555-8666-777777777777"
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
@@ -460,7 +460,7 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     worker_id = f"worker-{container_status.value}"
     worker = SchedulerWorkerRecord(
         worker_id=worker_id,
-        pool_name=pool_name,
+        pool=pool,
         capacity_owner_id=capacity_owner_id,
         status=SchedulerWorkerStatus.Available,
     )
@@ -502,7 +502,7 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     )
 
     with pytest.raises(ConflictError, match="pending or running containers"):
-        gateway.scale_pool(pool_name, 0, workspace_id=workspace_id)
+        gateway.scale_unit(current.id, 0, workspace_id=workspace_id)
 
     assert mutation_calls == []
     assert guard.events == [
@@ -517,10 +517,10 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "reservation-guarded-pool"
+    pool = "reservation-guarded-pool"
     capacity_owner_id = "dfd9f90a-f4af-41ee-8873-991a9fa860fe"
-    isolated_services.compute.create_pool(
-        UnitName(pool_name),
+    isolated_services.compute.create_unit(
+        UnitName(pool),
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
@@ -531,8 +531,8 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-reservation-guard")
-    join = gateway.pool_state_coordinator.create_pool_join_token(
-        pool_name,
+    join = gateway.unit_state_coordinator.create_unit_join_token(
+        UnitName(pool),
         workspace_id=workspace_id,
         owner_token_id="gateway-test-owner",
     )
@@ -540,7 +540,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     worker_id = agent_machine_worker_id(enrolled.machine_id)
     scheduler_pool_state = WorkerPoolStateSnapshot(
         capacity_owner_id=capacity_owner_id,
-        pool_name=pool_name,
+        pool=pool,
         available_workers=1,
         registered_machines=1,
     )
@@ -550,7 +550,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     )
 
     with pytest.raises(ConflictError, match="active capacity reservations"):
-        gateway.delete_pool(pool_name, workspace_id=workspace_id)
+        gateway.delete_unit(capacity_owner_id, workspace_id=workspace_id)
 
     assert guard.locked_capacity_owner_ids == [capacity_owner_id]
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
@@ -558,12 +558,12 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     assert gateway.scheduler_pool_state_repository.get_state(capacity_owner_id) == (
         scheduler_pool_state
     )
-    assert gateway.compute_states.get_pool_state(workspace_id, pool_name) is not None
+    assert gateway.compute_states.get_unit_state(workspace_id, pool) is not None
     assert [
         item.name
-        for item in isolated_services.compute.list_pools(workspace=workspace_id)
-        if item.name == pool_name
-    ] == [pool_name]
+        for item in isolated_services.compute.list_units(workspace=workspace_id)
+        if item.name == pool
+    ] == [pool]
     with isolated_services.context.database.session() as session:
         assert (
             len(
@@ -581,10 +581,10 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool_name = "display-name-is-not-owner"
+    pool = "display-name-is-not-owner"
     capacity_owner_id = "71ee746b-674e-4125-a12a-21c3350abf83"
-    isolated_services.compute.create_pool(
-        UnitName(pool_name),
+    isolated_services.compute.create_unit(
+        UnitName(pool),
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
@@ -592,27 +592,26 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-durable-owner-delete")
-    gateway.pool_state_coordinator.ensure_compute_pool_state(
-        gateway.pool_state_coordinator.pool_by_name(pool_name, workspace_id=workspace_id),
+    gateway.unit_state_coordinator.ensure_compute_pool_state(
+        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,
     )
     gateway.scheduler_pool_state_repository.set_state(
         capacity_owner_id,
         WorkerPoolStateSnapshot(
             capacity_owner_id=capacity_owner_id,
-            pool_name=pool_name,
+            pool=pool,
         ),
     )
 
-    gateway.delete_pool(pool_name, workspace_id=workspace_id)
+    gateway.delete_unit(capacity_owner_id, workspace_id=workspace_id)
 
     assert guard.locked_capacity_owner_ids == [capacity_owner_id]
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
     assert guard.events == ["lock-enter", "reservation-check", "lock-exit"]
     assert all(
-        item.name != pool_name
-        for item in isolated_services.compute.list_pools(workspace=workspace_id)
+        item.name != pool for item in isolated_services.compute.list_units(workspace=workspace_id)
     )
-    assert gateway.compute_states.get_pool_state(workspace_id, pool_name) is None
+    assert gateway.compute_states.get_unit_state(workspace_id, pool) is None
     with pytest.raises(WorkerPoolStateNotFoundError):
         gateway.scheduler_pool_state_repository.get_state(capacity_owner_id)

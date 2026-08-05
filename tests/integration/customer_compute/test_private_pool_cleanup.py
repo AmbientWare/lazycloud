@@ -7,7 +7,7 @@ from compute.offers import ComputeOffer
 from compute.state import (
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
-    ComputePoolState,
+    ComputeUnitState,
     RedisComputeStateRepository,
 )
 from coordination.redis_client import RedisClient
@@ -62,26 +62,26 @@ def test_delete_pool_cleans_private_agent_state(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    pool = isolated_services.compute.create_pool(UnitName("cleanup-pool"), provider="local")
+    unit = isolated_services.compute.create_unit(UnitName("cleanup-pool"), provider="local")
     redis = real_redis_actors.client()
     compute_states = RedisComputeStateRepository(redis)
     scheduler_workers = RedisSchedulerWorkerRepository(redis)
     scheduler_containers = RedisSchedulerContainerRepository(redis)
     scheduler_pool_states = RedisWorkerPoolStateRepository(redis)
     scheduler_pool_states.set_state(
-        pool.capacity_owner_id,
+        unit.capacity_owner_id,
         WorkerPoolStateSnapshot(
-            capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            capacity_owner_id=unit.capacity_owner_id,
+            pool=unit.name,
         ),
     )
-    scheduler_replicas_key = scheduler_pool_states.keys.worker_pool_replicas(pool.capacity_owner_id)
+    scheduler_replicas_key = scheduler_pool_states.keys.worker_pool_replicas(unit.capacity_owner_id)
     redis.set(scheduler_replicas_key, "replica-state")
-    compute_states.save_pool_state(
-        ComputePoolState(
+    compute_states.save_unit_state(
+        ComputeUnitState(
             workspace_id=workspace_id,
             name=UnitName("cleanup-pool"),
-            capacity_owner_id=pool.capacity_owner_id,
+            capacity_owner_id=unit.capacity_owner_id,
             provider="local",
         )
     )
@@ -90,15 +90,15 @@ def test_delete_pool_cleans_private_agent_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
             workspace_id=workspace_id,
-            pool_name=MachinePool("cleanup-pool"),
+            pool=MachinePool("cleanup-pool"),
             machine_id="machine-one",
         )
     )
     compute_states.save_agent_worker_slot_state(
         ComputeAgentWorkerSlotState(
-            capacity_owner_id=pool.capacity_owner_id,
+            capacity_owner_id=unit.capacity_owner_id,
             workspace_id=workspace_id,
-            pool_name=MachinePool("cleanup-pool"),
+            pool=MachinePool("cleanup-pool"),
             machine_id="machine-one",
             worker_id="worker-one",
         )
@@ -107,7 +107,7 @@ def test_delete_pool_cleans_private_agent_state(
         AgentBackendRoute(
             route_id="route-one",
             workspace_id=workspace_id,
-            pool_name="cleanup-pool",
+            pool="cleanup-pool",
             machine_id="machine-one",
             worker_id="worker-one",
             container_id="container-one",
@@ -116,9 +116,9 @@ def test_delete_pool_cleans_private_agent_state(
     )
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(
-            capacity_owner_id=pool.capacity_owner_id,
+            capacity_owner_id=unit.capacity_owner_id,
             worker_id="worker-one",
-            pool_name="cleanup-pool",
+            pool="cleanup-pool",
             machine_id="machine-one",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
@@ -134,7 +134,7 @@ def test_delete_pool_cleans_private_agent_state(
         SchedulerWorkerRecord(
             capacity_owner_id=_FOREIGN_CAPACITY_OWNER_ID,
             worker_id="worker-foreign",
-            pool_name="cleanup-pool",
+            pool="cleanup-pool",
             machine_id="machine-two",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
@@ -153,9 +153,9 @@ def test_delete_pool_cleans_private_agent_state(
         capacity_reservations=_capacity_reservations(redis),
     )
 
-    gateway.delete_pool("cleanup-pool", workspace_id=workspace_id)
+    gateway.delete_unit("cleanup-pool", workspace_id=workspace_id)
 
-    assert compute_states.get_pool_state(workspace_id, "cleanup-pool") is None
+    assert compute_states.get_unit_state(workspace_id, "cleanup-pool") is None
     assert compute_states.get_agent_token_state("agent-hash") is None
     assert compute_states.list_agent_token_states(workspace_id, "cleanup-pool") == []
     assert (
@@ -170,5 +170,5 @@ def test_delete_pool_cleans_private_agent_state(
     assert [
         worker.worker_id for worker in scheduler_workers.list_workers_in_pool("cleanup-pool")
     ] == ["worker-foreign"]
-    assert not scheduler_pool_states.delete_pool_state(pool.capacity_owner_id)
+    assert not scheduler_pool_states.delete_unit_state(unit.capacity_owner_id)
     assert redis.get(scheduler_replicas_key) is None

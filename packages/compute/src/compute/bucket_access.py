@@ -179,9 +179,7 @@ def _deployments_on_connection(
     """
     if connection is None:
         return ()
-    return tuple(
-        deployment for deployment in deployments if deployment.pool == connection.machine_pool
-    )
+    return tuple(deployment for deployment in deployments if deployment.pool == connection.pool)
 
 
 def _deployment_bucket_access_grants(

@@ -86,7 +86,7 @@ class MachineBootstrapFailureReason(StringEnum):
 class TailnetCleanupTombstone(ContractModel):
     id: str
     workspace_id: str
-    pool_name: str
+    pool: str
     machine_id: str
     generations: list[int] = Field(default_factory=list)
     auth_key_ids: list[str] = Field(default_factory=list)

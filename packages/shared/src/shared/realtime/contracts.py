@@ -34,7 +34,7 @@ class EventRecordType(StringEnum):
     WorkerPoolDegraded = "workerpool.degraded"
     WorkerPoolHealthy = "workerpool.healthy"
     GatewayEndpointCalled = "gateway.endpoint.called"
-    ComputePool = "compute.pool"
+    ComputeUnit = "compute.unit"
     ComputeJoinToken = "compute.join_token"
     ComputeMachine = "compute.machine"
     ComputeTransport = "compute.transport"
@@ -92,7 +92,7 @@ class EventMetadata(ContractModel):
     service_name: str = ""
     instance_id: str = ""
     app_id: str = ""
-    pool_name: str = ""
+    pool: str = ""
     action: str = ""
 
     @field_validator("*", mode="before")
@@ -114,7 +114,7 @@ class EventMetadata(ContractModel):
             "servicename": self.service_name,
             "instanceid": self.instance_id,
             "appid": self.app_id,
-            "poolname": self.pool_name,
+            "poolname": self.pool,
         }
         return {key: value for key, value in extension_keys.items() if value}
 
@@ -205,7 +205,7 @@ def event_metadata_from_data(
         service_name=_first_text(data, "service_name", "service"),
         instance_id=_first_text(data, "instance_id"),
         app_id=_first_text(data, "app_id"),
-        pool_name=_first_text(data, "pool_name"),
+        pool=_first_text(data, "pool"),
         action=_first_text(data, "action"),
     )
 
@@ -232,7 +232,7 @@ def event_metadata_from_cloud_event(
         service_name=_extension_text(extensions, "servicename"),
         instance_id=_extension_text(extensions, "instanceid"),
         app_id=_extension_text(extensions, "appid"),
-        pool_name=_extension_text(extensions, "poolname"),
+        pool=_extension_text(extensions, "poolname"),
     )
 
 
@@ -260,7 +260,7 @@ def event_time_for_data(
         case EventRecordType.ContainerLifecycle:
             return _first_datetime(data, "start_time") or now or utc_now()
         case (
-            EventRecordType.ComputePool
+            EventRecordType.ComputeUnit
             | EventRecordType.ComputeJoinToken
             | EventRecordType.ComputeMachine
             | EventRecordType.ComputeTransport

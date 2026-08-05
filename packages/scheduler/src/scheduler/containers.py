@@ -1119,7 +1119,7 @@ def _placement_failure_detail(
         return f"{reason}: no schedulable workers (pool selector {selector})"
     scheduling = _scheduling_request(request, provisionable=False)
     rejections = [
-        f"{worker.worker_id[:8]} in {worker.pool_name!r}: {detail}"
+        f"{worker.worker_id[:8]} in {worker.pool!r}: {detail}"
         for worker in workers[:3]
         if (detail := _worker_capacity(worker).fit_rejection(scheduling))
     ]
@@ -1136,7 +1136,7 @@ def _worker_capacity(
     reserved = reserved_capacity or WorkerReservedCapacity()
     return WorkerCapacity(
         worker_id=worker.worker_id,
-        pool=worker.pool_name,
+        pool=worker.pool,
         capacity_owner_id=worker.capacity_owner_id,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,

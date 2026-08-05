@@ -4,11 +4,11 @@ from compute.agent_control import (
     WorkerRecord,
     WorkerStatus,
 )
-from compute.projection import ComputePoolMode, PoolConfig, PrivatePoolState
+from compute.projection import ComputeUnitMode, PoolConfig, PrivateUnitState
 from compute.state import (
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
-    ComputePoolState,
+    ComputeUnitState,
 )
 from compute.telemetry import (
     agent_machine_connected,
@@ -23,9 +23,9 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputeUnitRecord
 from shared.errors import NotFoundError
-from shared.http.compute import PoolMachineMetricsResponse, PoolMachineResponse
+from shared.http.compute import UnitMachineMetricsResponse, UnitMachineResponse
 from shared.routing import (
     AgentBackendRoute,
 )
@@ -41,7 +41,7 @@ from gateway.http import (
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
-def pool_config_from_pool(pool: ComputePoolRecord) -> PoolConfig:
+def pool_config_from_unit(pool: ComputeUnitRecord) -> PoolConfig:
     """Project a provisioning unit into the config its agents are given."""
     return PoolConfig(
         name=pool.name,
@@ -49,7 +49,7 @@ def pool_config_from_pool(pool: ComputePoolRecord) -> PoolConfig:
         gpu=[pool.worker_gpu_type] if pool.worker_gpu_type else [],
         nodes=pool.max_machines,
         selector=pool.selector or pool.name,
-        mode=ComputePoolMode.Private,
+        mode=ComputeUnitMode.Private,
         transport=pool.transport,
         fallback=pool.fallback,
         priority=pool.priority,
@@ -57,14 +57,14 @@ def pool_config_from_pool(pool: ComputePoolRecord) -> PoolConfig:
     )
 
 
-def private_pool_from_compute_state(state: ComputePoolState) -> PrivatePoolState:
+def private_pool_from_compute_state(state: ComputeUnitState) -> PrivateUnitState:
     raw_config = state.metadata.get("config")
     config = (
         projection.PoolConfig.model_validate(raw_config)
         if isinstance(raw_config, dict)
         else projection.PoolConfig(name=state.name)
     )
-    return PrivatePoolState(
+    return PrivateUnitState(
         workspace_id=state.workspace_id,
         name=state.name,
         capacity_owner_id=state.capacity_owner_id,
@@ -79,7 +79,7 @@ def private_pool_from_compute_state(state: ComputePoolState) -> PrivatePoolState
 def machine_view(
     machine: Machine,
     agent_state: ComputeAgentTokenState | None = None,
-) -> PoolMachineResponse:
+) -> UnitMachineResponse:
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or machine.labels.get("gpu", "")
     gpu_count = int(machine.labels.get("gpu_count", "1") or 1) if gpu else 0
@@ -97,14 +97,14 @@ def machine_view(
         for check in (agent_state.preflight if agent_state is not None else [])
     ]
     remediation = [check.remediation for check in preflight_checks if check.remediation]
-    return PoolMachineResponse(
+    return UnitMachineResponse(
         id=machine.id,
         cpu=int((machine.cpu or 0) * 1000),
         memory=memory,
         gpu=gpu,
         gpu_count=gpu_count,
         status=machine.status.value,
-        pool_name=machine.pool,
+        pool=machine.pool,
         provider_name=machine.provider,
         readiness_phase=readiness_phase,
         readiness_message=(
@@ -133,7 +133,7 @@ def machine_view(
         ),
         created_at=machine.created_at,
         agent_version=agent_state.agent_version if agent_state is not None else "",
-        machine_metrics=PoolMachineMetricsResponse(
+        machine_metrics=UnitMachineMetricsResponse(
             total_cpu_available=int((machine.cpu or 0) * 1000),
             total_memory_available=memory,
             free_gpu_count=gpu_count,
@@ -195,7 +195,7 @@ def agent_route_view(
     return AgentRoute(
         route_id=route.route_id,
         workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
+        pool=route.pool,
         machine_id=route.machine_id,
         worker_id=route.worker_id,
         container_id=route.container_id,
@@ -217,7 +217,7 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
     return AgentWorkerSlot(
         worker_id=slot.worker_id,
         worker_token=str(worker_token) if worker_token is not None else "",
-        pool_name=slot.pool_name,
+        pool=slot.pool,
         capacity_owner_id=slot.capacity_owner_id,
         machine_id=slot.machine_id,
         cpu=slot.cpu,
@@ -234,7 +234,7 @@ def agent_worker_record(worker: SchedulerWorkerRecord) -> WorkerRecord:
     return WorkerRecord(
         id=worker.worker_id,
         machine_id=worker.machine_id,
-        pool_name=worker.pool_name,
+        pool=worker.pool,
         capacity_owner_id=worker.capacity_owner_id,
         status=_agent_worker_status(worker.status),
         total_cpu=worker.total_cpu_millicores,

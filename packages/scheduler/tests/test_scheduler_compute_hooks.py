@@ -32,7 +32,7 @@ def test_scheduler_compute_hooks_disable_machine_workers(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-machine-one",
-            pool_name="gpu-pool",
+            pool="gpu-pool",
             machine_id="machine-one",
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
@@ -49,7 +49,7 @@ def test_scheduler_compute_hooks_disable_machine_workers(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=fallback_worker_id,
-            pool_name="gpu-pool",
+            pool="gpu-pool",
             machine_id="",
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
@@ -88,7 +88,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-token-hash",
             workspace_id="ws-1",
-            pool_name=MachinePool("aws-pool"),
+            pool=MachinePool("aws-pool"),
             machine_id=machine_id,
             executor="docker",
             preflight_passed=True,
@@ -103,7 +103,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="join-token-hash",
             workspace_id="ws-1",
-            pool_name=MachinePool("aws-pool"),
+            pool=MachinePool("aws-pool"),
             expires_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
     )
@@ -111,7 +111,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool_name="aws-pool",
+            pool="aws-pool",
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
             created_at=now,
@@ -120,8 +120,8 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
         now=now,
     )
 
-    hooks.retire_machine("ws-1", "aws-pool", machine_id, "provider pool deleted")
-    hooks.revoke_pool_join_token("join-token-hash")
+    hooks.retire_machine("ws-1", machine_id, "provider unit deleted")
+    hooks.revoke_unit_join_token("join-token-hash")
 
     assert compute_states.get_agent_machine_state("ws-1", "aws-pool", machine_id) is None
     assert compute_states.list_agent_token_states("ws-1", "aws-pool") == []

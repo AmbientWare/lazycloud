@@ -125,7 +125,7 @@ def _state() -> AgentState:
     return AgentState(
         gateway_url="http://gateway.invalid:9000",
         workspace_id="workspace",
-        pool_name="default",
+        pool="default",
         machine_id="machine",
         agent_token="agent-token",
         credential_id="credential",

@@ -17,10 +17,10 @@ from compute.offers import ComputeOffer
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
-    ProviderPoolBootstrap,
-    ProviderPoolInstance,
-    ProviderPoolRequest,
-    ProviderPoolSnapshot,
+    ProviderUnitBootstrap,
+    ProviderUnitInstance,
+    ProviderUnitRequest,
+    ProviderUnitSnapshot,
     ResolvedComputeProvider,
 )
 from compute.service import ComputeService
@@ -28,8 +28,8 @@ from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from provider_aws import AWS_STS_PROOF_NONCE_KEY
@@ -49,10 +49,10 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
-    ComputePoolVisibility,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
     MachinePool,
     UnitName,
 )
@@ -127,52 +127,52 @@ class _PooledProvider:
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (_offer(),)
 
-    def ensure_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
-        return self.describe_pool(request)
+    def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return self.describe_unit(request)
 
-    def describe_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
-        return ProviderPoolSnapshot(
+    def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return ProviderUnitSnapshot(
             phase=ProviderCapacityPhase.Ready,
             resource_id=self.resource_id,
             desired_machines=1,
             max_machines=request.max_machines,
             observed_machines=1,
             instances=[
-                ProviderPoolInstance(
+                ProviderUnitInstance(
                     provider_instance_id=_INSTANCE_ID,
                     status="active",
                     storage_volume_ids=("vol-00000000000000001",),
                 )
             ],
-            provider_state=ComputePoolProviderState(resource_id=self.resource_id),
+            provider_state=ComputeUnitProviderState(resource_id=self.resource_id),
         )
 
-    def set_pool_capacity(
+    def set_unit_capacity(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         del desired_machines, max_machines
-        return self.describe_pool(request)
+        return self.describe_unit(request)
 
     def release_machine(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         del provider_instance_id
-        return self.describe_pool(request)
+        return self.describe_unit(request)
 
-    def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
-        return self.describe_pool(request).model_copy(
+    def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return self.describe_unit(request).model_copy(
             update={"phase": ProviderCapacityPhase.Deleted}
         )
 
     def machine_storage_destroyed(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
         storage_volume_ids: tuple[str, ...],
     ) -> bool:
@@ -234,7 +234,7 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
         name="cross-workspace",
     )
     with isolated_services.context.database.session() as session:
-        ComputePoolRepository(session).upsert(cross_workspace_pool)
+        ComputeUnitRepository(session).upsert(cross_workspace_pool)
     enrollment = _service(isolated_services, _PooledProvider())
 
     with pytest.raises(InvalidInputError, match="connection is not active"):
@@ -373,7 +373,7 @@ def _seed_connection_and_pool(
     isolated_services: ApiServices,
     *,
     reconnecting: bool = False,
-) -> ComputePoolRecord:
+) -> ComputeUnitRecord:
     now = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
@@ -419,7 +419,7 @@ def _seed_connection_and_pool(
                 updated_at=now,
             )
         )
-        pool = ComputePoolRepository(session).upsert(
+        pool = ComputeUnitRepository(session).upsert(
             _pool(
                 workspace_id=workspace_id,
                 pool_id=str(uuid4()),
@@ -444,23 +444,23 @@ def _seed_connection_and_pool(
         return pool
 
 
-def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
-    return ComputePoolRecord(
+def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputeUnitRecord:
+    return ComputeUnitRecord(
         id=pool_id,
         capacity_owner_id=pool_id,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
         workspace_id=workspace_id,
         name=UnitName(name),
-        machine_pool=MachinePool(name),
+        pool=MachinePool(name),
         selector=name,
-        status=ComputePoolPhase.Ready.value,
+        status=ComputeUnitPhase.Ready.value,
         source="workspace_policy",
         config={"root_volume_gib": 200, "workspace_machine_limit": 10},
         provider_ref=f"aws:{_CONNECTION_ID}",
         provider_connection_id=_CONNECTION_ID,
         capacity_mode=ComputeCapacityMode.Pooled,
-        visibility=ComputePoolVisibility.Internal,
+        visibility=ComputeUnitVisibility.Internal,
         region=_REGION,
         offer_id=_OFFER_ID,
         capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
@@ -468,8 +468,8 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputePoolRecord:
         min_machines=0,
         max_machines=10,
         observed_machines=1,
-        phase=ComputePoolPhase.Ready,
-        provider_state=ComputePoolProviderState(resource_id=_ASG_NAME),
+        phase=ComputeUnitPhase.Ready,
+        provider_state=ComputeUnitProviderState(resource_id=_ASG_NAME),
     )
 
 
@@ -551,11 +551,11 @@ class _Bootstrap:
 
     def bootstrap(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-    ) -> ProviderPoolBootstrap:
+    ) -> ProviderUnitBootstrap:
         del offer
-        return ProviderPoolBootstrap(
+        return ProviderUnitBootstrap(
             control_plane_url="https://control.example.com",
             enrollment_request_id=pool.id,
             agent_version="0.1.0",
@@ -567,7 +567,7 @@ class _Bootstrap:
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         )
 
-    def release(self, pool: ComputePoolRecord) -> None:
+    def release(self, pool: ComputeUnitRecord) -> None:
         self.released.append(pool.id)
 
 
@@ -585,8 +585,8 @@ def test_degraded_pool_still_accepts_provider_node_enrollment(
     """
     pool = _seed_connection_and_pool(isolated_services)
     with isolated_services.context.database.session() as session:
-        ComputePoolRepository(session).upsert(
-            pool.model_copy(update={"phase": ComputePoolPhase.Degraded})
+        ComputeUnitRepository(session).upsert(
+            pool.model_copy(update={"phase": ComputeUnitPhase.Degraded})
         )
     enrollment = _service(isolated_services, _PooledProvider())
 

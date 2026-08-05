@@ -60,7 +60,7 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
         container_ip="192.168.0.2",
         stub_id="stub-1",
         exposed_ports=[8001],
-        pool_name="pool-a",
+        pool="pool-a",
         workspace_storage_available=True,
         cache_available=True,
         gpu="l4",

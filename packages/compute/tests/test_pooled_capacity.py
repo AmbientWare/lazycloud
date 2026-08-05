@@ -16,14 +16,14 @@ from compute.policy import (
     ComputeCatalogRegion,
     WorkspaceComputePolicyService,
 )
-from compute.projection import PrivatePoolState
+from compute.projection import PrivateUnitState
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
-    ProviderPoolBootstrap,
-    ProviderPoolInstance,
-    ProviderPoolRequest,
-    ProviderPoolSnapshot,
+    ProviderUnitBootstrap,
+    ProviderUnitInstance,
+    ProviderUnitRequest,
+    ProviderUnitSnapshot,
     ResolvedComputeProvider,
 )
 from compute.reclaim import ComputeReclaimPolicy
@@ -35,9 +35,9 @@ from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
     TailnetCleanupTombstoneRepository,
     WorkspaceComputePolicyRepository,
 )
@@ -71,10 +71,10 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
     ComputeResourceRequirements,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
     MachinePool,
     UnitName,
     WorkspaceComputePolicy,
@@ -89,35 +89,35 @@ _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 @dataclass(slots=True)
 class _PooledProvider:
     desired: int = 0
-    ensure_calls: list[ProviderPoolRequest] = field(default_factory=list)
-    describe_calls: list[ProviderPoolRequest] = field(default_factory=list)
+    ensure_calls: list[ProviderUnitRequest] = field(default_factory=list)
+    describe_calls: list[ProviderUnitRequest] = field(default_factory=list)
     capacity_calls: list[tuple[int, int]] = field(default_factory=list)
-    delete_calls: list[ProviderPoolRequest] = field(default_factory=list)
+    delete_calls: list[ProviderUnitRequest] = field(default_factory=list)
     release_calls: list[str] = field(default_factory=list)
     lingering_storage: set[str] = field(default_factory=set)
-    before_capacity: Callable[[ProviderPoolRequest], None] | None = None
+    before_capacity: Callable[[ProviderUnitRequest], None] | None = None
     capacity_failure: Exception | None = None
     delete_failure: Exception | None = None
 
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (_offer(),)
 
-    def ensure_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+    def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         self.ensure_calls.append(request)
         self.desired = request.desired_machines
         return self._snapshot(request)
 
-    def describe_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+    def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         self.describe_calls.append(request)
         return self._snapshot(request)
 
-    def set_pool_capacity(
+    def set_unit_capacity(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         self.capacity_calls.append((desired_machines, max_machines))
         if self.before_capacity is not None:
             self.before_capacity(request)
@@ -135,14 +135,14 @@ class _PooledProvider:
 
     def release_machine(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         self.release_calls.append(provider_instance_id)
         self.desired = max(self.desired - 1, 0)
         return self._snapshot(request.model_copy(update={"desired_machines": self.desired}))
 
-    def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+    def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         if self.delete_failure is not None:
             raise self.delete_failure
         self.delete_calls.append(request)
@@ -151,7 +151,7 @@ class _PooledProvider:
 
     def machine_storage_destroyed(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
         storage_volume_ids: tuple[str, ...],
     ) -> bool:
@@ -161,59 +161,59 @@ class _PooledProvider:
 
     def _snapshot(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         phase: ProviderCapacityPhase = ProviderCapacityPhase.Ready,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         instances = [
-            ProviderPoolInstance(
+            ProviderUnitInstance(
                 provider_instance_id=f"i-{index:017x}",
                 status="active",
                 storage_volume_ids=(f"vol-{index:017x}",),
             )
             for index in range(self.desired)
         ]
-        return ProviderPoolSnapshot(
+        return ProviderUnitSnapshot(
             phase=phase,
             resource_id="asg-hidden",
             desired_machines=self.desired,
             max_machines=request.max_machines,
             observed_machines=len(instances),
             instances=instances,
-            provider_state=ComputePoolProviderState(resource_id="asg-hidden"),
+            provider_state=ComputeUnitProviderState(resource_id="asg-hidden"),
         )
 
 
 @dataclass(slots=True)
 class _AsyncScaleDownProvider(_PooledProvider):
-    def set_pool_capacity(
+    def set_unit_capacity(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         if desired_machines != 0:
-            return super().set_pool_capacity(
+            return super().set_unit_capacity(
                 request,
                 desired_machines=desired_machines,
                 max_machines=max_machines,
             )
         self.capacity_calls.append((desired_machines, max_machines))
         self.desired = 0
-        instance = ProviderPoolInstance(
+        instance = ProviderUnitInstance(
             provider_instance_id="i-00000000000000000",
             status="terminating",
             storage_volume_ids=("vol-00000000000000000",),
         )
-        return ProviderPoolSnapshot(
+        return ProviderUnitSnapshot(
             phase=ProviderCapacityPhase.Ready,
             resource_id="asg-hidden",
             desired_machines=0,
             max_machines=max_machines,
             observed_machines=1,
             instances=[instance],
-            provider_state=ComputePoolProviderState(resource_id="asg-hidden"),
+            provider_state=ComputeUnitProviderState(resource_id="asg-hidden"),
         )
 
 
@@ -262,18 +262,18 @@ class _Resolver(ComputeProviderResolver):
 
 @dataclass(slots=True)
 class _SchedulerHooks:
-    retired: list[tuple[str, str, str, str]] = field(default_factory=list)
+    retired: list[tuple[str, str, str]] = field(default_factory=list)
     available_machines: set[str] = field(default_factory=set)
     revoked_join_tokens: list[str] = field(default_factory=list)
 
-    def register_pool(self, state: PrivatePoolState) -> None:
+    def register_pool(self, state: PrivateUnitState) -> None:
         del state
 
     def register_machine(self, machine: Machine) -> None:
         del machine
 
-    def register_internal_pool(self, pool: ComputePoolRecord, offer: ComputeOffer) -> None:
-        del pool, offer
+    def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None:
+        del unit, offer
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
         del machine_id, reason
@@ -284,13 +284,12 @@ class _SchedulerHooks:
     def retire_machine(
         self,
         workspace_id: str,
-        pool_name: str,
         machine_id: str,
         reason: str,
     ) -> None:
-        self.retired.append((workspace_id, pool_name, machine_id, reason))
+        self.retired.append((workspace_id, machine_id, reason))
 
-    def revoke_pool_join_token(self, token_hash: str) -> None:
+    def revoke_unit_join_token(self, token_hash: str) -> None:
         self.revoked_join_tokens.append(token_hash)
 
 
@@ -343,7 +342,7 @@ def test_internal_pool_scale_enforces_workspace_capacity_limit(
     if workspace_limit == 20:
         with isolated_services.context.database.session() as session:
             sibling_pool_id = str(uuid4())
-            ComputePoolRepository(session).upsert(
+            ComputeUnitRepository(session).upsert(
                 pool.model_copy(
                     update={
                         "id": sibling_pool_id,
@@ -364,14 +363,14 @@ def test_internal_pool_scale_enforces_workspace_capacity_limit(
 
     if expect_capacity_conflict:
         with pytest.raises(ConflictError, match="capacity limit"):
-            compute.scale_internal_pool(
+            compute.scale_internal_unit(
                 pool.workspace_id,
                 pool.name,
                 requested_desired,
                 before_mutation=_allow_scale,
             )
     else:
-        scaled = compute.scale_internal_pool(
+        scaled = compute.scale_internal_unit(
             pool.workspace_id,
             pool.name,
             requested_desired,
@@ -410,13 +409,13 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     )
     with isolated_services.context.database.session() as session:
         sibling_id = str(uuid4())
-        ComputePoolRepository(session).upsert(
+        ComputeUnitRepository(session).upsert(
             baseline.model_copy(
                 update={
                     "id": sibling_id,
                     "capacity_owner_id": sibling_id,
                     "name": "larger-demand-owned-cpu",
-                    "machine_pool": "larger-demand-owned-cpu",
+                    "pool": "larger-demand-owned-cpu",
                     "selector": "larger-demand-owned-cpu",
                     "capability_key": f"{baseline.capability_key}:larger",
                     "desired_machines": 1,
@@ -452,7 +451,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     )
 
     with isolated_services.context.database.session() as session:
-        internal = ComputePoolRepository(session).list_internal(workspace_id=baseline.workspace_id)
+        internal = ComputeUnitRepository(session).list_internal(workspace_id=baseline.workspace_id)
     units = {item.name: item for item in internal}
     assert placed.id == baseline.id
     # Demand-driven placement never shrinks a pool it did not size.
@@ -471,13 +470,13 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
 
     compute.clear_aws_default_capacity(workspace="default", release_capacity=False)
     with isolated_services.context.database.session() as session:
-        cleared = ComputePoolRepository(session).get(baseline.id)
+        cleared = ComputeUnitRepository(session).get(baseline.id)
     assert cleared is not None
     assert cleared.min_machines == 0
     assert cleared.initial_machines == 0
     assert cleared.min_free_cpu_millicores == 0
     assert cleared.min_free_memory_mib == 0
-    drained = compute.scale_internal_pool(
+    drained = compute.scale_internal_unit(
         baseline.workspace_id,
         baseline.name,
         0,
@@ -508,27 +507,27 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
     )
     compute.reconcile_pooled_capacity()
     started_at = datetime(2026, 7, 22, 12, tzinfo=UTC)
-    before = compute.get_internal_pool(pool.workspace_id, pool.name)
+    before = compute.get_internal_unit(pool.workspace_id, pool.name)
     guard_observations: list[int] = []
 
-    def guard(current: ComputePoolRecord) -> None:
+    def guard(current: ComputeUnitRecord) -> None:
         assert current.capacity_owner_id in leases.held
         guard_observations.append(current.desired_machines)
 
-    def inspect_durable_intent(request: ProviderPoolRequest) -> None:
+    def inspect_durable_intent(request: ProviderUnitRequest) -> None:
         with isolated_services.context.database.session() as session:
-            durable = ComputePoolRepository(session).get(request.pool_id)
+            durable = ComputeUnitRepository(session).get(request.unit_id)
             open_operations = ComputeCapacityOperationRepository(session).list_open_for_owner(
                 pool.capacity_owner_id
             )
         assert durable is not None
         assert durable.desired_machines == 0
         assert durable.generation == before.generation + 1
-        assert durable.phase is ComputePoolPhase.Updating
+        assert durable.phase is ComputeUnitPhase.Updating
         assert open_operations == []
 
     provider.before_capacity = inspect_durable_intent
-    scaled = compute.scale_internal_pool(
+    scaled = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -540,7 +539,7 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
     assert leases.acquired[-1] == pool.capacity_owner_id
     assert scaled.desired_machines == 0
     assert scaled.observed_machines == 0
-    assert scaled.phase is ComputePoolPhase.Ready
+    assert scaled.phase is ComputeUnitPhase.Ready
 
 
 def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
@@ -566,20 +565,20 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
     provider.capacity_failure = RuntimeError("provider request failed")
 
     with pytest.raises(UpstreamUnavailableError, match="provider capacity update failed"):
-        compute.scale_internal_pool(
+        compute.scale_internal_unit(
             pool.workspace_id,
             pool.name,
             0,
             before_mutation=_allow_scale,
         )
 
-    degraded = compute.get_internal_pool(pool.workspace_id, pool.name)
+    degraded = compute.get_internal_unit(pool.workspace_id, pool.name)
     assert degraded.desired_machines == 0
     assert degraded.observed_machines == 1
-    assert degraded.phase is ComputePoolPhase.Degraded
+    assert degraded.phase is ComputeUnitPhase.Degraded
     provider.capacity_failure = None
 
-    repaired = compute.scale_internal_pool(
+    repaired = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -589,7 +588,7 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
     assert provider.capacity_calls == [(0, 10), (0, 10)]
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
-    assert repaired.phase is ComputePoolPhase.Ready
+    assert repaired.phase is ComputeUnitPhase.Ready
 
 
 def test_internal_pool_scale_maps_mutation_coordinator_failure(
@@ -618,7 +617,7 @@ def test_internal_pool_scale_maps_mutation_coordinator_failure(
     )
 
     with pytest.raises(UpstreamUnavailableError, match="mutation lease is unavailable"):
-        compute.scale_internal_pool(
+        compute.scale_internal_unit(
             pool.workspace_id,
             pool.name,
             0,
@@ -646,7 +645,7 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
-    first = compute.scale_internal_pool(
+    first = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -654,7 +653,7 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
     )
     generation = first.generation
 
-    second = compute.scale_internal_pool(
+    second = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -690,7 +689,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
-    converged = compute.scale_internal_pool(
+    converged = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -698,16 +697,16 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     )
     provider.desired = 1
 
-    def inspect_repair_intent(request: ProviderPoolRequest) -> None:
+    def inspect_repair_intent(request: ProviderUnitRequest) -> None:
         with isolated_services.context.database.session() as session:
-            durable = ComputePoolRepository(session).get(request.pool_id)
+            durable = ComputeUnitRepository(session).get(request.unit_id)
         assert durable is not None
         assert durable.desired_machines == 0
         assert durable.observed_machines == 1
-        assert durable.phase is ComputePoolPhase.Updating
+        assert durable.phase is ComputeUnitPhase.Updating
 
     provider.before_capacity = inspect_repair_intent
-    repaired = compute.scale_internal_pool(
+    repaired = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -719,7 +718,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     assert repaired.generation == converged.generation + 1
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
-    assert repaired.phase is ComputePoolPhase.Ready
+    assert repaired.phase is ComputeUnitPhase.Ready
 
 
 def test_scale_zero_terminalizes_missing_provider_instance_projections(
@@ -789,7 +788,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
             )
         )
 
-    scaled = compute.scale_internal_pool(
+    scaled = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -804,7 +803,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
         )
     assert scaled.desired_machines == 0
     assert scaled.observed_machines == 0
-    assert scaled.phase is ComputePoolPhase.Ready
+    assert scaled.phase is ComputeUnitPhase.Ready
     assert {item.id: item.created_at for item in after} == before
     assert {item.status for item in after} == {"deleted"}
     assert all(item.metadata["terminated_reason"] == "provider_instance_missing" for item in after)
@@ -840,7 +839,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
     def scale_before_reconcile(capacity_owner_id: str) -> None:
         assert capacity_owner_id == pool.capacity_owner_id
         reconcile_leases.on_acquire = None
-        scale_compute.scale_internal_pool(
+        scale_compute.scale_internal_unit(
             pool.workspace_id,
             pool.name,
             0,
@@ -859,7 +858,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
 
     assert provider.capacity_calls == [(0, 10)]
     assert [request.desired_machines for request in provider.ensure_calls] == [0]
-    durable = reconciler.get_internal_pool(pool.workspace_id, pool.name)
+    durable = reconciler.get_internal_unit(pool.workspace_id, pool.name)
     assert durable.desired_machines == 0
     assert durable.observed_machines == 0
 
@@ -1052,19 +1051,19 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     provider.delete_failure = RuntimeError("provider pool deletion failed")
 
     with pytest.raises(UpstreamUnavailableError, match="provider pool deletion failed"):
-        compute.delete_pool(pool.name, workspace=pool.workspace_id)
+        compute.delete_unit(pool.name, workspace=pool.workspace_id)
 
     with isolated_services.context.database.session() as session:
-        retained = ComputePoolRepository(session).get(pool.id)
+        retained = ComputeUnitRepository(session).get(pool.id)
     assert retained is not None
     assert provider.delete_calls == []
 
     provider.delete_failure = None
-    compute.delete_pool(pool.name, workspace=pool.workspace_id)
+    compute.delete_unit(pool.name, workspace=pool.workspace_id)
 
     with isolated_services.context.database.session() as session:
-        deleted = ComputePoolRepository(session).get(pool.id)
-    assert [request.pool_id for request in provider.delete_calls] == [pool.id]
+        deleted = ComputeUnitRepository(session).get(pool.id)
+    assert [request.unit_id for request in provider.delete_calls] == [pool.id]
     assert deleted is None
 
 
@@ -1096,7 +1095,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.name,
+                pool=pool.pool,
                 provider="agent",
                 status=ResourceStatus.Running,
             ),
@@ -1115,38 +1114,38 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
             workspace_id=pool.workspace_id,
             now=started_at,
         )
-    scaling = compute.scale_internal_pool(
+    scaling = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
         before_mutation=_allow_scale,
     )
-    assert scaling.phase is ComputePoolPhase.Updating
+    assert scaling.phase is ComputeUnitPhase.Updating
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=121))
     with isolated_services.context.database.session() as session:
         [lingering] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         active_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
-        updating_pool = ComputePoolRepository(session).get(pool.id)
+        updating_pool = ComputeUnitRepository(session).get(pool.id)
     assert lingering.status != "deleted"
     assert lingering.metadata["storage_volume_ids"] == ["vol-00000000000000000"]
     assert active_generation is not None
     assert active_generation.state is not WorkerCacheGenerationState.Retired
     assert updating_pool is not None
-    assert updating_pool.phase is ComputePoolPhase.Updating
+    assert updating_pool.phase is ComputeUnitPhase.Updating
 
     provider.lingering_storage.clear()
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=122))
     with isolated_services.context.database.session() as session:
         [destroyed] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         retired_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
-        ready_pool = ComputePoolRepository(session).get(pool.id)
+        ready_pool = ComputeUnitRepository(session).get(pool.id)
     assert destroyed.status == "deleted"
     assert "provider_storage_destroyed_at" in destroyed.metadata
     assert retired_generation is not None
     assert retired_generation.state is WorkerCacheGenerationState.Retired
     assert ready_pool is not None
-    assert ready_pool.phase is ComputePoolPhase.Ready
+    assert ready_pool.phase is ComputeUnitPhase.Ready
 
 
 def test_pooled_scale_down_projects_updating_during_provider_termination(
@@ -1170,7 +1169,7 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
     )
     compute.reconcile_pooled_capacity()
 
-    scaling = compute.scale_internal_pool(
+    scaling = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         0,
@@ -1179,7 +1178,7 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
 
     assert scaling.desired_machines == 0
     assert scaling.observed_machines == 1
-    assert scaling.phase is ComputePoolPhase.Updating
+    assert scaling.phase is ComputeUnitPhase.Updating
 
 
 def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
@@ -1218,7 +1217,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.name,
+                pool=pool.pool,
                 provider="agent",
                 status=ResourceStatus.Running,
             ),
@@ -1228,7 +1227,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             Worker(
                 id=worker_id,
                 machine_id=machine_id,
-                pool=pool.name,
+                pool=pool.pool,
                 status=ResourceStatus.Running,
             ),
             workspace_id=pool.workspace_id,
@@ -1237,7 +1236,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             token_hash="a" * 64,
             workspace_id=pool.workspace_id,
             capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            pool=pool.pool,
             created_by_token_id=None,
             max_uses=1,
             expires_at=now + timedelta(minutes=2),
@@ -1246,7 +1245,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             ComputeMachineEnrollmentCreate(
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
-                pool_name=MachinePool(pool.name),
+                pool=MachinePool(pool.name),
                 machine_id=machine_id,
                 machine_fingerprint_hash="b" * 64,
                 join_credential_id=credential.id,
@@ -1283,7 +1282,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             pool.workspace_id,
             machine_id,
-            pool_name=pool.name,
+            pool=pool.pool,
         )
         machine = MachineRepository(session).get(machine_id, workspace_id=pool.workspace_id)
         worker = WorkerRepository(session).get(worker_id, workspace_id=pool.workspace_id)
@@ -1301,7 +1300,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     assert tombstone is not None
     assert tombstone.generations == [1]
     assert tombstone.device_ids == ["device-1"]
-    assert {item[2] for item in hooks.retired} == {machine_id}
+    assert {item[1] for item in hooks.retired} == {machine_id}
     assert set(hooks.revoked_join_tokens) == {credential.token_hash}
 
 
@@ -1340,7 +1339,7 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=301))
     with isolated_services.context.database.session() as session:
         [replacement] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-        current = ComputePoolRepository(session).get(pool.id)
+        current = ComputeUnitRepository(session).get(pool.id)
     assert provider.release_calls == [booting.instance_id]
     assert replacement.launch_attempt == 2
     assert replacement.bootstrap_phase is MachineBootstrapPhase.Provisioning
@@ -1387,10 +1386,10 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     ensure_calls_before_exhaustion = len(provider.ensure_calls)
     compute.reconcile_pooled_capacity(now=moment)
     with isolated_services.context.database.session() as session:
-        degraded = ComputePoolRepository(session).get(pool.id)
+        degraded = ComputeUnitRepository(session).get(pool.id)
         [reclaimed] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert degraded is not None
-    assert degraded.phase is ComputePoolPhase.Degraded
+    assert degraded.phase is ComputeUnitPhase.Degraded
     assert degraded.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
     assert reclaimed.status == "deleted"
     assert reclaimed.bootstrap_phase is MachineBootstrapPhase.Failed
@@ -1402,13 +1401,13 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
 
     compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=301))
     with isolated_services.context.database.session() as session:
-        still_degraded = ComputePoolRepository(session).get(pool.id)
+        still_degraded = ComputeUnitRepository(session).get(pool.id)
     assert still_degraded is not None
     assert still_degraded.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
     assert provider.desired == 0
     assert len(provider.ensure_calls) == ensure_calls_before_exhaustion
 
-    scaled = compute.scale_internal_pool(
+    scaled = compute.scale_internal_unit(
         pool.workspace_id,
         pool.name,
         1,
@@ -1481,7 +1480,7 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     )
 
     with isolated_services.context.database.session() as session:
-        drained = ComputePoolRepository(session).get(baseline.id)
+        drained = ComputeUnitRepository(session).get(baseline.id)
     assert drained is not None
     assert drained.min_machines == 0
     assert drained.desired_machines == 0
@@ -1503,7 +1502,7 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
         capacity_owner_mutations=_MutationLeases(),
     )
 
-    def reconcile(*, floor: int, ceiling: int) -> ComputePoolRecord:
+    def reconcile(*, floor: int, ceiling: int) -> ComputeUnitRecord:
         return compute.reconcile_aws_default_capacity(
             workspace="default",
             region="us-east-1",
@@ -1568,7 +1567,7 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.name,
+                pool=pool.pool,
                 provider=pool.provider_ref,
                 status=ResourceStatus.Running,
             ),
@@ -1625,7 +1624,7 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
     )
 
     with isolated_services.context.database.session() as session:
-        held = ComputePoolRepository(session).get(pool.id)
+        held = ComputeUnitRepository(session).get(pool.id)
     assert held is not None
     # The provider scales in by picking its own victim, so the running workload is
     # only safe while the floor still holds its machine.
@@ -1685,11 +1684,11 @@ class _Bootstrap:
 
     def bootstrap(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-    ) -> ProviderPoolBootstrap:
+    ) -> ProviderUnitBootstrap:
         del offer
-        return ProviderPoolBootstrap(
+        return ProviderUnitBootstrap(
             control_plane_url="https://control.example.com",
             enrollment_request_id=pool.id,
             agent_version="0.1.0",
@@ -1701,14 +1700,14 @@ class _Bootstrap:
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         )
 
-    def release(self, pool: ComputePoolRecord) -> None:
+    def release(self, pool: ComputeUnitRecord) -> None:
         self.released.append(pool.id)
 
 
 _bootstrap = _Bootstrap()
 
 
-def _allow_scale(pool: ComputePoolRecord) -> None:
+def _allow_scale(pool: ComputeUnitRecord) -> None:
     del pool
 
 
@@ -1808,7 +1807,7 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
     )
     compute.reconcile_pooled_capacity()
     with isolated_services.context.database.session() as session:
-        pools = ComputePoolRepository(session)
+        pools = ComputeUnitRepository(session)
         stored = pools.get(pool.id)
         assert stored is not None
         pools.upsert(
@@ -1845,6 +1844,6 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
         root_volume_gib=200,
     )
     with isolated_services.context.database.session() as session:
-        after = ComputePoolRepository(session).get(pool.id)
+        after = ComputeUnitRepository(session).get(pool.id)
     assert after is not None
     assert after.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"

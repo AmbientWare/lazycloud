@@ -44,7 +44,7 @@ class CapacityInterruption(ContractModel):
     enrollment_id: str
     credential_generation: int = Field(ge=1)
     workspace_id: str
-    pool_name: str
+    pool: str
     machine_id: str
     state: AgentCapacityState
     reason: str
@@ -184,7 +184,7 @@ class SchedulerCapacityInterruptionService:
         current_time = now or utc_now()
         results: list[WorkerPreemptionResult] = []
         for worker in self.workers.list_workers_on_machine(interruption.machine_id):
-            if worker.pool_name != interruption.pool_name:
+            if worker.pool != interruption.pool:
                 continue
             operation = WorkerPreemptionOperation(
                 operation_id=(

@@ -9,9 +9,9 @@ from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeMachineEnrollmentRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -27,9 +27,9 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
-    ComputePoolPhase,
-    ComputePoolRecord,
     ComputeResourceRequirements,
+    ComputeUnitPhase,
+    ComputeUnitRecord,
     WorkspaceComputePolicy,
 )
 from shared.contracts import ContractModel
@@ -127,7 +127,7 @@ class AwsDefaultCapacityOwner(Protocol):
         min_free_memory_mib: int,
         root_volume_gib: int,
         idle_timeout_seconds: int,
-    ) -> ComputePoolRecord: ...
+    ) -> ComputeUnitRecord: ...
 
     def clear_aws_default_capacity(self, *, workspace: str, release_capacity: bool) -> None: ...
 
@@ -148,7 +148,7 @@ def _aws_capacity_is_zero(aws: AwsWorkspaceComputePolicy) -> bool:
 class AwsDefaultCapacityBaseline:
     capacity: AwsDefaultCapacityOwner
 
-    def reconcile(self, policy: WorkspaceComputePolicy) -> ComputePoolRecord | None:
+    def reconcile(self, policy: WorkspaceComputePolicy) -> ComputeUnitRecord | None:
         """Hold the warm baseline a connected workspace's policy asks for.
 
         The policy applies the same way whether the machines are LazyCloud's own
@@ -255,7 +255,7 @@ class WorkspaceComputePolicyService:
             policy = self._policy_in_session(session, workspace_id)
         self.aws_default_capacity.reconcile(policy)
 
-    def reconcile_capacity_at_startup(self) -> tuple[ComputePoolRecord, ...]:
+    def reconcile_capacity_at_startup(self) -> tuple[ComputeUnitRecord, ...]:
         baseline = self.aws_default_capacity
         if baseline is None:
             return ()
@@ -286,7 +286,7 @@ class WorkspaceComputePolicyService:
         self,
         *,
         workspace: str,
-        machine_pool: str,
+        pool: str,
     ) -> AwsAccountConnection | None:
         """The ready connection whose units feed this pool, if one does.
 
@@ -299,7 +299,7 @@ class WorkspaceComputePolicyService:
             connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
         if connection is None or not connection.hosts_workloads:
             return None
-        return connection if connection.machine_pool == machine_pool else None
+        return connection if connection.pool == pool else None
 
     def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str:
         """Pin the pool a deployment runs in for as long as it exists."""
@@ -308,7 +308,7 @@ class WorkspaceComputePolicyService:
             return named
         return self.default_machine_pool(workspace=workspace)
 
-    def machine_pools(self, *, workspace: str) -> tuple[MachinePoolView, ...]:
+    def pools(self, *, workspace: str) -> tuple[MachinePoolView, ...]:
         """Every pool this workspace can schedule into.
 
         Derived from the units that feed each pool rather than stored: naming a
@@ -318,13 +318,13 @@ class WorkspaceComputePolicyService:
         """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            units = ComputePoolRepository(session).list_for_workspace(workspace_id)
+            units = ComputeUnitRepository(session).list_for_workspace(workspace_id)
             default_pool = self._policy_in_session(session, workspace_id).default_pool
-        grouped: dict[str, list[ComputePoolRecord]] = {}
+        grouped: dict[str, list[ComputeUnitRecord]] = {}
         for unit in units:
-            if unit.phase is ComputePoolPhase.Deleted:
+            if unit.phase is ComputeUnitPhase.Deleted:
                 continue
-            grouped.setdefault(unit.machine_pool, []).append(unit)
+            grouped.setdefault(unit.pool, []).append(unit)
         return tuple(
             MachinePoolView(
                 name=name,
@@ -349,7 +349,7 @@ class WorkspaceComputePolicyService:
     def instances(self, *, workspace: str) -> tuple[ComputeInstanceView, ...]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
             instances = ComputeProviderInstanceRepository(session)
             enrollments = ComputeMachineEnrollmentRepository(session)
             if self.worker_state is None:
@@ -360,7 +360,7 @@ class WorkspaceComputePolicyService:
                     record,
                     region=pool.region,
                     workspace_id=workspace_id,
-                    pool_name=pool.name,
+                    pool=pool.name,
                     enrollments=enrollments,
                     worker_state=self.worker_state,
                 )
@@ -430,9 +430,9 @@ class WorkspaceComputePolicyService:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-            pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         if connection is not None or any(
-            pool.phase is not ComputePoolPhase.Deleted for pool in pools
+            pool.phase is not ComputeUnitPhase.Deleted for pool in pools
         ):
             raise ConflictError("disconnect AWS compute before deleting this workspace")
 
@@ -529,7 +529,7 @@ def _compute_instance_view(
     *,
     region: str,
     workspace_id: str,
-    pool_name: str,
+    pool: str,
     enrollments: ComputeMachineEnrollmentRepository,
     worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:
@@ -549,7 +549,7 @@ def _compute_instance_view(
         enrollment = enrollments.by_machine(
             workspace_id,
             record.machine_id,
-            pool_name=pool_name,
+            pool=pool,
         )
         if machine_serves_workloads(
             enrollment,

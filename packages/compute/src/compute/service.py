@@ -16,9 +16,9 @@ from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRecord,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -53,11 +53,11 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
-    ComputePoolVisibility,
     ComputeResourceRequirements,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
     MachinePool,
     UnitName,
 )
@@ -73,7 +73,7 @@ from shared.errors import (
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
-from shared.routing import BackendRouteTransport, PrivatePoolFallback
+from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import utc_now
 
 from compute.agent_control import (
@@ -90,19 +90,19 @@ from compute.offers import (
     choose_offer,
 )
 from compute.projection import (
-    ComputePoolPlan,
-    ComputePoolSource,
+    ComputeUnitPlan,
+    ComputeUnitSource,
     PoolConfig,
     ProviderReservation,
 )
 from compute.provider_machines import (
     _LAUNCH_STATE_INTENT,
     ProviderMachineReconciler,
-    ProviderPoolBootstrapFactory,
+    ProviderUnitBootstrapFactory,
     _metadata_time,
     _provider_instance_metadata,
     _provider_zero_capacity_converged,
-    _require_internal_pooled_pool,
+    _require_internal_pooled_unit,
     _reservation_open,
     _utc,
     _whole_hours,
@@ -115,10 +115,10 @@ from compute.providers import (
     DirectMachineProviderRegistry,
     PooledCapacityProvider,
     ProviderMachineStatus,
-    ProviderPoolRequest,
-    ProviderPoolSnapshot,
+    ProviderUnitRequest,
+    ProviderUnitSnapshot,
     ResolvedComputeProvider,
-    internal_pool_identity,
+    internal_unit_identity,
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
@@ -217,7 +217,7 @@ class ComputeService:
     context: ComputeContext
     provider_registry: DirectMachineProviderRegistry | None = None
     provider_resolver: ComputeProviderResolver | None = None
-    pool_bootstrap_factory: ProviderPoolBootstrapFactory | None = None
+    pool_bootstrap_factory: ProviderUnitBootstrapFactory | None = None
     usage_exporter: UsageMetricsExporter | None = None
     scheduler_hooks: ComputeSchedulerHooks | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
@@ -318,23 +318,23 @@ class ComputeService:
         # asks for nothing and takes the planned next unit.
         desired_unit = max(planned.desired_unit, minimum_unit)
         with self.context.database.session() as session:
-            pool = ComputePoolRepository(session).get_by_capacity_owner_id(
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
                 request.capacity_owner_id
             )
-        if pool is None:
+        if unit is None:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=desired_unit,
                 reason="capacity owner is not managed by compute",
             )
-        if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
-            return self._acquire_pooled_capacity(pool, request, desired_unit=desired_unit)
+        if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
+            return self._acquire_pooled_capacity(unit, request, desired_unit=desired_unit)
         return _capacity_result(
             request,
             CapacityAcquisitionStatus.Unsupported,
             desired_unit=desired_unit,
-            reason=f"capacity owner kind {pool.capacity_owner_kind.value!r} is unsupported",
+            reason=f"capacity owner kind {unit.capacity_owner_kind.value!r} is unsupported",
         )
 
     def _plan_capacity_acquisition(
@@ -346,7 +346,7 @@ class ComputeService:
         Existing operation intent always wins so retries cannot advance capacity twice.
         """
         with self.context.database.session() as session:
-            pool = ComputePoolRepository(session).get_by_capacity_owner_id(
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
                 request.capacity_owner_id
             )
             operation = ComputeCapacityOperationRepository(session).get(
@@ -358,22 +358,22 @@ class ComputeService:
                     [
                         record
                         for record in ComputeProviderInstanceRepository(session).list_for_pool(
-                            pool.id
+                            unit.id
                         )
                         if _reservation_open(record.status)
                     ]
                 )
-                if pool is not None
+                if unit is not None
                 else 0
             )
-        if pool is None:
+        if unit is None:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=1,
                 reason="capacity owner is not managed by compute",
             )
-        degraded_reason = pool.provider_state.degraded_reason
+        degraded_reason = unit.provider_state.degraded_reason
         if degraded_reason is not None:
             # The pool exhausted its launch attempts. Only the reconciler path
             # used to honour this, so acquisition kept buying machines that
@@ -385,14 +385,14 @@ class ComputeService:
                 desired_unit=max(direct_units, 1),
                 reason=degraded_reason,
             )
-        if not pool.scaling_enabled:
+        if not unit.scaling_enabled:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=max(direct_units, 1),
                 reason="capacity owner scaling is disabled",
             )
-        if not _shape_matches_pool(request.shape, pool):
+        if not _shape_matches_pool(request.shape, unit):
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
@@ -412,28 +412,28 @@ class ComputeService:
                 target_machine_id=operation.target_machine_id,
                 reason=operation.last_error,
             )
-        if pool.capacity_owner_kind is CapacityOwnerKind.ManagedPool:
+        if unit.capacity_owner_kind is CapacityOwnerKind.ManagedUnit:
             return _plan_next_capacity_unit(
                 request,
                 current_units=direct_units,
-                max_units=pool.max_machines,
+                max_units=unit.max_machines,
             )
-        if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
+        if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
             try:
-                current_pool, provider, offer = self._internal_pool_provider(
-                    pool.workspace_id,
-                    pool.name,
+                current_pool, provider, offer = self._internal_unit_provider(
+                    unit.workspace_id,
+                    unit.name,
                 )
                 if provider.pooled is None:
                     raise RuntimeError("capacity owner is not backed by a pooled provider")
-                snapshot = provider.pooled.describe_pool(
-                    self._provider_pool_request(current_pool, offer)
+                snapshot = provider.pooled.describe_unit(
+                    self._provider_unit_request(current_pool, offer)
                 )
             except Exception as exc:
                 return _capacity_result(
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    desired_unit=max(pool.desired_machines, 1),
+                    desired_unit=max(unit.desired_machines, 1),
                     reason=capacity_failure_message(
                         CapacityFailureCode.ProviderReconciliationFailed,
                         exception_type=type(exc).__name__,
@@ -442,13 +442,13 @@ class ComputeService:
             return _plan_next_capacity_unit(
                 request,
                 current_units=snapshot.desired_machines,
-                max_units=pool.max_machines,
+                max_units=unit.max_machines,
             )
         return _capacity_result(
             request,
             CapacityAcquisitionStatus.Unsupported,
             desired_unit=1,
-            reason=f"capacity owner kind {pool.capacity_owner_kind.value!r} is unsupported",
+            reason=f"capacity owner kind {unit.capacity_owner_kind.value!r} is unsupported",
         )
 
     def release_acquired_capacity(
@@ -456,14 +456,14 @@ class ComputeService:
         request: CapacityReleaseRequest,
     ) -> CapacityAcquisitionResult:
         with self.context.database.session() as session:
-            pool = ComputePoolRepository(session).get_by_capacity_owner_id(
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
                 request.capacity_owner_id
             )
             operation = ComputeCapacityOperationRepository(session).get(
                 request.capacity_owner_id,
                 request.operation_id,
             )
-        if pool is None or operation is None or operation.reservation_id != request.reservation_id:
+        if unit is None or operation is None or operation.reservation_id != request.reservation_id:
             return CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.Unsupported,
                 capacity_owner_id=request.capacity_owner_id,
@@ -486,8 +486,8 @@ class ComputeService:
                         current.model_copy(update={"status": "released", "updated_at": utc_now()})
                     )
             return _operation_result(operation, CapacityAcquisitionStatus.Requested)
-        if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
-            return self._release_pooled_capacity(pool, operation)
+        if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
+            return self._release_pooled_capacity(unit, operation)
         return _operation_result(
             operation,
             CapacityAcquisitionStatus.Unsupported,
@@ -496,13 +496,13 @@ class ComputeService:
 
     def _acquire_pooled_capacity(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         request: CapacityAcquisitionRequest,
         *,
         desired_unit: int,
     ) -> CapacityAcquisitionResult:
         try:
-            current_pool, provider, offer = self._internal_pool_provider(
+            current_pool, provider, offer = self._internal_unit_provider(
                 pool.workspace_id,
                 pool.name,
             )
@@ -531,9 +531,9 @@ class ComputeService:
                 reason="requested unit does not match the capacity owner's fixed worker shape",
                 desired_unit=desired_unit,
             )
-        provider_request = self._provider_pool_request(current_pool, offer)
+        provider_request = self._provider_unit_request(current_pool, offer)
         try:
-            snapshot = provider.pooled.describe_pool(provider_request)
+            snapshot = provider.pooled.describe_unit(provider_request)
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
@@ -545,7 +545,7 @@ class ComputeService:
                 desired_unit=desired_unit,
             )
         with self.context.database.session() as session:
-            pools = ComputePoolRepository(session)
+            pools = ComputeUnitRepository(session)
             locked_pool = pools.get(current_pool.id, for_update=True)
             if locked_pool is None:
                 return _capacity_result(
@@ -644,7 +644,7 @@ class ComputeService:
                     )
             return _operation_result(operation, CapacityAcquisitionStatus.ExistingPending)
         try:
-            updated_snapshot = provider.pooled.set_pool_capacity(
+            updated_snapshot = provider.pooled.set_unit_capacity(
                 provider_request,
                 desired_machines=desired_unit,
                 max_machines=current_pool.max_machines,
@@ -689,11 +689,11 @@ class ComputeService:
 
     def _release_pooled_capacity(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         operation: ComputeCapacityOperationRecord,
     ) -> CapacityAcquisitionResult:
         try:
-            current_pool, provider, offer = self._internal_pool_provider(
+            current_pool, provider, offer = self._internal_unit_provider(
                 pool.workspace_id,
                 pool.name,
             )
@@ -713,9 +713,9 @@ class ComputeService:
                 CapacityAcquisitionStatus.Unsupported,
                 reason="capacity owner is not backed by a pooled provider",
             )
-        provider_request = self._provider_pool_request(current_pool, offer)
+        provider_request = self._provider_unit_request(current_pool, offer)
         try:
-            snapshot = provider.pooled.describe_pool(provider_request)
+            snapshot = provider.pooled.describe_unit(provider_request)
         except Exception as exc:
             return _operation_result(
                 operation,
@@ -727,7 +727,7 @@ class ComputeService:
                 failure_code=CapacityFailureCode.ProviderReconciliationFailed,
             )
         with self.context.database.session() as session:
-            pools = ComputePoolRepository(session)
+            pools = ComputeUnitRepository(session)
             if pools.get(current_pool.id, for_update=True) is None:
                 return _operation_result(
                     operation,
@@ -807,7 +807,7 @@ class ComputeService:
                     )
             return _operation_result(current, CapacityAcquisitionStatus.Requested)
         try:
-            updated_snapshot = provider.pooled.set_pool_capacity(
+            updated_snapshot = provider.pooled.set_unit_capacity(
                 provider_request,
                 desired_machines=release_target,
                 max_machines=current_pool.max_machines,
@@ -898,12 +898,12 @@ class ComputeService:
             desired_unit=desired_unit,
         )
 
-    def create_pool(
+    def create_unit(
         self,
         name: UnitName,
         *,
         workspace: str = "default",
-        machine_pool: MachinePool | None = None,
+        pool: MachinePool | None = None,
         provider: str = "local",
         capacity_owner_id: str | None = None,
         initial_machines: int = 0,
@@ -926,8 +926,8 @@ class ComputeService:
         scale_down_cooldown_seconds: int = 60,
         registration_timeout_seconds: int = 600,
         transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted,
-        fallback: PrivatePoolFallback = PrivatePoolFallback.Internal,
-    ) -> ComputePoolRecord:
+        fallback: PrivateUnitFallback = PrivateUnitFallback.Internal,
+    ) -> ComputeUnitRecord:
         """Create or update a provisioning unit the workspace owns directly.
 
         `machine_pool` defaults to the unit's own name, which is what makes a
@@ -935,7 +935,7 @@ class ComputeService:
         """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            repository = ComputePoolRepository(session)
+            repository = ComputeUnitRepository(session)
             existing = repository.get_by_name(workspace_id, name, for_update=True)
             if existing is not None and existing.provider != provider:
                 raise ConflictError(f"compute pool provider is immutable: {name}")
@@ -948,7 +948,7 @@ class ComputeService:
             owner_kind, owner_source = capacity_owner_for_provider(provider)
             owner = capacity_owner_id or str(uuid4())
             saved = repository.upsert(
-                ComputePoolRecord(
+                ComputeUnitRecord(
                     id=existing.id if existing is not None else owner,
                     capacity_owner_id=(
                         existing.capacity_owner_id if existing is not None else owner
@@ -961,10 +961,10 @@ class ComputeService:
                     ),
                     workspace_id=workspace_id,
                     name=name,
-                    machine_pool=machine_pool or MachinePool(name),
+                    pool=pool or MachinePool(name),
                     provider=provider,
                     selector=name,
-                    status=ComputePoolPhase.Ready.value,
+                    status=ComputeUnitPhase.Ready.value,
                     source="workspace",
                     initial_machines=initial_machines,
                     desired_machines=(
@@ -974,7 +974,7 @@ class ComputeService:
                     max_machines=max_machines,
                     observed_machines=(existing.observed_machines if existing is not None else 0),
                     generation=existing.generation if existing is not None else 1,
-                    phase=ComputePoolPhase.Ready,
+                    phase=ComputeUnitPhase.Ready,
                     scaling_enabled=scaling_enabled,
                     default_eligible=default_eligible,
                     priority=priority,
@@ -997,7 +997,7 @@ class ComputeService:
             )
         self._publish_change(
             workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputePools,
+            topic=WorkspaceChangeTopic.ComputeUnits,
             change=(
                 WorkspaceChangeType.Created if existing is None else WorkspaceChangeType.Updated
             ),
@@ -1005,21 +1005,21 @@ class ComputeService:
         )
         return saved
 
-    def list_pools(self, *, workspace: str = "default") -> list[ComputePoolRecord]:
+    def list_units(self, *, workspace: str = "default") -> list[ComputeUnitRecord]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            records = ComputePoolRepository(session).list_for_workspace(workspace_id)
+            records = ComputeUnitRepository(session).list_for_workspace(workspace_id)
         records.sort(key=lambda item: item.name)
         return records
 
-    def list_pools_across_workspaces(self) -> list[ComputePoolRecord]:
+    def list_units_across_workspaces(self) -> list[ComputeUnitRecord]:
         """Every provisioning unit, for scheduler controller construction.
 
         A unit carries its own workspace, so the caller does not pair it with
         one; two units in the same group are distinguished by capacity owner.
         """
         with self.context.database.session() as session:
-            records = ComputePoolRepository(session).list_across_workspaces()
+            records = ComputeUnitRepository(session).list_across_workspaces()
         return sorted(records, key=lambda item: (item.workspace_id, item.name))
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
@@ -1040,8 +1040,8 @@ class ComputeService:
         drain-initiated release.
         """
         with self.context.database.session() as session:
-            pool = ComputePoolRepository(session).get_by_capacity_owner_id(capacity_owner_id)
-            if pool is None:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+            if unit is None:
                 raise ConflictError(
                     f"compute pool capacity owner does not exist: {capacity_owner_id}"
                 )
@@ -1049,11 +1049,11 @@ class ComputeService:
             open_operations = operations.list_open_for_owner(capacity_owner_id)
             peak_desired_units = operations.peak_desired_unit(capacity_owner_id)
             all_operations = operations.list_for_owner(capacity_owner_id)
-            machines = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            machines = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
         open_machines = [record for record in machines if _reservation_open(record.status)]
         desired_units = (
-            pool.desired_machines
-            if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider
+            unit.desired_machines
+            if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider
             else len(open_machines)
         )
         pending = next(
@@ -1088,23 +1088,23 @@ class ComputeService:
             last_failure_at=failed.updated_at if failed is not None else None,
         )
 
-    def list_pools_for_workspace_deletion(self, workspace_id: str) -> list[ComputePoolRecord]:
+    def list_pools_for_workspace_deletion(self, workspace_id: str) -> list[ComputeUnitRecord]:
         with self.context.database.session() as session:
             workspace = WorkspaceRepository(session).lock_for_deletion(workspace_id)
             if workspace.status is not WorkspaceStatus.Deleting:
                 raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-            records = ComputePoolRepository(session).list_for_workspace(workspace_id)
+            records = ComputeUnitRepository(session).list_for_workspace(workspace_id)
         records.sort(key=lambda item: item.name)
         return records
 
-    def delete_pool(self, name: str, *, workspace: str = "default") -> None:
+    def delete_unit(self, name: str, *, workspace: str = "default") -> None:
         termination_errors: list[str] = []
         deleted_machine_ids: list[str] = []
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
         clients = self._provider_client_snapshot(workspace_id)
         with self.context.database.session() as session:
-            compute_pool = ComputePoolRepository(session).get_by_name(workspace_id, name)
+            compute_pool = ComputeUnitRepository(session).get_by_name(workspace_id, name)
             if compute_pool is not None:
                 provider_instances = ComputeProviderInstanceRepository(session)
                 for record in provider_instances.list_for_pool(compute_pool.id):
@@ -1122,7 +1122,7 @@ class ComputeService:
             if release_error:
                 termination_errors.append(release_error)
         with self.context.database.session() as session:
-            compute_pool_repository = ComputePoolRepository(session)
+            compute_pool_repository = ComputeUnitRepository(session)
             compute_pool = (
                 compute_pool_repository.get(compute_pool.id) if compute_pool is not None else None
             )
@@ -1151,9 +1151,9 @@ class ComputeService:
                         workspace_id=workspace_id,
                     )
                     deleted_machine_ids.append(machine.id)
-                unit = ComputePoolRepository(session).get_by_name(workspace_id, name)
+                unit = ComputeUnitRepository(session).get_by_name(workspace_id, name)
                 if unit is not None:
-                    ComputePoolRepository(session).records.delete(
+                    ComputeUnitRepository(session).records.delete(
                         unit.id,
                         workspace_id=workspace_id,
                     )
@@ -1164,7 +1164,7 @@ class ComputeService:
             )
         self._publish_change(
             workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputePools,
+            topic=WorkspaceChangeTopic.ComputeUnits,
             change=WorkspaceChangeType.Deleted,
             resource_id=name,
         )
@@ -1176,7 +1176,7 @@ class ComputeService:
                 resource_id=machine_id,
             )
 
-    def _release_provider_pool_capacity(self, pool: ComputePoolRecord) -> str:
+    def _release_provider_pool_capacity(self, pool: ComputeUnitRecord) -> str:
         """Delete this pool's provider-side capacity, answering why it is still held.
 
         An empty answer is the only state in which the durable record may be
@@ -1190,12 +1190,12 @@ class ComputeService:
         """
 
         with self.context.database.session() as session:
-            repository = ComputePoolRepository(session)
+            repository = ComputeUnitRepository(session)
             current = repository.get(pool.id, for_update=True)
             if current is None:
                 return ""
             if (
-                current.phase not in {ComputePoolPhase.Deleting, ComputePoolPhase.Deleted}
+                current.phase not in {ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted}
                 or current.desired_machines
                 or current.min_machines
             ):
@@ -1205,13 +1205,13 @@ class ComputeService:
                             "desired_machines": 0,
                             "min_machines": 0,
                             "generation": current.generation + 1,
-                            "phase": ComputePoolPhase.Deleting,
-                            "status": ComputePoolPhase.Deleting.value,
+                            "phase": ComputeUnitPhase.Deleting,
+                            "status": ComputeUnitPhase.Deleting.value,
                         }
                     )
                 )
         try:
-            durable, provider, offer = self._internal_pool_provider(
+            durable, provider, offer = self._internal_unit_provider(
                 current.workspace_id,
                 current.name,
             )
@@ -1221,7 +1221,7 @@ class ComputeService:
             released = self.provider_machines._apply_pooled_snapshot(
                 durable,
                 offer,
-                pooled.delete_pool(self._provider_pool_request(durable, offer)),
+                pooled.delete_unit(self._provider_unit_request(durable, offer)),
                 provider=pooled,
                 update_capacity=False,
             )
@@ -1232,7 +1232,7 @@ class ComputeService:
                 current.id,
             )
             return f"{current.provider_ref}/{current.name}: {exc}"
-        if released.phase is not ComputePoolPhase.Deleted:
+        if released.phase is not ComputeUnitPhase.Deleted:
             return (
                 f"{current.provider_ref}/{current.name}: provider capacity release is "
                 f"in progress ({released.phase.value})"
@@ -1247,7 +1247,7 @@ class ComputeService:
             workspace = WorkspaceRepository(session).lock_for_deletion(workspace_id)
             if workspace.status is not WorkspaceStatus.Deleting:
                 raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-            compute_pool_repository = ComputePoolRepository(session)
+            compute_pool_repository = ComputeUnitRepository(session)
             compute_pool = compute_pool_repository.get_by_name(workspace_id, name)
             if compute_pool is not None:
                 provider_instances = ComputeProviderInstanceRepository(session)
@@ -1271,7 +1271,7 @@ class ComputeService:
                         termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if (
                     _owns_provider_pool_capacity(compute_pool)
-                    and compute_pool.phase is not ComputePoolPhase.Deleted
+                    and compute_pool.phase is not ComputeUnitPhase.Deleted
                 ):
                     # Workspace deletion only begins once the provider account is
                     # disconnected, so nothing here can still reach the provider to
@@ -1300,9 +1300,9 @@ class ComputeService:
                     machine.id,
                     workspace_id=workspace_id,
                 )
-            unit = ComputePoolRepository(session).get_by_name(workspace_id, name)
+            unit = ComputeUnitRepository(session).get_by_name(workspace_id, name)
             if unit is not None:
-                ComputePoolRepository(session).delete_for_workspace_deletion(
+                ComputeUnitRepository(session).delete_for_workspace_deletion(
                     unit.id,
                     workspace_id=workspace_id,
                 )
@@ -1318,7 +1318,7 @@ class ComputeService:
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         return self._prepare_pooled_capacity(
             workspace=workspace,
             requirements=requirements,
@@ -1351,7 +1351,7 @@ class ComputeService:
         min_free_memory_mib: int,
         root_volume_gib: int,
         idle_timeout_seconds: int,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         """Reconcile the permanent CPU floor for an AWS-default workspace."""
 
         pool = self._prepare_pooled_capacity(
@@ -1378,7 +1378,7 @@ class ComputeService:
         # sizing reconciler raises the machine straight back. This runs after the
         # preparing session has closed; `scale_internal_pool` takes the mutation
         # lease and locks the same row.
-        return self.scale_internal_pool(
+        return self.scale_internal_unit(
             pool.workspace_id,
             pool.name,
             0,
@@ -1406,7 +1406,7 @@ class ComputeService:
         if not release_capacity:
             return
         with self.context.database.session() as session:
-            pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
             protected = {
                 pool.id: self._machines_holding_active_work(
                     session,
@@ -1416,12 +1416,12 @@ class ComputeService:
                 for pool in pools
             }
         for pool in pools:
-            if pool.phase in {ComputePoolPhase.Deleting, ComputePoolPhase.Deleted}:
+            if pool.phase in {ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted}:
                 continue
             floor = protected[pool.id]
             if pool.desired_machines <= floor:
                 continue
-            self.scale_internal_pool(
+            self.scale_internal_unit(
                 workspace_id,
                 pool.name,
                 floor,
@@ -1475,7 +1475,7 @@ class ComputeService:
         idle_timeout_seconds: int,
         allowed_instance_types: tuple[str, ...],
         baseline: _PooledCapacityBaseline | None,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         if self.provider_resolver is None or self.pool_bootstrap_factory is None:
             raise ManagedComputeLaunchError(
                 "workspace pooled compute is not configured",
@@ -1530,7 +1530,7 @@ class ComputeService:
                 "pooled compute provider connection is unavailable",
                 code="provider_unavailable",
             )
-        pool_id, pool_name = internal_pool_identity(
+        pool_id, pool = internal_unit_identity(
             workspace_id=workspace_id,
             provider_ref=provider.ref,
             region=offer.region,
@@ -1538,7 +1538,7 @@ class ComputeService:
             root_volume_gib=root_volume_gib,
         )
         with self.context.database.session() as session:
-            repository = ComputePoolRepository(session)
+            repository = ComputeUnitRepository(session)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
@@ -1628,23 +1628,21 @@ class ComputeService:
             # One construction for both create and update: everything the unit
             # derives from the offer and the baseline is stated here, and only
             # the facts the provider owns are carried over from the stored row.
-            unit = ComputePoolRecord(
+            unit = ComputeUnitRecord(
                 id=current.id if current is not None else pool_id,
                 capacity_owner_id=current.capacity_owner_id if current is not None else pool_id,
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
-                name=pool_name,
-                machine_pool=(
-                    current.machine_pool if current is not None else MachinePool(pool_name)
-                ),
+                name=pool,
+                pool=(current.pool if current is not None else MachinePool(pool)),
                 provider=provider.ref,
-                selector=pool_name,
+                selector=pool,
                 source="workspace_policy",
                 provider_ref=provider.ref,
                 provider_connection_id=provider.connection_id,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                visibility=ComputePoolVisibility.Internal,
+                visibility=ComputeUnitVisibility.Internal,
                 region=offer.region,
                 offer_id=offer.id,
                 capability_key=offer.capability_key,
@@ -1670,12 +1668,12 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 observed_machines=current.observed_machines if current is not None else 0,
                 generation=current.generation if current is not None else 1,
-                phase=current.phase if current is not None else ComputePoolPhase.Provisioning,
+                phase=current.phase if current is not None else ComputeUnitPhase.Provisioning,
                 status=(
-                    current.status if current is not None else ComputePoolPhase.Provisioning.value
+                    current.status if current is not None else ComputeUnitPhase.Provisioning.value
                 ),
                 provider_state=(
-                    current.provider_state if current is not None else ComputePoolProviderState()
+                    current.provider_state if current is not None else ComputeUnitProviderState()
                 ),
             )
             created = current is None
@@ -1688,10 +1686,10 @@ class ComputeService:
                     keep_pool_id=current.id,
                 )
         if self.scheduler_hooks is not None:
-            self.scheduler_hooks.register_internal_pool(current, offer)
+            self.scheduler_hooks.register_internal_unit(current, offer)
         self._publish_change(
             workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputePools,
+            topic=WorkspaceChangeTopic.ComputeUnits,
             change=WorkspaceChangeType.Created if created else WorkspaceChangeType.Updated,
             resource_id=current.id,
         )
@@ -1709,7 +1707,7 @@ class ComputeService:
         A baseline that moves to a new capability leaves the unit it used to
         size still holding one; without this the workspace pays for both.
         """
-        units = ComputePoolRepository(session)
+        units = ComputeUnitRepository(session)
         cleared = {
             "initial_machines": 0,
             "min_machines": 0,
@@ -1731,37 +1729,37 @@ class ComputeService:
             )
         return self.capacity_owner_mutations
 
-    def get_internal_pool(
+    def get_internal_unit(
         self,
         workspace_id: str,
-        pool_name: str,
-    ) -> ComputePoolRecord:
+        unit_name: UnitName,
+    ) -> ComputeUnitRecord:
         """Read the durable pooled-provider intent for a workspace-owned pool."""
 
         with self.context.database.session() as session:
-            pool = ComputePoolRepository(session).get_by_name(workspace_id, pool_name)
-        return _require_internal_pooled_pool(pool, pool_name=pool_name)
+            unit = ComputeUnitRepository(session).get_by_name(workspace_id, unit_name)
+        return _require_internal_pooled_unit(unit, unit_name=unit_name)
 
-    def scale_internal_pool(
+    def scale_internal_unit(
         self,
         workspace_id: str,
-        pool_name: str,
+        unit_name: UnitName,
         desired_machines: int,
         *,
-        before_mutation: Callable[[ComputePoolRecord], None],
+        before_mutation: Callable[[ComputeUnitRecord], None],
         now: datetime | None = None,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         """Serialize, guard, persist, and apply one durable provider capacity intent."""
 
         if desired_machines < 0:
             raise InvalidInputError("desired compute pool capacity cannot be negative")
-        initial = self.get_internal_pool(workspace_id, pool_name)
+        initial = self.get_internal_unit(workspace_id, unit_name)
         mutations = self._required_capacity_owner_mutations()
         try:
             with mutations.mutation_lock(initial.capacity_owner_id):
-                return self._scale_internal_pool_under_lease(
+                return self._scale_internal_unit_under_lease(
                     workspace_id,
-                    pool_name,
+                    unit_name,
                     desired_machines,
                     capacity_owner_id=initial.capacity_owner_id,
                     before_mutation=before_mutation,
@@ -1774,54 +1772,54 @@ class ComputeService:
                 "compute capacity-owner mutation lease is unavailable"
             ) from exc
 
-    def _scale_internal_pool_under_lease(
+    def _scale_internal_unit_under_lease(
         self,
         workspace_id: str,
-        pool_name: str,
+        unit_name: UnitName,
         desired_machines: int,
         *,
         capacity_owner_id: str,
-        before_mutation: Callable[[ComputePoolRecord], None],
+        before_mutation: Callable[[ComputeUnitRecord], None],
         now: datetime | None,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         current_time = _utc(now)
         verify_provider_zero = False
         with self.context.database.session() as session:
-            pools = ComputePoolRepository(session)
-            pool = _require_internal_pooled_pool(
-                pools.get_by_name(workspace_id, pool_name, for_update=True),
-                pool_name=pool_name,
+            units = ComputeUnitRepository(session)
+            unit = _require_internal_pooled_unit(
+                units.get_by_name(workspace_id, unit_name, for_update=True),
+                unit_name=unit_name,
             )
-            if pool.capacity_owner_id != capacity_owner_id:
-                raise ConflictError(f"compute pool {pool_name!r} capacity owner changed")
-            before_mutation(pool)
-            if pool.provider_state.degraded_reason is not None:
+            if unit.capacity_owner_id != capacity_owner_id:
+                raise ConflictError(f"compute pool {unit!r} capacity owner changed")
+            before_mutation(unit)
+            if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded
                 # reason and re-enables capacity restoration.
-                pool = pool.model_copy(
+                unit = unit.model_copy(
                     update={
-                        "provider_state": pool.provider_state.model_copy(
+                        "provider_state": unit.provider_state.model_copy(
                             update={"degraded_reason": None}
                         )
                     }
                 )
-            stored_workspace_limit = pool.workspace_machine_limit or pool.max_machines
+            stored_workspace_limit = unit.workspace_machine_limit or unit.max_machines
             policy = WorkspaceComputePolicyRepository(session).get_for_workspace(workspace_id)
             if policy is None:
                 workspace_limit = stored_workspace_limit
-            elif _pool_gpu_capacity(pool):
+            elif _pool_gpu_capacity(unit):
                 workspace_limit = policy.aws.max_gpu_instances
             else:
                 workspace_limit = policy.aws.max_cpu_instances
             other_desired = sum(
                 item.desired_machines
-                for item in pools.list_internal(workspace_id=workspace_id)
-                if item.id != pool.id and _pool_gpu_capacity(item) == _pool_gpu_capacity(pool)
+                for item in units.list_internal(workspace_id=workspace_id)
+                if item.id != unit.id and _pool_gpu_capacity(item) == _pool_gpu_capacity(unit)
             )
             available = max(workspace_limit - other_desired, 0)
-            if desired_machines < pool.min_machines:
+            if desired_machines < unit.min_machines:
                 raise InvalidInputError(
-                    f"compute pool {pool_name!r} requires at least {pool.min_machines} machines"
+                    f"compute pool {unit!r} requires at least {unit.min_machines} machines"
                 )
             if desired_machines > available:
                 raise ConflictError(
@@ -1830,7 +1828,7 @@ class ComputeService:
             maximum = max(available, desired_machines, 1)
             if desired_machines == 0:
                 operations = ComputeCapacityOperationRepository(session)
-                for operation in operations.list_open_for_owner(pool.capacity_owner_id):
+                for operation in operations.list_open_for_owner(unit.capacity_owner_id):
                     operations.upsert(
                         operation.model_copy(
                             update={
@@ -1842,30 +1840,28 @@ class ComputeService:
                             }
                         )
                     )
-            if desired_machines == 0 and _zero_capacity_converged(pool):
+            if desired_machines == 0 and _zero_capacity_converged(unit):
                 verify_provider_zero = True
-                intent = pool
+                intent = unit
             else:
-                intent = pools.update_capacity(
-                    pool.id,
-                    expected_generation=pool.generation,
+                intent = units.update_capacity(
+                    unit.id,
+                    expected_generation=unit.generation,
                     desired_machines=desired_machines,
                     max_machines=maximum,
-                    observed_machines=pool.observed_machines,
-                    phase=ComputePoolPhase.Updating,
-                    provider_state=pool.provider_state,
+                    observed_machines=unit.observed_machines,
+                    phase=ComputeUnitPhase.Updating,
+                    provider_state=unit.provider_state,
                 )
                 if intent is None:
-                    raise ConflictError(
-                        f"compute pool {pool_name!r} capacity intent was superseded"
-                    )
+                    raise ConflictError(f"compute pool {unit!r} capacity intent was superseded")
 
         try:
-            provider, offer = self._resolved_internal_pool_provider(intent)
+            provider, offer = self._resolved_internal_unit_provider(intent)
             if provider.pooled is None:
-                raise UpstreamUnavailableError(f"compute pool {pool_name!r} provider is not pooled")
+                raise UpstreamUnavailableError(f"compute pool {unit!r} provider is not pooled")
             if verify_provider_zero:
-                observed = provider.pooled.describe_pool(self._provider_pool_request(intent, offer))
+                observed = provider.pooled.describe_unit(self._provider_unit_request(intent, offer))
                 if _provider_zero_capacity_converged(observed):
                     return self.provider_machines._apply_pooled_snapshot(
                         intent,
@@ -1880,10 +1876,10 @@ class ComputeService:
                     maximum=maximum,
                     observed=observed,
                 )
-            snapshot = provider.pooled.set_pool_capacity(
+            snapshot = provider.pooled.set_unit_capacity(
                 # Creates the autoscaling group, and its launch template with
                 # it, when the pool has none yet.
-                self._provider_pool_request(intent, offer),
+                self._provider_unit_request(intent, offer),
                 desired_machines=intent.desired_machines,
                 max_machines=intent.max_machines,
             )
@@ -1902,20 +1898,20 @@ class ComputeService:
             if isinstance(exc, (InvalidInputError, UpstreamUnavailableError)):
                 raise
             raise UpstreamUnavailableError(
-                f"compute pool {pool_name!r} provider capacity update failed"
+                f"compute pool {unit!r} provider capacity update failed"
             ) from exc
 
-    def describe_internal_pool(
+    def describe_internal_unit(
         self,
         workspace_id: str,
-        pool_name: str,
-    ) -> tuple[ComputePoolRecord, ProviderPoolSnapshot]:
-        pool, provider, offer = self._internal_pool_provider(workspace_id, pool_name)
+        unit_name: UnitName,
+    ) -> tuple[ComputeUnitRecord, ProviderUnitSnapshot]:
+        unit, provider, offer = self._internal_unit_provider(workspace_id, unit_name)
         if provider.pooled is None:
-            raise RuntimeError("internal compute pool does not use pooled capacity")
-        snapshot = provider.pooled.describe_pool(self._provider_pool_request(pool, offer))
+            raise RuntimeError("internal compute unit does not use pooled capacity")
+        snapshot = provider.pooled.describe_unit(self._provider_unit_request(unit, offer))
         updated = self.provider_machines._apply_pooled_snapshot(
-            pool,
+            unit,
             offer,
             snapshot,
             provider=provider.pooled,
@@ -1923,20 +1919,20 @@ class ComputeService:
         )
         return updated, snapshot
 
-    def release_internal_pool_machine(
+    def release_internal_unit_machine(
         self,
         workspace_id: str,
-        pool_name: str,
+        unit_name: UnitName,
         machine_id: str,
-    ) -> ComputePoolRecord:
-        pool, provider, offer = self._internal_pool_provider(workspace_id, pool_name)
+    ) -> ComputeUnitRecord:
+        unit, provider, offer = self._internal_unit_provider(workspace_id, unit_name)
         if provider.pooled is None:
             raise RuntimeError("internal compute pool does not use pooled capacity")
         with self.context.database.session() as session:
             record = next(
                 (
                     item
-                    for item in ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+                    for item in ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
                     if item.machine_id == machine_id and item.instance_id is not None
                 ),
                 None,
@@ -1944,14 +1940,14 @@ class ComputeService:
         if record is None or record.instance_id is None:
             raise KeyError(f"provider instance for machine not found: {machine_id}")
         snapshot = provider.pooled.release_machine(
-            self._provider_pool_request(pool, offer),
+            self._provider_unit_request(unit, offer),
             record.instance_id,
         )
         if self.scheduler_hooks is not None:
             self.scheduler_hooks.disable_machine(machine_id, "idle_pool_scale_down")
-        target = max(pool.desired_machines - 1, pool.min_machines)
+        target = max(unit.desired_machines - 1, unit.min_machines)
         return self.provider_machines._apply_pooled_snapshot(
-            pool.model_copy(update={"desired_machines": target}),
+            unit.model_copy(update={"desired_machines": target}),
             offer,
             snapshot,
             provider=provider.pooled,
@@ -1968,7 +1964,7 @@ class ComputeService:
             workspace_id = self.context.workspace(session, workspace).id
             instance = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             pool = (
-                ComputePoolRepository(session).get(instance.pool_id)
+                ComputeUnitRepository(session).get(instance.pool_id)
                 if instance is not None and instance.pool_id is not None
                 else None
             )
@@ -1976,23 +1972,23 @@ class ComputeService:
             return False
         if (
             pool.workspace_id != workspace_id
-            or pool.visibility is not ComputePoolVisibility.Internal
+            or pool.visibility is not ComputeUnitVisibility.Internal
             or pool.capacity_mode is not ComputeCapacityMode.Pooled
         ):
             raise UpstreamUnavailableError("provider machine ownership is inconsistent")
-        self.release_internal_pool_machine(workspace_id, pool.name, machine_id)
+        self.release_internal_unit_machine(workspace_id, pool.name, machine_id)
         return True
 
     def reconcile_pooled_capacity(
         self,
         *,
         now: datetime | None = None,
-    ) -> list[ComputePoolRecord]:
+    ) -> list[ComputeUnitRecord]:
         current_time = _utc(now)
         mutations = self._required_capacity_owner_mutations()
         with self.context.database.session() as session:
-            pools = ComputePoolRepository(session).list_internal_across_workspaces()
-        reconciled: list[ComputePoolRecord] = []
+            pools = ComputeUnitRepository(session).list_internal_across_workspaces()
+        reconciled: list[ComputeUnitRecord] = []
         for pool in pools:
             try:
                 with mutations.mutation_lock(pool.capacity_owner_id):
@@ -2011,23 +2007,23 @@ class ComputeService:
         pool_id: str,
         *,
         now: datetime,
-    ) -> ComputePoolRecord | None:
+    ) -> ComputeUnitRecord | None:
         with self.context.database.session() as session:
-            current = ComputePoolRepository(session).get(pool_id)
+            current = ComputeUnitRepository(session).get(pool_id)
         if current is None:
             return None
-        if current.phase is ComputePoolPhase.Deleted:
+        if current.phase is ComputeUnitPhase.Deleted:
             self._retire_proven_provider_pool_machines(current, now=now)
             return None
         try:
-            provider, offer = self._resolved_internal_pool_provider(current)
+            provider, offer = self._resolved_internal_unit_provider(current)
             pooled = provider.pooled
             if pooled is None:
                 raise UpstreamUnavailableError(
                     f"compute pool {current.name!r} provider is not pooled"
                 )
-            if current.phase is ComputePoolPhase.Deleting:
-                snapshot = pooled.delete_pool(self._provider_pool_request(current, offer))
+            if current.phase is ComputeUnitPhase.Deleting:
+                snapshot = pooled.delete_unit(self._provider_unit_request(current, offer))
                 return self.provider_machines._apply_pooled_snapshot(
                     current,
                     offer,
@@ -2043,12 +2039,12 @@ class ComputeService:
                 now=now,
             )
             degraded = current.provider_state.degraded_reason is not None
-            request = self._provider_pool_request(current, offer)
+            request = self._provider_unit_request(current, offer)
             snapshot = (
                 # A durably degraded pool stopped relaunching: observe and prove
                 # terminations without restoring provider capacity until an
                 # explicit capacity mutation clears the degraded reason.
-                pooled.describe_pool(request) if degraded else pooled.ensure_pool(request)
+                pooled.describe_unit(request) if degraded else pooled.ensure_unit(request)
             )
             return self.provider_machines._apply_pooled_snapshot(
                 current,
@@ -2071,12 +2067,12 @@ class ComputeService:
 
     def _reclaim_pooled_bootstrap_failures(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         *,
         pooled: PooledCapacityProvider,
         offer: ComputeOffer,
         now: datetime,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         """Reclaim pooled machines that missed their bootstrap phase deadline.
 
         Terminal proof stays with the pooled snapshot path: a reclaimed record
@@ -2123,7 +2119,7 @@ class ComputeService:
                 attempts_exhausted = True
             if record.instance_id is not None:
                 snapshot = pooled.release_machine(
-                    self._provider_pool_request(current, offer),
+                    self._provider_unit_request(current, offer),
                     record.instance_id,
                 )
                 current = self.provider_machines._apply_pooled_snapshot(
@@ -2138,7 +2134,7 @@ class ComputeService:
                 "reclaimed pooled provider machine that did not become ready",
                 extra={
                     "provider": record.provider,
-                    "pool_name": current.name,
+                    "pool": current.name,
                     "machine_id": record.machine_id,
                     "provider_instance_id": record.instance_id or record.id,
                     "launch_attempt": record.launch_attempt,
@@ -2161,8 +2157,8 @@ class ComputeService:
     ) -> AwsAccountPoolDrain:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            pools = ComputePoolRepository(session).list_for_provider_connection(connection_id)
-        if any(pool.workspace_id != workspace_id for pool in pools):
+            pools = ComputeUnitRepository(session).list_for_provider_connection(connection_id)
+        if any(unit.workspace_id != workspace_id for unit in pools):
             raise UpstreamUnavailableError("AWS capacity ownership is inconsistent")
         with self.context.database.session() as session:
             self._clear_other_internal_pool_floors(
@@ -2171,32 +2167,32 @@ class ComputeService:
                 keep_pool_id=None,
             )
 
-        for pool in pools:
-            if pool.phase is ComputePoolPhase.Deleted:
-                self._retire_proven_provider_pool_machines(pool, now=utc_now())
+        for unit in pools:
+            if unit.phase is ComputeUnitPhase.Deleted:
+                self._retire_proven_provider_pool_machines(unit, now=utc_now())
                 continue
-            current = pool
-            if pool.phase is not ComputePoolPhase.Deleting:
+            current = unit
+            if unit.phase is not ComputeUnitPhase.Deleting:
                 with self.context.database.session() as session:
-                    current = ComputePoolRepository(session).update_capacity(
-                        pool.id,
-                        expected_generation=pool.generation,
+                    current = ComputeUnitRepository(session).update_capacity(
+                        unit.id,
+                        expected_generation=unit.generation,
                         desired_machines=0,
-                        max_machines=max(pool.max_machines, 1),
-                        observed_machines=pool.observed_machines,
-                        phase=ComputePoolPhase.Deleting,
-                        provider_state=pool.provider_state,
+                        max_machines=max(unit.max_machines, 1),
+                        observed_machines=unit.observed_machines,
+                        phase=ComputeUnitPhase.Deleting,
+                        provider_state=unit.provider_state,
                     )
                 if current is None:
                     raise UpstreamUnavailableError("AWS capacity drain was superseded")
             try:
-                durable, provider, offer = self._internal_pool_provider(
+                durable, provider, offer = self._internal_unit_provider(
                     workspace_id,
                     current.name,
                 )
                 if provider.pooled is None:
                     raise RuntimeError("AWS capacity provider is not pooled")
-                snapshot = provider.pooled.delete_pool(self._provider_pool_request(durable, offer))
+                snapshot = provider.pooled.delete_unit(self._provider_unit_request(durable, offer))
                 self.provider_machines._apply_pooled_snapshot(
                     durable,
                     offer,
@@ -2211,8 +2207,8 @@ class ComputeService:
 
         with self.context.database.session() as session:
             remaining = sum(
-                pool.phase is not ComputePoolPhase.Deleted
-                for pool in ComputePoolRepository(session).list_for_provider_connection(
+                unit.phase is not ComputeUnitPhase.Deleted
+                for unit in ComputeUnitRepository(session).list_for_provider_connection(
                     connection_id
                 )
             )
@@ -2424,18 +2420,18 @@ class ComputeService:
             for provider in self.provider_resolver.list_providers(workspace_id)
         }
 
-    def _internal_pool_provider(
+    def _internal_unit_provider(
         self,
         workspace_id: str,
-        pool_name: str,
-    ) -> tuple[ComputePoolRecord, ResolvedComputeProvider, ComputeOffer]:
-        pool = self.get_internal_pool(workspace_id, pool_name)
-        provider, offer = self._resolved_internal_pool_provider(pool)
-        return pool, provider, offer
+        unit_name: UnitName,
+    ) -> tuple[ComputeUnitRecord, ResolvedComputeProvider, ComputeOffer]:
+        unit = self.get_internal_unit(workspace_id, unit_name)
+        provider, offer = self._resolved_internal_unit_provider(unit)
+        return unit, provider, offer
 
-    def _resolved_internal_pool_provider(
+    def _resolved_internal_unit_provider(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
     ) -> tuple[ResolvedComputeProvider, ComputeOffer]:
         if self.provider_resolver is None:
             raise UpstreamUnavailableError("workspace compute provider resolver is not configured")
@@ -2465,8 +2461,8 @@ class ComputeService:
     def clear_capacity_degradation(
         self,
         workspace: str,
-        pool_name: str,
-    ) -> ComputePoolRecord:
+        unit_name: UnitName,
+    ) -> ComputeUnitRecord:
         """Let a pool that exhausted its relaunch attempts buy machines again.
 
         Explicit because the degraded reason exists to stop a pool billing for
@@ -2477,29 +2473,29 @@ class ComputeService:
         """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            repository = ComputePoolRepository(session)
-            pool = repository.get_by_name(workspace_id, pool_name, for_update=True)
-            if pool is None:
-                raise NotFoundError(f"compute pool {pool_name!r} not found")
-            machines = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            repository = ComputeUnitRepository(session)
+            unit = repository.get_by_name(workspace_id, unit_name, for_update=True)
+            if unit is None:
+                raise NotFoundError(f"compute pool {unit_name!r} not found")
+            machines = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
             highest = max(
                 (record.launch_attempt for record in machines),
-                default=pool.provider_state.launch_attempt_baseline,
+                default=unit.provider_state.launch_attempt_baseline,
             )
             cleared = repository.apply_provider_state(
-                pool.id,
-                generation=pool.generation,
-                observed_machines=pool.observed_machines,
-                phase=ComputePoolPhase.Ready,
-                provider_state=pool.provider_state.model_copy(
+                unit.id,
+                generation=unit.generation,
+                observed_machines=unit.observed_machines,
+                phase=ComputeUnitPhase.Ready,
+                provider_state=unit.provider_state.model_copy(
                     update={"degraded_reason": None, "launch_attempt_baseline": highest}
                 ),
             )
         if cleared is None:
-            raise ConflictError(f"compute pool {pool_name!r} changed while clearing degradation")
+            raise ConflictError(f"compute pool {unit_name!r} changed while clearing degradation")
         self._publish_change(
             workspace_id=cleared.workspace_id,
-            topic=WorkspaceChangeTopic.ComputePools,
+            topic=WorkspaceChangeTopic.ComputeUnits,
             change=WorkspaceChangeType.Updated,
             resource_id=cleared.id,
         )
@@ -2507,48 +2503,48 @@ class ComputeService:
 
     def _mark_pooled_capacity_degraded(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         *,
         reason: str | None = None,
         preserve_deleting: bool = False,
-    ) -> ComputePoolRecord | None:
+    ) -> ComputeUnitRecord | None:
         provider_state = (
             pool.provider_state.model_copy(update={"degraded_reason": reason})
             if reason is not None
             else pool.provider_state
         )
         with self.context.database.session() as session:
-            degraded = ComputePoolRepository(session).apply_provider_state(
+            degraded = ComputeUnitRepository(session).apply_provider_state(
                 pool.id,
                 generation=pool.generation,
                 observed_machines=pool.observed_machines,
                 phase=(
-                    ComputePoolPhase.Deleting
-                    if preserve_deleting and pool.phase is ComputePoolPhase.Deleting
-                    else ComputePoolPhase.Degraded
+                    ComputeUnitPhase.Deleting
+                    if preserve_deleting and pool.phase is ComputeUnitPhase.Deleting
+                    else ComputeUnitPhase.Degraded
                 ),
                 provider_state=provider_state,
             )
         if degraded is not None:
             self._publish_change(
                 workspace_id=degraded.workspace_id,
-                topic=WorkspaceChangeTopic.ComputePools,
+                topic=WorkspaceChangeTopic.ComputeUnits,
                 change=WorkspaceChangeType.Updated,
                 resource_id=degraded.id,
             )
         return degraded
 
-    def _provider_pool_request(
+    def _provider_unit_request(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-    ) -> ProviderPoolRequest:
+    ) -> ProviderUnitRequest:
         if self.pool_bootstrap_factory is None or pool.provider_connection_id is None:
             raise RuntimeError("provider pool bootstrap is not configured")
-        return ProviderPoolRequest(
+        return ProviderUnitRequest(
             workspace_id=pool.workspace_id,
-            pool_id=pool.id,
-            pool_name=pool.name,
+            unit_id=pool.id,
+            unit_name=pool.name,
             provider_ref=pool.provider_ref,
             provider_connection_id=pool.provider_connection_id,
             generation=pool.generation,
@@ -2562,7 +2558,7 @@ class ComputeService:
 
     def _retire_proven_provider_pool_machines(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         *,
         now: datetime,
     ) -> None:
@@ -2610,7 +2606,7 @@ def _capacity_join_credential_reuse(
     credential: ComputeJoinCredentialRecord | None,
     *,
     workspace_id: str,
-    pool_name: str,
+    pool: str,
     machine_id: str,
     now: datetime,
 ) -> _CapacityJoinReuse:
@@ -2618,7 +2614,7 @@ def _capacity_join_credential_reuse(
         return _CapacityJoinReuse.Usable
     scoped_to_operation = (
         credential.workspace_id == workspace_id
-        and credential.pool_name == pool_name
+        and credential.pool == pool
         and credential.machine_id == machine_id
     )
     if not scoped_to_operation or credential.use_count != 0:
@@ -2644,7 +2640,7 @@ def _plan_capacity_join_token(
     signing_key: str,
     *,
     principal: ComputePrincipal,
-    pool_name: MachinePool,
+    pool: MachinePool,
     capacity_owner_id: str,
     operation_id: str,
     machine_id: str,
@@ -2652,7 +2648,7 @@ def _plan_capacity_join_token(
 ) -> JoinTokenCreationPlan:
     return plan_join_token_creation(
         principal,
-        pool_name,
+        pool,
         capacity_owner_id=capacity_owner_id,
         machine_id=machine_id,
         token=_capacity_join_token(
@@ -2678,7 +2674,7 @@ def _capacity_join_token(
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
-def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputePoolRecord) -> bool:
+def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputeUnitRecord) -> bool:
     return (
         offer.capacity_mode
         is (
@@ -2694,7 +2690,7 @@ def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputePoolRecord)
     )
 
 
-def _shape_matches_pool(shape: CapacityAcquisitionShape, pool: ComputePoolRecord) -> bool:
+def _shape_matches_pool(shape: CapacityAcquisitionShape, pool: ComputeUnitRecord) -> bool:
     return (
         shape.cpu_millicores == pool.worker_cpu_millicores
         and shape.memory_mib == pool.worker_memory_mib
@@ -2721,7 +2717,7 @@ def _offer_matches_capacity_shape(
 
 
 def _new_capacity_operation(
-    pool: ComputePoolRecord,
+    pool: ComputeUnitRecord,
     request: CapacityAcquisitionRequest,
     *,
     desired_unit: int,
@@ -2843,7 +2839,7 @@ def _operation_result(
     )
 
 
-def _offer_matches_pool(offer: ComputeOffer, plan: ComputePoolPlan) -> bool:
+def _offer_matches_pool(offer: ComputeOffer, plan: ComputeUnitPlan) -> bool:
     if plan.offer_id and offer.id != plan.offer_id:
         return False
     if plan.providers and offer.provider not in plan.providers:
@@ -2877,14 +2873,14 @@ def _resource_status_from_provider(status: str) -> ResourceStatus:
 
 
 def _provider_reservation_from_record(
-    pool_name: str,
+    pool: str,
     record: ComputeProviderInstanceRecord,
 ) -> ProviderReservation:
     metadata = _provider_instance_metadata(record)
     return ProviderReservation(
         id=record.id,
-        pool_name=pool_name,
-        selector=str(metadata.get("selector") or pool_name),
+        pool=pool,
+        selector=str(metadata.get("selector") or pool),
         provider=record.provider,
         cloud=str(metadata.get("cloud") or record.provider),
         region=str(metadata.get("region") or ""),
@@ -2933,7 +2929,7 @@ def _provider_record_at_deadline(
     deadline: datetime,
 ) -> ComputeProviderInstanceRecord:
     committed_micros = record.committed_micros
-    if record.source == ComputePoolSource.Managed.value:
+    if record.source == ComputeUnitSource.Managed.value:
         lifetime_seconds = ceil(
             (_utc(deadline) - _provider_commitment_start(record)).total_seconds()
         )
@@ -2954,12 +2950,12 @@ def _provider_commitment_start(record: ComputeProviderInstanceRecord) -> datetim
     ) or _utc(record.created_at)
 
 
-def _policy_owned_scale(pool: ComputePoolRecord) -> None:
+def _policy_owned_scale(pool: ComputeUnitRecord) -> None:
     """Workspace policy owns the zero-capacity intent; no extra scale guard applies."""
     del pool
 
 
-def _previous_policy_floor(current: ComputePoolRecord | None) -> int:
+def _previous_policy_floor(current: ComputeUnitRecord | None) -> int:
     """The floor the stored unit was already holding.
 
     ``initial_machines`` matters as well as ``min_machines``: a unit whose
@@ -2992,17 +2988,17 @@ def _policy_owned_desired_machines(
     return min(max(current_desired - released, floor), ceiling)
 
 
-def _zero_capacity_converged(pool: ComputePoolRecord) -> bool:
+def _zero_capacity_converged(pool: ComputeUnitRecord) -> bool:
     """Durable state already says zero, so only the provider is still in doubt."""
 
     return (
         pool.desired_machines == 0
         and pool.observed_machines == 0
-        and pool.phase is ComputePoolPhase.Ready
+        and pool.phase is ComputeUnitPhase.Ready
     )
 
 
-def _owns_provider_pool_capacity(pool: ComputePoolRecord) -> bool:
+def _owns_provider_pool_capacity(pool: ComputeUnitRecord) -> bool:
     """Answer whether a provider holds a pool object of its own for this record.
 
     Only a pool bound to a provider connection has one. Every other pool's
@@ -3016,7 +3012,7 @@ def _owns_provider_pool_capacity(pool: ComputePoolRecord) -> bool:
     )
 
 
-def _pool_gpu_capacity(pool: ComputePoolRecord) -> bool:
+def _pool_gpu_capacity(pool: ComputeUnitRecord) -> bool:
     return pool.worker_gpu_count > 0
 
 

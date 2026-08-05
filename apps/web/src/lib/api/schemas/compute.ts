@@ -206,11 +206,11 @@ const machinePreflightCheckSchema = z
   })
   .strict();
 
-export const poolMachineSchema = z.object({
+export const unitMachineSchema = z.object({
   id: z.string(),
   cpu: z.number(),
   memory: z.number(),
-  pool_name: z.string(),
+  pool: z.string(),
   provider_name: z.string(),
   readiness_phase: machineReadinessPhaseSchema,
   readiness_message: z.string(),
@@ -223,11 +223,11 @@ export const poolMachineSchema = z.object({
   remediation: z.array(z.string()),
   last_seen_at: z.string().nullable(),
 });
-export type PoolMachine = z.infer<typeof poolMachineSchema>;
+export type UnitMachine = z.infer<typeof unitMachineSchema>;
 
-export const poolMachineListSchema = z
+export const unitMachineListSchema = z
   .object({
-    data: z.array(poolMachineSchema),
+    data: z.array(unitMachineSchema),
     next: z.string(),
   })
   .strict();
@@ -296,7 +296,7 @@ const workerContainerSchema = z.object({
 export const workerSchema = z.object({
   id: z.string(),
   status: z.string(),
-  pool_name: z.string(),
+  pool: z.string(),
   machine_id: z.string().default(""),
   gpu: z.string().default(""),
   runtime: z.string().default(""),

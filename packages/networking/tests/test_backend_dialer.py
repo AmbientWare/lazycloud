@@ -34,7 +34,7 @@ def test_backend_route_dialer_connects_to_local_tcp_and_cleans_up(
     route = AgentBackendRoute(
         route_id=_ROUTE_ID,
         workspace_id="workspace-one",
-        pool_name="pool-one",
+        pool="pool-one",
         machine_id="machine-one",
         transport=BackendRouteTransport.LocalDirect,
         proxy_target=f"127.0.0.1:{free_tcp_port}",
@@ -103,7 +103,7 @@ def test_a_reachable_proxy_target_is_dialed_without_waiting_on_the_peer(
     route = AgentBackendRoute(
         route_id=_ROUTE_ID,
         workspace_id="workspace-one",
-        pool_name="pool-one",
+        pool="pool-one",
         machine_id="machine-one",
         transport=BackendRouteTransport.TsnetRestricted,
         proxy_target=f"127.0.0.1:{free_tcp_port}",

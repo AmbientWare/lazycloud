@@ -8,7 +8,7 @@ import {
   customerComputeInstanceListSchema,
   machinePoolListSchema,
   poolJoinCommandResponseSchema,
-  poolMachineListSchema,
+  unitMachineListSchema,
   workspaceComputePolicySchema,
   workerListSchema,
   type AwsConnection,
@@ -47,7 +47,7 @@ export function machinesQueryOptions(workspaceId: string) {
     queryFn: () =>
       apiRequest(
         withWorkspace("/api/v1/machines/pool?pool=self-hosted&limit=250", workspaceId),
-        poolMachineListSchema,
+        unitMachineListSchema,
       ),
     refetchInterval: 5_000,
     meta: workspaceLiveQueryMeta(true),

@@ -10,7 +10,7 @@ from compute.request_placement import (
 from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus,
     CapacityProvisioningReservation,
-    ComputePoolCapacityController,
+    ComputeUnitCapacityController,
 )
 from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.state import SchedulerWorkerRequest
@@ -26,7 +26,7 @@ from shared.capacity import (
     CapacityAcquisitionStatus as ComputeCapacityAcquisitionStatus,
 )
 from shared.compute_policy import (
-    ComputePoolRecord,
+    ComputeUnitRecord,
     MachinePool,
     UnitName,
 )
@@ -56,18 +56,18 @@ def test_scheduler_stamps_the_resolved_pool_and_every_unit_in_it_accepts() -> No
     assert placed.pool_selector == "aws"
 
     compute = _RequestedComputeCapacity()
-    controller = ComputePoolCapacityController(
+    controller = ComputeUnitCapacityController(
         workspace_id="workspace-1",
-        pool=_internal_aws_pool(),
+        unit=_internal_aws_pool(),
         compute=compute,
         workers=_NoWorkers(),
     )
     assert controller.accepts(placed)
     # A second unit feeding the same group is equally a candidate; that is what
     # gives the acquisition loop something to fail over to.
-    sibling = ComputePoolCapacityController(
+    sibling = ComputeUnitCapacityController(
         workspace_id="workspace-1",
-        pool=_internal_aws_pool().model_copy(
+        unit=_internal_aws_pool().model_copy(
             update={
                 "id": _SIBLING_OWNER_ID,
                 "capacity_owner_id": _SIBLING_OWNER_ID,
@@ -79,9 +79,9 @@ def test_scheduler_stamps_the_resolved_pool_and_every_unit_in_it_accepts() -> No
     )
     assert sibling.accepts(placed)
     # A unit feeding a different group is not.
-    other_group = ComputePoolCapacityController(
+    other_group = ComputeUnitCapacityController(
         workspace_id="workspace-1",
-        pool=_internal_aws_pool().model_copy(update={"machine_pool": "another-group"}),
+        unit=_internal_aws_pool().model_copy(update={"pool": "another-group"}),
         compute=compute,
         workers=_NoWorkers(),
     )
@@ -92,7 +92,7 @@ def test_scheduler_stamps_the_resolved_pool_and_every_unit_in_it_accepts() -> No
     reservation = CapacityProvisioningReservation(
         id="22222222-2222-4222-8222-222222222222",
         capacity_owner_id=_OWNER_ID,
-        pool_name="internal-aws-cpu",
+        pool="internal-aws-cpu",
         owner_kind=CapacityOwnerKind.PooledProvider,
         acquisition_shape=acquisition_shape,
         schedulable_shape=acquisition_shape.model_copy(update={"memory_mib": 15_500}),
@@ -120,7 +120,7 @@ class _RecordingCapacity:
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
         self.requests.append(request)
-        return ComputeCapacityPlacementResult(machine_pool="aws")
+        return ComputeCapacityPlacementResult(pool="aws")
 
 
 @dataclass(slots=True)
@@ -158,12 +158,12 @@ class _NoWorkers:
         return []
 
 
-def _internal_aws_pool() -> ComputePoolRecord:
-    return ComputePoolRecord(
+def _internal_aws_pool() -> ComputeUnitRecord:
+    return ComputeUnitRecord(
         id=_OWNER_ID,
         workspace_id=_WORKSPACE_ID,
         name=UnitName("internal-aws-cpu"),
-        machine_pool=MachinePool("aws"),
+        pool=MachinePool("aws"),
         provider="aws",
         capacity_owner_id=_OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,

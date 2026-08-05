@@ -9,7 +9,7 @@ from compute.agent_control import (
     plan_agent_join,
     plan_join_token_binding,
 )
-from compute.projection import PoolConfig, PrivatePoolState
+from compute.projection import PoolConfig, PrivateUnitState
 from compute.state import (
     ComputeJoinTokenState,
 )
@@ -26,7 +26,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=hash_compute_token("join-token"),
         workspace_id="workspace-one",
-        pool_name=MachinePool("gpu-pool"),
+        pool=MachinePool("gpu-pool"),
         machine_id="machine-fixed",
         created_by_token_id="token-owner",
         expires_at=now + timedelta(hours=1),
@@ -43,7 +43,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     assert not conflict.accepted
     assert conflict.decision is JoinTokenDecision.FingerprintConflict
 
-    pool = PrivatePoolState(
+    pool = PrivateUnitState(
         workspace_id="workspace-one",
         name=UnitName("gpu-pool"),
         config=PoolConfig(name="gpu-pool"),
@@ -83,7 +83,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     assert join.should_save_pool
     assert join.should_register_pool
 
-    rtx_token = token.model_copy(update={"pool_name": "rtx-pool", "machine_id": "rtx-machine"})
+    rtx_token = token.model_copy(update={"pool": "rtx-pool", "machine_id": "rtx-machine"})
     rtx_pool = pool.model_copy(update={"name": "rtx-pool", "config": PoolConfig(name="rtx-pool")})
     rtx_request = request.model_copy(
         update={

@@ -19,9 +19,9 @@ class _Gateway:
         machine_id: str,
         *,
         workspace_id: str,
-        pool_name: str = "",
+        pool: str = "",
     ) -> None:
-        del pool_name
+        del pool
         self.calls.append(("delete", workspace_id, machine_id))
 
 

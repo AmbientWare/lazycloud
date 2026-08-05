@@ -6,7 +6,7 @@ from compute.state import (
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputeJoinTokenState,
-    ComputePoolState,
+    ComputeUnitState,
     RedisComputeStateRepository,
 )
 from coordination.redis_client import RedisClient
@@ -21,7 +21,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     repo = RedisComputeStateRepository(redis)
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
-    pool = ComputePoolState(
+    pool = ComputeUnitState(
         workspace_id="ws-1",
         name=UnitName("default"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -29,8 +29,8 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         desired_machines=2,
         updated_at=now,
     )
-    repo.save_pool_state(pool)
-    assert repo.get_pool_state("ws-1", "default") == pool
+    repo.save_unit_state(pool)
+    assert repo.get_unit_state("ws-1", "default") == pool
     assert repo.list_all_pool_states() == [pool]
     assert repo.pool_lock_plan("ws-1", "default").key == (
         "test:compute:workspaces:ws-1:pools:default:lock"
@@ -40,7 +40,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="join-hash",
         workspace_id="ws-1",
-        pool_name=MachinePool("default"),
+        pool=MachinePool("default"),
         created_at=now,
     )
     repo.save_join_token_state(join, ttl_seconds=0)
@@ -51,7 +51,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="agent-hash",
         workspace_id="ws-1",
-        pool_name=MachinePool("default"),
+        pool=MachinePool("default"),
         machine_id="machine-1",
         created_at=now,
     )
@@ -65,7 +65,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     slot = ComputeAgentWorkerSlotState(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         workspace_id="ws-1",
-        pool_name=MachinePool("default"),
+        pool=MachinePool("default"),
         machine_id="machine-1",
         worker_id="worker-1",
         created_at=now,
@@ -78,7 +78,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
-        pool_name="default",
+        pool="default",
         machine_id="machine-1",
         worker_id="worker-1",
         container_id="container-1",
@@ -94,21 +94,21 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     assert repo.prune_agent_machine_index("ws-1", "default") == 1
 
     repo.save_agent_worker_slot_state(slot, now=now)
-    assert repo.delete_agent_machine_state("ws-1", "default", "machine-1")
+    assert repo.delete_agent_machine_state("ws-1", UnitName("default"), "machine-1")
     assert repo.get_agent_token_state("agent-hash") is None
     assert repo.list_agent_worker_slot_states("ws-1", "default", "machine-1") == []
-    assert repo.delete_pool_state("ws-1", "default")
+    assert repo.delete_unit_state("ws-1", UnitName("default"))
 
     orphan_revision = repo.keys.agent_route_revision("ws-1", "orphaned-pool", "orphaned-machine")
     peer_revision = repo.keys.agent_route_revision("ws-peer", "orphaned-pool", "orphaned-machine")
     fake.set(orphan_revision, "1")
     fake.set(peer_revision, "1")
 
-    assert repo.delete_pool_state("ws-1", "orphaned-pool")
+    assert repo.delete_unit_state("ws-1", UnitName("orphaned-pool"))
     assert fake.get(orphan_revision) is None
     assert fake.get(peer_revision) == "1"
 
-    cleanup_pool = ComputePoolState(
+    cleanup_pool = ComputeUnitState(
         workspace_id="ws-1",
         name=UnitName("cleanup"),
         capacity_owner_id="22222222-2222-4222-8222-222222222222",
@@ -118,14 +118,14 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="cleanup-agent-hash",
         workspace_id="ws-1",
-        pool_name=MachinePool("cleanup"),
+        pool=MachinePool("cleanup"),
         machine_id="cleanup-machine",
         created_at=now,
     )
     cleanup_slot = ComputeAgentWorkerSlotState(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         workspace_id="ws-1",
-        pool_name=MachinePool("cleanup"),
+        pool=MachinePool("cleanup"),
         machine_id="cleanup-machine",
         worker_id="cleanup-worker",
         created_at=now,
@@ -134,19 +134,19 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     cleanup_route = AgentBackendRoute(
         route_id="cleanup-route",
         workspace_id="ws-1",
-        pool_name="cleanup",
+        pool="cleanup",
         machine_id="cleanup-machine",
         worker_id="cleanup-worker",
         container_id="cleanup-container",
         port=8080,
     )
-    repo.save_pool_state(cleanup_pool)
+    repo.save_unit_state(cleanup_pool)
     repo.save_agent_token_state(cleanup_agent)
     repo.save_agent_worker_slot_state(cleanup_slot, now=now)
     repo.save_agent_route_state(cleanup_route)
 
-    assert repo.delete_pool_state("ws-1", "cleanup")
-    assert repo.get_pool_state("ws-1", "cleanup") is None
+    assert repo.delete_unit_state("ws-1", UnitName("cleanup"))
+    assert repo.get_unit_state("ws-1", "cleanup") is None
     assert repo.get_agent_token_state("cleanup-agent-hash") is None
     assert repo.list_agent_token_states("ws-1", "cleanup") == []
     assert repo.list_agent_worker_slot_states("ws-1", "cleanup", "cleanup-machine") == []
@@ -159,14 +159,14 @@ def test_compute_state_repository_deletes_exact_workspace_residue() -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
     for workspace_id, suffix in (("ws-delete", "owned"), ("ws-peer", "peer")):
-        pool_name = f"pool-{suffix}"
+        pool = f"pool-{suffix}"
         machine_id = f"machine-{suffix}"
         repo.save_join_token_state(
             ComputeJoinTokenState(
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 token_hash=f"join-{suffix}",
                 workspace_id=workspace_id,
-                pool_name=MachinePool(pool_name),
+                pool=MachinePool(pool),
                 created_at=now,
             )
         )
@@ -175,12 +175,12 @@ def test_compute_state_repository_deletes_exact_workspace_residue() -> None:
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 token_hash=f"agent-{suffix}",
                 workspace_id=workspace_id,
-                pool_name=MachinePool(pool_name),
+                pool=MachinePool(pool),
                 machine_id=machine_id,
                 created_at=now,
             )
         )
-        fake.set(repo.keys.agent_route_revision(workspace_id, pool_name, machine_id), "1")
+        fake.set(repo.keys.agent_route_revision(workspace_id, pool, machine_id), "1")
 
     assert repo.delete_workspace_state("ws-delete") > 0
     assert repo.get_join_token_state("join-owned") is None

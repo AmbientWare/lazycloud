@@ -14,7 +14,7 @@ from scheduler.agent_pool import (
 from scheduler.capacity_reservations import (
     CapacityAcquisitionController,
     CapacityWorkerRepository,
-    ComputePoolCapacityController,
+    ComputeUnitCapacityController,
 )
 from scheduler.pool_drain import (
     WorkerPoolDrainContainerRepository,
@@ -47,8 +47,8 @@ class SchedulerCapacityControllerProvider:
         group, and keying by the label would silently drop all but one of them.
         """
         configs: dict[str, AgentPoolConfig] = {}
-        for pool in self.services.compute.list_pools_across_workspaces():
-            config = agent_pool_config_from_pool(pool)
+        for unit in self.services.compute.list_units_across_workspaces():
+            config = agent_pool_config_from_pool(unit)
             if config is not None:
                 configs[config.capacity_owner_id] = config
         for state in self.compute_states.list_all_pool_states():
@@ -58,21 +58,21 @@ class SchedulerCapacityControllerProvider:
             configs[key]
             for key in sorted(
                 configs,
-                key=lambda item: (configs[item].workspace_id, configs[item].pool_name, item),
+                key=lambda item: (configs[item].workspace_id, configs[item].pool, item),
             )
         ]
 
     def capacity_acquisition_controllers(self) -> list[CapacityAcquisitionController]:
         controllers: list[CapacityAcquisitionController] = [
-            ComputePoolCapacityController(
-                pool.workspace_id,
-                pool,
+            ComputeUnitCapacityController(
+                unit.workspace_id,
+                unit,
                 self.services.compute,
                 self.workers,
             )
-            for pool in self.services.compute.list_pools_across_workspaces()
-            if pool.capacity_owner_kind
-            in {CapacityOwnerKind.ManagedPool, CapacityOwnerKind.PooledProvider}
+            for unit in self.services.compute.list_units_across_workspaces()
+            if unit.capacity_owner_kind
+            in {CapacityOwnerKind.ManagedUnit, CapacityOwnerKind.PooledProvider}
         ]
         controllers.sort(key=lambda item: item.capacity_owner_id)
         return controllers

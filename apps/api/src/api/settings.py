@@ -6,8 +6,8 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.http.compute import PoolPolicy
-from shared.routing import BackendRouteTransport, PrivatePoolFallback
+from shared.http.compute import UnitPolicy
+from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
 
 class TcpIngressSettings(BaseSettings):
@@ -78,7 +78,7 @@ class AgentRouteReconciliationSettings(BaseSettings):
     )
 
 
-class CapacityBootstrapPool(PoolPolicy):
+class CapacityBootstrapUnit(UnitPolicy):
     """One provisioning unit reconciled before the production API starts serving.
 
     `machine_pool` is the pool the unit stamps on its machines; it
@@ -86,45 +86,45 @@ class CapacityBootstrapPool(PoolPolicy):
     """
 
     name: str = Field(min_length=1, max_length=160)
-    machine_pool: str = Field(default="", max_length=240)
+    pool: str = Field(default="", max_length=240)
     workspace: str = Field(default="default", min_length=1, max_length=160)
     provider: str = Field(default="local", min_length=1, max_length=160)
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
-    fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
+    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
 
-    @field_validator("name", "workspace", "provider", "machine_pool")
+    @field_validator("name", "workspace", "provider", "pool")
     @classmethod
     def normalize_identity(cls, value: str) -> str:
         return value.strip()
 
 
 class CapacityBootstrapSettings(BaseSettings):
-    pools: tuple[CapacityBootstrapPool, ...] = ()
+    units: tuple[CapacityBootstrapUnit, ...] = ()
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_CAPACITY_BOOTSTRAP_",
         extra="ignore",
     )
 
-    @field_validator("pools")
+    @field_validator("units")
     @classmethod
-    def require_unique_pool_owners(
+    def require_unique_unit_owners(
         cls,
-        pools: tuple[CapacityBootstrapPool, ...],
-    ) -> tuple[CapacityBootstrapPool, ...]:
-        identities = [(pool.workspace, pool.name) for pool in pools]
+        units: tuple[CapacityBootstrapUnit, ...],
+    ) -> tuple[CapacityBootstrapUnit, ...]:
+        identities = [(unit.workspace, unit.name) for unit in units]
         if len(identities) != len(set(identities)):
-            raise ValueError("capacity bootstrap pools must have unique workspace/name pairs")
-        owner_ids = [pool.capacity_owner_id for pool in pools]
+            raise ValueError("capacity bootstrap units must have unique workspace/name pairs")
+        owner_ids = [unit.capacity_owner_id for unit in units]
         if len(owner_ids) != len(set(owner_ids)):
-            raise ValueError("capacity bootstrap pools must have unique capacity owner ids")
-        return pools
+            raise ValueError("capacity bootstrap units must have unique capacity owner ids")
+        return units
 
 
 __all__ = [
     "AgentRouteReconciliationSettings",
-    "CapacityBootstrapPool",
     "CapacityBootstrapSettings",
+    "CapacityBootstrapUnit",
     "TcpIngressSettings",
 ]

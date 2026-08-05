@@ -140,7 +140,7 @@ class SchedulerContainerRouteRepository(Protocol):
 
 class WorkerRouteIdentity(ContractModel):
     worker_id: str
-    pool_name: str = "default"
+    pool: str = "default"
     machine_id: str = ""
     pod_address: str = ""
     container_service_port: int = 0
@@ -166,11 +166,11 @@ class WorkerRouteIdentity(ContractModel):
     def route_context(self, request: ContainerRequestContext) -> WorkerRouteContext | None:
         if not (request.workspace_id and request.container_id):
             return None
-        if self.agent_worker and not (self.pool_name and self.machine_id and self.worker_id):
+        if self.agent_worker and not (self.pool and self.machine_id and self.worker_id):
             return None
         return WorkerRouteContext(
             workspace_id=request.workspace_id,
-            pool_name=self.pool_name,
+            pool=self.pool,
             machine_id=self.machine_id,
             worker_id=self.worker_id,
             container_id=request.container_id,
