@@ -147,6 +147,17 @@ class MachineJoinCommandResponse(HttpModel):
     expires_at: datetime
 
 
+class MachineJoinTokenResponse(HttpModel):
+    """The same credential the join command embeds, for a machine-readable caller.
+
+    A process that has to write the token to a file should not have to parse it
+    back out of a shell string.
+    """
+
+    token: str
+    expires_at: datetime
+
+
 class WorkerContainerResponse(HttpModel):
     container_id: str
     workspace_id: str = ""

@@ -10,6 +10,7 @@ from shared.http.compute import (
     MachineCreateRequest,
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
+    MachineJoinTokenResponse,
     MachineListResponse,
     MachineResponse,
     UnitMachineListResponse,
@@ -80,6 +81,24 @@ def machine_join_command(
     service: GatewayControlService = Depends(gateway_service),
 ) -> MachineJoinCommandResponse:
     return service.machine_join_command(
+        request,
+        workspace_id=workspace_id,
+        owner_token_id=token.id,
+    )
+
+
+@router.post(
+    "/api/v1/machines/join-token",
+    response_model=MachineJoinTokenResponse,
+    operation_id="get_machine_join_token",
+)
+def machine_join_token(
+    request: MachineJoinCommandRequest,
+    token: write_token,
+    workspace_id: write_workspace,
+    service: GatewayControlService = Depends(gateway_service),
+) -> MachineJoinTokenResponse:
+    return service.machine_join_token(
         request,
         workspace_id=workspace_id,
         owner_token_id=token.id,

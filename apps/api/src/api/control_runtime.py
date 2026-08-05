@@ -40,7 +40,6 @@ from observability.telemetry import TelemetryConfig
 from provider_clients.release import resolve_deployment_release
 from provider_clients.settings import AwsCapacityReconciliationSettings
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
-from shared.compute_policy import MachinePool, UnitName
 from shared.enums import StringEnum
 from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
@@ -57,7 +56,6 @@ from api.server.services import (
 from api.server.worker_repository_service import WorkerRepositoryService
 from api.settings import (
     AgentRouteReconciliationSettings,
-    CapacityBootstrapSettings,
     TcpIngressSettings,
 )
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -210,7 +208,6 @@ class ControlPlaneRuntime:
 def _production_api_services() -> ApiServices:
     tcp_ingress_settings = TcpIngressSettings()
     agent_route_reconciliation_settings = AgentRouteReconciliationSettings()
-    capacity_bootstrap_settings = CapacityBootstrapSettings()
     gateway_settings = GatewaySettings()
     workspace_change_stream_settings = WorkspaceChangeStreamSettings()
     # The install routes serve exactly the agent artifact this names, so the
@@ -299,52 +296,5 @@ def _production_api_services() -> ApiServices:
             tailnet_runtime=tailnet_runtime,
             owned_resources=tuple(owned_resources),
         )
-        try:
-            _reconcile_bootstrap_capacity(services, capacity_bootstrap_settings)
-        except BaseException as startup_error:
-            rollback.pop_all()
-            try:
-                services.close()
-            except BaseException as cleanup_error:
-                raise BaseExceptionGroup(
-                    "capacity bootstrap and service cleanup both failed",
-                    [startup_error, cleanup_error],
-                ) from None
-            raise
         rollback.pop_all()
         return services
-
-
-def _reconcile_bootstrap_capacity(
-    services: ApiServices,
-    settings: CapacityBootstrapSettings,
-) -> None:
-    for unit in settings.units:
-        services.compute.create_unit(
-            UnitName(unit.name),
-            workspace=unit.workspace,
-            pool=MachinePool(unit.pool) if unit.pool else None,
-            provider=unit.provider,
-            capacity_owner_id=unit.capacity_owner_id,
-            initial_machines=unit.initial_machines,
-            min_machines=unit.min_machines,
-            max_machines=unit.max_machines,
-            scaling_enabled=unit.scaling_enabled,
-            default_eligible=unit.default_eligible,
-            priority=unit.priority,
-            min_free_cpu_millicores=unit.min_free_cpu_millicores,
-            min_free_memory_mib=unit.min_free_memory_mib,
-            min_free_gpu_count=unit.min_free_gpu_count,
-            worker_cpu_millicores=unit.worker_cpu_millicores,
-            worker_memory_mib=unit.worker_memory_mib,
-            worker_gpu_type=unit.worker_gpu_type,
-            worker_gpu_count=unit.worker_gpu_count,
-            worker_runtimes=unit.worker_runtimes,
-            worker_preemptible=unit.worker_preemptible,
-            idle_drain_timeout_seconds=unit.idle_drain_timeout_seconds,
-            scale_up_cooldown_seconds=unit.scale_up_cooldown_seconds,
-            scale_down_cooldown_seconds=unit.scale_down_cooldown_seconds,
-            registration_timeout_seconds=unit.registration_timeout_seconds,
-            transport=unit.transport,
-            fallback=unit.fallback,
-        )

@@ -730,7 +730,7 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
     fleets = [
         unit
         for unit in isolated_services.compute.list_units(workspace=workspace_id)
-        if unit.name == SELF_HOSTED_FLEET_POOL_NAME
+        if unit.pool == SELF_HOSTED_FLEET_POOL_NAME
     ]
     assert len(fleets) == 1
     assert fleets[0].provider == "agent"
@@ -751,7 +751,7 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
     fleets = [
         unit
         for unit in isolated_services.compute.list_units(workspace=workspace_id)
-        if unit.name == SELF_HOSTED_FLEET_POOL_NAME
+        if unit.pool == SELF_HOSTED_FLEET_POOL_NAME
     ]
     assert len(fleets) == 1
     assert fleets[0].worker_gpu_type == "A10G"

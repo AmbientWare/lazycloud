@@ -34,6 +34,7 @@ from compute.agent_control import (
     validate_agent_transport_config,
 )
 from compute.projection import PoolConfig
+from compute.providers import joined_unit_identity
 from compute.service import ComputeService
 from compute.state import (
     ComputeAgentTokenState,
@@ -110,7 +111,6 @@ from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeUnitRecord,
     MachinePool,
-    UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import resolve_authorized, resolve_max_pending_tasks, resolve_retries
@@ -131,6 +131,7 @@ from shared.http.client_manifests import (
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
+    MachineJoinTokenResponse,
     UnitJoinCommandResponse,
     UnitMachineListResponse,
     UnitMachineResponse,
@@ -1136,7 +1137,7 @@ class GatewayControlService:
         Requested GPU types extend the fleet's accepted set.
         """
         try:
-            fleet = self._resolve_self_hosted_fleet(
+            fleet = self._resolve_joined_fleet(
                 workspace_id,
                 gpu=list(request.gpu),
                 pool=MachinePool(request.pool.strip()),
@@ -1159,32 +1160,66 @@ class GatewayControlService:
             expires_at=plan.expires_at,
         )
 
-    def _resolve_self_hosted_fleet(
+    def machine_join_token(
+        self,
+        request: MachineJoinCommandRequest,
+        *,
+        workspace_id: str,
+        owner_token_id: str,
+    ) -> MachineJoinTokenResponse:
+        """Mint the bare join credential for the pool the caller names.
+
+        Same fleet resolution and same mint as `machine_join_command`; only the
+        rendering differs.
+        """
+        try:
+            fleet = self._resolve_joined_fleet(
+                workspace_id,
+                gpu=list(request.gpu),
+                pool=MachinePool(request.pool.strip()),
+            )
+        except (KeyError, ValueError) as exc:
+            raise _domain_error(exc) from exc
+        plan = self.unit_state_coordinator.create_unit_join_token(
+            fleet,
+            workspace_id=workspace_id,
+            owner_token_id=owner_token_id,
+            ttl=request.ttl,
+        )
+        return MachineJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
+
+    def _resolve_joined_fleet(
         self,
         workspace_id: str,
         *,
         gpu: list[str],
         pool: MachinePool = MachinePool(""),
     ) -> ComputeUnitRecord:
-        group = pool or SELF_HOSTED_FLEET_POOL_NAME
-        # One self-hosted unit per group. A workspace joining hosts into a pool
-        # a connected account also feeds needs its own capacity owner there, or
-        # that account's drain would treat the joined hosts as its own.
-        unit_name = (
-            SELF_HOSTED_FLEET_POOL_NAME
-            if group == SELF_HOSTED_FLEET_POOL_NAME
-            else f"{SELF_HOSTED_FLEET_POOL_NAME}-{group}"
+        """Find or create the unit that owns joined machines for one pool.
+
+        One unit per group. A workspace joining hosts into a pool a connected
+        account also feeds needs its own capacity owner there, or that account's
+        drain would treat the joined hosts as its own.
+
+        Nothing declares this unit; it exists because a host asked to join, and
+        the identity is derived so asking twice resolves the same row.
+        """
+        group = pool or MachinePool(SELF_HOSTED_FLEET_POOL_NAME)
+        _, unit_name = joined_unit_identity(
+            workspace_id=workspace_id,
+            pool=group,
+            provider="agent",
         )
         try:
             current = self.unit_state_coordinator.unit_by_name(
-                UnitName(unit_name),
+                unit_name,
                 workspace_id=workspace_id,
             )
         except NotFoundError:
             return self.unit_state_coordinator.create_or_update_pool(
                 PoolConfig(name=unit_name, providers=["agent"], gpu=gpu),
                 workspace_id=workspace_id,
-                pool=MachinePool(group),
+                pool=group,
             )
         config = pool_config_from_unit(current)
         merged = [*config.gpu, *[item for item in gpu if item not in config.gpu]]

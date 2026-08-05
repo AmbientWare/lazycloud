@@ -5,10 +5,6 @@ from pathlib import Path
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
-from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_policy import MachinePool
-from shared.http.compute import UnitPolicy
-from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
 
 class TcpIngressSettings(BaseSettings):
@@ -79,53 +75,7 @@ class AgentRouteReconciliationSettings(BaseSettings):
     )
 
 
-class CapacityBootstrapUnit(UnitPolicy):
-    """One provisioning unit reconciled before the production API starts serving.
-
-    `machine_pool` is the pool the unit stamps on its machines; it
-    defaults to the unit's own name so an unset pool still routes.
-    """
-
-    name: str = Field(min_length=1, max_length=160)
-    pool: MachinePool = MachinePool(Field(default="", max_length=240))
-    workspace: str = Field(default="default", min_length=1, max_length=160)
-    provider: str = Field(default="local", min_length=1, max_length=160)
-    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
-    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
-
-    @field_validator("name", "workspace", "provider", "pool")
-    @classmethod
-    def normalize_identity(cls, value: str) -> str:
-        return value.strip()
-
-
-class CapacityBootstrapSettings(BaseSettings):
-    units: tuple[CapacityBootstrapUnit, ...] = ()
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_CAPACITY_BOOTSTRAP_",
-        extra="ignore",
-    )
-
-    @field_validator("units")
-    @classmethod
-    def require_unique_unit_owners(
-        cls,
-        units: tuple[CapacityBootstrapUnit, ...],
-    ) -> tuple[CapacityBootstrapUnit, ...]:
-        identities = [(unit.workspace, unit.name) for unit in units]
-        if len(identities) != len(set(identities)):
-            raise ValueError("capacity bootstrap units must have unique workspace/name pairs")
-        owner_ids = [unit.capacity_owner_id for unit in units]
-        if len(owner_ids) != len(set(owner_ids)):
-            raise ValueError("capacity bootstrap units must have unique capacity owner ids")
-        return units
-
-
 __all__ = [
     "AgentRouteReconciliationSettings",
-    "CapacityBootstrapSettings",
-    "CapacityBootstrapUnit",
     "TcpIngressSettings",
 ]

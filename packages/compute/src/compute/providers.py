@@ -263,6 +263,28 @@ def internal_unit_identity(
     return str(identity), UnitName(f"managed-{identity.hex[:24]}")
 
 
+def joined_unit_identity(
+    *,
+    workspace_id: str,
+    pool: MachinePool,
+    provider: str,
+) -> tuple[str, UnitName]:
+    """Derive the durable id and name of one joined-capacity unit.
+
+    Machines reach this unit by joining rather than being bought, so the seed is
+    only what decides which fleet a host lands in: the workspace, the pool it
+    serves, and the kind of agent running it. Deriving rather than naming keeps
+    find-or-create idempotent across restarts, and keeps the name out of the
+    shape a pool label has — a unit called `lazycloud` sitting in pool
+    `lazycloud` is the ambiguity this whole vocabulary exists to prevent.
+    """
+    identity = uuid5(
+        NAMESPACE_URL,
+        "\0".join(("compute-joined", workspace_id, pool, provider)),
+    )
+    return str(identity), UnitName(f"joined-{identity.hex[:24]}")
+
+
 class MachineReferenceLike(Protocol):
     machine_id: str
 

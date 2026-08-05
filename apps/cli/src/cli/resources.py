@@ -25,6 +25,7 @@ from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
     MachineCreateRequest,
+    MachineJoinCommandRequest,
     UnitCreateRequest,
     UnitJoinCommandRequest,
     UnitJoinTokenRequest,
@@ -421,6 +422,22 @@ def unit_clear_degraded(
     )
 
 
+def pool_join_token(
+    ctx: typer.Context,
+    pool: Annotated[str, typer.Option("--pool")] = "",
+    ttl: Annotated[str, typer.Option("--ttl")] = "",
+) -> None:
+    """Mint a single-use join credential for a pool, creating its unit if new.
+
+    Names a pool, not a unit: the capacity owner is found or created server-side,
+    so nothing has to exist before the first host joins.
+    """
+    response = admin_api_client().create_pool_join_token(
+        MachineJoinCommandRequest(pool=MachinePool(pool), ttl=ttl)
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
 def unit_join_token(
     ctx: typer.Context,
     unit_id: str,
@@ -592,6 +609,7 @@ unit_app.command(
 
 
 def register_machine_extensions(group: typer.Typer) -> None:
+    group.command("join-token")(pool_join_token)
     group.command("create")(machine_create)
     group.command("delete")(machine_delete)
     group.command("cordon")(machine_cordon)

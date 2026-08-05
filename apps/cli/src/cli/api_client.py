@@ -14,6 +14,8 @@ from shared.http.compute import (
     ContainerRunRequest,
     ContainerWithAppPageResponse,
     MachineCreateRequest,
+    MachineJoinCommandRequest,
+    MachineJoinTokenResponse,
     MachineListResponse,
     MachineResponse,
     UnitCreateRequest,
@@ -283,6 +285,17 @@ class AdminApiClient:
         return UnitScaleResponse.model_validate(
             self.channel.post(
                 self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/clear-degradation")
+            )
+        )
+
+    def create_pool_join_token(
+        self,
+        request: MachineJoinCommandRequest,
+    ) -> MachineJoinTokenResponse:
+        return MachineJoinTokenResponse.model_validate(
+            self.channel.post(
+                self._workspace_path("/api/v1/machines/join-token"),
+                request.model_dump(mode="json"),
             )
         )
 
