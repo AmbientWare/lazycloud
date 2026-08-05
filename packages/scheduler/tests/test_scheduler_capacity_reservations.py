@@ -50,7 +50,7 @@ from shared.capacity import (
     CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
-from shared.compute_fleet import Pool
+from shared.compute_policy import ComputePoolRecord
 from shared.compute_policy import ComputePlacementSource
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
@@ -62,6 +62,7 @@ from shared.scheduling import (
 from tests.provider_fixtures import configure_test_provider
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
+WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 OTHER_OWNER_ID = "22222222-2222-4222-8222-222222222222"
 
 
@@ -261,14 +262,17 @@ class _UnusedComputeCapacity(_SizingSnapshots):
         raise AssertionError(f"unexpected capacity release: {request.operation_id}")
 
 
-def _managed_pool() -> Pool:
-    return Pool(
+def _managed_pool() -> ComputePoolRecord:
+    return ComputePoolRecord(
+        id=OWNER_ID,
+        workspace_id=WORKSPACE_ID,
         name="default",
+        machine_pool="default",
         provider="generic",
         capacity_owner_id=OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.ManagedPool,
         capacity_owner_source=CapacityOwnerSource.Managed,
-        max_workers=2,
+        max_machines=2,
         scaling_enabled=True,
         default_eligible=True,
         worker_cpu_millicores=4_000,

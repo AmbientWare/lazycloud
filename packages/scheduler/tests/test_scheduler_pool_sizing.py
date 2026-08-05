@@ -8,23 +8,28 @@ from scheduler.pool_sizing import (
     plan_worker_pool_sizing,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource, CapacityPoolSizingSnapshot
-from shared.compute_fleet import Pool
+from shared.compute_policy import ComputePoolRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
+WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _pool(**updates: object) -> Pool:
+def _pool(**updates: object) -> ComputePoolRecord:
     values: dict[str, object] = {
+        "id": OWNER_ID,
+        "workspace_id": WORKSPACE_ID,
         "capacity_owner_id": OWNER_ID,
         "capacity_owner_kind": CapacityOwnerKind.ManagedPool,
         "capacity_owner_source": CapacityOwnerSource.Managed,
         "name": "cpu",
+        "machine_pool": "cpu",
         "provider": "managed",
-        "initial_workers": 2,
-        "min_workers": 1,
-        "max_workers": 4,
+        "initial_machines": 2,
+        "desired_machines": 1,
+        "min_machines": 1,
+        "max_machines": 4,
         "scaling_enabled": True,
         "default_eligible": True,
         "min_free_cpu_millicores": 2_000,
@@ -33,7 +38,7 @@ def _pool(**updates: object) -> Pool:
         "worker_memory_mib": 8_192,
     }
     values.update(updates)
-    return Pool.model_validate(values)
+    return ComputePoolRecord.model_validate(values)
 
 
 def _state(**updates: object) -> CapacityPoolSizingSnapshot:
@@ -111,7 +116,7 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
         now=NOW,
     )
     below_headroom = plan_worker_pool_sizing(
-        _pool(initial_workers=0, min_workers=0),
+        _pool(initial_machines=0, min_machines=0),
         headroom=headroom,
         registered_units=2,
         authoritative_units=2,
@@ -138,7 +143,7 @@ def test_pending_target_and_derived_cooldown_prevent_duplicate_scale_up() -> Non
         now=NOW,
     )
     cooldown = plan_worker_pool_sizing(
-        _pool(initial_workers=0, min_workers=0, scale_up_cooldown_seconds=30),
+        _pool(initial_machines=0, min_machines=0, scale_up_cooldown_seconds=30),
         headroom=headroom,
         registered_units=1,
         authoritative_units=1,
@@ -156,7 +161,7 @@ def test_recorded_failures_alone_reproduce_the_exponential_scale_up_backoff() ->
     # A pool whose launches keep failing must not buy another machine a tick
     # later just because the scheduler restarted. Nothing but the failure count
     # and time recorded against the capacity operation is available to it.
-    pool = _pool(initial_workers=0, min_workers=0, registration_timeout_seconds=60)
+    pool = _pool(initial_machines=0, min_machines=0, registration_timeout_seconds=60)
     headroom = effective_pool_headroom(pool, [])
     intervals = [
         plan_worker_pool_sizing(

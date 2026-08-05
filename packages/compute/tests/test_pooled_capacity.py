@@ -44,7 +44,6 @@ from database.repositories.compute import (
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
-    PoolRepository,
     WorkerRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
@@ -409,11 +408,6 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
         idle_timeout_seconds=300,
     )
     with isolated_services.context.database.session() as session:
-        policy = PoolRepository(session).get(
-            baseline.name,
-            workspace_id=baseline.workspace_id,
-        )
-        assert policy is not None
         sibling_id = str(uuid4())
         ComputePoolRepository(session).upsert(
             baseline.model_copy(
@@ -421,25 +415,16 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
                     "id": sibling_id,
                     "capacity_owner_id": sibling_id,
                     "name": "larger-demand-owned-cpu",
+                    "machine_pool": "larger-demand-owned-cpu",
                     "selector": "larger-demand-owned-cpu",
                     "capability_key": f"{baseline.capability_key}:larger",
                     "desired_machines": 1,
+                    "initial_machines": 1,
                     "min_machines": 1,
-                }
-            )
-        )
-        PoolRepository(session).upsert(
-            policy.model_copy(
-                update={
-                    "capacity_owner_id": sibling_id,
-                    "name": "larger-demand-owned-cpu",
-                    "initial_workers": 1,
-                    "min_workers": 1,
                     "min_free_cpu_millicores": 2_000,
                     "min_free_memory_mib": 2_048,
                 }
-            ),
-            workspace_id=baseline.workspace_id,
+            )
         )
     baseline = compute.reconcile_aws_default_capacity(
         workspace="default",
@@ -467,39 +452,30 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
 
     with isolated_services.context.database.session() as session:
         internal = ComputePoolRepository(session).list_internal(workspace_id=baseline.workspace_id)
-        policies = {
-            item.name: item
-            for item in PoolRepository(session).list(workspace_id=baseline.workspace_id)
-        }
+    units = {item.name: item for item in internal}
     assert placed.id == baseline.id
     # Demand-driven placement never shrinks a pool it did not size.
     assert placed.desired_machines == 1
     assert [pool.id for pool in internal if pool.min_machines > 0] == [baseline.id]
-    policy = policies[baseline.name]
-    assert policy.initial_workers == 1
-    assert policy.min_workers == 1
-    assert policy.min_free_cpu_millicores == 1_000
-    assert policy.min_free_memory_mib == 1_024
-    larger_policy = policies["larger-demand-owned-cpu"]
-    assert larger_policy.initial_workers == 0
-    assert larger_policy.min_workers == 0
-    assert larger_policy.min_free_cpu_millicores == 0
-    assert larger_policy.min_free_memory_mib == 0
+    kept = units[baseline.name]
+    assert kept.initial_machines == 1
+    assert kept.min_machines == 1
+    assert kept.min_free_cpu_millicores == 1_000
+    assert kept.min_free_memory_mib == 1_024
+    larger = units["larger-demand-owned-cpu"]
+    assert larger.initial_machines == 0
+    assert larger.min_machines == 0
+    assert larger.min_free_cpu_millicores == 0
+    assert larger.min_free_memory_mib == 0
 
     compute.clear_aws_default_capacity(workspace="default", release_capacity=False)
     with isolated_services.context.database.session() as session:
         cleared = ComputePoolRepository(session).get(baseline.id)
-        cleared_policy = PoolRepository(session).get(
-            baseline.name,
-            workspace_id=baseline.workspace_id,
-        )
     assert cleared is not None
     assert cleared.min_machines == 0
-    assert cleared_policy is not None
-    assert cleared_policy.initial_workers == 0
-    assert cleared_policy.min_workers == 0
-    assert cleared_policy.min_free_cpu_millicores == 0
-    assert cleared_policy.min_free_memory_mib == 0
+    assert cleared.initial_machines == 0
+    assert cleared.min_free_cpu_millicores == 0
+    assert cleared.min_free_memory_mib == 0
     drained = compute.scale_internal_pool(
         baseline.workspace_id,
         baseline.name,
@@ -1079,9 +1055,7 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
 
     with isolated_services.context.database.session() as session:
         retained = ComputePoolRepository(session).get(pool.id)
-        retained_policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
     assert retained is not None
-    assert retained_policy is not None
     assert provider.delete_calls == []
 
     provider.delete_failure = None
@@ -1089,10 +1063,8 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
 
     with isolated_services.context.database.session() as session:
         deleted = ComputePoolRepository(session).get(pool.id)
-        deleted_policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
     assert [request.pool_id for request in provider.delete_calls] == [pool.id]
     assert deleted is None
-    assert deleted_policy is None
 
 
 def test_pooled_scale_down_waits_for_exact_volume_absence(

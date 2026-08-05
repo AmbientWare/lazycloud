@@ -2243,7 +2243,31 @@ class ComputeService:
                 if current is not None
                 else 0
             )
-            initial = baseline.initial_machines if baseline is not None else 0
+            # Only the baseline owns the durable floors. Demand-driven placement
+            # reaches the same unit and must carry them through untouched, or the
+            # warm capacity a workspace paid for is erased by the next request.
+            initial = (
+                baseline.initial_machines
+                if baseline is not None
+                else current.initial_machines
+                if current is not None
+                else 0
+            )
+            free_cpu = (
+                baseline.min_free_cpu_millicores
+                if baseline is not None
+                else current.min_free_cpu_millicores
+                if current is not None
+                else 0
+            )
+            free_memory = (
+                baseline.min_free_memory_mib
+                if baseline is not None
+                else current.min_free_memory_mib
+                if current is not None
+                else 0
+            )
+            free_gpu = current.min_free_gpu_count if current is not None else 0
             # One construction for both create and update: everything the unit
             # derives from the offer and the baseline is stated here, and only
             # the facts the provider owns are carried over from the stored row.
@@ -2279,10 +2303,9 @@ class ComputeService:
                 worker_preemptible=(
                     str(offer.labels.get("preemptible", "false")).strip().lower() == "true"
                 ),
-                min_free_cpu_millicores=(
-                    baseline.min_free_cpu_millicores if baseline is not None else 0
-                ),
-                min_free_memory_mib=(baseline.min_free_memory_mib if baseline is not None else 0),
+                min_free_cpu_millicores=free_cpu,
+                min_free_memory_mib=free_memory,
+                min_free_gpu_count=free_gpu,
                 idle_drain_timeout_seconds=idle_timeout_seconds,
                 workspace_machine_limit=workspace_machine_limit,
                 root_volume_gib=root_volume_gib,
