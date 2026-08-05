@@ -12,7 +12,6 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
-    Text,
     UniqueConstraint,
     text,
 )
@@ -149,34 +148,6 @@ class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
     )
 
 
-class ComputeCapacityRequestTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_capacity_requests"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_capacity_requests_workspace_status", "workspace_id", "status"),
-    )
-
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    pool_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    stub_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("stubs.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    source: Mapped[str] = mapped_column(String(80), nullable=False)
-    max_spend_micros: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    ttl_seconds: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    status: Mapped[str] = mapped_column(String(80), nullable=False, default="active")
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
 class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "compute_capacity_operations"
     __table_args__: tuple[SchemaItem, ...] = (
@@ -235,11 +206,6 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
         ForeignKey("compute_pools.id", ondelete="CASCADE"),
         nullable=True,
     )
-    capacity_request_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_capacity_requests.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     provider: Mapped[str] = mapped_column(String(80), nullable=False)
     offer_id: Mapped[str] = mapped_column(String(255), nullable=False)
     instance_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -262,77 +228,6 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
         DateTime(timezone=True),
         nullable=True,
     )
-
-
-class ComputeSolverRunTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_solver_runs"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_solver_runs_workspace_created", "workspace_id", "created_at"),
-    )
-
-    workspace_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    pool_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    feasible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ComputeSolverDecisionTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_solver_decisions"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_solver_decisions_run", "solver_run_id"),
-    )
-
-    solver_run_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_solver_runs.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    action: Mapped[str] = mapped_column(String(80), nullable=False)
-    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    offer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    reservation_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_provider_instances.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    cost_micros: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ComputeLedgerTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_ledger"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_ledger_workspace_created", "workspace_id", "created_at"),
-    )
-
-    workspace_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    pool_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    reservation_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_provider_instances.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    source: Mapped[str] = mapped_column(String(80), nullable=False)
-    amount_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):

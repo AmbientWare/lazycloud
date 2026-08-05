@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from compute.offers import ComputeOffer
-from compute.projection import PoolConfig as ComputePoolConfig
-from compute.projection import PrivatePoolState
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.service import GatewayControlService
 from shared.compute_policy import ComputePoolRecord
 from shared.http.compute import (
-    PoolCapacityResponse,
     PoolCreateRequest,
     PoolJoinCommandRequest,
     PoolJoinCommandResponse,
@@ -17,9 +13,6 @@ from shared.http.compute import (
     PoolJoinTokenResponse,
     PoolListResponse,
     PoolMachineListResponse,
-    PoolOfferQuery,
-    PoolOfferResponse,
-    PoolProviderInstanceResponse,
     PoolResponse,
     PoolScaleRequest,
     PoolScaleResponse,
@@ -33,74 +26,6 @@ from api.server.services import ApiServices
 router = APIRouter()
 
 
-def _compute_pool_config(pool_name: str, request: PoolOfferQuery) -> ComputePoolConfig:
-    return ComputePoolConfig(
-        name=pool_name,
-        providers=request.provider,
-        regions=request.region,
-        gpu=request.gpu,
-        nodes=request.node_count,
-        ttl=request.ttl,
-        max_spend=request.max_spend,
-        min_reliability=request.min_reliability,
-        offer_id=request.offer_id,
-    )
-
-
-def _offer_response(offer: ComputeOffer) -> PoolOfferResponse:
-    return PoolOfferResponse(
-        id=offer.id,
-        provider=offer.provider,
-        instance_type=offer.instance_type,
-        region=offer.region,
-        gpu=offer.gpu or "",
-        gpu_count=offer.gpu_count,
-        cpu_millicores=offer.cpu_millicores,
-        memory_mb=offer.memory_mb,
-        hourly_cost_micros=offer.hourly_cost_micros,
-        reliability=offer.reliability,
-        available=offer.available,
-        storage_mb=offer.storage_mb,
-        cloud=offer.cloud,
-        node_count=offer.node_count,
-        display_name=offer.display_name,
-        category=offer.category,
-        region_display_name=offer.region_display_name,
-        latitude=offer.latitude,
-        longitude=offer.longitude,
-    )
-
-
-def _capacity_response(state: PrivatePoolState) -> PoolCapacityResponse:
-    config = state.config or ComputePoolConfig(name=state.name)
-    return PoolCapacityResponse(
-        name=state.name,
-        selector=state.selector,
-        reservations=[
-            PoolProviderInstanceResponse(
-                id=item.id,
-                provider=item.provider,
-                offer_id=item.offer_id,
-                status=item.status,
-                gpu_count=item.gpu_count,
-                hourly_cost_micros=item.hourly_cost_micros,
-                created_at=item.created_at,
-                expires_at=item.expires_at,
-                machine_id=item.machine_id,
-                region=item.region,
-                node_count=item.node_count,
-                instance_type=item.instance_type,
-            )
-            for item in state.reservations
-        ],
-        committed_spend_micros=state.committed_spend_micros,
-        max_spend_micros=int(config.max_spend * 1_000_000),
-        status=state.status,
-        expires_at=state.expires_at,
-        reserved_nodes=state.reserved_nodes,
-    )
-
-
 def _pool_state_response(pool: ComputePoolRecord) -> PoolScaleResponse:
     return PoolScaleResponse(
         name=pool.name,
@@ -110,28 +35,6 @@ def _pool_state_response(pool: ComputePoolRecord) -> PoolScaleResponse:
         phase=pool.phase,
         status=pool.status,
         degraded_reason=pool.provider_state.degraded_reason,
-    )
-
-
-def _pool_query(
-    provider: Annotated[list[str] | None, Query()] = None,
-    region: Annotated[list[str] | None, Query()] = None,
-    gpu: Annotated[list[str] | None, Query()] = None,
-    node_count: Annotated[int, Query(ge=1)] = 1,
-    ttl: str = "",
-    max_spend: Annotated[float, Query(ge=0.0)] = 0.0,
-    min_reliability: Annotated[float, Query(ge=0.0, le=1.0)] = 0.0,
-    offer_id: str = "",
-) -> PoolOfferQuery:
-    return PoolOfferQuery(
-        provider=provider or [],
-        region=region or [],
-        gpu=gpu or [],
-        node_count=node_count,
-        ttl=ttl,
-        max_spend=max_spend,
-        min_reliability=min_reliability,
-        offer_id=offer_id,
     )
 
 

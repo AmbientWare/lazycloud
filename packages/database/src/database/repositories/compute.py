@@ -14,14 +14,10 @@ from database.tables.compute import (
     AwsAccountConnectionTable,
     AwsAuthorizationCleanupTombstoneTable,
     ComputeCapacityOperationTable,
-    ComputeCapacityRequestTable,
     ComputeJoinCredentialTable,
-    ComputeLedgerTable,
     ComputeMachineEnrollmentTable,
     ComputePoolTable,
     ComputeProviderInstanceTable,
-    ComputeSolverDecisionTable,
-    ComputeSolverRunTable,
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
@@ -69,19 +65,6 @@ def _model_json(model: BaseModel) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
 
 
-class ComputeCapacityRequestRecord(ContractModel):
-    id: str
-    workspace_id: str
-    pool_id: str | None = None
-    stub_id: str | None = None
-    source: str
-    max_spend_micros: int = 0
-    ttl_seconds: int = 0
-    status: str = "active"
-    expires_at: datetime | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class ComputeCapacityOperationRecord(ContractModel):
     id: str
     workspace_id: str
@@ -112,7 +95,6 @@ class ComputeProviderInstanceRecord(ContractModel):
     status: str
     source: str
     pool_id: str | None = None
-    capacity_request_id: str | None = None
     instance_type: str | None = None
     instance_id: str | None = None
     machine_id: str | None = None
@@ -132,40 +114,6 @@ class ComputeProviderInstanceRecord(ContractModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
-
-
-class ComputeSolverRunRecord(ContractModel):
-    id: str
-    workspace_id: str | None = None
-    pool_id: str | None = None
-    feasible: bool = False
-    reason: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class ComputeSolverDecisionRecord(ContractModel):
-    id: str
-    solver_run_id: str | None = None
-    action: str
-    provider: str | None = None
-    offer_id: str | None = None
-    reservation_id: str | None = None
-    count: int = 0
-    cost_micros: int = 0
-    reason: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class ComputeLedgerRecord(ContractModel):
-    id: str
-    source: str
-    amount_micros: int
-    started_at: datetime
-    ended_at: datetime
-    workspace_id: str | None = None
-    pool_id: str | None = None
-    reservation_id: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ComputeJoinCredentialRecord(ContractModel):
@@ -858,42 +806,6 @@ class ComputeCapacityOperationRepository:
 
 
 @dataclass(slots=True)
-class ComputeCapacityRequestRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeCapacityRequestRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeCapacityRequestTable, ComputeCapacityRequestRecord),
-        )
-
-    def upsert(self, record: ComputeCapacityRequestRecord) -> ComputeCapacityRequestRecord:
-        return self.records.upsert(record, workspace_id=record.workspace_id, status=record.status)
-
-    def list_for_pool(self, pool_id: str) -> list[ComputeCapacityRequestRecord]:
-        """System listing keyed by an already-authorized pool id."""
-        return [item for item in self.records.list_across_workspaces() if item.pool_id == pool_id]
-
-    def active_for_pool(
-        self,
-        pool_id: str,
-        *,
-        for_update: bool = False,
-    ) -> ComputeCapacityRequestRecord | None:
-        statement = select(ComputeCapacityRequestTable).where(
-            ComputeCapacityRequestTable.pool_id == pool_id,
-            ComputeCapacityRequestTable.status == "active",
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        rows = list(self.session.scalars(statement))
-        if len(rows) > 1:
-            raise RuntimeError(f"pool {pool_id} has multiple active capacity requests")
-        return ComputeCapacityRequestRecord.model_validate(rows[0].payload) if rows else None
-
-
-@dataclass(slots=True)
 class ComputeProviderInstanceRepository:
     session: Session
 
@@ -1019,89 +931,6 @@ class ComputeProviderInstanceRepository:
     def list_open(self) -> list[ComputeProviderInstanceRecord]:
         closed = {"deleted", "failed"}
         return [item for item in self.records.list() if item.status not in closed]
-
-
-@dataclass(slots=True)
-class ComputeSolverRunRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeSolverRunRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeSolverRunTable, ComputeSolverRunRecord),
-        )
-
-    def upsert(self, record: ComputeSolverRunRecord) -> ComputeSolverRunRecord:
-        """System-authority write; cluster-wide solver runs carry no workspace."""
-        return self.records.upsert_across_workspaces(record, workspace_id=record.workspace_id)
-
-
-@dataclass(slots=True)
-class ComputeSolverDecisionRepository:
-    session: Session
-
-    @property
-    def records(self) -> GlobalTableRepository[ComputeSolverDecisionRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeSolverDecisionTable, ComputeSolverDecisionRecord),
-        )
-
-    def upsert(self, record: ComputeSolverDecisionRecord) -> ComputeSolverDecisionRecord:
-        return self.records.upsert(record, status=record.action)
-
-
-@dataclass(slots=True)
-class ComputeLedgerRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeLedgerRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeLedgerTable, ComputeLedgerRecord),
-        )
-
-    def append(self, record: ComputeLedgerRecord) -> ComputeLedgerRecord:
-        """System-authority write; platform-level ledger rows carry no workspace."""
-        return self.records.upsert_across_workspaces(
-            record,
-            workspace_id=record.workspace_id,
-            status=record.source,
-        )
-
-    def append_for_workspace_deletion(
-        self,
-        record: ComputeLedgerRecord,
-    ) -> ComputeLedgerRecord:
-        if record.workspace_id is None:
-            raise ValueError("workspace deletion ledger row requires workspace ownership")
-        workspace = WorkspaceRepository(self.session).lock_for_deletion(record.workspace_id)
-        if workspace.status is not WorkspaceStatus.Deleting:
-            raise ConflictError(f"workspace cleanup requires deleting state: {record.workspace_id}")
-        row = self.session.get(ComputeLedgerTable, record.id)
-        if row is None:
-            row = ComputeLedgerTable(id=record.id)
-            self.session.add(row)
-        row.workspace_id = record.workspace_id
-        row.pool_id = record.pool_id or None
-        row.reservation_id = record.reservation_id or None
-        row.source = record.source
-        row.amount_micros = record.amount_micros
-        row.started_at = record.started_at
-        row.ended_at = record.ended_at
-        row.payload = _model_json(record)
-        flag_modified(row, "payload")
-        self.session.flush()
-        return record
-
-    def list_for_workspace(self, workspace_id: str) -> list[ComputeLedgerRecord]:
-        return [
-            item
-            for item in self.records.list(workspace_id=workspace_id)
-            if item.workspace_id == workspace_id
-        ]
 
 
 @dataclass(slots=True)

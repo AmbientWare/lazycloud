@@ -181,79 +181,6 @@ class WorkerListResponse(HttpModel):
     workers: list[WorkerResponse] = Field(default_factory=list)
 
 
-class PoolOfferQuery(HttpModel):
-    provider: list[str] = Field(default_factory=list)
-    region: list[str] = Field(default_factory=list)
-    gpu: list[str] = Field(default_factory=list)
-    node_count: int = Field(default=1, ge=1)
-    ttl: str = ""
-    max_spend: float = Field(default=0.0, ge=0.0)
-    min_reliability: float = Field(default=0.0, ge=0.0, le=1.0)
-    offer_id: str = ""
-
-
-class PoolOfferResponse(HttpModel):
-    id: str
-    provider: str
-    instance_type: str
-    region: str
-    gpu: str = ""
-    gpu_count: int = 0
-    cpu_millicores: int = 0
-    memory_mb: int = 0
-    hourly_cost_micros: int = 0
-    reliability: float = 1.0
-    available: int = 0
-    storage_mb: int = 0
-    cloud: str = ""
-    node_count: int = 1
-    display_name: str = ""
-    category: str = ""
-    region_display_name: str = ""
-    latitude: float = 0.0
-    longitude: float = 0.0
-
-
-class PoolOfferListResponse(HttpModel):
-    data: list[PoolOfferResponse] = Field(default_factory=list)
-    next: str = ""
-
-
-class PoolCapacityLaunchRequest(PoolOfferQuery):
-    pass
-
-
-class PoolCapacityExtendRequest(HttpModel):
-    ttl: str
-    max_spend: float = Field(gt=0.0)
-
-
-class PoolProviderInstanceResponse(HttpModel):
-    id: str
-    provider: str = ""
-    offer_id: str = ""
-    status: str = ""
-    gpu_count: int = 0
-    hourly_cost_micros: int = 0
-    created_at: datetime | None = None
-    expires_at: datetime | None = None
-    machine_id: str = ""
-    region: str = ""
-    node_count: int = 0
-    instance_type: str = ""
-
-
-class PoolCapacityResponse(HttpModel):
-    name: str
-    selector: str = ""
-    reservations: list[PoolProviderInstanceResponse] = Field(default_factory=list)
-    committed_spend_micros: int = 0
-    max_spend_micros: int = 0
-    status: str = "active"
-    expires_at: datetime | None = None
-    reserved_nodes: int = 0
-
-
 class PoolJoinTokenRequest(HttpModel):
     ttl: str = ""
 
@@ -406,9 +333,6 @@ __all__ = [
     "MachineJoinCommandResponse",
     "MachineListResponse",
     "MachineResponse",
-    "PoolCapacityExtendRequest",
-    "PoolCapacityLaunchRequest",
-    "PoolCapacityResponse",
     "PoolCreateRequest",
     "PoolJoinCommandRequest",
     "PoolJoinCommandResponse",
@@ -418,11 +342,7 @@ __all__ = [
     "PoolMachineListResponse",
     "PoolMachineMetricsResponse",
     "PoolMachineResponse",
-    "PoolOfferListResponse",
-    "PoolOfferQuery",
-    "PoolOfferResponse",
     "PoolPolicy",
-    "PoolProviderInstanceResponse",
     "PoolResponse",
     "PoolScaleRequest",
     "PoolScaleResponse",

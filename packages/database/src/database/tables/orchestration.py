@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -179,26 +178,6 @@ class RouteTable(IdPayloadTable, DatabaseBase):
     )
     route_id: Mapped[str] = mapped_column(String(512), nullable=False)
     state: Mapped[str] = mapped_column(String(80), nullable=False, default="opening")
-
-
-class ProviderTable(NamedWorkspacePayloadTable, DatabaseBase):
-    __tablename__ = "providers"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("workspace_id", "name", name="uq_providers_workspace_name"),
-        CheckConstraint("kind = 'aws'", name="ck_providers_kind_aws"),
-        CheckConstraint(
-            "(jsonb_typeof(payload) = 'object' "
-            "AND jsonb_typeof(payload -> 'kind') = 'string' "
-            "AND payload ->> 'kind' = kind "
-            "AND payload ->> 'kind' = 'aws' "
-            "AND NOT coalesce(payload -> 'config' ? 'provider_kind', false)) IS TRUE",
-            name="ck_providers_payload_kind_aws",
-        ).ddl_if(dialect="postgresql"),
-    )
-
-    kind: Mapped[str] = mapped_column(String(80), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
 
 class AgentTable(IdPayloadTable, DatabaseBase):

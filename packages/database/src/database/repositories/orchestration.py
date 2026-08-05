@@ -16,7 +16,6 @@ from database.tables.orchestration import (
     AutoscalerStateTable,
     ContainerTable,
     MachineTable,
-    ProviderTable,
     RouteTable,
     WorkerTable,
 )
@@ -30,7 +29,6 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
-from shared.provider_config import ProviderConfig
 from shared.routing import AgentBackendRoute
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -475,37 +473,6 @@ class ContainerRepository:
         return [
             value if value.tzinfo is not None else value.replace(tzinfo=UTC) for value in values
         ]
-
-
-@dataclass(slots=True)
-class ProviderRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ProviderConfig]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ProviderTable, ProviderConfig, key_field="name"),
-        )
-
-    def upsert(self, provider: ProviderConfig, *, workspace_id: str) -> ProviderConfig:
-        return self.records.upsert(
-            provider,
-            key=provider.name,
-            workspace_id=workspace_id,
-            name=provider.name,
-            status="enabled" if provider.enabled else "disabled",
-        )
-
-    def get(self, name: str, *, workspace_id: str) -> ProviderConfig | None:
-        return self.records.get(name, workspace_id=workspace_id)
-
-    def list(self, *, workspace_id: str) -> list[ProviderConfig]:
-        return self.records.list(workspace_id=workspace_id)
-
-    def list_across_workspaces(self) -> list[ProviderConfig]:
-        """System listing for provider lifecycle reconciliation."""
-        return self.records.list_across_workspaces()
 
 
 @dataclass(slots=True)

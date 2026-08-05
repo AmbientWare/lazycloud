@@ -513,7 +513,6 @@ class ProviderMachineReconciler:
                 "status": provider_status,
                 "source": "workspace_policy",
                 "pool_id": pool.id,
-                "capacity_request_id": None,
                 "instance_type": offer.instance_type,
                 "instance_id": instance_id,
                 "machine_id": settled_existing.machine_id if settled_existing is not None else None,
@@ -721,63 +720,6 @@ class ProviderMachineReconciler:
             resource_id=updated.id,
         )
         return updated
-
-    def _record_provider_instance(
-        self,
-        session: DatabaseSession,
-        *,
-        pool_id: str,
-        capacity_request_id: str,
-        machine: Machine,
-        offer: ComputeOffer,
-        remote_id: str,
-        status: str,
-        source: str,
-        ttl_seconds: int,
-        now: datetime,
-        registration_token_hash: str,
-        launch_state: str = _LAUNCH_STATE_COMMITTED,
-    ) -> ComputeProviderInstanceRecord:
-        expires_at = now + timedelta(seconds=ttl_seconds)
-        normalized_status = _reservation_status_from_provider(status).value
-        return ComputeProviderInstanceRepository(session).records.create(
-            {
-                "pool_id": pool_id,
-                "capacity_request_id": capacity_request_id,
-                "provider": offer.provider,
-                "offer_id": offer.id,
-                "instance_type": offer.instance_type,
-                "instance_id": remote_id,
-                "machine_id": machine.id,
-                "gpu": offer.gpu,
-                "gpu_count": offer.gpu_count,
-                "cpu_millicores": offer.cpu_millicores,
-                "memory_mb": offer.memory_mb,
-                "hourly_cost_micros": offer.hourly_cost_micros,
-                "committed_micros": offer.hourly_cost_micros * _whole_hours(ttl_seconds),
-                "source": source,
-                "status": normalized_status,
-                "expires_at": expires_at,
-                "billing_renewal_at": now + timedelta(hours=1),
-                "bootstrap_phase": MachineBootstrapPhase.Requested,
-                "bootstrap_failure_reason": None,
-                "bootstrap_observed_at": now,
-                "launch_attempt": 1,
-                "metadata": {
-                    "cloud": offer.cloud,
-                    "region": offer.region,
-                    "node_count": offer.node_count or 1,
-                    "storage_mb": offer.storage_mb,
-                    "commitment_started_at": now.isoformat(),
-                    "billing_cursor_at": now.isoformat(),
-                    "registration_token_hash": registration_token_hash,
-                    "launch_state": launch_state,
-                },
-                "created_at": now,
-                "updated_at": now,
-            },
-            status=normalized_status,
-        )
 
     def _record_failed_launch_cleanup(
         self,

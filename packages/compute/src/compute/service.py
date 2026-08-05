@@ -16,7 +16,6 @@ from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRecord,
-    ComputeLedgerRepository,
     ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
@@ -2949,19 +2948,6 @@ def _provider_commitment_start(record: ComputeProviderInstanceRecord) -> datetim
         _provider_instance_metadata(record),
         "commitment_started_at",
     ) or _utc(record.created_at)
-
-
-def _recorded_pool_spend_micros(
-    session: DatabaseSession,
-    *,
-    workspace_id: str,
-    pool_id: str,
-) -> int:
-    return sum(
-        max(record.amount_micros, 0)
-        for record in ComputeLedgerRepository(session).list_for_workspace(workspace_id)
-        if record.pool_id == pool_id and record.source == "managed_compute"
-    )
 
 
 def _policy_owned_scale(pool: ComputePoolRecord) -> None:

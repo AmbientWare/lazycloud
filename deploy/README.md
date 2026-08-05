@@ -71,7 +71,7 @@ namespaces, whatever the tailnet says.
 
 Resetting means Postgres, Redis, and the agent together. Redis is keyed by
 durable IDs, so a recreated database leaves the scheduler refusing every
-reconcile with `capacity owner … has multiple agent pool configs`.
+reconcile against capacity owners the new database does not know.
 
 The agent's `/var/lib/lazycloud/agent` is a host bind mount whose enrollment and
 worker slots outlive both. Clear `slots/`, `agent-state.json`,

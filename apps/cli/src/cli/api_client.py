@@ -53,9 +53,6 @@ from shared.http.operations import (
     ImageBuildListResponse,
     ImageBuildRequest,
     ImageBuildResponse,
-    ProviderListResponse,
-    ProviderResponse,
-    ProviderSetRequest,
     SchedulerContainerDispatchListResponse,
 )
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
@@ -396,22 +393,6 @@ class AdminApiClient:
                 )
             )
         )
-
-    def list_providers(self) -> ProviderListResponse:
-        return ProviderListResponse.model_validate(
-            self.channel.get(self._workspace_path("/api/v1/providers"))
-        )
-
-    def set_provider(self, request: ProviderSetRequest) -> ProviderResponse:
-        return ProviderResponse.model_validate(
-            self.channel.post(
-                self._workspace_path("/api/v1/providers"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def delete_provider(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/providers/{url_path_segment(name)}"))
 
     def create_image_build(self, request: ImageBuildRequest) -> ImageBuildResponse:
         return ImageBuildResponse.model_validate(

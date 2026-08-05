@@ -78,7 +78,6 @@ x-tailnet-env: &tailnet-env
 
 x-usage-credentials: &usage-credentials
   LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY: "${LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY:-}"
-  LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN: "${LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN:-}"
 
 x-platform-aws-credentials: &platform-aws-credentials
   AWS_REGION: "${AWS_REGION:-us-east-1}"

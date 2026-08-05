@@ -22,7 +22,7 @@ from cli.database import database_app
 from cli.execution import events, invoke
 from cli.identity import profile_export, token_create, token_list, token_revoke
 from cli.offline_auth import auth_app
-from cli.operations import cron_app, image_app, provider_app, scheduler_app
+from cli.operations import cron_app, image_app, scheduler_app
 from cli.resources import (
     container_app,
     map_app,
@@ -64,7 +64,6 @@ _ADMIN_GROUP_ORDER = (
     "pool",
     "machine",
     "worker",
-    "provider",
     "image",
     "cron",
     "scheduler",
@@ -120,7 +119,6 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("queue", queue_app)
     registry.add_group("map", map_app)
     registry.add_group("worker", worker_app)
-    registry.add_group("provider", provider_app)
     registry.add_group("image", image_app)
     registry.add_group("cron", cron_app)
     registry.add_group("scheduler", scheduler_app)
