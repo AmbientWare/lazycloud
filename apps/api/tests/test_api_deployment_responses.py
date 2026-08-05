@@ -1,5 +1,4 @@
 from api.server.response_mapping import deployment_response
-from shared.compute_policy import ComputePlacement, ComputePlacementSource, ComputePlacementTarget
 from shared.deployment_records import Deployment, DeploymentSpec, Resources
 from shared.deployments import DeploymentKind
 
@@ -26,14 +25,8 @@ def test_deployment_response_exposes_safe_workload_configuration() -> None:
             ),
             env={"MODEL_TOKEN": "must-not-leave-the-control-plane"},
             secrets=["production-model-token"],
-            placement=ComputePlacementTarget.Aws,
         ),
-        resolved_placement=ComputePlacement(
-            target=ComputePlacementTarget.Aws,
-            source=ComputePlacementSource.WorkloadOverride,
-            provider="aws",
-            region="us-east-1",
-        ),
+        pool="aws",
     )
 
     response = deployment_response(deployment).model_dump(mode="json")
@@ -54,12 +47,7 @@ def test_deployment_response_exposes_safe_workload_configuration() -> None:
         "cron": None,
         "command": [],
         "ports": {"http": 8080},
-        "placement": {
-            "target": "aws",
-            "source": "workload_override",
-            "provider": "aws",
-            "region": "us-east-1",
-        },
+        "pool": "aws",
     }
     assert "env" not in response["spec"]
     assert "secrets" not in response["spec"]

@@ -71,7 +71,6 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePlacementTarget,
     ComputePoolPhase,
     ComputePoolProviderState,
     ComputePoolRecord,
@@ -1468,7 +1467,7 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
         expected_revision=current.revision,
         # AWS stays the default placement: zeroing the policy is the only control
         # the user is given, and it has to release the machine on its own.
-        default_placement=ComputePlacementTarget.Aws,
+        default_pool="aws",
         aws=current.aws.model_copy(
             update={
                 "initial_cpu_workers": 0,
@@ -1612,7 +1611,7 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
     policies.update_policy(
         workspace="default",
         expected_revision=current.revision,
-        default_placement=ComputePlacementTarget.Aws,
+        default_pool="aws",
         aws=current.aws.model_copy(
             update={
                 "initial_cpu_workers": 0,

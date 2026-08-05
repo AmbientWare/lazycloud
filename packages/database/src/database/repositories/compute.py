@@ -681,7 +681,7 @@ class WorkspaceComputePolicyRepository:
             "id": policy.id,
             "workspace_id": policy.workspace_id,
             "revision": policy.revision,
-            "default_placement": policy.default_placement.value,
+            "default_pool": policy.default_pool,
             "payload": _model_json(policy),
             "created_at": policy.created_at,
             "updated_at": policy.updated_at,
@@ -731,7 +731,7 @@ class WorkspaceComputePolicyRepository:
             .with_for_update()
         ).one()
         row.revision = policy.revision
-        row.default_placement = policy.default_placement.value
+        row.default_pool = policy.default_pool
         self.session.flush()
         return saved
 

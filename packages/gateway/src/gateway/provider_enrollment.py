@@ -359,7 +359,7 @@ class ProviderNodeEnrollmentService:
             connection is None
             or connection.id != pool.provider_ref.removeprefix("aws:")
             or connection.workspace_id != pool.workspace_id
-            or not connection.accepts_placement
+            or not connection.hosts_workloads
             or connection.active_authorization is None
             or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
         ):

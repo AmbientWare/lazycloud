@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { appSchema, deploymentSchema } from "./apps";
-import { computePlacementTargetSchema } from "./compute_placement";
 import { stubSchema } from "./stubs";
 
 // Synced to shared.http.compute, shared.http.gateway, and
@@ -120,7 +119,7 @@ const awsWorkspaceComputePolicySchema = z
 export const workspaceComputePolicySchema = z
   .object({
     revision: z.number().int().positive(),
-    default_placement: computePlacementTargetSchema,
+    default_pool: z.string(),
     aws: awsWorkspaceComputePolicySchema,
     created_at: z.string(),
     updated_at: z.string(),
@@ -131,7 +130,7 @@ export type WorkspaceComputePolicy = z.infer<typeof workspaceComputePolicySchema
 export const workspaceComputePolicyUpdateRequestSchema = z
   .object({
     expected_revision: z.number().int().positive(),
-    default_placement: computePlacementTargetSchema,
+    default_pool: z.string(),
     aws: awsWorkspaceComputePolicySchema,
   })
   .strict();
@@ -162,6 +161,25 @@ export const customerComputeCatalogSchema = z
         })
         .strict(),
     ),
+    next: z.string(),
+  })
+  .strict();
+
+/** One pool a workload may name, described by the units feeding it. */
+export const machinePoolSchema = z
+  .object({
+    name: z.string(),
+    is_default: z.boolean().default(false),
+    providers: z.array(z.string()).default([]),
+    unit_count: z.number().int().nonnegative().default(0),
+    gpu_types: z.array(z.string()).default([]),
+  })
+  .strict();
+export type MachinePool = z.infer<typeof machinePoolSchema>;
+
+export const machinePoolListSchema = z
+  .object({
+    data: z.array(machinePoolSchema),
     next: z.string(),
   })
   .strict();

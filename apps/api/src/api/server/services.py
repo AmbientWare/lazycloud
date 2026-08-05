@@ -842,6 +842,7 @@ class ApiServices(ApiServiceCore):
             tailnet_control=resolved_tailnet_control_settings,
             backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
+            capacity_baseline=compute_policies,
         )
         placement_resources = (
             aws_composition.deployment_bucket_access if aws_composition is not None else None

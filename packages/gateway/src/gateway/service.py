@@ -1114,7 +1114,7 @@ class GatewayControlService:
         workspace_id: str,
         owner_token_id: str,
     ) -> MachineJoinCommandResponse:
-        """Mint the join command for the group the caller names.
+        """Mint the join command for the pool the caller names.
 
         The self-hosted fleet is created on first join and owned server-side.
         A caller may name any group, including one a connected account also
@@ -1153,7 +1153,7 @@ class GatewayControlService:
         machine_pool: str = "",
     ) -> ComputePoolRecord:
         group = machine_pool or SELF_HOSTED_FLEET_POOL_NAME
-        # One self-hosted unit per group. A workspace joining hosts into a group
+        # One self-hosted unit per group. A workspace joining hosts into a pool
         # a connected account also feeds needs its own capacity owner there, or
         # that account's drain would treat the joined hosts as its own.
         unit_name = (

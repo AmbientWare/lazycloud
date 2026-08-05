@@ -26,7 +26,6 @@ from shared.capacity import (
     CapacityAcquisitionStatus as ComputeCapacityAcquisitionStatus,
 )
 from shared.compute_policy import (
-    ComputePlacementTarget,
     ComputePoolRecord,
 )
 from shared.scheduling import SchedulerWorkerRecord
@@ -36,14 +35,13 @@ _WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 _SIBLING_OWNER_ID = "33333333-3333-4333-8333-333333333333"
 
 
-def test_scheduler_stamps_the_resolved_group_and_every_unit_in_it_accepts() -> None:
-    """The request carries a group, and each unit feeding it is a candidate."""
+def test_scheduler_stamps_the_resolved_pool_and_every_unit_in_it_accepts() -> None:
+    """The request carries a pool, and each unit feeding it is a candidate."""
     capacity = _RecordingCapacity()
     request = SchedulerWorkerRequest(
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id="container-1",
-        requested_placement=ComputePlacementTarget.Aws,
         cpu_millicores=1_000,
         memory_mib=2_048,
     )
@@ -51,11 +49,9 @@ def test_scheduler_stamps_the_resolved_group_and_every_unit_in_it_accepts() -> N
     placed = SchedulerComputePlacement(capacity).place(request)
 
     assert capacity.requests[0].deployment_id == ""
-    assert capacity.requests[0].requested_placement is ComputePlacementTarget.Aws
     assert capacity.requests[0].requirements.cpu_millicores == 1_000
     assert capacity.requests[0].requirements.memory_mb == 2_048
     assert placed.pool_selector == "aws"
-    assert placed.requested_placement is ComputePlacementTarget.Aws
 
     compute = _RequestedComputeCapacity()
     controller = ComputePoolCapacityController(

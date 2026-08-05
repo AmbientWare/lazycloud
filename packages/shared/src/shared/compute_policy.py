@@ -15,19 +15,8 @@ from shared.timestamps import utc_now
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 LAZYCLOUD_MACHINE_POOL = "lazycloud"
-"""Scheduling group the platform's own fleet stamps on its machines."""
+"""Pool the platform's own fleet stamps on its machines."""
 _AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
-
-
-class ComputePlacementTarget(StringEnum):
-    Managed = "managed"
-    Aws = "aws"
-
-
-class ComputePlacementSource(StringEnum):
-    WorkspaceDefault = "workspace_default"
-    WorkloadOverride = "workload_override"
-    AttachedPool = "attached_pool"
 
 
 class ComputeCapacityMode(StringEnum):
@@ -62,27 +51,6 @@ class ComputeResourceRequirements(ContractModel):
     def validate_gpu(self) -> ComputeResourceRequirements:
         if (self.gpu is None) != (self.gpu_count == 0):
             raise ValueError("GPU type and count must be requested together")
-        return self
-
-
-class ComputePlacement(ContractModel):
-    target: ComputePlacementTarget
-    source: ComputePlacementSource = ComputePlacementSource.WorkloadOverride
-    provider: str = Field(default="", max_length=80)
-    region: str = Field(default="", max_length=64)
-    pool_name: str = Field(default="", max_length=240)
-    provider_ref: str = Field(default="", max_length=160)
-
-    @model_validator(mode="after")
-    def validate_target(self) -> ComputePlacement:
-        if self.target is ComputePlacementTarget.Managed:
-            if self.region:
-                raise ValueError("managed placement cannot select a customer AWS region")
-        elif self.target is ComputePlacementTarget.Aws:
-            if self.region and not _matches_aws_region(self.region):
-                raise ValueError("AWS placement region is invalid")
-            if self.provider and self.provider != ComputePlacementTarget.Aws.value:
-                raise ValueError("AWS placement provider must be aws")
         return self
 
 
@@ -130,7 +98,8 @@ class WorkspaceComputePolicy(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     revision: int = Field(default=1, ge=1)
-    default_placement: ComputePlacementTarget = ComputePlacementTarget.Managed
+    default_pool: str = Field(default=LAZYCLOUD_MACHINE_POOL, min_length=1, max_length=240)
+    """Pool workloads land in when they name none."""
     aws: AwsWorkspaceComputePolicy = Field(default_factory=AwsWorkspaceComputePolicy)
     created_at: datetime
     updated_at: datetime
@@ -168,8 +137,8 @@ class ComputePoolRecord(CapacityOwnerIdentity):
     shape and a scaling policy, because worker admission, sizing and drain all
     key on the owning unit.
 
-    `machine_pool` is the scheduling group this unit stamps on every machine it
-    produces. Several units may name one group; a unit names exactly one.
+    `machine_pool` is the pool this unit stamps on every machine it
+    produces. Several units may name one pool; a unit names exactly one.
     """
 
     id: str = Field(pattern=_UUID_PATTERN)
@@ -285,9 +254,6 @@ __all__ = [
     "LAZYCLOUD_MACHINE_POOL",
     "AwsWorkspaceComputePolicy",
     "ComputeCapacityMode",
-    "ComputePlacement",
-    "ComputePlacementSource",
-    "ComputePlacementTarget",
     "ComputePoolPhase",
     "ComputePoolProviderState",
     "ComputePoolRecord",

@@ -16,6 +16,7 @@ from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
+from control.service import ControlPlaneService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeMachineEnrollmentCreate,
@@ -57,17 +58,18 @@ from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     LAZYCLOUD_MACHINE_POOL,
     ComputeCapacityMode,
-    ComputePlacementTarget,
     ComputePoolRecord,
     ComputePoolVisibility,
     ComputeResourceRequirements,
 )
 from shared.deployment_records import DeploymentSpec
 from shared.http.compute_policy import (
+    MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputePolicyResponse,
     WorkspaceComputeSummaryResponse,
 )
+from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from tests.url_constants import EXAMPLE_COM_URL
 
@@ -185,7 +187,7 @@ def test_workspace_policy_rejects_unavailable_catalog_selections(
         "/api/v1/compute/policy",
         json={
             "expected_revision": policy.revision,
-            "default_placement": "managed",
+            "default_pool": "lazycloud",
             "aws": {
                 **policy.aws.model_dump(mode="json"),
                 "default_region": "eu-west-1",
@@ -197,7 +199,7 @@ def test_workspace_policy_rejects_unavailable_catalog_selections(
         "/api/v1/compute/policy",
         json={
             "expected_revision": policy.revision,
-            "default_placement": "managed",
+            "default_pool": "lazycloud",
             "aws": {
                 **policy.aws.model_dump(mode="json"),
                 "default_region": "us-west-2",
@@ -365,31 +367,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_inventory.data == []
 
 
-def test_policy_rejects_aws_default_without_ready_connection(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> None:
-    services = _configured_aws_services(isolated_services, request)
-    client = _client(services, request)
-    policy_response = client.get("/api/v1/compute/policy")
-    policy = WorkspaceComputePolicyResponse.model_validate_json(policy_response.content)
-
-    response = client.put(
-        "/api/v1/compute/policy",
-        json={
-            "expected_revision": policy.revision,
-            "default_placement": "aws",
-            "aws": policy.aws.model_dump(mode="json"),
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "connect and validate AWS before making it the default placement"
-    )
-
-
-def test_policy_accepts_placement_during_authorization_replacement(
+def test_policy_hosts_workloads_during_authorization_replacement(
     isolated_services: ApiServices,
 ) -> None:
     configuration = _aws_catalog_configuration()
@@ -406,25 +384,19 @@ def test_policy_accepts_placement_during_authorization_replacement(
     updated = policies.update_policy(
         workspace="default",
         expected_revision=current.revision,
-        default_placement=ComputePlacementTarget.Aws,
+        default_pool="aws",
         aws=current.aws,
     )
-    placement = policies.resolve_placement(
-        workspace="default",
-        requested=ComputePlacementTarget.Aws,
-    )
-
-    assert updated.default_placement is ComputePlacementTarget.Aws
-    assert placement.target is ComputePlacementTarget.Aws
-    assert placement.provider_ref.startswith("aws:")
+    assert updated.default_pool == "aws"
+    assert policies.default_machine_pool(workspace="default") == "aws"
 
 
-def test_placement_names_the_group_and_leaves_the_unit_to_arbitration(
+def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
     isolated_services: ApiServices,
 ) -> None:
-    """Placement resolves a group; it never picks which unit inside it serves.
+    """Placement resolves a pool; it never picks which unit inside it serves.
 
-    Two units feed one group here. Placement answering with the group is what
+    Two units feed one pool here. Placement answering with the pool is what
     leaves the acquisition loop both candidates to fail over between; answering
     with a unit would pin the request to one of them.
     """
@@ -436,7 +408,7 @@ def test_placement_names_the_group_and_leaves_the_unit_to_arbitration(
         isolated_services.compute.create_pool(
             name,
             workspace=workspace_id,
-            machine_pool="shared-group",
+            machine_pool="shared-pool",
             provider="agent",
             capacity_owner_id=owner,
             worker_cpu_millicores=4_000,
@@ -452,17 +424,17 @@ def test_placement_names_the_group_and_leaves_the_unit_to_arbitration(
     result = placement.place(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
-            requested_pool="shared-group",
+            requested_pool="shared-pool",
             requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
     )
 
-    assert result.machine_pool == "shared-group"
-    # A unit in the group already hosts this shape, so nothing is provisioned.
+    assert result.machine_pool == "shared-pool"
+    # A unit in the pool already hosts this shape, so nothing is provisioned.
     assert recorder.requests == []
 
 
-def test_placement_defaults_to_the_platform_group_without_a_connection(
+def test_placement_defaults_to_the_platform_pool_without_a_connection(
     isolated_services: ApiServices,
 ) -> None:
     recorder = _RecordingPooledCapacity()
@@ -480,8 +452,50 @@ def test_placement_defaults_to_the_platform_group_without_a_connection(
     )
 
     assert result.machine_pool == LAZYCLOUD_MACHINE_POOL
-    # Nothing provisions into a group no connected account feeds.
+    # Nothing provisions into a pool no connected account feeds.
     assert recorder.requests == []
+
+
+def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    """A caller only sees the pools its own workspace's units feed.
+
+    A pool is derived from the units feeding it rather than stored, so this
+    listing is only as scoped as the query behind it: a read across workspaces
+    would hand one tenant the names of another tenant's capacity.
+    """
+    control = ControlPlaneService(isolated_services.context)
+    caller = control.upsert_workspace("pool-listing-caller")
+    other = control.upsert_workspace("pool-listing-other")
+    isolated_services.compute.create_pool(
+        "caller-unit",
+        workspace=caller.id,
+        machine_pool="caller-pool",
+        provider="agent",
+    )
+    isolated_services.compute.create_pool(
+        "other-unit",
+        workspace=other.id,
+        machine_pool="other-pool",
+        provider="agent",
+    )
+    token, _record = AuthService(isolated_services.context).create_token(
+        "pool-listing-token",
+        kind=TokenKind.Workspace,
+        workspace_id=caller.id,
+    )
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+
+    response = client.get(
+        "/api/v1/compute/pools",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    pools = MachinePoolListResponse.model_validate_json(response.content)
+    assert [item.name for item in pools.data] == ["caller-pool"]
 
 
 def test_deployment_placement_is_pinned_when_workspace_default_changes(
@@ -506,7 +520,7 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
     policies.update_policy(
         workspace="default",
         expected_revision=policy.revision,
-        default_placement=ComputePlacementTarget.Aws,
+        default_pool="aws",
         aws=policy.aws,
     )
     created_after = isolated_services.deployments.deploy(
@@ -526,10 +540,9 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
         )
     )
 
-    assert persisted_original.resolved_placement.target is ComputePlacementTarget.Managed
+    assert persisted_original.pool == LAZYCLOUD_MACHINE_POOL
     assert scheduled_original.machine_pool == LAZYCLOUD_MACHINE_POOL
-    assert created_after.resolved_placement.target is ComputePlacementTarget.Aws
-    assert created_after.resolved_placement.region == "us-east-1"
+    assert created_after.pool == "aws"
 
 
 @dataclass(slots=True)

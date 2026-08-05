@@ -4,7 +4,6 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 import typer
-from shared.compute_policy import ComputePlacementTarget
 
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.function import Function
@@ -71,7 +70,6 @@ def deploy(
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
-    placement: Annotated[ComputePlacementTarget | None, typer.Option("--placement")] = None,
     preemptible: Annotated[
         bool | None,
         typer.Option("--preemptible/--no-preemptible"),
@@ -93,7 +91,6 @@ def deploy(
         keep_warm=keep_warm,
         tcp=tcp,
         pool=pool,
-        placement=placement,
         preemptible=preemptible,
         entrypoint=entrypoint,
     )
@@ -118,7 +115,6 @@ def deploy(
                 env=overrides.env,
                 secrets=overrides.secrets,
                 pool=overrides.pool,
-                placement=overrides.placement,
                 preemptible=overrides.preemptible,
             )
         elif not isinstance(user_object, App) and overrides.has_values():
@@ -141,7 +137,6 @@ def deploy(
                 keep_warm=overrides.keep_warm,
                 tcp=overrides.tcp,
                 pool=overrides.pool,
-                placement=overrides.placement,
                 preemptible=overrides.preemptible,
                 entrypoint=overrides.entrypoint,
             )
@@ -182,7 +177,6 @@ def run(
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
-    placement: Annotated[ComputePlacementTarget | None, typer.Option("--placement")] = None,
     preemptible: Annotated[
         bool | None,
         typer.Option("--preemptible/--no-preemptible"),
@@ -207,7 +201,6 @@ def run(
         keep_warm=keep_warm,
         tcp=tcp,
         pool=pool,
-        placement=placement,
         preemptible=preemptible,
         entrypoint=entrypoint,
     )
@@ -233,7 +226,6 @@ def run(
                 env=overrides.env,
                 secrets=overrides.secrets,
                 pool=overrides.pool,
-                placement=overrides.placement,
                 preemptible=overrides.preemptible,
             )
             response = call_handler(target.remote, args=payload_args)
@@ -269,7 +261,6 @@ def shell(
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
-    placement: Annotated[ComputePlacementTarget | None, typer.Option("--placement")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
     if handler is None:
@@ -297,7 +288,6 @@ def shell(
         keep_warm=keep_warm,
         tcp=tcp,
         pool=pool,
-        placement=placement,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
         container_id=container_id,
@@ -484,7 +474,6 @@ def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
         secrets=overrides.secrets,
         tcp=overrides.tcp,
         pool=overrides.pool,
-        placement=overrides.placement,
         preemptible=overrides.preemptible,
     )
 

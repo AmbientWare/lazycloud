@@ -12,6 +12,7 @@ from math import ceil
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.compute import (
+    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeCapacityRequestRecord,
@@ -1741,7 +1742,7 @@ class ComputeService:
 
         An empty answer is the only state in which the durable record may be
         deleted. Once the row is gone nothing in the product can name the pool's
-        provider resources again, so a group that outlives its record keeps
+        provider resources again, so a pool that outlives its record keeps
         launching billable machines that no reconciler will ever take back.
 
         The deleting intent is persisted before the provider is asked, because a
@@ -1982,6 +1983,13 @@ class ComputeService:
             allowed_instance_types=allowed_instance_types,
             baseline=None,
         )
+
+    def workspace_has_ready_connection(self, workspace: str) -> bool:
+        """Whether this workspace has an account capacity can be built in."""
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+        return connection is not None and connection.hosts_workloads
 
     def reconcile_aws_default_capacity(
         self,

@@ -35,7 +35,6 @@ from lazycloud.abstractions.invocation import (
 )
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PlacementInput,
     PoolInput,
     RetryPolicyInput,
     SchemaInput,
@@ -124,7 +123,6 @@ class TaskQueueOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
     metadata: dict[str, Any] | None
 
@@ -176,7 +174,6 @@ class TaskQueueFunction(Generic[P, R]):
     docker_enabled: bool = False
     preemptible: bool = False
     pool: PoolInput = None
-    placement: PlacementInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -255,7 +252,6 @@ class TaskQueueFunction(Generic[P, R]):
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
-            placement=self.placement,
             retry_policy=self.effective_retry_policy,
             lifecycle_hooks=lifecycle_hooks(
                 on_start=self.on_start,
@@ -626,7 +622,6 @@ def _task_queue(
     docker_enabled: bool = False,
     preemptible: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TaskQueueFunction[P, R]: ...
@@ -674,7 +669,6 @@ def _task_queue(
     docker_enabled: bool = False,
     preemptible: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], TaskQueueFunction[P, R]]: ...
@@ -721,7 +715,6 @@ def _task_queue(
     docker_enabled: bool = False,
     preemptible: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], TaskQueueFunction[P, R]] | TaskQueueFunction[P, R]:
@@ -766,7 +759,6 @@ def _task_queue(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata or {},
         )

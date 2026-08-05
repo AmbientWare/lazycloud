@@ -1036,7 +1036,7 @@ class CapacityReservationService:
             if remaining:
                 # Only what we are abandoning. With no candidate left the claim
                 # is the answer: releasing it here would mint a fresh one on the
-                # next attempt and churn reservations for as long as the group
+                # next attempt and churn reservations for as long as the pool
                 # stays full, instead of holding one and waiting for it to drain.
                 self._release_failed_failover_allocation(result, request, now=current_time)
         if last_result is not None:

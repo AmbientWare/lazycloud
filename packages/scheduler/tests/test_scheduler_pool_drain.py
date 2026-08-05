@@ -299,9 +299,9 @@ def test_drain_never_terminates_a_machine_another_unit_owns(
     isolated_services: ApiServices,
     real_redis_actors: _RealRedisActors,
 ) -> None:
-    """A joined machine sharing a group with an auto-scaling unit survives its drain.
+    """A joined machine sharing a pool with an auto-scaling unit survives its drain.
 
-    Once several units feed one scheduling group, the group label no longer
+    Once several units feed one pool, the pool label no longer
     identifies who bought a machine. The drain selects candidates by capacity
     owner for exactly this reason: without that co-filter, scaling the provider
     unit down would terminate a host the customer joined themselves.
@@ -350,7 +350,7 @@ def test_drain_never_terminates_a_machine_another_unit_owns(
     joined_owner_id = str(uuid5(NAMESPACE_URL, f"self-hosted:{provider_owner_id}"))
     assert joined_owner_id != provider_owner_id
 
-    # Both workers sit in the group "cpu" and both are idle past the threshold.
+    # Both workers sit in the pool "cpu" and both are idle past the threshold.
     # The joined host is idle longest, so it is the candidate the drain would
     # pick on ordering alone: only its capacity owner keeps it.
     _add_worker(

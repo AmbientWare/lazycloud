@@ -39,7 +39,7 @@ bucket and prefixes it needs, then deploy onto connected AWS compute:
 unset LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET
 unset LAZYCLOUD_PARQUET_SECRET_KEY_SECRET
 
-lazycloud deploy examples.parallel_parquet.app:app --placement aws
+lazycloud deploy examples.parallel_parquet.app:app --pool aws
 ```
 
 The identity needs read and list access to the input prefix plus write access

@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from shared.callbacks import normalize_callback_url
-from shared.compute_policy import ComputePlacementTarget
 from shared.contracts import ContractModel
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
@@ -147,17 +146,6 @@ class StubVolumeConfig(ContractModel):
         return self.config or StubVolumeProviderConfig()
 
 
-class StubPoolConfig(ContractModel):
-    model_config = ConfigDict(extra="allow", validate_assignment=True)
-
-    name: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def pool_fields_must_be_json(cls, value: JsonValue) -> dict[str, JsonValue]:
-        return _JSON_MAPPING_ADAPTER.validate_python(value)
-
-
 class StubSchemaConfig(ContractModel):
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
     outputs: dict[str, JsonValue] = Field(default_factory=dict)
@@ -199,8 +187,7 @@ class StubConfig(ContractModel):
         serialization_alias="schema",
     )
     tcp: bool = False
-    pool: StubPoolConfig = Field(default_factory=StubPoolConfig)
-    placement: ComputePlacementTarget | None = None
+    pool: str = ""
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
     outputs: dict[str, JsonValue] = Field(default_factory=dict)
     python_version: str | None = None
@@ -230,7 +217,6 @@ __all__ = [
     "StubConfig",
     "StubImageConfig",
     "StubMountCredentialConfig",
-    "StubPoolConfig",
     "StubRuntimeConfig",
     "StubSchemaConfig",
     "StubTaskPolicy",

@@ -242,7 +242,6 @@ def test_scheduler_image_build_executor_submits_waits_and_delegates(
     assert result.status is BuildStatus.Complete
     assert scheduler.calls[0].workspace_id == request.workspace_id
     assert scheduler.calls[0].pool_selector == "image-build"
-    assert scheduler.calls[0].requested_placement is None
     assert factory.calls == [request.session.container_id, request.session.container_id]
     assert result.cache_metadata["scheduler_submit_status"] == "queued"
     assert result.cache_metadata["container_service_url"] == "worker.example.com:443"
@@ -422,7 +421,6 @@ def test_scheduler_image_build_executor_defers_placement_to_the_workspace_policy
     # Without a dedicated build pool the workspace policy chooses where the build
     # runs; forcing managed capacity strands builds on connected-provider
     # deployments that have no local worker.
-    assert scheduler.calls[0].requested_placement is None
 
 
 def test_scheduler_stages_and_cleans_private_build_credentials(tmp_path: Path) -> None:

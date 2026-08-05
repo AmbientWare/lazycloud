@@ -18,7 +18,6 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
-from shared.compute_policy import ComputePlacementTarget
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.mounts import MountAuthMode
 
@@ -47,14 +46,14 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     )
     deployments = replace(
         isolated_services.deployments,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        pool_resolver=WorkspaceComputePolicyService(isolated_services.context),
         placement_resources=bucket_access,
     )
 
     first = deployments.deploy(
         DeploymentSpec(
             name="bucket-reader",
-            placement=ComputePlacementTarget.Aws,
+            metadata={"pool": "aws"},
             volumes=[
                 VolumeMount(
                     name="customer-data",
@@ -72,7 +71,7 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     deployments.deploy(
         DeploymentSpec(
             name="secret-backed-bucket",
-            placement=ComputePlacementTarget.Aws,
+            metadata={"pool": "aws"},
             volumes=[
                 VolumeMount(
                     name="other-data",

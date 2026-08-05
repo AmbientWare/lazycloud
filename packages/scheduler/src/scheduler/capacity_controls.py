@@ -43,7 +43,7 @@ class SchedulerCapacityControllerProvider:
     def agent_pool_configs(self) -> list[AgentPoolConfig]:
         """One config per provisioning unit that runs agent machines.
 
-        Keyed by capacity owner, not by group label: several units may feed one
+        Keyed by capacity owner, not by pool label: several units may feed one
         group, and keying by the label would silently drop all but one of them.
         """
         configs: dict[str, AgentPoolConfig] = {}

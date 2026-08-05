@@ -81,8 +81,8 @@ class AgentRouteReconciliationSettings(BaseSettings):
 class CapacityBootstrapPool(PoolPolicy):
     """One provisioning unit reconciled before the production API starts serving.
 
-    `machine_pool` is the scheduling group the unit stamps on its machines; it
-    defaults to the unit's own name so an unset group still routes.
+    `machine_pool` is the pool the unit stamps on its machines; it
+    defaults to the unit's own name so an unset pool still routes.
     """
 
     name: str = Field(min_length=1, max_length=160)

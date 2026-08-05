@@ -7,7 +7,6 @@ from typing import Protocol
 from database.repositories.apps import AppRepository, CronJobRepository, DeploymentRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
-from shared.compute_policy import ComputePlacement
 from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
 from shared.deployment_records import (
     Deployment,
@@ -61,20 +60,15 @@ class DeploymentRegistrar(Protocol):
     ) -> DeploymentRegistration: ...
 
 
-class DeploymentPlacementResolver(Protocol):
-    def resolve_deployment_placement(
-        self,
-        spec: DeploymentSpec,
-        *,
-        workspace: str,
-    ) -> ComputePlacement: ...
+class DeploymentPoolResolver(Protocol):
+    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
 class DeploymentService:
     context: ControlContext
     events: ControlEventEmitter
-    placement_resolver: DeploymentPlacementResolver
+    pool_resolver: DeploymentPoolResolver
     registrar: DeploymentRegistrar
     workspace_changes: WorkspaceChangePublisher | None = None
     placement_resources: DeploymentPlacementResourceManager | None = None
@@ -83,7 +77,7 @@ class DeploymentService:
         normalized_spec = _normalize_runtime_spec(spec)
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
-        resolved_placement = self.placement_resolver.resolve_deployment_placement(
+        resolved_pool = self.pool_resolver.resolve_deployment_pool(
             normalized_spec,
             workspace=workspace_record.id,
         )
@@ -134,7 +128,7 @@ class DeploymentService:
                     "stub_id": None,
                     "version": version,
                     "spec": normalized_spec.model_dump(mode="json"),
-                    "resolved_placement": resolved_placement.model_dump(mode="json"),
+                    "pool": resolved_pool,
                     "active": deployment_active,
                 },
                 workspace_id=workspace_record.id,

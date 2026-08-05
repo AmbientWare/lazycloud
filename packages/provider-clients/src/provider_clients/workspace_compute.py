@@ -168,7 +168,7 @@ def _provider_ref(connection_id: str) -> str:
 
 def _connection_ready(connection: AwsAccountConnection) -> bool:
     return (
-        connection.accepts_placement
+        connection.hosts_workloads
         and connection.node_role_arn is not None
         and connection.node_instance_profile_arn is not None
     )

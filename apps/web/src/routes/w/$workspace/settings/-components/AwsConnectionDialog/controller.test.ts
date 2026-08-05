@@ -216,7 +216,7 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsCon
     pending_authorization: null,
     retiring_authorization: null,
     revision: 1,
-    accepts_placement: phase === "ready",
+    hosts_workloads: phase === "ready",
     can_manage_existing_capacity: phase === "ready",
     available_actions: phase === "ready" ? ["validate", "reconnect", "remove"] : [],
     detail: "AWS connection state",

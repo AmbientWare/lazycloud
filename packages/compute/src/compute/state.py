@@ -94,7 +94,7 @@ class ComputeAgentTokenState(ContractModel):
     """Unit that bought this machine.
 
     Taken from the join credential rather than from the pool config: a joined
-    machine in a group an auto-scaling unit also feeds must never be selected by
+    machine in a pool an auto-scaling unit also feeds must never be selected by
     that unit's drain.
     """
     pool_name: str

@@ -51,7 +51,7 @@ def list_machines_in_pool(
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> PoolMachineListResponse:
-    """Machines in one scheduling group, self-hosted by default."""
+    """Machines in one pool, self-hosted by default."""
     machines = sorted(
         (
             item

@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from compute.aws_connections import AwsAccountConnectionService, AwsAccountPoolDrainer
+from compute.aws_connections import (
+    AwsAccountConnectionService,
+    AwsAccountPoolDrainer,
+    AwsConnectionCapacityBaseline,
+)
 from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.context import ComputeContext
 from coordination.redis_client import RedisClient
@@ -140,6 +144,7 @@ def aws_account_connection_composition_from_settings(
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
     workspace_changes: WorkspaceChangePublisher,
+    capacity_baseline: AwsConnectionCapacityBaseline,
 ) -> AwsAccountConnectionComposition | None:
     # Connected AWS is an optional deployment shape, but a half-configured one is not:
     # the settings validator already rejected that, so absence here is genuine absence.
@@ -171,6 +176,7 @@ def aws_account_connection_composition_from_settings(
         authorization_lifecycle=components.authorization_lifecycle,
         pool_drainer=pool_drainer,
         bucket_access_reconciler=bucket_access,
+        capacity_baseline=capacity_baseline,
         workspace_changes=workspace_changes,
         external_id_bytes=connection_settings.external_id_bytes,
         draft_ttl_seconds=connection_settings.draft_ttl_seconds,

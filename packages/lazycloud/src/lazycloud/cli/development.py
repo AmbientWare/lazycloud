@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from shared.compute_policy import ComputePlacementTarget
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
@@ -38,7 +37,6 @@ def dev(
     secrets: Annotated[list[str] | None, typer.Option("--secret")] = None,
     ports: Annotated[list[str] | None, typer.Option("--port")] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
-    placement: Annotated[ComputePlacementTarget | None, typer.Option("--placement")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
     overrides = build_deployment_overrides(
@@ -53,7 +51,6 @@ def dev(
         secrets=secrets,
         ports=ports,
         pool=pool,
-        placement=placement,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
     )

@@ -5,11 +5,7 @@ from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import ComputePoolRepository
-from shared.compute_policy import (
-    ComputePlacementTarget,
-    ComputePoolRecord,
-    ComputeResourceRequirements,
-)
+from shared.compute_policy import ComputePoolRecord, ComputeResourceRequirements
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.gpu import GPU_ANY, normalize_gpu_type
@@ -37,7 +33,6 @@ class ComputeCapacityPlacementRequest(ContractModel):
     workspace_id: str
     deployment_id: str = ""
     requested_pool: str = ""
-    requested_placement: ComputePlacementTarget | None = None
     requirements: ComputeResourceRequirements
 
 
@@ -53,12 +48,12 @@ class ComputeCapacityPlacementService:
     compute: PooledCapacityOwner
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
-        """Name the group a request lands in, provisioning a unit if none fits.
+        """Name the pool a request lands in, provisioning a unit if none fits.
 
         The group is the answer; the unit inside it is the capacity
         controllers' to pick. Provisioning happens here only when no existing
-        unit in the group can host the shape and the group is one a connected
-        account feeds — a group fed only by joined machines has nothing to
+        unit in the pool can host the shape and the pool is one a connected
+        account feeds — a pool fed only by joined machines has nothing to
         provision into and is left as it is.
         """
         machine_pool = self._machine_pool_for(request)
@@ -97,10 +92,7 @@ class ComputeCapacityPlacementService:
         deployment_pool = self._deployment_machine_pool(request)
         if deployment_pool:
             return deployment_pool
-        return self.policies.machine_pool_for_target(
-            workspace=request.workspace_id,
-            target=request.requested_placement,
-        )
+        return self.policies.default_machine_pool(workspace=request.workspace_id)
 
     def _deployment_machine_pool(self, request: ComputeCapacityPlacementRequest) -> str:
         """The group a deployment was pinned to when it was created.
@@ -119,13 +111,7 @@ class ComputeCapacityPlacementService:
             raise InvalidInputError(
                 f"deployment {request.deployment_id!r} was not found in the workspace"
             )
-        placement = deployment.resolved_placement
-        if placement.pool_name:
-            return placement.pool_name
-        return self.policies.machine_pool_for_target(
-            workspace=request.workspace_id,
-            target=placement.target,
-        )
+        return deployment.pool
 
 
 def _pool_supports(pool: ComputePoolRecord, requirements: ComputeResourceRequirements) -> bool:

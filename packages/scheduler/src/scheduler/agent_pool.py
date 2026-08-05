@@ -285,7 +285,7 @@ def agent_machine_schedulable(
 def _machine_owned_by(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> bool:
     """Whether this unit's controller owns the machine.
 
-    Several units may feed one group, so matching on the group label alone would
+    Several units may feed one pool, so matching on the pool label alone would
     have every one of their controllers claim every machine in it. The worker id
     is derived from the machine, so they would each write the same worker with a
     different owner and alternate it on every reconcile.

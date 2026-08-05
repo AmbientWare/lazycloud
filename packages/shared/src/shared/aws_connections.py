@@ -160,10 +160,10 @@ class AwsAccountConnection(ContractModel):
         repr=False,
     )
     machine_pool: str = Field(default="aws", min_length=1, max_length=240)
-    """Scheduling group every unit provisioned on this connection stamps.
+    """Pool every unit provisioned on this connection stamps.
 
     The customer's override point: units are created on demand per capability
-    key, so the group they belong to cannot live on any one of them.
+    key, so the pool they belong to cannot live on any one of them.
     """
     phase: AwsAccountConnectionPhase
     active_authorization: AwsAccountAuthorizationGeneration | None = None
@@ -286,7 +286,12 @@ class AwsAccountConnection(ContractModel):
         return authorization.managed_authorization if authorization is not None else None
 
     @property
-    def accepts_placement(self) -> bool:
+    def hosts_workloads(self) -> bool:
+        """Whether this connection is ready to run workloads.
+
+        A readiness fact about the account, not a statement about where any
+        workload is scheduled: what a workload runs on is the pool it names.
+        """
         accepts = self.phase in {
             AwsAccountConnectionPhase.Ready,
             AwsAccountConnectionPhase.ReconnectPending,

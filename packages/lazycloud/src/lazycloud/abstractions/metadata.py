@@ -6,7 +6,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import JsonValue
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import ComputePlacementTarget
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy, TaskPolicy, normalize_retry_policy
 
@@ -38,7 +37,6 @@ There is no pool object to pass: the durable row a workload lands on is a
 provisioning unit the control plane owns and chooses, and several units may
 feed one group.
 """
-PlacementInput = ComputePlacementTarget | None
 RetryPolicyInput = RetryPolicy | Mapping[str, JsonValue] | None
 
 

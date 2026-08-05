@@ -41,7 +41,7 @@ schedule is registered with the control plane at deploy time.
 
 Cron jobs accept the full [function option set](/concepts/functions) —
 resources, image, timeouts, `retries`/`retry_policy`, `env`/`secrets`/
-`volumes`, lifecycle hooks, and placement. Each scheduled run is a durable
+`volumes`, lifecycle hooks, and the pool. Each scheduled run is a durable
 task: a failing run is retried per the retry configuration, and terminal
 failures are visible in [task history](/concepts/tasks-and-logs) and the
 dashboard.

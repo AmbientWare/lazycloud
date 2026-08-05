@@ -6,6 +6,7 @@ import {
   awsConnectionSchema,
   customerComputeCatalogSchema,
   customerComputeInstanceListSchema,
+  machinePoolListSchema,
   poolJoinCommandResponseSchema,
   poolMachineListSchema,
   workspaceComputePolicySchema,
@@ -77,6 +78,15 @@ export function computeCatalogQueryOptions(workspaceId: string, enabled = true) 
         customerComputeCatalogSchema,
       ),
     staleTime: 5 * 60_000,
+  });
+}
+
+export function machinePoolsQueryOptions(workspaceId: string, enabled = true) {
+  return queryOptions({
+    queryKey: [...computeQueryKeys.root(workspaceId), "pools"] as const,
+    enabled,
+    queryFn: () =>
+      apiRequest(withWorkspace("/api/v1/compute/pools", workspaceId), machinePoolListSchema),
   });
 }
 

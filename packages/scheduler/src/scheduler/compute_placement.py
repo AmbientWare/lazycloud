@@ -20,9 +20,9 @@ class SchedulerComputePlacement:
     capacity: SchedulerCapacityPlacement
 
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
-        """Resolve the scheduling group this request lands in.
+        """Resolve the pool this request lands in.
 
-        Only the group is decided here. Which unit inside it serves the request
+        Only the pool is decided here. Which unit inside it serves the request
         is the capacity controllers' arbitration, so naming one now would leave
         the acquisition loop a single candidate and no failover to run.
         """
@@ -33,7 +33,6 @@ class SchedulerComputePlacement:
                 workspace_id=request.workspace_id,
                 deployment_id=request.deployment_id,
                 requested_pool=request.pool_selector,
-                requested_placement=request.requested_placement,
                 requirements=ComputeResourceRequirements(
                     cpu_millicores=request.cpu_millicores,
                     memory_mb=request.memory_mib,

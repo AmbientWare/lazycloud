@@ -518,7 +518,7 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
 def test_a_named_group_never_spills_into_a_unit_of_another_group(
     real_redis_actors: _RealRedisActors,
 ) -> None:
-    """Failover stays inside the group the request named.
+    """Failover stays inside the pool the request named.
 
     A unit is a candidate because it feeds the requested group, so a healthier
     unit of some other group is not an alternative however high its priority:

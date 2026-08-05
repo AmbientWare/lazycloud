@@ -63,7 +63,7 @@ from shared.http.pods import (
 from typing_extensions import Never, Self
 
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import PlacementInput, PoolInput, build_resource_metadata
+from lazycloud.abstractions.metadata import PoolInput, build_resource_metadata
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
 from lazycloud.control import ControlClientConfigMixin
@@ -226,7 +226,6 @@ class SandboxOptions(TypedDict, total=False):
     preemptible: bool
     ports: Iterable[int] | None
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
     metadata: Mapping[str, Any] | None
     command: Iterable[str] | None
@@ -1539,7 +1538,6 @@ class Sandbox(ControlClientConfigMixin):
     docker_enabled: bool = False
     preemptible: bool = False
     pool: PoolInput = None
-    placement: PlacementInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = ""
@@ -1576,7 +1574,6 @@ class Sandbox(ControlClientConfigMixin):
         preemptible: bool = False,
         ports: Iterable[int] | None = None,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
@@ -1604,7 +1601,6 @@ class Sandbox(ControlClientConfigMixin):
         self.docker_enabled = docker_enabled
         self.preemptible = preemptible
         self.pool = pool
-        self.placement = placement
         self.provider = provider
         self.metadata = dict(metadata or {})
         self.stub_id = ""
@@ -1646,7 +1642,6 @@ class Sandbox(ControlClientConfigMixin):
             env=dict(self.env or {}),
             secrets=self.secrets,
             volumes=list(self.volumes),
-            placement=self.placement,
             metadata=build_resource_metadata(
                 app=self._app_slug,
                 authorized=self.authorized,

@@ -245,7 +245,7 @@ function ConnectionActions({
   const customerAction = connection.customer_action;
   const customerActionAvailable = Boolean(customerAction?.url);
   const pending = pendingAction !== null;
-  const showCapacity = connection.accepts_placement || connection.can_manage_existing_capacity;
+  const showCapacity = connection.hosts_workloads || connection.can_manage_existing_capacity;
   const showActionBar =
     actionPlan.primary !== null || actionPlan.secondary !== null || actionPlan.destructive !== null;
 
@@ -263,7 +263,7 @@ function ConnectionActions({
         <dl className="border border-border bg-card text-xs">
           <ConnectionDetail
             label="Placement"
-            value={connection.accepts_placement ? "Available" : "Unavailable"}
+            value={connection.hosts_workloads ? "Available" : "Unavailable"}
           />
           <ConnectionDetail
             label="Active compute"

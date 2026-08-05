@@ -5,7 +5,6 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from pydantic import ValidationError
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import ComputePlacementTarget
 from shared.deployment_records import (
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_KEEP_WARM_SECONDS,
@@ -60,23 +59,6 @@ def test_deployment_concurrency_is_positive_at_public_http_boundaries() -> None:
             stub_type=DeploymentKind.Pod.value,
             keep_warm_seconds=-1,
             autoscaler=Autoscaler(max_containers=0),
-        )
-
-
-def test_deployment_authoring_accepts_only_a_placement_target() -> None:
-    authored = DeploymentSpec.model_validate({"name": "aws-task", "placement": "aws"})
-    assert authored.placement is ComputePlacementTarget.Aws
-
-    with pytest.raises(ValidationError):
-        DeploymentSpec.model_validate(
-            {
-                "name": "leaky-placement",
-                "placement": {
-                    "target": "aws",
-                    "provider_ref": "aws:private",
-                    "pool_name": "private-pool",
-                },
-            }
         )
 
 

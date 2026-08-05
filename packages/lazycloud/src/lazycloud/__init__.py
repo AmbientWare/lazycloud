@@ -1,5 +1,4 @@
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import ComputePlacementTarget
 from shared.gpu import GpuType
 from shared.image_building.authoring import LinuxArchitecture, PythonVersion
 from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
@@ -41,7 +40,6 @@ __all__ = [
     "Client",
     "CloudBucket",
     "CloudBucketConfig",
-    "ComputePlacementTarget",
     "Container",
     "Deployment",
     "FunctionCall",

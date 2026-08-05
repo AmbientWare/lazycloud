@@ -20,6 +20,7 @@ from shared.http.compute import (
 )
 from shared.http.compute_policy import (
     ComputeCatalogResponse,
+    MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
@@ -154,6 +155,11 @@ class ComputeClient:
     def instances(self) -> WorkspaceComputeInstanceListResponse:
         return WorkspaceComputeInstanceListResponse.model_validate(
             self.channel.get(self._compute_path("/instances"))
+        )
+
+    def pools(self) -> MachinePoolListResponse:
+        return MachinePoolListResponse.model_validate(
+            self.channel.get(self._compute_path("/pools"))
         )
 
     def workloads(self) -> WorkspaceComputeWorkloadListResponse:

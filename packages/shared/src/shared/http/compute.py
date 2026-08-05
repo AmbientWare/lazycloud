@@ -132,7 +132,7 @@ class MachineListResponse(HttpModel):
 class MachineJoinCommandRequest(HttpModel):
     """Request the join command for a workspace's self-hosted fleet.
 
-    Naming a group creates it: a caller may join machines into any group they
+    Naming a pool creates it: a caller may join machines into any group they
     choose, including one an auto-scaling unit already feeds. Left empty, the
     workspace's implicit self-hosted fleet answers.
     """

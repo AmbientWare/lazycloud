@@ -24,7 +24,6 @@ from shared.workload_config import (
     StubAutoscalerConfig,
     StubConfig,
     StubImageConfig,
-    StubPoolConfig,
     StubRuntimeConfig,
     StubSchemaConfig,
     StubTaskPolicy,
@@ -73,8 +72,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
     env: dict[str, str | None] = {}
     for name, value in _env_dict(request.env).items():
         env[name] = value
-    pool = StubPoolConfig.model_validate(request.pool)
-    pool_selector = pool.name.strip()
+    pool_selector = request.pool.strip()
     retry_policy = request.retry_policy or (
         RetryPolicy.from_retries(request.retries) if request.retries > 0 else None
     )
@@ -170,8 +168,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             outputs=request.outputs.model_dump(mode="json"),
         ),
         tcp=request.tcp,
-        pool=pool,
-        placement=request.placement,
+        pool=pool_selector,
     )
 
 
@@ -271,7 +268,6 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
         retry_policy=config.retry_policy,
         lifecycle_hooks=config.lifecycle_hooks,
         client_contract=config.client_contract,
-        placement=config.placement,
     )
 
 

@@ -10,7 +10,8 @@ from shared.http.compute_policy import (
     ComputeCatalogResponse,
     ComputeConnectionSummaryResponse,
     ComputeCostSummaryResponse,
-    ResolvedComputePlacementResponse,
+    MachinePoolListResponse,
+    MachinePoolResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeInstanceResponse,
     WorkspaceComputePolicyPatchRequest,
@@ -57,7 +58,7 @@ def update_workspace_compute_policy(
         service.update_policy(
             workspace=workspace_id,
             expected_revision=request.expected_revision,
-            default_placement=request.default_placement,
+            default_pool=request.default_pool,
             aws=request.aws,
         )
     )
@@ -80,7 +81,7 @@ def patch_workspace_compute_policy(
         service.update_policy(
             workspace=workspace_id,
             expected_revision=request.expected_revision,
-            default_placement=request.default_placement or current.default_placement,
+            default_pool=request.default_pool or current.default_pool,
             aws=AwsWorkspaceComputePolicy.model_validate(dict(merged)),
         )
     )
@@ -190,6 +191,31 @@ def list_workspace_compute_instances(
 
 
 @router.get(
+    "/pools",
+    response_model=MachinePoolListResponse,
+    operation_id="list_workspace_compute_pools",
+)
+def list_workspace_compute_pools(
+    workspace_id: read_workspace,
+    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
+) -> MachinePoolListResponse:
+    """Pools this workspace can run workloads in."""
+    return MachinePoolListResponse(
+        data=[
+            MachinePoolResponse(
+                name=item.name,
+                is_default=item.is_default,
+                providers=item.providers,
+                unit_count=item.unit_count,
+                gpu_types=item.gpu_types,
+            )
+            for item in service.machine_pools(workspace=workspace_id)
+        ],
+        next="",
+    )
+
+
+@router.get(
     "/workloads",
     response_model=WorkspaceComputeWorkloadListResponse,
     operation_id="list_workspace_compute_workloads",
@@ -205,12 +231,7 @@ def list_workspace_compute_workloads(
                 app_id=item.deployment.app_id,
                 name=item.deployment.name,
                 kind=item.deployment.kind,
-                placement=ResolvedComputePlacementResponse(
-                    target=item.placement.target,
-                    source=item.placement.source,
-                    provider=item.placement.provider,
-                    region=item.placement.region,
-                ),
+                pool=item.pool,
                 cpu_millicores=item.resources.cpu_millicores,
                 memory_mb=item.resources.memory_mb,
                 gpu=item.resources.gpu,

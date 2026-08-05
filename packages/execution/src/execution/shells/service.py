@@ -161,7 +161,6 @@ class ShellControlService:
                 disk_mib=plan.disk_mib,
                 gpu_request=list(plan.gpu_request),
                 gpu_count=plan.gpu_count,
-                requested_placement=stub.config.placement,
                 mounts=source_code_mounts(
                     context=self.services.context,
                     object_storage=self.services.object_storage,

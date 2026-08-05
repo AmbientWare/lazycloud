@@ -49,7 +49,6 @@ from lazycloud.abstractions.invocation import (
 )
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PlacementInput,
     PoolInput,
     RetryPolicyInput,
     SchemaInput,
@@ -145,7 +144,6 @@ class EndpointOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
     metadata: dict[str, Any] | None
 
@@ -174,7 +172,6 @@ class ASGIOptions(TypedDict, total=False):
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
 
 
@@ -228,7 +225,6 @@ class Endpoint(Generic[P, R]):
     docker_enabled: bool = False
     preemptible: bool = False
     pool: PoolInput = None
-    placement: PlacementInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -289,7 +285,6 @@ class Endpoint(Generic[P, R]):
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
-            placement=self.placement,
             retry_policy=retry_policy_config(
                 self.retry_policy,
                 retries=self.retries,
@@ -458,7 +453,6 @@ def _endpoint(
     docker_enabled: bool = False,
     preemptible: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Endpoint[P, R]: ...
@@ -500,7 +494,6 @@ def _endpoint(
     docker_enabled: bool = False,
     preemptible: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
@@ -541,7 +534,6 @@ def _endpoint(
     docker_enabled: bool = False,
     preemptible: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]] | Endpoint[P, R]:
@@ -578,7 +570,6 @@ def _endpoint(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata or {},
             route=route,
@@ -617,7 +608,6 @@ class ASGI:
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
     pool: PoolInput = None
-    placement: PlacementInput = None
     provider: str | None = None
     deployment_client: DeploymentControlClient | None = field(
         default=None,
@@ -673,7 +663,6 @@ class ASGI:
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
-            placement=self.placement,
             lifecycle_hooks=lifecycle_hooks(on_start=self.on_start),
             metadata=build_resource_metadata(
                 app=self._app_slug,
@@ -816,7 +805,6 @@ def _asgi(
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
     def decorate(target: Callable[..., Awaitable[Any]] | Callable[..., Any]) -> ASGI:
@@ -846,7 +834,6 @@ def _asgi(
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             pool=pool,
-            placement=placement,
             provider=provider,
         )
 
@@ -879,7 +866,6 @@ def _realtime(
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     pool: PoolInput = None,
-    placement: PlacementInput = None,
     provider: str | None = None,
 ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
     def decorate(target: Callable[..., Any]) -> RealtimeASGI:
@@ -909,7 +895,6 @@ def _realtime(
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             pool=pool,
-            placement=placement,
             provider=provider,
         )
 

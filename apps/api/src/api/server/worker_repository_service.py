@@ -691,11 +691,11 @@ class WorkerRepositoryService:
         if not worker.capacity_owner_id:
             raise ConflictError("worker registration requires a capacity owner identity")
         with self.services.context.database.session() as session:
-            # A group is fed by any number of units, so the worker is admitted on
-            # the unit it names and the group is checked against that unit. The
-            # two failures stay distinct: a group no unit feeds yet is a pool that
+            # A pool is fed by any number of units, so the worker is admitted on
+            # the unit it names and the pool is checked against that unit. The
+            # two failures stay distinct: a pool no unit feeds yet is a pool that
             # may still be provisioning and is worth retrying, while an owner that
-            # does not feed the group it claims can never succeed.
+            # does not feed the pool it claims can never succeed.
             units = ComputePoolRepository(session)
             feeding = units.list_for_machine_pool(principal.workspace_id, worker.pool_name)
             if not feeding:

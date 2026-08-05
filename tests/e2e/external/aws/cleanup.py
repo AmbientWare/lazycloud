@@ -85,14 +85,14 @@ def _apply_zero_policy(client: ComputeClient) -> AwsWorkspaceComputePolicy:
         idle_timeout_seconds=aws.idle_timeout_seconds,
         root_volume_gib=aws.root_volume_gib,
     )
-    # Zero under the placement the workspace already has. Flipping to Managed
+    # Zero under the group the workspace already has. Flipping to another
     # first would release capacity through a different branch than the one a user
     # takes, and zeroing the policy is the only control they are given.
     if current.aws != zero:
         client.update_policy(
             WorkspaceComputePolicyUpdateRequest(
                 expected_revision=current.revision,
-                default_placement=current.default_placement,
+                default_pool=current.default_pool,
                 aws=zero,
             )
         )

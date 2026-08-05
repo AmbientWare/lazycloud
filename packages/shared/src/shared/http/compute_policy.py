@@ -13,8 +13,6 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
-    ComputePlacementSource,
-    ComputePlacementTarget,
 )
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
@@ -22,7 +20,7 @@ from shared.http.base import HttpModel
 
 class WorkspaceComputePolicyUpdateRequest(HttpModel):
     expected_revision: int = Field(ge=1)
-    default_placement: ComputePlacementTarget
+    default_pool: str = Field(min_length=1, max_length=240)
     aws: AwsWorkspaceComputePolicy
 
 
@@ -45,23 +43,33 @@ class AwsWorkspaceComputePolicyPatch(HttpModel):
 
 class WorkspaceComputePolicyPatchRequest(HttpModel):
     expected_revision: int = Field(ge=1)
-    default_placement: ComputePlacementTarget | None = None
+    default_pool: str | None = None
     aws: AwsWorkspaceComputePolicyPatch = Field(default_factory=AwsWorkspaceComputePolicyPatch)
 
 
 class WorkspaceComputePolicyResponse(HttpModel):
     revision: int = Field(ge=1)
-    default_placement: ComputePlacementTarget
+    default_pool: str
     aws: AwsWorkspaceComputePolicy
     created_at: datetime
     updated_at: datetime
 
 
-class ResolvedComputePlacementResponse(HttpModel):
-    target: ComputePlacementTarget
-    source: ComputePlacementSource
-    provider: str
-    region: str
+class MachinePoolResponse(HttpModel):
+    """One pool a workload may name, and what feeds it."""
+
+    name: str
+    is_default: bool = False
+    providers: tuple[str, ...] = ()
+    """Distinct providers behind this pool, e.g. `aws`, `agent`, `local`."""
+    unit_count: int = Field(default=0, ge=0)
+    gpu_types: tuple[str, ...] = ()
+    """GPU types this pool can host, empty when it hosts CPU workloads only."""
+
+
+class MachinePoolListResponse(HttpModel):
+    data: list[MachinePoolResponse] = Field(default_factory=list)
+    next: str = ""
 
 
 class ComputeCatalogInstanceResponse(HttpModel):
@@ -151,7 +159,7 @@ class WorkspaceComputeWorkloadResponse(HttpModel):
     app_id: str | None = None
     name: str
     kind: DeploymentKind
-    placement: ResolvedComputePlacementResponse
+    pool: str
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
     gpu: str | None = None
@@ -170,7 +178,8 @@ __all__ = [
     "ComputeCatalogResponse",
     "ComputeConnectionSummaryResponse",
     "ComputeCostSummaryResponse",
-    "ResolvedComputePlacementResponse",
+    "MachinePoolListResponse",
+    "MachinePoolResponse",
     "WorkspaceComputeInstanceListResponse",
     "WorkspaceComputeInstanceResponse",
     "WorkspaceComputePolicyResponse",
