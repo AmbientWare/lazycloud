@@ -84,9 +84,7 @@ from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
 from compute.offers import (
     ComputeOffer,
-    ComputeReservation,
     OfferRequest,
-    ReservationSource,
     ReservationStatus,
     choose_offer,
 )
@@ -2585,6 +2583,7 @@ class ComputeService:
                     now=now,
                 )
 
+
 def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:
     labels = {
         "selector": config.selector,
@@ -2910,44 +2909,6 @@ def _provider_reservation_from_record(
         storage_mb=_metadata_int(metadata, "storage_mb"),
         architecture=str(metadata.get("architecture") or ""),
         runtime=str(metadata.get("runtime") or ""),
-    )
-
-
-def _compute_reservation_from_record(
-    reservation: ProviderReservation,
-    *,
-    pool_name: str,
-) -> ComputeReservation:
-    return ComputeReservation(
-        id=reservation.id,
-        pool_name=pool_name,
-        selector=reservation.selector,
-        provider=reservation.provider,
-        cloud=reservation.cloud,
-        region=reservation.region,
-        offer_id=reservation.offer_id,
-        instance_type=reservation.instance_type,
-        instance_id=reservation.instance_id,
-        machine_id=reservation.machine_id,
-        gpu=reservation.gpu,
-        gpu_count=reservation.gpu_count,
-        node_count=reservation.node_count,
-        cpu_millicores=reservation.cpu_millicores,
-        memory_mb=reservation.memory_mb,
-        storage_mb=reservation.storage_mb,
-        architecture=reservation.architecture,
-        runtime=reservation.runtime,
-        hourly_cost_micros=reservation.hourly_cost_micros,
-        committed_micros=reservation.committed_micros,
-        source=(
-            ReservationSource.Attached
-            if str(reservation.source) == ComputePoolSource.Attached.value
-            else ReservationSource.CliReservation
-        ),
-        status=reservation.status,
-        created_at_seconds=_unix_seconds(reservation.created_at),
-        expires_at_seconds=_unix_seconds(reservation.expires_at),
-        billing_renewal_at_seconds=_unix_seconds(reservation.billing_renewal_at),
     )
 
 
