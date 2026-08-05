@@ -752,7 +752,7 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
         if pool.name == SELF_HOSTED_FLEET_POOL_NAME
     ]
     assert len(fleets) == 1
-    assert fleets[0].labels.get("gpu") == "A10G"
+    assert fleets[0].worker_gpu_type == "A10G"
 
     with isolated_services.context.database.session() as session:
         credentials = ComputeJoinCredentialRepository(session).list_for_pool(

@@ -25,11 +25,11 @@ from shared.capacity import (
 from shared.capacity import (
     CapacityAcquisitionStatus as ComputeCapacityAcquisitionStatus,
 )
-from shared.compute_policy import ComputePoolRecord
 from shared.compute_policy import (
     ComputePlacement,
     ComputePlacementSource,
     ComputePlacementTarget,
+    ComputePoolRecord,
 )
 from shared.scheduling import SchedulerWorkerRecord
 

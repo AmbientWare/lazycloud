@@ -48,6 +48,7 @@ class _RecordingHttpChannel(HttpChannel):
             capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Provider,
             name="gpu-pool",
+            machine_pool="aws",
             created_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
         ).model_dump(mode="json")
 

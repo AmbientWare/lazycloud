@@ -35,6 +35,7 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
+from database.repositories.compute import ComputePoolRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.images import (
     CheckpointRepository,
@@ -43,7 +44,6 @@ from database.repositories.images import (
 )
 from database.repositories.orchestration import (
     ContainerRepository,
-    PoolRepository,
 )
 from execution.containers.preemption import PreemptedContainerService
 from execution.taskqueues.service import TaskQueueControlService
@@ -2335,9 +2335,9 @@ def _register_worker_session(
 ) -> dict[str, str]:
     with services.context.database.session() as session:
         durable_workspace_id = services.context.workspace(session, workspace_id).id
-        pool = PoolRepository(session).get(
+        pool = ComputePoolRepository(session).get_by_name(
+            durable_workspace_id,
             worker.pool_name,
-            workspace_id=durable_workspace_id,
         )
     if pool is None:
         capacity_owner_id = str(

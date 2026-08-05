@@ -10,18 +10,19 @@ from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
 from shared.provider_config import ProviderConfig, ProviderKind
 
-
 _UNIT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _WORKSPACE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 
 def _unit(name: str, **overrides: object) -> ComputePoolRecord:
-    return ComputePoolRecord(
-        id=_UNIT_ID,
-        workspace_id=_WORKSPACE_ID,
-        name=name,
-        machine_pool=name,
-        **overrides,
+    return ComputePoolRecord.model_validate(
+        {
+            "id": _UNIT_ID,
+            "workspace_id": _WORKSPACE_ID,
+            "name": name,
+            "machine_pool": name,
+            **overrides,
+        }
     )
 
 

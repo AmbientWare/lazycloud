@@ -50,8 +50,7 @@ from shared.capacity import (
     CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
-from shared.compute_policy import ComputePoolRecord
-from shared.compute_policy import ComputePlacementSource
+from shared.compute_policy import ComputePlacementSource, ComputePoolRecord
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -236,7 +235,7 @@ class _WorkerRepository:
 
 @dataclass(slots=True)
 class _SizingSnapshots:
-    pool: Pool
+    pool: ComputePoolRecord
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         if capacity_owner_id != self.pool.capacity_owner_id:
