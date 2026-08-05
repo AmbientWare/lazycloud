@@ -234,10 +234,29 @@ def internal_pool_identity(
     provider_ref: str,
     region: str,
     capability_key: str,
+    root_volume_gib: int,
 ) -> tuple[str, str]:
+    """Derive the durable id and name of one provisioning unit.
+
+    The seed is everything AWS pins to a single Auto Scaling group, root volume
+    included: the volume size feeds the launch template, so two units differing
+    only in it must not collide on one template.
+
+    The derived name reaches the ASG and launch-template names, so changing this
+    seed orphans the AWS resources of any unit created under the old one.
+    """
     identity = uuid5(
         NAMESPACE_URL,
-        "\0".join(("compute-pool", workspace_id, provider_ref, region, capability_key)),
+        "\0".join(
+            (
+                "compute-pool",
+                workspace_id,
+                provider_ref,
+                region,
+                capability_key,
+                str(root_volume_gib),
+            )
+        ),
     )
     return str(identity), f"managed-{identity.hex[:24]}"
 

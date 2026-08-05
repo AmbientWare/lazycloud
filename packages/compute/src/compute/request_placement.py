@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
-from database.repositories.orchestration import PoolRepository
+from database.repositories.compute import ComputePoolRepository
 from shared.capacity import CapacityOwnerKind
-from shared.compute_fleet import Pool
 from shared.compute_policy import (
     ComputePlacement,
     ComputePlacementTarget,
@@ -115,12 +114,12 @@ class ComputeCapacityPlacementService:
         self,
         request: ComputeCapacityPlacementRequest,
         placement: ComputePlacement,
-    ) -> Pool | None:
+    ) -> ComputePoolRecord | None:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, request.workspace_id).id
-            pools = PoolRepository(session)
+            pools = ComputePoolRepository(session)
             if placement.pool_name:
-                selected = pools.get(placement.pool_name, workspace_id=workspace_id)
+                selected = pools.get_by_name(workspace_id, placement.pool_name)
                 if selected is None:
                     raise InvalidInputError(
                         f"attached compute pool {placement.pool_name!r} "
@@ -136,7 +135,7 @@ class ComputeCapacityPlacementService:
                 return None
             candidates = [
                 pool
-                for pool in pools.list(workspace_id=workspace_id)
+                for pool in pools.list_for_workspace(workspace_id)
                 if pool.capacity_owner_kind is CapacityOwnerKind.WorkspaceAgent
                 and pool.default_eligible
                 and _pool_supports(pool, request.requirements)
@@ -147,7 +146,7 @@ class ComputeCapacityPlacementService:
         return candidates[0]
 
 
-def _pool_supports(pool: Pool, requirements: ComputeResourceRequirements) -> bool:
+def _pool_supports(pool: ComputePoolRecord, requirements: ComputeResourceRequirements) -> bool:
     if pool.worker_cpu_millicores < requirements.cpu_millicores:
         return False
     if pool.worker_memory_mib < requirements.memory_mb:

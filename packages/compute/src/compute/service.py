@@ -33,7 +33,6 @@ from database.repositories.observability import UsageRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
-    PoolRepository,
     WorkerRepository,
 )
 from database.types import DatabaseSession
@@ -60,10 +59,11 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
-from shared.compute_fleet import Machine, Pool, ResourceStatus, Worker
+from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputePoolPhase,
+    ComputePoolProviderState,
     ComputePoolRecord,
     ComputePoolVisibility,
     ComputeResourceRequirements,
@@ -80,6 +80,7 @@ from shared.errors import (
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
+from shared.routing import BackendRouteTransport, PrivatePoolFallback
 from shared.timestamps import utc_now
 from shared.usage import UsageMetric, UsageUnit, usage_record_id
 
@@ -400,11 +401,6 @@ class ComputeService:
                 request.capacity_owner_id,
                 request.operation_id,
             )
-            policy = (
-                PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
-                if pool is not None
-                else None
-            )
             direct_units = (
                 len(
                     [
@@ -418,7 +414,7 @@ class ComputeService:
                 if pool is not None
                 else 0
             )
-        if pool is None or policy is None:
+        if pool is None:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
@@ -437,14 +433,14 @@ class ComputeService:
                 desired_unit=max(direct_units, 1),
                 reason=degraded_reason,
             )
-        if not policy.scaling_enabled:
+        if not pool.scaling_enabled:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=max(direct_units, 1),
                 reason="capacity owner scaling is disabled",
             )
-        if not _shape_matches_pool(request.shape, policy):
+        if not _shape_matches_pool(request.shape, pool):
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
@@ -468,7 +464,7 @@ class ComputeService:
             return _plan_next_capacity_unit(
                 request,
                 current_units=direct_units,
-                max_units=policy.max_workers,
+                max_units=pool.max_machines,
             )
         if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
             try:
@@ -556,13 +552,12 @@ class ComputeService:
         desired_unit: int,
     ) -> CapacityAcquisitionResult:
         with self.context.database.session() as session:
-            policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
             records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
             existing_operation = ComputeCapacityOperationRepository(session).get(
                 request.capacity_owner_id,
                 request.operation_id,
             )
-        if policy is None or not _shape_matches_pool(request.shape, policy):
+        if not _shape_matches_pool(request.shape, pool):
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.Unsupported,
@@ -570,7 +565,7 @@ class ComputeService:
                 desired_unit=desired_unit,
             )
         clients = self._provider_client_snapshot(pool.workspace_id)
-        provider_name = pool.provider_ref or policy.provider
+        provider_name = pool.provider_ref or pool.provider
         provider = clients.get(provider_name)
         if provider is None:
             return _capacity_result(
@@ -585,7 +580,7 @@ class ComputeService:
                     item
                     for item in provider.list_offers()
                     if _offer_matches_capacity_shape(item, request.shape)
-                    and _offer_matches_capacity_policy(item, policy)
+                    and _offer_matches_capacity_policy(item, pool)
                 ),
                 None,
             )
@@ -680,7 +675,7 @@ class ComputeService:
                     if _reservation_open(item.status)
                 ]
                 current_units = len(open_records)
-                if desired_unit > policy.max_workers:
+                if desired_unit > pool.max_machines:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             pool,
@@ -1456,11 +1451,12 @@ class ComputeService:
         name: str,
         *,
         workspace: str = "default",
+        machine_pool: str = "",
         provider: str = "local",
         capacity_owner_id: str | None = None,
-        initial_workers: int = 0,
-        min_workers: int = 0,
-        max_workers: int = 1,
+        initial_machines: int = 0,
+        min_machines: int = 0,
+        max_machines: int = 1,
         scaling_enabled: bool = False,
         default_eligible: bool = False,
         priority: int = 0,
@@ -1477,12 +1473,18 @@ class ComputeService:
         scale_up_cooldown_seconds: int = 5,
         scale_down_cooldown_seconds: int = 60,
         registration_timeout_seconds: int = 600,
-        labels: dict[str, str] | None = None,
-    ) -> Pool:
+        transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted,
+        fallback: PrivatePoolFallback = PrivatePoolFallback.Internal,
+    ) -> ComputePoolRecord:
+        """Create or update a provisioning unit the workspace owns directly.
+
+        `machine_pool` defaults to the unit's own name, which is what makes a
+        unit nobody grouped explicitly reachable by its own label.
+        """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            repository = PoolRepository(session)
-            existing = repository.get(name, workspace_id=workspace_id)
+            repository = ComputePoolRepository(session)
+            existing = repository.get_by_name(workspace_id, name, for_update=True)
             if existing is not None and existing.provider != provider:
                 raise ConflictError(f"compute pool provider is immutable: {name}")
             if (
@@ -1492,49 +1494,62 @@ class ComputeService:
             ):
                 raise ConflictError(f"compute pool capacity owner is immutable: {name}")
             owner_kind, owner_source = capacity_owner_for_provider(provider)
-            pool = Pool(
-                capacity_owner_id=(
-                    existing.capacity_owner_id
-                    if existing is not None
-                    else capacity_owner_id or str(uuid4())
-                ),
-                capacity_owner_kind=(
-                    existing.capacity_owner_kind if existing is not None else owner_kind
-                ),
-                capacity_owner_source=(
-                    existing.capacity_owner_source if existing is not None else owner_source
-                ),
-                name=name,
-                provider=provider,
-                initial_workers=initial_workers,
-                min_workers=min_workers,
-                max_workers=max_workers,
-                scaling_enabled=scaling_enabled,
-                default_eligible=default_eligible,
-                priority=priority,
-                min_free_cpu_millicores=min_free_cpu_millicores,
-                min_free_memory_mib=min_free_memory_mib,
-                min_free_gpu_count=min_free_gpu_count,
-                worker_cpu_millicores=worker_cpu_millicores,
-                worker_memory_mib=worker_memory_mib,
-                worker_gpu_type=worker_gpu_type,
-                worker_gpu_count=worker_gpu_count,
-                worker_runtimes=worker_runtimes,
-                worker_preemptible=worker_preemptible,
-                idle_drain_timeout_seconds=idle_drain_timeout_seconds,
-                scale_up_cooldown_seconds=scale_up_cooldown_seconds,
-                scale_down_cooldown_seconds=scale_down_cooldown_seconds,
-                registration_timeout_seconds=registration_timeout_seconds,
-                labels=labels or {},
+            owner = capacity_owner_id or str(uuid4())
+            saved = repository.upsert(
+                ComputePoolRecord(
+                    id=existing.id if existing is not None else owner,
+                    capacity_owner_id=(
+                        existing.capacity_owner_id if existing is not None else owner
+                    ),
+                    capacity_owner_kind=(
+                        existing.capacity_owner_kind if existing is not None else owner_kind
+                    ),
+                    capacity_owner_source=(
+                        existing.capacity_owner_source if existing is not None else owner_source
+                    ),
+                    workspace_id=workspace_id,
+                    name=name,
+                    machine_pool=machine_pool or name,
+                    provider=provider,
+                    selector=name,
+                    status=ComputePoolPhase.Ready.value,
+                    source="workspace",
+                    initial_machines=initial_machines,
+                    desired_machines=(
+                        existing.desired_machines if existing is not None else min_machines
+                    ),
+                    min_machines=min_machines,
+                    max_machines=max_machines,
+                    observed_machines=(existing.observed_machines if existing is not None else 0),
+                    generation=existing.generation if existing is not None else 1,
+                    phase=ComputePoolPhase.Ready,
+                    scaling_enabled=scaling_enabled,
+                    default_eligible=default_eligible,
+                    priority=priority,
+                    min_free_cpu_millicores=min_free_cpu_millicores,
+                    min_free_memory_mib=min_free_memory_mib,
+                    min_free_gpu_count=min_free_gpu_count,
+                    worker_cpu_millicores=worker_cpu_millicores,
+                    worker_memory_mib=worker_memory_mib,
+                    worker_gpu_type=worker_gpu_type,
+                    worker_gpu_count=worker_gpu_count,
+                    worker_runtimes=worker_runtimes,
+                    worker_preemptible=worker_preemptible,
+                    idle_drain_timeout_seconds=idle_drain_timeout_seconds,
+                    scale_up_cooldown_seconds=scale_up_cooldown_seconds,
+                    scale_down_cooldown_seconds=scale_down_cooldown_seconds,
+                    registration_timeout_seconds=registration_timeout_seconds,
+                    transport=transport,
+                    fallback=fallback,
+                )
             )
-            saved = repository.upsert(pool, workspace_id=workspace_id)
         self._publish_change(
             workspace_id=workspace_id,
             topic=WorkspaceChangeTopic.ComputePools,
             change=(
                 WorkspaceChangeType.Created if existing is None else WorkspaceChangeType.Updated
             ),
-            resource_id=name,
+            resource_id=saved.id,
         )
         return saved
 
@@ -1621,12 +1636,12 @@ class ComputeService:
             last_failure_at=failed.updated_at if failed is not None else None,
         )
 
-    def list_pools_for_workspace_deletion(self, workspace_id: str) -> list[Pool]:
+    def list_pools_for_workspace_deletion(self, workspace_id: str) -> list[ComputePoolRecord]:
         with self.context.database.session() as session:
             workspace = WorkspaceRepository(session).lock_for_deletion(workspace_id)
             if workspace.status is not WorkspaceStatus.Deleting:
                 raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-            records = PoolRepository(session).list(workspace_id=workspace_id)
+            records = ComputePoolRepository(session).list_for_workspace(workspace_id)
         records.sort(key=lambda item: item.name)
         return records
 
@@ -1694,7 +1709,12 @@ class ComputeService:
                         workspace_id=workspace_id,
                     )
                     deleted_machine_ids.append(machine.id)
-                PoolRepository(session).records.delete(name, workspace_id=workspace_id)
+                unit = ComputePoolRepository(session).get_by_name(workspace_id, name)
+                if unit is not None:
+                    ComputePoolRepository(session).records.delete(
+                        unit.id,
+                        workspace_id=workspace_id,
+                    )
         if termination_errors:
             details = "; ".join(termination_errors)
             raise UpstreamUnavailableError(
@@ -1847,10 +1867,12 @@ class ComputeService:
                     machine.id,
                     workspace_id=workspace_id,
                 )
-            PoolRepository(session).delete_for_workspace_deletion(
-                name,
-                workspace_id=workspace_id,
-            )
+            unit = ComputePoolRepository(session).get_by_name(workspace_id, name)
+            if unit is not None:
+                ComputePoolRepository(session).delete_for_workspace_deletion(
+                    unit.id,
+                    workspace_id=workspace_id,
+                )
 
     def list_pool_offers(
         self,
@@ -2156,19 +2178,18 @@ class ComputeService:
             provider_ref=provider.ref,
             region=offer.region,
             capability_key=offer.capability_key,
+            root_volume_gib=root_volume_gib,
         )
-        created = False
         with self.context.database.session() as session:
             repository = ComputePoolRepository(session)
-            scheduler_pools = PoolRepository(session)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
                 region=offer.region,
                 capability_key=offer.capability_key,
+                root_volume_gib=root_volume_gib,
                 for_update=True,
             )
-            current_policy = scheduler_pools.get(pool_name, workspace_id=workspace_id)
             other_desired = sum(
                 item.desired_machines
                 for item in repository.list_internal(workspace_id=workspace_id)
@@ -2190,7 +2211,7 @@ class ComputeService:
             else:
                 desired = _policy_owned_desired_machines(
                     current_desired=current.desired_machines if current is not None else 0,
-                    previous_floor=_previous_policy_floor(current, current_policy),
+                    previous_floor=_previous_policy_floor(current),
                     floor=requested_machines,
                     ceiling=remaining,
                 )
@@ -2222,128 +2243,62 @@ class ComputeService:
                 if current is not None
                 else 0
             )
-            if current is None:
-                created = True
-                current = repository.upsert(
-                    ComputePoolRecord(
-                        id=pool_id,
-                        capacity_owner_id=pool_id,
-                        capacity_owner_kind=CapacityOwnerKind.PooledProvider,
-                        capacity_owner_source=CapacityOwnerSource.Provider,
-                        workspace_id=workspace_id,
-                        name=pool_name,
-                        selector=pool_name,
-                        status=ComputePoolPhase.Provisioning.value,
-                        source="workspace_policy",
-                        config={
-                            "gpu_count": offer.gpu_count,
-                            "idle_timeout_seconds": idle_timeout_seconds,
-                            "root_volume_gib": root_volume_gib,
-                            "workspace_machine_limit": workspace_machine_limit,
-                        },
-                        provider_ref=provider.ref,
-                        provider_connection_id=provider.connection_id,
-                        capacity_mode=ComputeCapacityMode.Pooled,
-                        visibility=ComputePoolVisibility.Internal,
-                        region=offer.region,
-                        offer_id=offer.id,
-                        capability_key=offer.capability_key,
-                        desired_machines=desired,
-                        min_machines=minimum,
-                        max_machines=maximum,
-                        observed_machines=0,
-                        generation=1,
-                        phase=ComputePoolPhase.Provisioning,
-                    )
-                )
-            elif (
-                desired != current.desired_machines
-                or minimum != current.min_machines
-                or maximum != current.max_machines
-                or idle_timeout_seconds
-                != _pool_config_int(current, "idle_timeout_seconds", default=300)
-            ):
-                current = current.model_copy(
-                    update={
-                        "desired_machines": desired,
-                        "min_machines": minimum,
-                        "max_machines": maximum,
-                        "config": {
-                            **current.config,
-                            "idle_timeout_seconds": idle_timeout_seconds,
-                            "root_volume_gib": root_volume_gib,
-                            "workspace_machine_limit": workspace_machine_limit,
-                        },
-                    }
-                )
-                current = repository.upsert(current)
-            scheduler_pools.upsert(
-                Pool(
-                    capacity_owner_id=current.capacity_owner_id,
-                    capacity_owner_kind=current.capacity_owner_kind,
-                    capacity_owner_source=current.capacity_owner_source,
-                    name=current.name,
-                    provider=current.provider_ref,
-                    initial_workers=(
-                        baseline.initial_machines
-                        if baseline is not None
-                        else current_policy.initial_workers
-                        if current_policy is not None
-                        else 0
-                    ),
-                    min_workers=current.min_machines,
-                    max_workers=current.max_machines,
-                    scaling_enabled=True,
-                    default_eligible=False,
-                    priority=current_policy.priority if current_policy is not None else 0,
-                    min_free_cpu_millicores=(
-                        baseline.min_free_cpu_millicores
-                        if baseline is not None
-                        else current_policy.min_free_cpu_millicores
-                        if current_policy is not None
-                        else 0
-                    ),
-                    min_free_memory_mib=(
-                        baseline.min_free_memory_mib
-                        if baseline is not None
-                        else current_policy.min_free_memory_mib
-                        if current_policy is not None
-                        else 0
-                    ),
-                    min_free_gpu_count=(
-                        current_policy.min_free_gpu_count if current_policy is not None else 0
-                    ),
-                    worker_cpu_millicores=offer.cpu_millicores,
-                    worker_memory_mib=offer.memory_mb,
-                    worker_gpu_type=offer.gpu or "",
-                    worker_gpu_count=offer.gpu_count,
-                    worker_runtimes=(offer.runtime,),
-                    worker_preemptible=(
-                        str(offer.labels.get("preemptible", "false")).strip().lower() == "true"
-                    ),
-                    idle_drain_timeout_seconds=idle_timeout_seconds,
-                    scale_up_cooldown_seconds=(
-                        current_policy.scale_up_cooldown_seconds
-                        if current_policy is not None
-                        else 5
-                    ),
-                    scale_down_cooldown_seconds=(
-                        current_policy.scale_down_cooldown_seconds
-                        if current_policy is not None
-                        else 60
-                    ),
-                    registration_timeout_seconds=(
-                        current_policy.registration_timeout_seconds
-                        if current_policy is not None
-                        else 600
-                    ),
-                    labels={
-                        "capacity_mode": ComputeCapacityMode.Pooled.value,
-                        "visibility": ComputePoolVisibility.Internal.value,
-                    },
-                ),
+            initial = baseline.initial_machines if baseline is not None else 0
+            # One construction for both create and update: everything the unit
+            # derives from the offer and the baseline is stated here, and only
+            # the facts the provider owns are carried over from the stored row.
+            unit = ComputePoolRecord(
+                id=current.id if current is not None else pool_id,
+                capacity_owner_id=current.capacity_owner_id if current is not None else pool_id,
+                capacity_owner_kind=CapacityOwnerKind.PooledProvider,
+                capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
+                name=pool_name,
+                machine_pool=current.machine_pool if current is not None else pool_name,
+                provider=provider.ref,
+                selector=pool_name,
+                source="workspace_policy",
+                provider_ref=provider.ref,
+                provider_connection_id=provider.connection_id,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                visibility=ComputePoolVisibility.Internal,
+                region=offer.region,
+                offer_id=offer.id,
+                capability_key=offer.capability_key,
+                desired_machines=desired,
+                initial_machines=min(max(initial, minimum), maximum),
+                min_machines=minimum,
+                max_machines=maximum,
+                scaling_enabled=True,
+                default_eligible=False,
+                worker_cpu_millicores=offer.cpu_millicores,
+                worker_memory_mib=offer.memory_mb,
+                worker_gpu_type=offer.gpu or "",
+                worker_gpu_count=offer.gpu_count,
+                worker_runtimes=(offer.runtime,),
+                worker_preemptible=(
+                    str(offer.labels.get("preemptible", "false")).strip().lower() == "true"
+                ),
+                min_free_cpu_millicores=(
+                    baseline.min_free_cpu_millicores if baseline is not None else 0
+                ),
+                min_free_memory_mib=(baseline.min_free_memory_mib if baseline is not None else 0),
+                idle_drain_timeout_seconds=idle_timeout_seconds,
+                workspace_machine_limit=workspace_machine_limit,
+                root_volume_gib=root_volume_gib,
+                observed_machines=current.observed_machines if current is not None else 0,
+                generation=current.generation if current is not None else 1,
+                phase=current.phase if current is not None else ComputePoolPhase.Provisioning,
+                status=(
+                    current.status if current is not None else ComputePoolPhase.Provisioning.value
+                ),
+                provider_state=(
+                    current.provider_state if current is not None else ComputePoolProviderState()
+                ),
             )
+            created = current is None
+            if current is None or unit != current:
+                current = repository.upsert(unit)
             if baseline is not None:
                 self._clear_other_internal_pool_floors(
                     session,
@@ -2367,39 +2322,25 @@ class ComputeService:
         workspace_id: str,
         keep_pool_id: str | None,
     ) -> None:
-        internal_pools = ComputePoolRepository(session)
-        scheduler_pools = PoolRepository(session)
-        for internal_pool in internal_pools.list_internal(workspace_id=workspace_id):
-            if internal_pool.id == keep_pool_id:
+        """Drop every durable floor the baseline no longer owns.
+
+        A baseline that moves to a new capability leaves the unit it used to
+        size still holding one; without this the workspace pays for both.
+        """
+        units = ComputePoolRepository(session)
+        cleared = {
+            "initial_machines": 0,
+            "min_machines": 0,
+            "min_free_cpu_millicores": 0,
+            "min_free_memory_mib": 0,
+            "min_free_gpu_count": 0,
+        }
+        for unit in units.list_internal(workspace_id=workspace_id):
+            if unit.id == keep_pool_id:
                 continue
-            if internal_pool.min_machines:
-                internal_pools.upsert(internal_pool.model_copy(update={"min_machines": 0}))
-            policy = scheduler_pools.get(
-                internal_pool.name,
-                workspace_id=workspace_id,
-            )
-            if policy is None or not any(
-                (
-                    policy.initial_workers,
-                    policy.min_workers,
-                    policy.min_free_cpu_millicores,
-                    policy.min_free_memory_mib,
-                    policy.min_free_gpu_count,
-                )
-            ):
+            if all(getattr(unit, field) == value for field, value in cleared.items()):
                 continue
-            scheduler_pools.upsert(
-                policy.model_copy(
-                    update={
-                        "initial_workers": 0,
-                        "min_workers": 0,
-                        "min_free_cpu_millicores": 0,
-                        "min_free_memory_mib": 0,
-                        "min_free_gpu_count": 0,
-                    }
-                ),
-                workspace_id=workspace_id,
-            )
+            units.upsert(unit.model_copy(update=cleared))
 
     def _required_capacity_owner_mutations(self) -> CapacityOwnerMutationLease:
         if self.capacity_owner_mutations is None:
@@ -2956,8 +2897,8 @@ class ComputeService:
 
         prepared_launches: list[PreparedProviderLaunch] = []
         with self.context.database.session() as session:
-            pool_repository = PoolRepository(session)
-            compute_pool = pool_repository.get(plan.name, workspace_id=workspace_id)
+            compute_pool_repository = ComputePoolRepository(session)
+            compute_pool = compute_pool_repository.get_by_name(workspace_id, plan.name)
             selected_offer = offers[0]
             owner_kind, owner_source = (
                 (
@@ -2971,28 +2912,43 @@ class ComputeService:
                 )
             )
             if compute_pool is None:
-                compute_pool = pool_repository.upsert(
-                    Pool(
-                        name=plan.name,
-                        provider=plan.providers[0] if plan.providers else selected_offer.provider,
+                owner = str(uuid4())
+                compute_pool = compute_pool_repository.upsert(
+                    ComputePoolRecord(
+                        id=owner,
+                        capacity_owner_id=owner,
                         capacity_owner_kind=owner_kind,
                         capacity_owner_source=owner_source,
-                        initial_workers=plan.nodes,
-                        min_workers=0,
-                        max_workers=max(
+                        workspace_id=workspace_id,
+                        name=plan.name,
+                        machine_pool=plan.name,
+                        provider=(plan.providers[0] if plan.providers else selected_offer.provider),
+                        selector=config.selector or plan.name,
+                        status="active",
+                        source=ComputePoolSource.Managed.value,
+                        config=_json_object(config),
+                        expires_at=(
+                            current_time
+                            + timedelta(seconds=compute_pool_from_config(config).ttl_seconds)
+                            if config.ttl
+                            else None
+                        ),
+                        initial_machines=plan.nodes,
+                        desired_machines=0,
+                        min_machines=0,
+                        max_machines=max(
                             plan.nodes,
                             selected_offer.available * max(selected_offer.node_count, 1),
                             1,
                         ),
                         scaling_enabled=True,
+                        priority=config.priority,
                         worker_cpu_millicores=selected_offer.cpu_millicores,
                         worker_memory_mib=selected_offer.memory_mb,
                         worker_gpu_type=selected_offer.gpu or "",
                         worker_gpu_count=selected_offer.gpu_count,
                         worker_runtimes=(selected_offer.runtime,),
-                        labels=_pool_labels_from_config(config),
-                    ),
-                    workspace_id=workspace_id,
+                    )
                 )
             elif (
                 compute_pool.capacity_owner_kind is not owner_kind
@@ -3002,10 +2958,10 @@ class ComputeService:
                     f"compute pool {plan.name!r} is owned by "
                     f"{compute_pool.capacity_owner_kind.value!r} capacity"
                 )
-            elif plan.nodes > compute_pool.max_workers:
+            elif plan.nodes > compute_pool.max_machines:
                 raise CapacityLimitReachedError(
                     f"compute pool {plan.name!r} limit reached: {plan.nodes} workers "
-                    f"requested, maximum is {compute_pool.max_workers}"
+                    f"requested, maximum is {compute_pool.max_machines}"
                 )
             offers = [
                 offer for offer in offers if _offer_matches_capacity_policy(offer, compute_pool)
@@ -3014,16 +2970,7 @@ class ComputeService:
                 raise ConflictError(
                     f"compute pool {plan.name!r} has no offers matching its fixed worker shape"
                 )
-            pool_worker_limit = compute_pool.max_workers
-            compute_pool_repository = ComputePoolRepository(session)
-            compute_pool = self._ensure_compute_pool_record(
-                compute_pool_repository,
-                workspace_id=workspace_id,
-                compute_pool=compute_pool,
-                config=config,
-                source=ComputePoolSource.Managed.value,
-                now=current_time,
-            )
+            pool_worker_limit = compute_pool.max_machines
             locked_pool = compute_pool_repository.get(compute_pool.id, for_update=True)
             if locked_pool is None:
                 raise RuntimeError("compute pool disappeared during capacity launch")
@@ -3888,42 +3835,6 @@ class ComputeService:
             now=_utc(now),
         )
 
-    def _ensure_compute_pool_record(
-        self,
-        repository: ComputePoolRepository,
-        *,
-        workspace_id: str,
-        compute_pool: Pool,
-        config: PoolConfig,
-        source: str,
-        now: datetime,
-    ) -> ComputePoolRecord:
-        existing = repository.get_by_name(workspace_id, compute_pool.name)
-        payload: dict[str, JsonValue | datetime] = {
-            "capacity_owner_id": compute_pool.capacity_owner_id,
-            "capacity_owner_kind": compute_pool.capacity_owner_kind,
-            "capacity_owner_source": compute_pool.capacity_owner_source,
-            "workspace_id": workspace_id,
-            "name": compute_pool.name,
-            "selector": config.selector or compute_pool.name,
-            "status": "active",
-            "source": source,
-            "config": _json_object(config),
-            "expires_at": (
-                now + timedelta(seconds=compute_pool_from_config(config).ttl_seconds)
-                if config.ttl
-                else None
-            ),
-        }
-        if existing is None:
-            return repository.records.create(
-                payload,
-                workspace_id=workspace_id,
-                name=compute_pool.name,
-                status="active",
-            )
-        return repository.upsert(existing.model_copy(update=payload))
-
     def _record_solver_run(
         self,
         session: DatabaseSession,
@@ -4554,7 +4465,7 @@ def _capacity_join_token(
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
-def _offer_matches_capacity_policy(offer: ComputeOffer, pool: Pool) -> bool:
+def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputePoolRecord) -> bool:
     return (
         offer.capacity_mode
         is (
@@ -4570,7 +4481,7 @@ def _offer_matches_capacity_policy(offer: ComputeOffer, pool: Pool) -> bool:
     )
 
 
-def _shape_matches_pool(shape: CapacityAcquisitionShape, pool: Pool) -> bool:
+def _shape_matches_pool(shape: CapacityAcquisitionShape, pool: ComputePoolRecord) -> bool:
     return (
         shape.cpu_millicores == pool.worker_cpu_millicores
         and shape.memory_mib == pool.worker_memory_mib
@@ -4886,21 +4797,16 @@ def _policy_owned_scale(pool: ComputePoolRecord) -> None:
     del pool
 
 
-def _previous_policy_floor(
-    current: ComputePoolRecord | None,
-    current_policy: Pool | None,
-) -> int:
-    """The floor the stored pool was already holding.
+def _previous_policy_floor(current: ComputePoolRecord | None) -> int:
+    """The floor the stored unit was already holding.
 
-    ``initial_workers`` matters as well as ``min_machines``: a policy whose
+    ``initial_machines`` matters as well as ``min_machines``: a unit whose
     initial exceeds its minimum holds that capacity durably, so reading only the
     minimum would under-release it and leave paid machines behind.
     """
-
     if current is None:
         return 0
-    initial = current_policy.initial_workers if current_policy is not None else 0
-    return max(current.min_machines, initial, 0)
+    return max(current.min_machines, current.initial_machines, 0)
 
 
 def _policy_owned_desired_machines(

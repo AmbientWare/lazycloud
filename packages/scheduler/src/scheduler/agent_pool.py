@@ -10,7 +10,7 @@ from compute.projection import PoolConfig, normalize_pool_config
 from compute.state import ComputeAgentTokenState, ComputePoolState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
-from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityOwnerKind
 from shared.compute_policy import ComputePoolRecord
 from shared.contracts import ContractModel
 from shared.scheduling import (
@@ -20,7 +20,6 @@ from shared.scheduling import (
 )
 from shared.timestamps import utc_now
 
-AGENT_PROVIDER_NAME = "agent"
 DEFAULT_AGENT_WORKER_BUILD_VERSION = "local"
 
 
@@ -202,13 +201,14 @@ class SchedulerAgentPoolService:
 
 
 def agent_pool_config_from_pool(pool: ComputePoolRecord) -> AgentPoolConfig | None:
-    """Config for a unit that runs agent machines, or None if it runs none.
+    """Config for a unit whose machines join, or None for one that provisions.
 
-    The unit's own provider column decides: a unit whose machines are joined or
-    locally hosted is driven by the agent pool controller, and one backed by a
-    cloud auto-scaling group is not.
+    The unit's capacity owner kind decides. A `WorkspaceAgent` unit owns no
+    provider resources — its machines arrive by joining — so the agent pool
+    controller drives it; a unit backed by an auto-scaling group is driven by
+    the capacity controller instead.
     """
-    if pool.provider not in AGENT_MACHINE_PROVIDERS:
+    if pool.capacity_owner_kind is not CapacityOwnerKind.WorkspaceAgent:
         return None
     return AgentPoolConfig(
         workspace_id=pool.workspace_id,

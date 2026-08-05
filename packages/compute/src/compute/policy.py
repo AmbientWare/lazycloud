@@ -15,7 +15,6 @@ from database.repositories.compute import (
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.orchestration import PoolRepository
 from database.types import DatabaseSession
 from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue
@@ -278,20 +277,11 @@ class WorkspaceComputePolicyService:
             policy = self._policy_in_session(session, workspace_id)
             if attached_pool:
                 pool = ComputePoolRepository(session).get_by_name(workspace_id, attached_pool)
-                if pool is not None:
-                    return self._attached_pool_placement(pool)
-                scheduler_pool = PoolRepository(session).get(
-                    attached_pool,
-                    workspace_id=workspace_id,
-                )
-                if scheduler_pool is not None:
-                    return ComputePlacement(
-                        target=ComputePlacementTarget.Managed,
-                        source=ComputePlacementSource.AttachedPool,
-                        provider=scheduler_pool.provider,
-                        pool_name=scheduler_pool.name,
+                if pool is None:
+                    raise InvalidInputError(
+                        f"attached compute pool {attached_pool!r} was not found"
                     )
-                raise InvalidInputError(f"attached compute pool {attached_pool!r} was not found")
+                return self._attached_pool_placement(pool)
             target = requested if requested is not None else policy.default_placement
             source = (
                 ComputePlacementSource.WorkloadOverride
