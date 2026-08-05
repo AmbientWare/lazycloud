@@ -30,6 +30,7 @@ from shared.compute_policy import (
     ComputeResourceRequirements,
     ComputeUnitPhase,
     ComputeUnitRecord,
+    MachinePool,
     WorkspaceComputePolicy,
 )
 from shared.contracts import ContractModel
@@ -84,7 +85,7 @@ class ComputeInstanceView:
 @dataclass(frozen=True, slots=True)
 class ComputeWorkloadView:
     deployment: Deployment
-    pool: str
+    pool: MachinePool
     resources: ComputeResourceRequirements
 
 
@@ -276,7 +277,7 @@ class WorkspaceComputePolicyService:
             pool for policy in policies if (pool := baseline.reconcile(policy)) is not None
         )
 
-    def default_machine_pool(self, *, workspace: str) -> str:
+    def default_machine_pool(self, *, workspace: str) -> MachinePool:
         """Pool a workload lands in when it names none."""
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
@@ -286,7 +287,7 @@ class WorkspaceComputePolicyService:
         self,
         *,
         workspace: str,
-        pool: str,
+        pool: MachinePool,
     ) -> AwsAccountConnection | None:
         """The ready connection whose units feed this pool, if one does.
 
@@ -360,7 +361,7 @@ class WorkspaceComputePolicyService:
                     record,
                     region=pool.region,
                     workspace_id=workspace_id,
-                    pool=pool.name,
+                    pool=pool.pool,
                     enrollments=enrollments,
                     worker_state=self.worker_state,
                 )
@@ -529,7 +530,7 @@ def _compute_instance_view(
     *,
     region: str,
     workspace_id: str,
-    pool: str,
+    pool: MachinePool,
     enrollments: ComputeMachineEnrollmentRepository,
     worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:

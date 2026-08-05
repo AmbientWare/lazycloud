@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from shared.compute_policy import MachinePool
 
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
@@ -51,7 +52,7 @@ def serve(
         ports=container_ports,
         keep_warm=keep_warm,
         tcp=tcp,
-        pool=pool,
+        pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
         container_id=container_id,

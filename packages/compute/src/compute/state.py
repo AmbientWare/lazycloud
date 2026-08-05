@@ -44,6 +44,9 @@ class ComputeUnitState(ContractModel):
     workspace_id: str
     name: UnitName
     """Unit this hot state belongs to. Pool state is per unit, never per pool."""
+    pool: MachinePool = MachinePool("")
+    """Pool the unit's machines serve. Carried so a consumer holding only this
+    state never has to substitute the unit's name for the label."""
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     provider: str = "agent"
     status: ComputeUnitStatus = ComputeUnitStatus.Active
@@ -163,7 +166,7 @@ class ComputeAgentWorkerSlotState(ContractModel):
 
 class ComputeUnitLockPlan(ContractModel):
     workspace_id: str
-    unit_name: str
+    capacity_owner_id: str
     key: str
     ttl_seconds: int = DEFAULT_COMPUTE_POOL_LOCK_TTL_SECONDS
     retries: int = DEFAULT_COMPUTE_POOL_LOCK_RETRIES
@@ -175,66 +178,68 @@ class ComputeStateKeys:
     redis: RedisClient
     namespace: str = "compute"
 
-    def pool_state(self, workspace_id: str, unit_name: str) -> str:
-        return self.redis.key(self.namespace, "workspaces", workspace_id, "pools", unit_name)
+    def pool_state(self, workspace_id: str, capacity_owner_id: str) -> str:
+        return self.redis.key(
+            self.namespace, "workspaces", workspace_id, "units", capacity_owner_id
+        )
 
     def pool_index(self, workspace_id: str) -> str:
-        return self.redis.key(self.namespace, "workspaces", workspace_id, "pool-index")
+        return self.redis.key(self.namespace, "workspaces", workspace_id, "unit-index")
 
     def pool_workspace_index(self) -> str:
         return self.redis.key(self.namespace, "workspace-index")
 
-    def pool_state_lock(self, workspace_id: str, unit_name: str) -> str:
+    def pool_state_lock(self, workspace_id: str, capacity_owner_id: str) -> str:
         return self.redis.key(
-            self.namespace, "workspaces", workspace_id, "pools", unit_name, "lock"
+            self.namespace, "workspaces", workspace_id, "units", capacity_owner_id, "lock"
         )
 
     def join_token(self, token_hash: str) -> str:
         return self.redis.key(self.namespace, "join-tokens", token_hash)
 
-    def join_token_index(self, workspace_id: str, unit_name: str) -> str:
+    def join_token_index(self, workspace_id: str, capacity_owner_id: str) -> str:
         return self.redis.key(
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "join-token-index",
         )
 
     def agent_token(self, token_hash: str) -> str:
         return self.redis.key(self.namespace, "agent-tokens", token_hash)
 
-    def agent_machine(self, workspace_id: str, unit_name: str, machine_id: str) -> str:
+    def agent_machine(self, workspace_id: str, capacity_owner_id: str, machine_id: str) -> str:
         return self.redis.key(
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machines",
             machine_id,
         )
 
-    def agent_machine_unit(self, workspace_id: str, machine_id: str) -> str:
+    def agent_machine_owner(self, workspace_id: str, machine_id: str) -> str:
         return self.redis.key(
-            self.namespace, "workspaces", workspace_id, "machines", machine_id, "pool"
+            self.namespace, "workspaces", workspace_id, "machines", machine_id, "unit"
         )
 
-    def agent_machine_index(self, workspace_id: str, unit_name: str) -> str:
+    def agent_machine_index(self, workspace_id: str, capacity_owner_id: str) -> str:
         return self.redis.key(
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machine-index",
         )
 
     def agent_slot(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         worker_id: str,
     ) -> str:
@@ -242,21 +247,21 @@ class ComputeStateKeys:
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machines",
             machine_id,
             "slots",
             worker_id,
         )
 
-    def agent_slot_index(self, workspace_id: str, unit_name: str, machine_id: str) -> str:
+    def agent_slot_index(self, workspace_id: str, capacity_owner_id: str, machine_id: str) -> str:
         return self.redis.key(
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machines",
             machine_id,
             "slot-index",
@@ -265,7 +270,7 @@ class ComputeStateKeys:
     def agent_route(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         route_id: str,
     ) -> str:
@@ -273,33 +278,35 @@ class ComputeStateKeys:
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machines",
             machine_id,
             "routes",
             route_id,
         )
 
-    def agent_route_index(self, workspace_id: str, unit_name: str, machine_id: str) -> str:
+    def agent_route_index(self, workspace_id: str, capacity_owner_id: str, machine_id: str) -> str:
         return self.redis.key(
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machines",
             machine_id,
             "route-index",
         )
 
-    def agent_route_revision(self, workspace_id: str, unit_name: str, machine_id: str) -> str:
+    def agent_route_revision(
+        self, workspace_id: str, capacity_owner_id: str, machine_id: str
+    ) -> str:
         return self.redis.key(
             self.namespace,
             "workspaces",
             workspace_id,
-            "pools",
-            unit_name,
+            "units",
+            capacity_owner_id,
             "machines",
             machine_id,
             "route-revision",
@@ -315,21 +322,24 @@ class RedisComputeStateRepository:
         self.redis = redis
         self.keys = keys or ComputeStateKeys(redis)
 
-    def pool_lock_plan(self, workspace_id: str, unit_name: str) -> ComputeUnitLockPlan:
+    def pool_lock_plan(self, workspace_id: str, capacity_owner_id: str) -> ComputeUnitLockPlan:
         return ComputeUnitLockPlan(
             workspace_id=workspace_id,
-            unit_name=unit_name,
-            key=self.keys.pool_state_lock(workspace_id, unit_name),
+            capacity_owner_id=capacity_owner_id,
+            key=self.keys.pool_state_lock(workspace_id, capacity_owner_id),
         )
 
     def save_unit_state(self, state: ComputeUnitState) -> ComputeUnitState:
-        self.redis.set(self.keys.pool_state(state.workspace_id, state.name), dump_model_json(state))
-        self.redis.set_add(self.keys.pool_index(state.workspace_id), state.name)
+        self.redis.set(
+            self.keys.pool_state(state.workspace_id, state.capacity_owner_id),
+            dump_model_json(state),
+        )
+        self.redis.set_add(self.keys.pool_index(state.workspace_id), state.capacity_owner_id)
         self.redis.set_add(self.keys.pool_workspace_index(), state.workspace_id)
         return state
 
-    def get_unit_state(self, workspace_id: str, unit_name: str) -> ComputeUnitState | None:
-        raw = self.redis.get(self.keys.pool_state(workspace_id, unit_name))
+    def get_unit_state(self, workspace_id: str, capacity_owner_id: str) -> ComputeUnitState | None:
+        raw = self.redis.get(self.keys.pool_state(workspace_id, capacity_owner_id))
         if raw is None:
             return None
         state = load_model_json(ComputeUnitState, raw)
@@ -359,26 +369,26 @@ class RedisComputeStateRepository:
             states.extend(self.list_pool_states(workspace_id, limit=remaining))
         return states
 
-    def delete_unit_state(self, workspace_id: str, unit_name: UnitName) -> bool:
-        machine_index = self.keys.agent_machine_index(workspace_id, unit_name)
+    def delete_unit_state(self, workspace_id: str, capacity_owner_id: str) -> bool:
+        machine_index = self.keys.agent_machine_index(workspace_id, capacity_owner_id)
         for machine_id in redis_strings(self.redis.set_members(machine_index)):
-            self.delete_agent_machine_state(workspace_id, unit_name, machine_id)
-        pool_root = self.keys.pool_state(workspace_id, unit_name)
+            self.delete_agent_machine_state(workspace_id, capacity_owner_id, machine_id)
+        pool_root = self.keys.pool_state(workspace_id, capacity_owner_id)
         owned_descendants = self.redis.scan(f"{pool_root}:*")
-        join_token_index = self.keys.join_token_index(workspace_id, unit_name)
+        join_token_index = self.keys.join_token_index(workspace_id, capacity_owner_id)
         join_token_hashes = redis_strings(self.redis.set_members(join_token_index))
         join_token_keys = [self.keys.join_token(token_hash) for token_hash in join_token_hashes]
         deleted = bool(
             self.redis.delete(
-                self.keys.pool_state(workspace_id, unit_name),
-                self.keys.pool_state_lock(workspace_id, unit_name),
+                self.keys.pool_state(workspace_id, capacity_owner_id),
+                self.keys.pool_state_lock(workspace_id, capacity_owner_id),
                 machine_index,
                 join_token_index,
                 *join_token_keys,
                 *owned_descendants,
             )
         )
-        self.redis.set_remove(self.keys.pool_index(workspace_id), unit_name)
+        self.redis.set_remove(self.keys.pool_index(workspace_id), capacity_owner_id)
         if self.redis.set_cardinality(self.keys.pool_index(workspace_id)) == 0:
             self.redis.set_remove(self.keys.pool_workspace_index(), workspace_id)
         return deleted
@@ -423,7 +433,7 @@ class RedisComputeStateRepository:
         ttl = max(ttl_seconds, 1)
         self.redis.set(self.keys.join_token(state.token_hash), dump_model_json(state), ex=ttl)
         self.redis.set_add(
-            self.keys.join_token_index(state.workspace_id, state.pool),
+            self.keys.join_token_index(state.workspace_id, state.capacity_owner_id),
             state.token_hash,
         )
         return state
@@ -454,7 +464,7 @@ class RedisComputeStateRepository:
         deleted = bool(self.redis.delete(self.keys.join_token(token_hash)))
         if state is not None:
             self.redis.set_remove(
-                self.keys.join_token_index(state.workspace_id, state.pool),
+                self.keys.join_token_index(state.workspace_id, state.capacity_owner_id),
                 token_hash,
             )
         return deleted
@@ -468,15 +478,15 @@ class RedisComputeStateRepository:
         payload = dump_model_json(state)
         self.redis.set(self.keys.agent_token(state.token_hash), payload, ex=ttl_seconds)
         self.redis.set(
-            self.keys.agent_machine(state.workspace_id, state.pool, state.machine_id),
+            self.keys.agent_machine(state.workspace_id, state.capacity_owner_id, state.machine_id),
             payload,
         )
         self.redis.set(
-            self.keys.agent_machine_unit(state.workspace_id, state.machine_id),
-            state.pool,
+            self.keys.agent_machine_owner(state.workspace_id, state.machine_id),
+            state.capacity_owner_id,
         )
         self.redis.set_add(
-            self.keys.agent_machine_index(state.workspace_id, state.pool),
+            self.keys.agent_machine_index(state.workspace_id, state.capacity_owner_id),
             state.machine_id,
         )
         return state
@@ -497,10 +507,10 @@ class RedisComputeStateRepository:
     def get_agent_machine_state(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
     ) -> ComputeAgentTokenState | None:
-        raw = self.redis.get(self.keys.agent_machine(workspace_id, unit_name, machine_id))
+        raw = self.redis.get(self.keys.agent_machine(workspace_id, capacity_owner_id, machine_id))
         if raw is None:
             return None
         return load_model_json(ComputeAgentTokenState, raw)
@@ -510,91 +520,103 @@ class RedisComputeStateRepository:
         workspace_id: str,
         machine_id: str,
     ) -> ComputeAgentTokenState | None:
-        unit_name = self.redis.get(self.keys.agent_machine_unit(workspace_id, machine_id))
-        if unit_name is not None and redis_text(unit_name):
-            return self.get_agent_machine_state(workspace_id, redis_text(unit_name), machine_id)
+        capacity_owner_id = self.redis.get(self.keys.agent_machine_owner(workspace_id, machine_id))
+        if capacity_owner_id is not None and redis_text(capacity_owner_id):
+            return self.get_agent_machine_state(
+                workspace_id, redis_text(capacity_owner_id), machine_id
+            )
         for pool in self.list_pool_states(workspace_id):
-            state = self.get_agent_machine_state(workspace_id, pool.name, machine_id)
+            state = self.get_agent_machine_state(workspace_id, pool.capacity_owner_id, machine_id)
             if state is not None:
                 return state
         return None
 
     def list_agent_token_states(
-        self, workspace_id: str, unit_name: str
+        self, workspace_id: str, capacity_owner_id: str
     ) -> list[ComputeAgentTokenState]:
         machine_ids = sorted(
             redis_strings(
-                self.redis.set_members(self.keys.agent_machine_index(workspace_id, unit_name))
+                self.redis.set_members(
+                    self.keys.agent_machine_index(workspace_id, capacity_owner_id)
+                )
             )
         )
         states = [
             state
             for machine_id in machine_ids
-            if (state := self.get_agent_machine_state(workspace_id, unit_name, machine_id))
+            if (state := self.get_agent_machine_state(workspace_id, capacity_owner_id, machine_id))
             is not None
         ]
         states.sort(key=lambda item: item.machine_id)
         return states
 
-    def unit_name_for_machine(self, workspace_id: str, machine_id: str) -> UnitName | None:
+    def unit_owner_for_machine(self, workspace_id: str, machine_id: str) -> str | None:
         """Resolve which unit a joined machine enrolled under.
 
         The reverse index is the only authority: the machine's pool label names
-        the group it serves, which several units share.
+        the pool it serves, which several units share.
         """
-        raw = self.redis.get(self.keys.agent_machine_unit(workspace_id, machine_id))
+        raw = self.redis.get(self.keys.agent_machine_owner(workspace_id, machine_id))
         if raw is None or not redis_text(raw):
             return None
-        return UnitName(redis_text(raw))
+        return redis_text(raw)
 
     def delete_agent_machine_state_for_machine(self, workspace_id: str, machine_id: str) -> bool:
-        unit_name = self.unit_name_for_machine(workspace_id, machine_id)
-        if unit_name is None:
+        capacity_owner_id = self.unit_owner_for_machine(workspace_id, machine_id)
+        if capacity_owner_id is None:
             return False
-        return self.delete_agent_machine_state(workspace_id, unit_name, machine_id)
+        return self.delete_agent_machine_state(workspace_id, capacity_owner_id, machine_id)
 
     def delete_agent_machine_state(
-        self, workspace_id: str, unit_name: UnitName, machine_id: str
+        self, workspace_id: str, capacity_owner_id: str, machine_id: str
     ) -> bool:
-        state = self.get_agent_machine_state(workspace_id, unit_name, machine_id)
+        state = self.get_agent_machine_state(workspace_id, capacity_owner_id, machine_id)
         worker_ids = redis_strings(
-            self.redis.set_members(self.keys.agent_slot_index(workspace_id, unit_name, machine_id))
+            self.redis.set_members(
+                self.keys.agent_slot_index(workspace_id, capacity_owner_id, machine_id)
+            )
         )
         keys = [
-            self.keys.agent_slot(workspace_id, unit_name, machine_id, worker_id)
+            self.keys.agent_slot(workspace_id, capacity_owner_id, machine_id, worker_id)
             for worker_id in worker_ids
         ]
         keys.extend(
             [
-                self.keys.agent_slot_index(workspace_id, unit_name, machine_id),
-                self.keys.agent_machine(workspace_id, unit_name, machine_id),
-                self.keys.agent_machine_unit(workspace_id, machine_id),
+                self.keys.agent_slot_index(workspace_id, capacity_owner_id, machine_id),
+                self.keys.agent_machine(workspace_id, capacity_owner_id, machine_id),
+                self.keys.agent_machine_owner(workspace_id, machine_id),
             ]
         )
         route_ids = redis_strings(
-            self.redis.set_members(self.keys.agent_route_index(workspace_id, unit_name, machine_id))
+            self.redis.set_members(
+                self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id)
+            )
         )
         keys.extend(
-            self.keys.agent_route(workspace_id, unit_name, machine_id, route_id)
+            self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id)
             for route_id in route_ids
         )
         keys.extend(
             [
-                self.keys.agent_route_index(workspace_id, unit_name, machine_id),
-                self.keys.agent_route_revision(workspace_id, unit_name, machine_id),
+                self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id),
+                self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id),
             ]
         )
         if state is not None and state.token_hash:
             keys.append(self.keys.agent_token(state.token_hash))
         deleted = bool(self.redis.delete(*keys))
-        self.redis.set_remove(self.keys.agent_machine_index(workspace_id, unit_name), machine_id)
+        self.redis.set_remove(
+            self.keys.agent_machine_index(workspace_id, capacity_owner_id), machine_id
+        )
         return deleted
 
-    def prune_agent_machine_index(self, workspace_id: str, unit_name: str) -> int:
+    def prune_agent_machine_index(self, workspace_id: str, capacity_owner_id: str) -> int:
         removed = 0
-        index_key = self.keys.agent_machine_index(workspace_id, unit_name)
+        index_key = self.keys.agent_machine_index(workspace_id, capacity_owner_id)
         for machine_id in redis_strings(self.redis.set_members(index_key)):
-            if self.redis.exists(self.keys.agent_machine(workspace_id, unit_name, machine_id)):
+            if self.redis.exists(
+                self.keys.agent_machine(workspace_id, capacity_owner_id, machine_id)
+            ):
                 continue
             removed += int(self.redis.set_remove(index_key, machine_id))
         return removed
@@ -603,27 +625,33 @@ class RedisComputeStateRepository:
         self.redis.set(
             self.keys.agent_route(
                 state.workspace_id,
-                state.pool,
+                state.capacity_owner_id,
                 state.machine_id,
                 state.route_id,
             ),
             dump_model_json(state),
         )
         self.redis.set_add(
-            self.keys.agent_route_index(state.workspace_id, state.pool, state.machine_id),
+            self.keys.agent_route_index(
+                state.workspace_id, state.capacity_owner_id, state.machine_id
+            ),
             state.route_id,
         )
-        self.bump_agent_route_revision(state.workspace_id, state.pool, state.machine_id)
+        self.bump_agent_route_revision(
+            state.workspace_id, state.capacity_owner_id, state.machine_id
+        )
         return state
 
     def get_agent_route_state(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         route_id: str,
     ) -> AgentBackendRoute | None:
-        raw = self.redis.get(self.keys.agent_route(workspace_id, unit_name, machine_id, route_id))
+        raw = self.redis.get(
+            self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id)
+        )
         if raw is None:
             return None
         return load_model_json(AgentBackendRoute, raw)
@@ -631,13 +659,13 @@ class RedisComputeStateRepository:
     def list_agent_route_states(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
     ) -> list[AgentBackendRoute]:
         route_ids = sorted(
             redis_strings(
                 self.redis.set_members(
-                    self.keys.agent_route_index(workspace_id, unit_name, machine_id)
+                    self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id)
                 )
             )
         )
@@ -647,7 +675,7 @@ class RedisComputeStateRepository:
             if (
                 state := self.get_agent_route_state(
                     workspace_id,
-                    unit_name,
+                    capacity_owner_id,
                     machine_id,
                     route_id,
                 )
@@ -662,7 +690,7 @@ class RedisComputeStateRepository:
             self.keys.namespace,
             "workspaces",
             "*",
-            "pools",
+            "units",
             "*",
             "machines",
             "*",
@@ -687,26 +715,28 @@ class RedisComputeStateRepository:
     def delete_agent_route_state(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         route_id: str,
     ) -> bool:
         deleted = bool(
-            self.redis.delete(self.keys.agent_route(workspace_id, unit_name, machine_id, route_id))
+            self.redis.delete(
+                self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id)
+            )
         )
         self.redis.set_remove(
-            self.keys.agent_route_index(workspace_id, unit_name, machine_id), route_id
+            self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id), route_id
         )
-        self.bump_agent_route_revision(workspace_id, unit_name, machine_id)
+        self.bump_agent_route_revision(workspace_id, capacity_owner_id, machine_id)
         return deleted
 
     def bump_agent_route_revision(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
     ) -> int:
-        key = self.keys.agent_route_revision(workspace_id, unit_name, machine_id)
+        key = self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id)
         return self.redis.increment(key)
 
     def save_agent_worker_slot_state(
@@ -725,14 +755,16 @@ class RedisComputeStateRepository:
         self.redis.set(
             self.keys.agent_slot(
                 updated.workspace_id,
-                updated.pool,
+                updated.capacity_owner_id,
                 updated.machine_id,
                 updated.worker_id,
             ),
             dump_model_json(updated),
         )
         self.redis.set_add(
-            self.keys.agent_slot_index(updated.workspace_id, updated.pool, updated.machine_id),
+            self.keys.agent_slot_index(
+                updated.workspace_id, updated.capacity_owner_id, updated.machine_id
+            ),
             updated.worker_id,
         )
         return updated
@@ -740,20 +772,20 @@ class RedisComputeStateRepository:
     def list_agent_worker_slot_states(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
     ) -> list[ComputeAgentWorkerSlotState]:
         worker_ids = sorted(
             redis_strings(
                 self.redis.set_members(
-                    self.keys.agent_slot_index(workspace_id, unit_name, machine_id)
+                    self.keys.agent_slot_index(workspace_id, capacity_owner_id, machine_id)
                 )
             )
         )
         states: list[ComputeAgentWorkerSlotState] = []
         for worker_id in worker_ids:
             raw = self.redis.get(
-                self.keys.agent_slot(workspace_id, unit_name, machine_id, worker_id)
+                self.keys.agent_slot(workspace_id, capacity_owner_id, machine_id, worker_id)
             )
             if raw is None:
                 continue
@@ -764,14 +796,16 @@ class RedisComputeStateRepository:
     def delete_agent_worker_slot_state(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         worker_id: str,
     ) -> bool:
         deleted = bool(
-            self.redis.delete(self.keys.agent_slot(workspace_id, unit_name, machine_id, worker_id))
+            self.redis.delete(
+                self.keys.agent_slot(workspace_id, capacity_owner_id, machine_id, worker_id)
+            )
         )
         self.redis.set_remove(
-            self.keys.agent_slot_index(workspace_id, unit_name, machine_id), worker_id
+            self.keys.agent_slot_index(workspace_id, capacity_owner_id, machine_id), worker_id
         )
         return deleted

@@ -28,6 +28,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from shared.compute_policy import UnitName
 from shared.urls import normalize_http_origin
 
 from .account_connection import AwsAccountConnectionTarget
@@ -103,7 +104,7 @@ class AwsManagedPoolBinaries(AwsManagedPoolModel):
 
 class AwsManagedPoolSpec(AwsManagedPoolModel):
     workspace_id: str = Field(min_length=1, max_length=128)
-    pool: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,62}$")
+    unit_name: UnitName = Field(pattern=r"^[a-z][a-z0-9_-]{0,62}$")
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
@@ -133,18 +134,18 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
 
     @property
     def resource_key(self) -> str:
-        return hashlib.sha256(f"{self.workspace_id}\0{self.pool}".encode()).hexdigest()[:24]
+        return hashlib.sha256(f"{self.workspace_id}\0{self.unit_name}".encode()).hexdigest()[:24]
 
     @property
     def autoscaling_group_name(self) -> str:
         return aws_managed_capacity_resource_name(
-            "asg", self.workspace_id, self.pool, max_length=255
+            "asg", self.workspace_id, self.unit_name, max_length=255
         )
 
     @property
     def launch_template_name(self) -> str:
         return aws_managed_capacity_resource_name(
-            "nodes", self.workspace_id, self.pool, max_length=128
+            "nodes", self.workspace_id, self.unit_name, max_length=128
         )
 
 
@@ -1059,11 +1060,11 @@ def _filters(spec: AwsManagedPoolSpec, resource: str) -> list[_Filter]:
 
 def _tags(spec: AwsManagedPoolSpec, resource: str) -> list[_Tag]:
     return [
-        {"Key": "Name", "Value": f"managed-pool-{spec.pool}-{resource}"},
+        {"Key": "Name", "Value": f"managed-pool-{spec.unit_name}-{resource}"},
         {"Key": AWS_MANAGED_POOL_TAG, "Value": AWS_MANAGED_POOL_TAG_VALUE},
         {"Key": "cloud-pool:key", "Value": spec.resource_key},
         {"Key": "cloud-pool:workspace", "Value": spec.workspace_id},
-        {"Key": "cloud-pool:name", "Value": spec.pool},
+        {"Key": "cloud-pool:name", "Value": spec.unit_name},
         {"Key": "cloud-pool:resource", "Value": resource},
     ]
 

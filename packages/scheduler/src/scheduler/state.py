@@ -15,6 +15,7 @@ from coordination.token_lock import (
     try_acquire_token_lock,
 )
 from pydantic import Field, field_validator
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute
@@ -422,7 +423,7 @@ class CapacityReservationDispatchAllocation:
 
 
 class WorkerPoolLockPlan(ContractModel):
-    pool: str
+    pool: MachinePool
     kind: WorkerPoolLockKind
     key: str
     ttl_seconds: int
@@ -2699,7 +2700,7 @@ class RedisWorkerPoolStateRepository:
         capacity_owner_id: str,
         kind: WorkerPoolLockKind,
     ) -> WorkerPoolLockPlan:
-        return worker_pool_lock_plan(self.keys, capacity_owner_id, kind)
+        return worker_pool_lock_plan(self.keys, MachinePool(capacity_owner_id), kind)
 
 
 def capacity_memory_mib(memory_mib: int) -> int:
@@ -3059,7 +3060,7 @@ def _same_route(
 
 def worker_pool_lock_plan(
     keys: SchedulerStateKeys,
-    pool: str,
+    pool: MachinePool,
     kind: WorkerPoolLockKind,
 ) -> WorkerPoolLockPlan:
     if kind is WorkerPoolLockKind.State:

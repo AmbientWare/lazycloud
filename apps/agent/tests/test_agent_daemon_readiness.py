@@ -37,6 +37,7 @@ from gateway.http import (
     UpdateAgentRouteStatusResponse,
 )
 from shared.compute_enrollment import AgentCapacityState
+from shared.compute_policy import MachinePool
 from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
@@ -166,7 +167,7 @@ def _service(state_dir: Path, gateway: _Gateway) -> AgentDaemonService:
         AgentState(
             gateway_url="https://control.example.com",
             workspace_id="workspace-one",
-            pool="pool-one",
+            pool=MachinePool("pool-one"),
             machine_id="machine-one",
             agent_token="agent-secret",
             credential_id="credential-one",
@@ -219,7 +220,7 @@ def test_daemon_cordons_current_session_before_bounded_worker_shutdown(
         AgentState(
             gateway_url="https://control.example.com",
             workspace_id="workspace-one",
-            pool="pool-one",
+            pool=MachinePool("pool-one"),
             machine_id="machine-one",
             agent_token="agent-secret",
             credential_id="credential-one",

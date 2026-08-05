@@ -14,6 +14,7 @@ from types import FrameType
 from typing import Protocol, runtime_checkable
 
 from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from shared.scheduling import WorkerUnavailableReason
@@ -58,7 +59,7 @@ class ContainerWorkerArguments(argparse.Namespace):
     """
 
     worker_id: str | None = None
-    pool: str | None = None
+    pool: MachinePool | None = None
     machine_id: str | None = None
     pod_address: str | None = None
     container_service_port: int | None = None

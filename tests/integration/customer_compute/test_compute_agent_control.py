@@ -45,8 +45,10 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
 
     pool = PrivateUnitState(
         workspace_id="workspace-one",
-        name=UnitName("gpu-pool"),
-        config=PoolConfig(name="gpu-pool"),
+        name=UnitName("gpu-unit"),
+        pool=MachinePool("gpu-pool"),
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        config=PoolConfig(name="gpu-unit"),
         created_by_token_id="token-owner",
     )
     request = AgentJoinRequest(

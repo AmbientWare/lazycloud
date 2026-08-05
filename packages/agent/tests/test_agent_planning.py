@@ -21,6 +21,7 @@ from agent.operations import (
     split_csv,
 )
 from shared.compute_enrollment import PreflightSeverity
+from shared.compute_policy import MachinePool
 from shared.gpu import normalize_gpu_type
 
 
@@ -97,7 +98,7 @@ def test_agent_service_serializes_worker_capacity_without_credentials() -> None:
     slot = AgentWorkerSlot(
         worker_id="worker-1",
         worker_token="token-1",
-        pool="gpu",
+        pool=MachinePool("gpu"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         machine_id="machine-1",
         cpu_millicores=2500,
@@ -125,7 +126,7 @@ def test_worker_slot_equality_and_reconciliation() -> None:
     active = AgentWorkerSlot(
         worker_id="worker-1",
         worker_token="token-1",
-        pool="default",
+        pool=MachinePool("default"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         machine_id="machine-1",
         cpu_millicores=1000,
@@ -135,7 +136,7 @@ def test_worker_slot_equality_and_reconciliation() -> None:
     changed = active.model_copy(update={"memory_mb": 2048})
     new_slot = AgentWorkerSlot(
         worker_id="worker-2",
-        pool="default",
+        pool=MachinePool("default"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
     )
 

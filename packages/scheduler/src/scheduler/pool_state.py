@@ -6,6 +6,7 @@ from typing import Protocol
 
 from compute.agent_control import agent_machine_worker_id
 from compute.state import ComputeAgentTokenState
+from shared.compute_policy import MachinePool
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerWorkerRecord,
@@ -87,7 +88,7 @@ class SchedulerPoolStateService:
         for capacity_owner_id in sorted(pool_names_by_owner):
             state = self.refresh_pool(
                 capacity_owner_id,
-                pool=pool_names_by_owner[capacity_owner_id],
+                pool=MachinePool(pool_names_by_owner[capacity_owner_id]),
                 agent_pool_config=configs_by_owner.get(capacity_owner_id),
                 now=now,
             )
@@ -98,7 +99,7 @@ class SchedulerPoolStateService:
         self,
         capacity_owner_id: str,
         *,
-        pool: str,
+        pool: MachinePool,
         agent_pool_config: AgentPoolConfig | None = None,
         now: datetime | None = None,
     ) -> WorkerPoolStateSnapshot:
@@ -160,7 +161,7 @@ class SchedulerPoolStateService:
         pool_names_by_owner: dict[str, str],
         *,
         capacity_owner_id: str,
-        pool: str,
+        pool: MachinePool,
     ) -> None:
         cls._require_capacity_owner(capacity_owner_id)
         existing_pool_name = pool_names_by_owner.setdefault(capacity_owner_id, pool)
@@ -189,7 +190,7 @@ class SchedulerPoolStateService:
             )
             for machine in self.agent_machines.list_agent_token_states(
                 config.workspace_id,
-                config.pool,
+                config.capacity_owner_id,
             )
         ]
 

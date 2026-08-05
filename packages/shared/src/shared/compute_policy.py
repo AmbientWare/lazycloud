@@ -3,11 +3,10 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import datetime
-from typing import NewType
 
 from pydantic import Field, JsonValue, model_validator
 
-from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind
+from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind, MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
@@ -15,21 +14,6 @@ from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
-UnitName = NewType("UnitName", str)
-"""Name of one provisioning unit, unique per workspace.
-
-A unit is one capacity owner: one Auto Scaling group, or the workspace's agent
-or local fleet. This names exactly one durable row.
-"""
-
-MachinePool = NewType("MachinePool", str)
-"""Scheduling pool a workload names, stamped on every machine serving it.
-
-Several units may feed one pool, so this names no single row. It is a routing
-label and must never be used to look a unit up — that is what made a pool label
-reaching a unit lookup silently return the wrong row while the two names
-happened to coincide.
-"""
 
 LAZYCLOUD_MACHINE_POOL = "lazycloud"
 """Pool the platform's own fleet stamps on its machines."""
@@ -115,7 +99,9 @@ class WorkspaceComputePolicy(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     revision: int = Field(default=1, ge=1)
-    default_pool: str = Field(default=LAZYCLOUD_MACHINE_POOL, min_length=1, max_length=240)
+    default_pool: MachinePool = Field(
+        default=MachinePool(LAZYCLOUD_MACHINE_POOL), min_length=1, max_length=240
+    )
     """Pool workloads land in when they name none."""
     aws: AwsWorkspaceComputePolicy = Field(default_factory=AwsWorkspaceComputePolicy)
     created_at: datetime

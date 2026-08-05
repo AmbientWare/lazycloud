@@ -31,7 +31,7 @@ def test_self_hosted_collection_is_static_workspace_scoped_and_excludes_managed_
         pool=MachinePool("lazycloud"),
         provider="local",
     )
-    isolated_services.compute.create_machine(pool="lazycloud", provider="local")
+    isolated_services.compute.create_machine(pool=MachinePool("lazycloud"), provider="local")
     after_managed_machine = client.get("/api/v1/machines/pool?pool=self-hosted", headers=headers)
 
     assert after_managed_machine.status_code == 200

@@ -12,6 +12,7 @@ from compute.providers import (
     ProviderMachineStatus,
     ProviderReconcileResult,
 )
+from shared.compute_policy import MachinePool
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +20,7 @@ class RecordingProviderMachine:
     id: str
     name: str
     machine_id: str
-    pool: str
+    pool: MachinePool
     status: str = ProviderMachineStatus.Active
 
 
@@ -57,7 +58,7 @@ class RecordingDirectMachineProvider:
 
     def reconcile_machines(
         self,
-        pool: str,
+        pool: MachinePool,
         expected_machine_ids: set[str],
         *,
         terminate_stale: bool = False,

@@ -46,6 +46,7 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
+    MachinePool,
     UnitName,
 )
 from shared.contracts import ContractModel
@@ -316,7 +317,7 @@ class ProviderMachineReconciler:
                 for record in records
                 if record.machine_id and record.machine_id not in overdue_machine_ids
             }
-            probe = client.reconcile_machines(pool.name, expected, terminate_stale=False)
+            probe = client.reconcile_machines(pool.pool, expected, terminate_stale=False)
             stale = set(probe.stale_machine_ids)
             if overdue_machine_ids:
                 observed = {item.machine_id: item for item in probe.observed_machines}
@@ -384,7 +385,7 @@ class ProviderMachineReconciler:
             self._terminate_overdue_stale_machines(
                 client,
                 provider_name=provider_name,
-                pool=pool.name,
+                pool=pool.pool,
                 expected=expected,
                 stale=stale - overdue_machine_ids,
                 now=now,
@@ -999,7 +1000,7 @@ class ProviderMachineReconciler:
         client: DirectMachineProvider,
         *,
         provider_name: str,
-        pool: str,
+        pool: MachinePool,
         expected: set[str],
         stale: set[str],
         now: datetime,

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import Field, JsonValue
 from shared.app_identity import CHECKPOINT_SIGNAL_ROOT
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 
 from worker import execution
@@ -99,7 +100,7 @@ class CheckpointAvailabilityRequest(ContractModel):
     runtime_checkpoint_restore: bool = True
     manager_initialized: bool = True
     manager_available: bool = True
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     pool_criu_enabled: bool = False
 
 

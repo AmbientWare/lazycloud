@@ -16,7 +16,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import ComputeUnitPhase
+from shared.compute_policy import ComputeUnitPhase, MachinePool
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
@@ -57,7 +57,7 @@ class UnitPolicy(HttpModel):
 
 class UnitCreateRequest(UnitPolicy):
     name: str
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
 
@@ -67,7 +67,7 @@ class UnitResponse(UnitPolicy):
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
     name: str
-    pool: str
+    pool: MachinePool
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
@@ -113,7 +113,7 @@ class MachineCreateRequest(HttpModel):
 
 class MachineResponse(HttpModel):
     id: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None
@@ -138,7 +138,7 @@ class MachineJoinCommandRequest(HttpModel):
     """
 
     ttl: str = ""
-    pool: str = Field(default="", max_length=240)
+    pool: MachinePool = MachinePool(Field(default="", max_length=240))
     gpu: list[str] = Field(default_factory=list)
 
 
@@ -159,7 +159,7 @@ class WorkerContainerResponse(HttpModel):
 class WorkerResponse(HttpModel):
     id: str
     status: str
-    pool: str
+    pool: MachinePool
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -225,7 +225,7 @@ class UnitMachineResponse(HttpModel):
     gpu: str = ""
     gpu_count: int = 0
     status: str = ""
-    pool: str
+    pool: MachinePool
     provider_name: str = "agent"
     readiness_phase: MachineReadinessPhase = MachineReadinessPhase.Joining
     readiness_message: str = "Waiting for the agent to connect"

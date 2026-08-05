@@ -6,6 +6,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field, JsonValue, field_validator
 
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import AgentBackendRoute
@@ -120,7 +121,7 @@ class WorkerUnavailableReason(StringEnum):
 
 class SchedulerWorkerRecord(ContractModel):
     worker_id: str
-    pool: str
+    pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 from pydantic import Field
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
 from shared.routing import AgentBackendRoute
@@ -68,7 +69,7 @@ class SchedulerWorkerContainerView(ContractModel):
 class SchedulerWorkerView(ContractModel):
     id: str
     status: str
-    pool: str
+    pool: MachinePool
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""

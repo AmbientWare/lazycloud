@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+from shared.compute_policy import MachinePool
 from shared.deployment_records import (
     DEFAULT_MAX_PENDING_TASKS,
     resolve_http_wait_timeout_seconds,
@@ -67,7 +68,7 @@ class EndpointStubConfig(BaseModel):
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
     max_pending_tasks: int | None = Field(default=None, ge=0)
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     metadata: EndpointMetadataConfig = Field(default_factory=EndpointMetadataConfig)
 
     @property

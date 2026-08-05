@@ -6,6 +6,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 from shared.bytes_transport import EncodedBytesBody
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
+from shared.compute_policy import MachinePool
 from shared.function_payloads import (
     FunctionJsonResult,
     FunctionPayloadEncoding,
@@ -118,7 +119,7 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
     )
     pool = UnitResponse(
         name="default",
-        pool="lazycloud",
+        pool=MachinePool("lazycloud"),
         provider="agent",
         capacity_owner_id="6fb19db5-ddd0-478d-8f4a-cdf422ad438c",
         capacity_owner_kind=CapacityOwnerKind.WorkspaceAgent,

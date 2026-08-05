@@ -21,6 +21,7 @@ from images.scheduling import (
 from pydantic import JsonValue
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import SchedulerWorkerRecord, SchedulerWorkerRequest
+from shared.compute_policy import MachinePool
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.credentials import ImageCredentialEnvVar
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
@@ -151,6 +152,6 @@ class _FakeWorkerRequestRepository:
         return SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
         )

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from pydantic import JsonValue
+from shared.compute_policy import MachinePool
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionCloudpickleInvocation
@@ -749,7 +750,7 @@ def _stub_request_from_spec(
         allow_list=_metadata_str_list(metadata, "allow_list"),
         docker_enabled=_metadata_bool(metadata, "docker_enabled"),
         preemptible=spec.resources.preemptible,
-        pool=_metadata_pool_name(metadata),
+        pool=MachinePool(_metadata_pool_name(metadata)),
         workspace=workspace,
     )
 

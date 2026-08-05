@@ -13,7 +13,10 @@ from compute.providers import (
     ProviderUnitSnapshot,
 )
 from pydantic import ValidationError
-from shared.compute_policy import ComputeCapacityMode, ComputeUnitProviderState
+from shared.compute_policy import (
+    ComputeCapacityMode,
+    ComputeUnitProviderState,
+)
 
 from .account_connection import AwsAccountConnectionTarget
 from .instance_catalog import (
@@ -207,7 +210,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             )
         return AwsManagedPoolSpec(
             workspace_id=request.workspace_id,
-            pool=request.unit_name,
+            unit_name=request.unit_name,
             region=request.offer.region,
             instance_type=request.offer.instance_type,
             ami_id=ami_id,

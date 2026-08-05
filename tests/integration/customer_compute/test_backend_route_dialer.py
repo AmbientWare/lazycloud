@@ -17,6 +17,7 @@ from networking.routing import (
     build_backend_route_dial_plan,
 )
 from pydantic import SecretStr
+from shared.compute_policy import MachinePool
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 
 ROUTE_AUTH_KEY = SecretStr("0123456789abcdef0123456789abcdef")
@@ -347,7 +348,7 @@ def _route(
     return AgentBackendRoute(
         route_id=route_id,
         workspace_id="workspace-one",
-        pool="gpu",
+        pool=MachinePool("gpu"),
         machine_id="machine-one",
         state=state,
         proxy_target=proxy_target,

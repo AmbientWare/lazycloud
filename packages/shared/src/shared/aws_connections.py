@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field, field_validator, model_validator
 
+from shared.capacity import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -159,7 +160,7 @@ class AwsAccountConnection(ContractModel):
         pattern=r"^[A-Za-z0-9+=,.@:_/-]+$",
         repr=False,
     )
-    pool: str = Field(default="aws", min_length=1, max_length=240)
+    pool: MachinePool = Field(default=MachinePool("aws"), min_length=1, max_length=240)
     """Pool every unit provisioned on this connection stamps.
 
     The customer's override point: units are created on demand per capability

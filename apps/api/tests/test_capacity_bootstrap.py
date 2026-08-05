@@ -5,6 +5,7 @@ from api.control_runtime import _reconcile_bootstrap_capacity
 from api.server.services import ApiServices
 from api.settings import CapacityBootstrapSettings, CapacityBootstrapUnit
 from database.repositories.compute import ComputeUnitRepository
+from shared.compute_policy import MachinePool
 from shared.errors import ConflictError
 
 
@@ -17,7 +18,7 @@ def test_capacity_bootstrap_reconciles_policy_with_an_immutable_owner(
             CapacityBootstrapUnit(
                 name="compose-cpu",
                 capacity_owner_id=owner_id,
-                pool="lazycloud",
+                pool=MachinePool("lazycloud"),
                 initial_machines=1,
                 min_machines=1,
                 max_machines=1,

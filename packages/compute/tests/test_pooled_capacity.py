@@ -75,7 +75,6 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitProviderState,
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
     WorkspaceComputePolicy,
 )
@@ -1245,7 +1244,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             ComputeMachineEnrollmentCreate(
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
-                pool=MachinePool(pool.name),
+                pool=pool.pool,
                 machine_id=machine_id,
                 machine_fingerprint_hash="b" * 64,
                 join_credential_id=credential.id,

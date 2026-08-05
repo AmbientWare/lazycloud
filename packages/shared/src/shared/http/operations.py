@@ -6,6 +6,7 @@ from pydantic import Field, JsonValue
 
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.compute_fleet import LeaseStatus, ResourceStatus
+from shared.compute_policy import MachinePool
 from shared.events import Event
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
@@ -138,7 +139,7 @@ class ImageBuildListResponse(HttpModel):
 
 class AgentRegisterRequest(HttpModel):
     name: str = "agent"
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -147,7 +148,7 @@ class AgentRegisterRequest(HttpModel):
 class AgentResponse(HttpModel):
     id: str
     name: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     status: ResourceStatus = ResourceStatus.Created
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)

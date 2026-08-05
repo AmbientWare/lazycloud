@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from shared.callbacks import normalize_callback_url
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
@@ -187,7 +188,7 @@ class StubConfig(ContractModel):
         serialization_alias="schema",
     )
     tcp: bool = False
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
     outputs: dict[str, JsonValue] = Field(default_factory=dict)
     python_version: str | None = None

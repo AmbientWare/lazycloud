@@ -20,7 +20,7 @@ from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
-from shared.compute_policy import ComputeUnitRecord, UnitName
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.scheduling import (
@@ -155,7 +155,7 @@ class CapacityProvisioningReservation(ContractModel):
     id: str
     resource_version: int = Field(default=0, ge=0)
     capacity_owner_id: str
-    pool: str
+    pool: MachinePool
     owner_kind: CapacityOwnerKind
     status: CapacityReservationStatus = CapacityReservationStatus.Pending
     acquisition_shape: CapacityRequestShape
@@ -234,6 +234,9 @@ class CapacityAcquisitionController(Protocol):
 
     @property
     def unit_name(self) -> UnitName: ...
+
+    @property
+    def pool(self) -> MachinePool: ...
 
     @property
     def registration_timeout(self) -> timedelta: ...
@@ -326,6 +329,10 @@ class ComputeUnitCapacityController:
     @property
     def unit_name(self) -> UnitName:
         return self.unit.name
+
+    @property
+    def pool(self) -> MachinePool:
+        return self.unit.pool
 
     @property
     def registration_timeout(self) -> timedelta:
@@ -701,7 +708,7 @@ class RedisCapacityReservationRepository:
         self,
         *,
         capacity_owner_id: str,
-        pool: str,
+        pool: MachinePool,
         owner_kind: CapacityOwnerKind,
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
@@ -1077,7 +1084,7 @@ class CapacityReservationService:
                 )
             decision = self.reservations.reserve(
                 capacity_owner_id=controller.capacity_owner_id,
-                pool=controller.unit_name,
+                pool=controller.pool,
                 owner_kind=controller.owner_kind,
                 request=request,
                 shape=controller.reservation_shape(request),

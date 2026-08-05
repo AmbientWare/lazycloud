@@ -19,6 +19,7 @@ from lazycloud.cli.resources import container_attach, container_checkpoint
 from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
 from pydantic import JsonValue
+from shared.compute_policy import MachinePool
 from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
     ContainerResponse,
@@ -353,7 +354,7 @@ def unit_create(
     response = admin_api_client().create_unit(
         UnitCreateRequest(
             name=name,
-            pool=pool,
+            pool=MachinePool(pool),
             provider=provider,
             initial_machines=initial_machines,
             min_machines=min_machines,

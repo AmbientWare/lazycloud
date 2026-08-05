@@ -10,7 +10,7 @@ from compute.service import ComputeService
 from compute.state import ComputeUnitState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from pydantic import Field
-from shared.compute_policy import UnitName
+from shared.compute_policy import MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.env import truthy_env_value
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerStatus
@@ -35,7 +35,7 @@ class WorkerPoolDrainConfig(ContractModel):
 
 class WorkerPoolDrainResult(ContractModel):
     capacity_owner_id: str
-    pool: str
+    pool: MachinePool
     action: WorkerPoolDrainAction = WorkerPoolDrainAction.None_
     machine_id: str = ""
     desired_replicas: int = 0
@@ -48,7 +48,7 @@ class WorkerPoolDrainResult(ContractModel):
 
 class WorkerPoolDrainWorker(Protocol):
     worker_id: str
-    pool: str
+    pool: MachinePool
     capacity_owner_id: str
     machine_id: str
     status: SchedulerWorkerStatus
@@ -89,6 +89,9 @@ class WorkerPoolDrainController(Protocol):
     @property
     def unit_name(self) -> UnitName: ...
 
+    @property
+    def pool(self) -> MachinePool: ...
+
     def reconcile(self, *, now: datetime | None = None) -> WorkerPoolDrainResult: ...
 
 
@@ -126,7 +129,7 @@ class WorkerPoolDrainService:
         if not self._acquire_lock(lock_plan, token):
             return WorkerPoolDrainResult(
                 capacity_owner_id=controller.capacity_owner_id,
-                pool=controller.unit_name,
+                pool=controller.pool,
                 reason="capacity-owner mutation lock already held",
                 lock_acquired=False,
             )
@@ -134,14 +137,14 @@ class WorkerPoolDrainService:
             if self.reservations.has_open_reservations(controller.capacity_owner_id):
                 return WorkerPoolDrainResult(
                     capacity_owner_id=controller.capacity_owner_id,
-                    pool=controller.unit_name,
+                    pool=controller.pool,
                     reason="capacity owner has open provisioning allocations",
                 )
             return controller.reconcile(now=current_time)
         except Exception as exc:
             return WorkerPoolDrainResult(
                 capacity_owner_id=controller.capacity_owner_id,
-                pool=controller.unit_name,
+                pool=controller.pool,
                 reason="worker-pool drain failed",
                 error=str(exc),
             )
@@ -168,6 +171,10 @@ class ManagedComputeWorkerPoolDrainController:
         return self.state.name
 
     @property
+    def pool(self) -> MachinePool:
+        return self.state.pool
+
+    @property
     def capacity_owner_id(self) -> str:
         return _capacity_owner_id_from_state(self.state)
 
@@ -177,7 +184,7 @@ class ManagedComputeWorkerPoolDrainController:
         if not config.enabled:
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
-                pool=self.unit_name,
+                pool=self.pool,
                 reason="worker-pool drain disabled",
             )
         sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
@@ -186,7 +193,7 @@ class ManagedComputeWorkerPoolDrainController:
         ):
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
-                pool=self.unit_name,
+                pool=self.pool,
                 reason="worker-pool capacity is awaiting registration",
             )
         latest_mutation = max(
@@ -211,13 +218,13 @@ class ManagedComputeWorkerPoolDrainController:
         ):
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
-                pool=self.unit_name,
+                pool=self.pool,
                 reason="worker-pool scale-down cooldown is active",
             )
         if self.state.active_machines <= config.min_workers:
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
-                pool=self.unit_name,
+                pool=self.pool,
                 desired_replicas=self.state.desired_machines,
                 observed_replicas=self.state.active_machines,
                 reason="pool is at min machines",
@@ -238,7 +245,7 @@ class ManagedComputeWorkerPoolDrainController:
         if candidate is None:
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
-                pool=self.unit_name,
+                pool=self.pool,
                 desired_replicas=self.state.desired_machines,
                 observed_replicas=self.state.active_machines,
                 reason="no idle provider machine candidate",
@@ -253,7 +260,7 @@ class ManagedComputeWorkerPoolDrainController:
         reason = "released idle connected provider machine"
         return WorkerPoolDrainResult(
             capacity_owner_id=self.capacity_owner_id,
-            pool=self.unit_name,
+            pool=self.pool,
             action=WorkerPoolDrainAction.TerminateProviderMachine,
             machine_id=candidate.machine_id,
             desired_replicas=desired_replicas,

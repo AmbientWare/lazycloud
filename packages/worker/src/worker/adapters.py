@@ -10,6 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import Field, field_validator
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.routing import (
@@ -140,7 +141,7 @@ class SchedulerContainerRouteRepository(Protocol):
 
 class WorkerRouteIdentity(ContractModel):
     worker_id: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     machine_id: str = ""
     pod_address: str = ""
     container_service_port: int = 0

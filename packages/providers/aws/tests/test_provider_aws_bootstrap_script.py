@@ -14,6 +14,7 @@ from provider_aws.managed_pool import (
     AwsManagedPoolSpec,
     aws_managed_pool_bootstrap_script,
 )
+from shared.compute_policy import UnitName
 
 _AGENT_SHA256 = "a" * 64
 _AGENT_BINARY_URL = (
@@ -29,7 +30,7 @@ _SESSION_TOKEN = "temporary/session-token"
 def _spec() -> AwsManagedPoolSpec:
     return AwsManagedPoolSpec(
         workspace_id="12345678-1234-4123-8123-123456789abc",
-        pool="bootstrap",
+        unit_name=UnitName("bootstrap"),
         region="us-east-1",
         instance_type="i4i.xlarge",
         ami_id="ami-0123456789abcdef0",

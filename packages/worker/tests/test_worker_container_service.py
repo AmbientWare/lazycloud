@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Event
 
 import pytest
+from shared.compute_policy import MachinePool
 from worker.container_client.models import (
     ContainerArchiveResponse,
     ContainerExecRequest,
@@ -511,7 +512,7 @@ def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Pa
             workspace_id="workspace-1",
             machine_id="machine-1",
             worker_id="worker-1",
-            pool="pool-1",
+            pool=MachinePool("pool-1"),
             route_local_target_host="agent.internal",
         )
     )
@@ -641,7 +642,7 @@ def _instance(
     stub_id: str = "stub-1",
     worker_id: str = "worker-1",
     machine_id: str = "",
-    pool: str = "",
+    pool: MachinePool = MachinePool(""),
     route_local_target_host: str = "",
 ) -> WorkerContainerServiceInstance:
     (root / "workspace").mkdir(parents=True, exist_ok=True)

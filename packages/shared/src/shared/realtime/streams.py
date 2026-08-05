@@ -662,7 +662,7 @@ def event_headers(
         "service": metadata.service_name,
         "instance_id": metadata.instance_id,
         "app_id": metadata.app_id,
-        "pool": metadata.pool,
+        "pool": str(metadata.pool),
     }
     headers.update({key: value for key, value in metadata_headers.items() if value})
     return headers

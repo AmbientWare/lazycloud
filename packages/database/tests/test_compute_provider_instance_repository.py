@@ -44,7 +44,7 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
 
         machine_id = str(uuid4())
         MachineRepository(session).upsert(
-            Machine(id=machine_id, pool=pool.name, provider="aws"),
+            Machine(id=machine_id, pool=pool.pool, provider="aws"),
             workspace_id=workspace_id,
         )
 
@@ -89,14 +89,14 @@ def test_unbinding_releases_only_the_machine_it_names(
         machines = MachineRepository(session)
         first = str(uuid4())
         machines.upsert(
-            Machine(id=first, pool=pool.name, provider="aws"), workspace_id=workspace_id
+            Machine(id=first, pool=pool.pool, provider="aws"), workspace_id=workspace_id
         )
         assert repository.bind_machine(pool.id, instance.instance_id or "", first) is not None
 
         # A stale release must not strand the binding a later enrollment made.
         second = str(uuid4())
         machines.upsert(
-            Machine(id=second, pool=pool.name, provider="aws"), workspace_id=workspace_id
+            Machine(id=second, pool=pool.pool, provider="aws"), workspace_id=workspace_id
         )
         kept = repository.unbind_machine(pool.id, instance.instance_id or "", second)
         assert kept is not None

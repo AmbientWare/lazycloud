@@ -257,7 +257,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         MachineRepository(session).upsert(
             Machine(
                 id=ready_machine_id,
-                pool="current-aws-inventory",
+                pool=MachinePool("aws"),
                 provider="aws",
                 status=ResourceStatus.Running,
                 created_at=now,
@@ -269,7 +269,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
-                pool=MachinePool("current-aws-inventory"),
+                pool=MachinePool("aws"),
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -285,7 +285,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             Worker(
                 id=agent_machine_worker_id(ready_machine_id),
                 machine_id=ready_machine_id,
-                pool="current-aws-inventory",
+                pool=MachinePool("aws"),
                 status=ResourceStatus.Running,
                 last_seen_at=now,
                 created_at=now,
@@ -322,7 +322,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=agent_machine_worker_id(ready_machine_id),
-            pool="current-aws-inventory",
+            pool=MachinePool("aws"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=ready_machine_id,
             status=SchedulerWorkerStatus.Available,

@@ -32,7 +32,7 @@ def test_scheduler_compute_hooks_disable_machine_workers(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-machine-one",
-            pool="gpu-pool",
+            pool=MachinePool("gpu-pool"),
             machine_id="machine-one",
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
@@ -49,7 +49,7 @@ def test_scheduler_compute_hooks_disable_machine_workers(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=fallback_worker_id,
-            pool="gpu-pool",
+            pool=MachinePool("gpu-pool"),
             machine_id="",
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
@@ -111,7 +111,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool="aws-pool",
+            pool=MachinePool("aws-pool"),
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
             created_at=now,

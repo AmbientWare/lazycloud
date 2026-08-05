@@ -5,6 +5,7 @@ from pydantic import Field, JsonValue, field_validator
 from shared.bytes_transport import decode_bytes, encode_bytes
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_policy import MachinePool
 from shared.http.base import HttpModel
 from shared.identity import AuthScope
 from shared.routing import (
@@ -70,7 +71,7 @@ class JoinAgentRequest(HttpModel):
 
 class JoinAgentResponse(HttpModel):
     workspace_id: str = ""
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     machine_id: str = ""
     agent_token: str = ""
     credential_id: str = ""
@@ -93,7 +94,7 @@ class LeaveAgentResponse(HttpModel):
 class AgentRoute(HttpModel):
     route_id: str
     workspace_id: str
-    pool: str
+    pool: MachinePool
     machine_id: str
     worker_id: str = ""
     container_id: str = ""
@@ -164,7 +165,7 @@ class UpdateAgentRouteStatusResponse(HttpModel):
 class AgentWorkerSlot(HttpModel):
     worker_id: str
     worker_token: str = ""
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     cpu: int = 0

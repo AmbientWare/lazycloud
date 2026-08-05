@@ -92,7 +92,7 @@ def test_scheduler_stamps_the_resolved_pool_and_every_unit_in_it_accepts() -> No
     reservation = CapacityProvisioningReservation(
         id="22222222-2222-4222-8222-222222222222",
         capacity_owner_id=_OWNER_ID,
-        pool="internal-aws-cpu",
+        pool=MachinePool("internal-aws-cpu"),
         owner_kind=CapacityOwnerKind.PooledProvider,
         acquisition_shape=acquisition_shape,
         schedulable_shape=acquisition_shape.model_copy(update={"memory_mib": 15_500}),
@@ -120,7 +120,7 @@ class _RecordingCapacity:
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
         self.requests.append(request)
-        return ComputeCapacityPlacementResult(pool="aws")
+        return ComputeCapacityPlacementResult(pool=MachinePool("aws"))
 
 
 @dataclass(slots=True)

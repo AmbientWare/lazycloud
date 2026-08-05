@@ -20,7 +20,9 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
 )
-from shared.compute_policy import MachinePool
+from shared.compute_policy import (
+    MachinePool,
+)
 
 if TYPE_CHECKING:
     from database.repositories.compute import ComputeMachineEnrollmentRecord
@@ -216,7 +218,7 @@ class AgentBootstrapConfig(ContractModel):
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
     workspace_id: str
-    pool: str
+    pool: MachinePool
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     executor: str = DEFAULT_PRIVATE_EXECUTOR
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
@@ -226,7 +228,6 @@ class AgentBootstrapConfig(ContractModel):
 
 
 class AgentStreamTimingPlan(ContractModel):
-    route_revision_key: str
     refresh_seconds: float = AGENT_STREAM_REFRESH_SECONDS
     heartbeat_seconds: float = AGENT_STREAM_HEARTBEAT_SECONDS
     event_coalesce_seconds: float = AGENT_STREAM_EVENT_COALESCE_SECONDS
@@ -299,7 +300,7 @@ class AgentStreamSnapshotPlan(ContractModel):
 class WorkerRecord(ContractModel):
     id: str
     machine_id: str
-    pool: str
+    pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     status: WorkerStatus = WorkerStatus.Pending
     total_cpu: int = 0
@@ -557,10 +558,13 @@ def plan_agent_join(
             err_msg="pool not found",
             binding=binding,
         )
+    # Compared by capacity owner, not by name: the credential carries the pool
+    # its machine will join, and a pool is fed by several units, so its name
+    # matches no single unit's.
     if (
         active_token is None
         or pool_state.workspace_id != active_token.workspace_id
-        or pool_state.name != active_token.pool
+        or pool_state.capacity_owner_id != active_token.capacity_owner_id
     ):
         return AgentJoinPlan(
             decision=JoinTokenDecision.OwnerMismatch,
@@ -934,7 +938,7 @@ def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
 def _reject_unroutable_runtime_url(
     url: str,
     *,
-    pool: str,
+    pool: MachinePool,
     transport: BackendRouteTransport,
 ) -> None:
     """Refuse a runtime callback a remote machine could never resolve.
@@ -977,7 +981,7 @@ def build_agent_bootstrap_config(
         raise ValueError(transport_plan.err_msg)
     _reject_unroutable_runtime_url(
         gateway_runtime_http_url,
-        pool=pool_state.name,
+        pool=pool_state.pool,
         transport=normalized.transport,
     )
     return AgentBootstrapConfig(
@@ -987,7 +991,7 @@ def build_agent_bootstrap_config(
         gateway_grpc_port=gateway.grpc_port,
         gateway_grpc_tls=gateway.grpc_tls,
         workspace_id=workspace_id,
-        pool=pool_state.name,
+        pool=pool_state.pool,
         transport=normalized.transport,
         executor=executor,
         fallback=normalized.fallback,
@@ -997,16 +1001,8 @@ def build_agent_bootstrap_config(
     )
 
 
-def agent_stream_timing(agent_state: ComputeAgentTokenState) -> AgentStreamTimingPlan:
-    return AgentStreamTimingPlan(
-        route_revision_key=agent_route_revision_key(
-            agent_state.workspace_id, agent_state.pool, agent_state.machine_id
-        )
-    )
-
-
-def agent_route_revision_key(workspace_id: str, pool: str, machine_id: str) -> str:
-    return f"scheduler:route:machine:{{{workspace_id}}}:{pool}:{machine_id}:rev"
+def agent_stream_timing() -> AgentStreamTimingPlan:
+    return AgentStreamTimingPlan()
 
 
 def validate_current_agent_state(
@@ -1073,7 +1069,7 @@ def plan_agent_stream_snapshot(
         current=state_plan,
         routes=agent_routes_for_stream(routes),
         slots=slots,
-        timing=agent_stream_timing(state_plan.state),
+        timing=agent_stream_timing(),
     )
 
 

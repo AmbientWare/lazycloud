@@ -75,7 +75,10 @@ from scheduler.state import (
 from shared.app_identity import FUNCTION_IMAGE
 from shared.cache_records import CacheEntry
 from shared.compute_enrollment import ComputePreflightCheck, PreflightSeverity
-from shared.compute_policy import UnitName
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
@@ -697,7 +700,7 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-attacker",
-            pool="managed",
+            pool=MachinePool("managed"),
             status=SchedulerWorkerStatus.Available,
         ),
     )
@@ -827,7 +830,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool="pool",
+            pool=MachinePool("pool"),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -846,7 +849,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="compose-machine",
-            pool="pool",
+            pool=MachinePool("pool"),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -924,7 +927,7 @@ def test_worker_network_mutations_are_bound_to_authenticated_worker_assignment(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-network-owner",
             machine_id="machine-network-owner",
-            pool="network-pool",
+            pool=MachinePool("network-pool"),
             status=SchedulerWorkerStatus.Available,
         ),
     )
@@ -994,7 +997,7 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
             capacity_owner_id=capacity_owner_id,
             worker_id=worker_id,
             machine_id="compose-machine",
-            pool="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -1072,7 +1075,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
         )
     )
@@ -1141,7 +1144,7 @@ def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
         )
     )
@@ -1215,7 +1218,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool="pool",
+            pool=MachinePool("pool"),
             status=SchedulerWorkerStatus.Available,
         ),
     )
@@ -1227,7 +1230,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-2",
-            pool="pool",
+            pool=MachinePool("pool"),
             status=SchedulerWorkerStatus.Available,
         ),
     )
@@ -1288,7 +1291,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
         {
             "worker": SchedulerWorkerRecord(
                 worker_id="worker-1",
-                pool="pool",
+                pool=MachinePool("pool"),
                 capacity_owner_id=capacity_owner_id,
                 status=SchedulerWorkerStatus.Available,
             ).model_dump(mode="json"),
@@ -1372,7 +1375,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             **base_payload,
             "worker": SchedulerWorkerRecord(
                 worker_id="capacity-worker",
-                pool="capacity-pool",
+                pool=MachinePool("capacity-pool"),
                 capacity_owner_id=owner_id,
             ).model_dump(mode="json"),
         },
@@ -1390,7 +1393,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             **base_payload,
             "worker": SchedulerWorkerRecord(
                 worker_id="capacity-worker",
-                pool="capacity-pool",
+                pool=MachinePool("capacity-pool"),
                 capacity_owner_id=other_owner_id,
             ).model_dump(mode="json"),
         },
@@ -1402,7 +1405,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             **base_payload,
             "worker": SchedulerWorkerRecord(
                 worker_id="capacity-worker",
-                pool="capacity-pool",
+                pool=MachinePool("capacity-pool"),
                 capacity_owner_id=owner_id,
             ).model_dump(mode="json"),
         },
@@ -2063,7 +2066,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         AgentBackendRoute(
             route_id=f"compose-machine:compose-container-worker:{container_id}:container:{port}",
             workspace_id=workspace_id,
-            pool="default",
+            pool=MachinePool("default"),
             machine_id="compose-machine",
             worker_id="compose-container-worker",
             container_id=container_id,
@@ -2136,7 +2139,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     active_route = AgentBackendRoute(
         route_id=f"machine-1:worker-1:{container_id}:container:9090",
         workspace_id=workspace_id,
-        pool="default",
+        pool=MachinePool("default"),
         machine_id="machine-1",
         worker_id="worker-1",
         container_id=container_id,
@@ -2165,7 +2168,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     orphan_route = AgentBackendRoute(
         route_id="missing-worker:missing-container:container:9090",
         workspace_id=workspace_id,
-        pool="default",
+        pool=MachinePool("default"),
         machine_id="machine-1",
         worker_id="missing-worker",
         container_id="missing-container",
@@ -2217,14 +2220,14 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     workspace_id, machine_id, agent_token = _join_gateway_agent(
         isolated_services,
         gateway,
-        pool="pool-a",
+        pool=MachinePool("pool-a"),
         machine_fingerprint="route-machine",
     )
     worker_id = agent_machine_worker_id(machine_id)
     route = AgentBackendRoute(
         route_id=f"{machine_id}:{worker_id}:container-1:container:8001",
         workspace_id=workspace_id,
-        pool="pool-a",
+        pool=MachinePool("pool-a"),
         machine_id=machine_id,
         worker_id=worker_id,
         container_id="container-1",
@@ -2264,7 +2267,7 @@ def _join_gateway_agent(
     services: ApiServices,
     gateway: GatewayControlService,
     *,
-    pool: str,
+    pool: MachinePool,
     machine_fingerprint: str,
 ) -> tuple[str, str, str]:
     with services.context.database.session() as session:

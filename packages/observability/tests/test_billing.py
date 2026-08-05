@@ -824,7 +824,7 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
     unit = isolated_services.compute.create_unit(UnitName("usage-managed"), workspace=workspace_id)
     machine = isolated_services.compute.create_machine(
         workspace=workspace_id,
-        pool="usage-managed",
+        pool=MachinePool("usage-managed"),
     )
     token_hash = hash_compute_token("agent-token")
     joined_at = utc_now() - timedelta(seconds=30)

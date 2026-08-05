@@ -6,7 +6,10 @@ from enum import StrEnum
 
 from pydantic import Field, field_validator
 from shared.capacity import CapacityOwnerIdentity
-from shared.compute_policy import UnitName
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
@@ -91,7 +94,7 @@ class ComputeUnitPlan(ContractModel):
 
 class ProviderReservation(ContractModel):
     id: str
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     selector: str = ""
     provider: str = ""
     cloud: str = ""
@@ -126,7 +129,7 @@ class ProviderReservation(ContractModel):
 
 class ProviderInstanceProjection(ContractModel):
     id: str
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     provider: str = ""
     cloud: str = ""
     region: str = ""
@@ -151,6 +154,9 @@ class ProviderInstanceProjection(ContractModel):
 class PrivateUnitState(CapacityOwnerIdentity):
     workspace_id: str = ""
     name: UnitName
+    pool: MachinePool = MachinePool("")
+    """Pool this unit's machines serve, so the agent bootstrap never has to
+    substitute the unit's name for the label it must advertise."""
     selector: str = ""
     config: PoolConfig | None = None
     reservations: list[ProviderReservation] = Field(default_factory=list)

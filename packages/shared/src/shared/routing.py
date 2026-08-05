@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import field_validator
 
+from shared.capacity import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -50,7 +51,8 @@ class RoutePrewarmDecision(StringEnum):
 class AgentBackendRoute(ContractModel):
     route_id: str
     workspace_id: str = ""
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
+    capacity_owner_id: str = ""
     machine_id: str = ""
     worker_id: str = ""
     container_id: str = ""

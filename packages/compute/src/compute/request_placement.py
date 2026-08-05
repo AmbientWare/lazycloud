@@ -5,7 +5,7 @@ from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import ComputeUnitRepository
-from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord
+from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord, MachinePool
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.gpu import GPU_ANY, normalize_gpu_type
@@ -38,7 +38,7 @@ class ComputeCapacityPlacementRequest(ContractModel):
 
 @dataclass(frozen=True, slots=True)
 class ComputeCapacityPlacementResult:
-    pool: str
+    pool: MachinePool
 
 
 @dataclass(slots=True)
@@ -59,15 +59,17 @@ class ComputeCapacityPlacementService:
         pool = self._machine_pool_for(request)
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, request.workspace_id).id
-            units = ComputeUnitRepository(session).list_for_machine_pool(workspace_id, pool)
+            units = ComputeUnitRepository(session).list_for_machine_pool(
+                workspace_id, MachinePool(pool)
+            )
         if any(_pool_supports(unit, request.requirements) for unit in units):
-            return ComputeCapacityPlacementResult(pool=pool)
+            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
         connection = self.policies.connection_for_machine_pool(
             workspace=request.workspace_id,
-            pool=pool,
+            pool=MachinePool(pool),
         )
         if connection is None:
-            return ComputeCapacityPlacementResult(pool=pool)
+            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
         policy = self.policies.get_policy(workspace=request.workspace_id)
         aws = policy.aws
@@ -84,7 +86,7 @@ class ComputeCapacityPlacementService:
             idle_timeout_seconds=aws.idle_timeout_seconds,
             allowed_instance_types=aws.allowed_instance_types,
         )
-        return ComputeCapacityPlacementResult(pool=pool)
+        return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
     def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
         if request.requested_pool:

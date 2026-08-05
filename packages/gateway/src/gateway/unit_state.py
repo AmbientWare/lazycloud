@@ -16,7 +16,10 @@ from compute.state import (
     RedisComputeStateRepository,
 )
 from database.context import ServiceContext
-from database.repositories.compute import ComputeJoinCredentialRepository
+from database.repositories.compute import (
+    ComputeJoinCredentialRepository,
+    ComputeMachineEnrollmentRepository,
+)
 from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import ComputeCredentialStatus
@@ -84,7 +87,7 @@ class GatewayUnitStateCoordinator:
         config: projection.PoolConfig,
         *,
         workspace_id: str,
-        pool: str = "",
+        pool: MachinePool = MachinePool(""),
     ) -> ComputeUnitRecord:
         if not config.name:
             msg = "pool name is required"
@@ -121,7 +124,7 @@ class GatewayUnitStateCoordinator:
         config: projection.PoolConfig | None = None,
         owner_token_id: str = "gateway",
     ) -> PrivateUnitState:
-        current = self.compute_states.get_unit_state(workspace_id, unit.name)
+        current = self.compute_states.get_unit_state(workspace_id, unit.capacity_owner_id)
         compute_config = config or pool_config_from_unit(unit)
         metadata: dict[str, JsonValue] = {
             **(current.metadata if current is not None else {}),
@@ -138,17 +141,25 @@ class GatewayUnitStateCoordinator:
             provider=unit.provider,
             max_machines=max(unit.max_machines, 1),
             desired_machines=unit.max_machines,
-            active_machines=len(
-                [
-                    machine
-                    for machine in self.compute.list_machines(workspace=workspace_id)
-                    if machine.pool == unit.name
-                ]
-            ),
+            active_machines=self._unit_machine_count(unit, workspace_id=workspace_id),
             metadata=metadata,
         )
         self.compute_states.save_unit_state(state)
         return private_pool_from_compute_state(state)
+
+    def _unit_machine_count(self, unit: ComputeUnitRecord, *, workspace_id: str) -> int:
+        """How many machines this unit itself enrolled.
+
+        Counting the unit's pool would count every unit feeding that pool, which
+        would size one unit's capacity from another's machines.
+        """
+        with self.context.database.session() as session:
+            return len(
+                ComputeMachineEnrollmentRepository(session).list_for_unit(
+                    workspace_id,
+                    unit.capacity_owner_id,
+                )
+            )
 
     def private_unit_for_join_token(
         self,
@@ -166,7 +177,7 @@ class GatewayUnitStateCoordinator:
             token_state.capacity_owner_id,
             workspace_id=token_state.workspace_id,
         )
-        state = self.compute_states.get_unit_state(token_state.workspace_id, unit.name)
+        state = self.compute_states.get_unit_state(token_state.workspace_id, unit.capacity_owner_id)
         if state is not None:
             return private_pool_from_compute_state(state)
         return self.ensure_compute_pool_state(
@@ -314,7 +325,7 @@ class GatewayUnitStateCoordinator:
         pool_state: PrivateUnitState,
         config: projection.PoolConfig,
     ) -> None:
-        current = self.compute_states.get_unit_state(workspace_id, pool_state.name)
+        current = self.compute_states.get_unit_state(workspace_id, pool_state.capacity_owner_id)
         metadata: dict[str, JsonValue] = {
             **(current.metadata if current is not None else {}),
             "config": _JSON_OBJECT.validate_python(config.model_dump(mode="json")),
@@ -336,8 +347,8 @@ class GatewayUnitStateCoordinator:
         )
         self.compute_states.save_unit_state(state)
 
-    def delete_compute_pool_state(self, unit_name: str, *, workspace_id: str) -> bool:
-        return self.compute_states.delete_unit_state(workspace_id, UnitName(unit_name))
+    def delete_compute_unit_state(self, capacity_owner_id: str, *, workspace_id: str) -> bool:
+        return self.compute_states.delete_unit_state(workspace_id, capacity_owner_id)
 
 
 __all__ = ["GatewayComputeService", "GatewayUnitStateCoordinator"]

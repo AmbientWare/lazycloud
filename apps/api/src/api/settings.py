@@ -6,6 +6,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.compute_policy import MachinePool
 from shared.http.compute import UnitPolicy
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
@@ -86,7 +87,7 @@ class CapacityBootstrapUnit(UnitPolicy):
     """
 
     name: str = Field(min_length=1, max_length=160)
-    pool: str = Field(default="", max_length=240)
+    pool: MachinePool = MachinePool(Field(default="", max_length=240))
     workspace: str = Field(default="default", min_length=1, max_length=160)
     provider: str = Field(default="local", min_length=1, max_length=160)
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)

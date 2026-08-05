@@ -4,6 +4,7 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 import typer
+from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.function import Function
@@ -90,7 +91,7 @@ def deploy(
         ports=ports,
         keep_warm=keep_warm,
         tcp=tcp,
-        pool=pool,
+        pool=MachinePool(pool) if pool else None,
         preemptible=preemptible,
         entrypoint=entrypoint,
     )
@@ -200,7 +201,7 @@ def run(
         ports=ports,
         keep_warm=keep_warm,
         tcp=tcp,
-        pool=pool,
+        pool=MachinePool(pool) if pool else None,
         preemptible=preemptible,
         entrypoint=entrypoint,
     )
@@ -287,7 +288,7 @@ def shell(
         ports=ports,
         keep_warm=keep_warm,
         tcp=tcp,
-        pool=pool,
+        pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
         container_id=container_id,

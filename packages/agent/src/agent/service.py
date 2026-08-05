@@ -10,6 +10,7 @@ from foundation.ids import required_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.app_identity import ADMIN_CLI_NAME
 from shared.compute_fleet import AgentLease, AgentRecord, LeaseStatus, ResourceStatus
+from shared.compute_policy import MachinePool
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceRecord
 from shared.timestamps import utc_now
@@ -51,7 +52,7 @@ class AgentService:
         self,
         name: str,
         *,
-        pool: str = "default",
+        pool: MachinePool = MachinePool("default"),
         version: str = "local",
         capacity: dict[str, int | float | str] | None = None,
         labels: dict[str, str] | None = None,

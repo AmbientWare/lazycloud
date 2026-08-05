@@ -266,7 +266,7 @@ class _ClientProvider:
 def _spec() -> AwsManagedPoolSpec:
     return AwsManagedPoolSpec(
         workspace_id="12345678-1234-4123-8123-123456789abc",
-        pool="acceptance",
+        unit_name=UnitName("acceptance"),
         region="us-east-1",
         instance_type="i4i.xlarge",
         ami_id="ami-0123456789abcdef0",

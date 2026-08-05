@@ -11,7 +11,10 @@ from compute.state import ComputeAgentTokenState, ComputeUnitState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityOwnerKind
-from shared.compute_policy import ComputeUnitRecord
+from shared.compute_policy import (
+    ComputeUnitRecord,
+    MachinePool,
+)
 from shared.contracts import ContractModel
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -32,7 +35,7 @@ class AgentPoolWorkerAction(StrEnum):
 
 class AgentPoolConfig(ContractModel):
     workspace_id: str
-    pool: str
+    pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
@@ -47,7 +50,7 @@ class AgentPoolWorkerResult(ContractModel):
 
 class AgentPoolReconcileResult(ContractModel):
     workspace_id: str
-    pool: str
+    pool: MachinePool
     ensured_worker_ids: list[str] = Field(default_factory=list)
     existing_worker_ids: list[str] = Field(default_factory=list)
     disabled_worker_ids: list[str] = Field(default_factory=list)
@@ -62,7 +65,7 @@ class AgentMachineRepository(Protocol):
     def list_agent_token_states(
         self,
         workspace_id: str,
-        unit_name: str,
+        capacity_owner_id: str,
     ) -> list[ComputeAgentTokenState]: ...
 
 
@@ -103,7 +106,7 @@ class AgentWorkerPoolController:
         )
         for machine in self.machines.list_agent_token_states(
             self.config.workspace_id,
-            self.config.pool,
+            self.config.capacity_owner_id,
         ):
             outcome = self.ensure_machine_worker(machine, now=current_time)
             if outcome.action is AgentPoolWorkerAction.Ensured:
@@ -212,7 +215,7 @@ def agent_pool_config_from_pool(pool: ComputeUnitRecord) -> AgentPoolConfig | No
         return None
     return AgentPoolConfig(
         workspace_id=pool.workspace_id,
-        pool=pool.name,
+        pool=pool.pool,
         capacity_owner_id=pool.capacity_owner_id,
         gpu_type=pool.worker_gpu_type,
         worker_build_version=DEFAULT_AGENT_WORKER_BUILD_VERSION,
@@ -224,7 +227,7 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
     normalized = normalize_unit_config(config)
     return AgentPoolConfig(
         workspace_id=state.workspace_id,
-        pool=state.name,
+        pool=state.pool,
         capacity_owner_id=state.capacity_owner_id,
         gpu_type=(normalized.gpu[0] if normalized and normalized.gpu else ""),
         worker_build_version=str(

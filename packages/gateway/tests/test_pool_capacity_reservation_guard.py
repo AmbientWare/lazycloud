@@ -123,7 +123,7 @@ def _scalable_pool(
     services: ApiServices,
     *,
     workspace_id: str,
-    pool: str,
+    pool: MachinePool,
     capacity_owner_id: str,
 ) -> ComputeUnitRecord:
     services.compute.create_unit(
@@ -206,7 +206,7 @@ def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
@@ -244,7 +244,7 @@ def test_pool_scale_refuses_open_reservation_before_compute_mutation(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
@@ -279,7 +279,7 @@ def test_pool_scale_zero_refuses_active_reservation_when_stored_capacity_is_zero
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
     ).model_copy(update={"desired_machines": 0, "observed_machines": 0})
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
@@ -314,7 +314,7 @@ def test_pool_scale_zero_refuses_unassigned_pending_workspace_container(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
     )
     with isolated_services.context.database.session() as session:
@@ -353,14 +353,14 @@ def test_pool_scale_zero_disables_owner_worker_before_compute_mutation(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-dispatch-fence")
     worker = SchedulerWorkerRecord(
         worker_id="idle-provider-worker",
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
         status=SchedulerWorkerStatus.Available,
     )
@@ -408,7 +408,7 @@ def test_pool_state_refuses_mismatched_durable_capacity_owner(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id="25555555-3666-4777-8888-999999999999",
     )
 
@@ -448,7 +448,7 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
@@ -460,7 +460,7 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     worker_id = f"worker-{container_status.value}"
     worker = SchedulerWorkerRecord(
         worker_id=worker_id,
-        pool=pool,
+        pool=MachinePool(pool),
         capacity_owner_id=capacity_owner_id,
         status=SchedulerWorkerStatus.Available,
     )
@@ -517,10 +517,10 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool = "reservation-guarded-pool"
+    unit_name = "reservation-guarded-pool"
     capacity_owner_id = "dfd9f90a-f4af-41ee-8873-991a9fa860fe"
     isolated_services.compute.create_unit(
-        UnitName(pool),
+        UnitName(unit_name),
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
@@ -532,7 +532,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-reservation-guard")
     join = gateway.unit_state_coordinator.create_unit_join_token(
-        UnitName(pool),
+        UnitName(unit_name),
         workspace_id=workspace_id,
         owner_token_id="gateway-test-owner",
     )
@@ -540,7 +540,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     worker_id = agent_machine_worker_id(enrolled.machine_id)
     scheduler_pool_state = WorkerPoolStateSnapshot(
         capacity_owner_id=capacity_owner_id,
-        pool=pool,
+        pool=MachinePool(unit_name),
         available_workers=1,
         registered_machines=1,
     )
@@ -558,12 +558,12 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     assert gateway.scheduler_pool_state_repository.get_state(capacity_owner_id) == (
         scheduler_pool_state
     )
-    assert gateway.compute_states.get_unit_state(workspace_id, pool) is not None
+    assert gateway.compute_states.get_unit_state(workspace_id, capacity_owner_id) is not None
     assert [
         item.name
         for item in isolated_services.compute.list_units(workspace=workspace_id)
-        if item.name == pool
-    ] == [pool]
+        if item.name == unit_name
+    ] == [unit_name]
     with isolated_services.context.database.session() as session:
         assert (
             len(
@@ -581,10 +581,10 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    pool = "display-name-is-not-owner"
+    unit_name = "display-name-is-not-owner"
     capacity_owner_id = "71ee746b-674e-4125-a12a-21c3350abf83"
     isolated_services.compute.create_unit(
-        UnitName(pool),
+        UnitName(unit_name),
         workspace=workspace_id,
         provider="agent",
         capacity_owner_id=capacity_owner_id,
@@ -593,14 +593,14 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-durable-owner-delete")
     gateway.unit_state_coordinator.ensure_compute_pool_state(
-        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(unit_name), workspace_id=workspace_id),
         workspace_id=workspace_id,
     )
     gateway.scheduler_pool_state_repository.set_state(
         capacity_owner_id,
         WorkerPoolStateSnapshot(
             capacity_owner_id=capacity_owner_id,
-            pool=pool,
+            pool=MachinePool(unit_name),
         ),
     )
 
@@ -610,8 +610,9 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
     assert guard.events == ["lock-enter", "reservation-check", "lock-exit"]
     assert all(
-        item.name != pool for item in isolated_services.compute.list_units(workspace=workspace_id)
+        item.name != unit_name
+        for item in isolated_services.compute.list_units(workspace=workspace_id)
     )
-    assert gateway.compute_states.get_unit_state(workspace_id, pool) is None
+    assert gateway.compute_states.get_unit_state(workspace_id, capacity_owner_id) is None
     with pytest.raises(WorkerPoolStateNotFoundError):
         gateway.scheduler_pool_state_repository.get_state(capacity_owner_id)

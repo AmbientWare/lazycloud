@@ -9,6 +9,7 @@ from cli.api_client import AdminApiClient
 from cli.main import build_admin_cli
 from pydantic import JsonValue
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
+from shared.compute_policy import MachinePool
 from shared.http.apps import AppResponse
 from shared.http.compute import ContainerWithAppPageResponse, UnitResponse
 from shared.http.system import AuthTokenResponse
@@ -48,7 +49,7 @@ class _RecordingHttpChannel(HttpChannel):
             capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Provider,
             name="gpu-pool",
-            pool="aws",
+            pool=MachinePool("aws"),
             created_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
         ).model_dump(mode="json")
 

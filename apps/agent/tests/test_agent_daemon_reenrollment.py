@@ -20,6 +20,7 @@ from gateway.http import (
     RequestAgentTransportCredentialResponse,
 )
 from networking.tailnet import TailnetStatus
+from shared.compute_policy import MachinePool
 from shared.http.errors import ErrorResponse, HttpApiError
 from shared.routing import BackendRouteTransport
 
@@ -125,7 +126,7 @@ def _state() -> AgentState:
     return AgentState(
         gateway_url="http://gateway.invalid:9000",
         workspace_id="workspace",
-        pool="default",
+        pool=MachinePool("default"),
         machine_id="machine",
         agent_token="agent-token",
         credential_id="credential",

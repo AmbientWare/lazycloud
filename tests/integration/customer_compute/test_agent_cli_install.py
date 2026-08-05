@@ -19,6 +19,7 @@ from cli.main import build_admin_cli
 from fastapi.testclient import TestClient
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import AGENT_NAME
+from shared.compute_policy import MachinePool
 from shared.http_transport import HttpChannel
 from tests.url_constants import EXAMPLE_COM_URL
 
@@ -90,7 +91,7 @@ def test_agent_install_writes_token_config_service_and_runs_commands(tmp_path: P
     result = install_agent_service(
         AgentInstallRequest(
             name="worker-a",
-            pool="gpu",
+            pool=MachinePool("gpu"),
             endpoint=EXAMPLE_COM_URL,
             join_token="secret-token-value",
             version="v1",

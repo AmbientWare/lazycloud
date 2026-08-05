@@ -1231,8 +1231,8 @@ def _record_worker_pool_drain_observability(
                 level=EventLevel.Warning if result.error else EventLevel.Info,
                 data=data,
             )
-        event_signatures[result.pool] = signature
-        labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool": result.pool}
+        event_signatures[str(result.pool)] = signature
+        labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool": str(result.pool)}
         services.metrics.increment(
             "worker_pool_drain_decisions_total",
             labels={

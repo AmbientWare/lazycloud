@@ -16,6 +16,7 @@ from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRecord,
+    ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
@@ -1143,8 +1144,9 @@ class ComputeService:
                     )
             if not termination_errors:
                 machine_repository = MachineRepository(session)
+                owned = _unit_machine_ids(session, workspace_id, compute_pool)
                 for machine in machine_repository.records.list(workspace_id=workspace_id):
-                    if machine.pool != name or machine.status is ResourceStatus.Deleted:
+                    if machine.id not in owned or machine.status is ResourceStatus.Deleted:
                         continue
                     machine_repository.upsert(
                         machine.model_copy(update={"status": ResourceStatus.Deleted}),
@@ -1293,8 +1295,9 @@ class ComputeService:
                     workspace_id=workspace_id,
                 )
             machine_repository = MachineRepository(session)
+            owned = _unit_machine_ids(session, workspace_id, compute_pool)
             for machine in machine_repository.records.list(workspace_id=workspace_id):
-                if machine.pool != name or machine.status is ResourceStatus.Deleted:
+                if machine.id not in owned or machine.status is ResourceStatus.Deleted:
                     continue
                 machine_repository.mark_deleted_for_workspace_deletion(
                     machine.id,
@@ -1530,7 +1533,7 @@ class ComputeService:
                 "pooled compute provider connection is unavailable",
                 code="provider_unavailable",
             )
-        pool_id, pool = internal_unit_identity(
+        unit_id, unit_name = internal_unit_identity(
             workspace_id=workspace_id,
             provider_ref=provider.ref,
             region=offer.region,
@@ -1538,6 +1541,16 @@ class ComputeService:
             root_volume_gib=root_volume_gib,
         )
         with self.context.database.session() as session:
+            # The connection owns the pool its units feed. Deriving it from the
+            # unit's own name would put every AWS unit in a pool named after
+            # itself, which no workload asks for.
+            connection = AwsAccountConnectionRepository(session).get(provider.connection_id)
+            if connection is None:
+                raise ManagedComputeLaunchError(
+                    "pooled compute provider connection is unavailable",
+                    code="provider_unavailable",
+                )
+            unit_pool = connection.pool
             repository = ComputeUnitRepository(session)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
@@ -1629,15 +1642,15 @@ class ComputeService:
             # derives from the offer and the baseline is stated here, and only
             # the facts the provider owns are carried over from the stored row.
             unit = ComputeUnitRecord(
-                id=current.id if current is not None else pool_id,
-                capacity_owner_id=current.capacity_owner_id if current is not None else pool_id,
+                id=current.id if current is not None else unit_id,
+                capacity_owner_id=current.capacity_owner_id if current is not None else unit_id,
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
-                name=pool,
-                pool=(current.pool if current is not None else MachinePool(pool)),
+                name=unit_name,
+                pool=unit_pool,
                 provider=provider.ref,
-                selector=pool,
+                selector=unit_name,
                 source="workspace_policy",
                 provider_ref=provider.ref,
                 provider_connection_id=provider.connection_id,
@@ -2218,7 +2231,7 @@ class ComputeService:
         self,
         *,
         workspace: str = "default",
-        pool: str,
+        pool: MachinePool,
         provider: str = "local",
         cpu: float | None = None,
         memory: str | None = None,
@@ -2283,7 +2296,7 @@ class ComputeService:
         self,
         *,
         machine_id: str | None = None,
-        pool: str = "default",
+        pool: MachinePool = MachinePool("default"),
         labels: dict[str, str] | None = None,
     ) -> Worker:
         with self.context.database.session() as session:
@@ -2583,6 +2596,27 @@ class ComputeService:
                 )
 
 
+def _unit_machine_ids(
+    session: DatabaseSession,
+    workspace_id: str,
+    unit: ComputeUnitRecord | None,
+) -> set[str]:
+    """Machine ids this unit's own join credentials enrolled.
+
+    The pool label cannot select them: several units feed one pool, so filtering
+    by it would reach another unit's machines while missing none of its own.
+    """
+    if unit is None:
+        return set()
+    return {
+        enrollment.machine_id
+        for enrollment in ComputeMachineEnrollmentRepository(session).list_for_unit(
+            workspace_id,
+            unit.capacity_owner_id,
+        )
+    }
+
+
 def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:
     labels = {
         "selector": config.selector,
@@ -2606,7 +2640,7 @@ def _capacity_join_credential_reuse(
     credential: ComputeJoinCredentialRecord | None,
     *,
     workspace_id: str,
-    pool: str,
+    pool: MachinePool,
     machine_id: str,
     now: datetime,
 ) -> _CapacityJoinReuse:
@@ -2873,7 +2907,7 @@ def _resource_status_from_provider(status: str) -> ResourceStatus:
 
 
 def _provider_reservation_from_record(
-    pool: str,
+    pool: MachinePool,
     record: ComputeProviderInstanceRecord,
 ) -> ProviderReservation:
     metadata = _provider_instance_metadata(record)

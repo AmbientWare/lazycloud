@@ -448,7 +448,7 @@ class ComputeUnitRepository:
     def list_for_machine_pool(
         self,
         workspace_id: str,
-        pool: str,
+        pool: MachinePool,
     ) -> list[ComputeUnitRecord]:
         """Every unit feeding one scheduling group, best candidate first."""
         statement = (
@@ -1199,7 +1199,7 @@ class ComputeMachineEnrollmentRepository:
         workspace_id: str,
         machine_id: str,
         *,
-        pool: str = "",
+        pool: MachinePool = MachinePool(""),
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
         statement = select(ComputeMachineEnrollmentTable).where(
@@ -1268,7 +1268,7 @@ class TailnetCleanupTombstoneRepository:
         self,
         *,
         workspace_id: str,
-        pool: str,
+        pool: MachinePool,
         machine_id: str,
         generations: list[int],
         auth_key_ids: list[str],

@@ -113,7 +113,7 @@ class ProviderNodeEnrollmentService:
             )
         )
         try:
-            if joined.workspace_id != pool.workspace_id or joined.pool != pool.name:
+            if joined.workspace_id != pool.workspace_id or joined.pool != pool.pool:
                 raise ConflictError("provider node joined a different compute pool")
             with self.gateway.services.context.database.session() as session:
                 bound = ComputeProviderInstanceRepository(session).bind_machine(

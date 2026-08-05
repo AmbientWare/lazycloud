@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 from gateway.machine_lifecycle import MachineLifecycleService
+from shared.compute_policy import MachinePool
 from shared.errors import NotFoundError
 
 MACHINE_ID = "11111111-1111-4111-8111-111111111111"
@@ -19,7 +20,7 @@ class _Gateway:
         machine_id: str,
         *,
         workspace_id: str,
-        pool: str = "",
+        pool: MachinePool = MachinePool(""),
     ) -> None:
         del pool
         self.calls.append(("delete", workspace_id, machine_id))

@@ -969,8 +969,8 @@ class GatewayControlService:
                 )
                 self._delete_pool_workers(unit.capacity_owner_id)
                 self.services.compute.delete_unit(name, workspace=workspace_id)
-                self.unit_state_coordinator.delete_compute_pool_state(
-                    name,
+                self.unit_state_coordinator.delete_compute_unit_state(
+                    unit.capacity_owner_id,
                     workspace_id=workspace_id,
                 )
                 self.scheduler_pool_state_repository.delete_unit_state(unit.capacity_owner_id)
@@ -1003,9 +1003,9 @@ class GatewayControlService:
                     return
                 if self.capacity_reservations.has_open_reservations(owner.capacity_owner_id):
                     raise ConflictError(f"compute pool {name!r} has active capacity reservations")
-                if self._pool_has_active_containers(
+                if self._unit_has_active_containers(
                     workspace_id=workspace_id,
-                    pool=name,
+                    pool=owner.pool,
                     capacity_owner_id=owner.capacity_owner_id,
                 ):
                     raise ConflictError(
@@ -1053,11 +1053,11 @@ class GatewayControlService:
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
 
-    def _pool_has_active_containers(
+    def _unit_has_active_containers(
         self,
         *,
         workspace_id: str,
-        pool: str,
+        pool: MachinePool,
         capacity_owner_id: str,
     ) -> bool:
         owner_worker_ids = {
@@ -1115,8 +1115,8 @@ class GatewayControlService:
                 name,
                 workspace_id=workspace_id,
             )
-            self.unit_state_coordinator.delete_compute_pool_state(
-                name,
+            self.unit_state_coordinator.delete_compute_unit_state(
+                pool.capacity_owner_id,
                 workspace_id=workspace_id,
             )
             self.scheduler_pool_state_repository.delete_unit_state(pool.capacity_owner_id)
@@ -1139,7 +1139,7 @@ class GatewayControlService:
             fleet = self._resolve_self_hosted_fleet(
                 workspace_id,
                 gpu=list(request.gpu),
-                pool=request.pool.strip(),
+                pool=MachinePool(request.pool.strip()),
             )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
@@ -1164,7 +1164,7 @@ class GatewayControlService:
         workspace_id: str,
         *,
         gpu: list[str],
-        pool: str = "",
+        pool: MachinePool = MachinePool(""),
     ) -> ComputeUnitRecord:
         group = pool or SELF_HOSTED_FLEET_POOL_NAME
         # One self-hosted unit per group. A workspace joining hosts into a pool
@@ -1184,7 +1184,7 @@ class GatewayControlService:
             return self.unit_state_coordinator.create_or_update_pool(
                 PoolConfig(name=unit_name, providers=["agent"], gpu=gpu),
                 workspace_id=workspace_id,
-                pool=group,
+                pool=MachinePool(group),
             )
         config = pool_config_from_unit(current)
         merged = [*config.gpu, *[item for item in gpu if item not in config.gpu]]
@@ -1363,7 +1363,7 @@ class GatewayControlService:
         self,
         *,
         workspace_id: str,
-        pool: str,
+        pool: MachinePool,
         machine_id: str,
     ) -> None:
         with self.services.context.database.session() as session:
@@ -1967,7 +1967,7 @@ class GatewayControlService:
             state = self._require_agent_state(request.agent_token)
             routes = self.compute_states.list_agent_route_states(
                 state.workspace_id,
-                state.pool,
+                state.capacity_owner_id,
                 state.machine_id,
             )
         except (KeyError, ValueError) as exc:
@@ -1984,7 +1984,7 @@ class GatewayControlService:
             state = self._require_agent_state(request.agent_token)
             route = self.compute_states.get_agent_route_state(
                 state.workspace_id,
-                state.pool,
+                state.capacity_owner_id,
                 state.machine_id,
                 request.route_id,
             )
@@ -2040,13 +2040,13 @@ class GatewayControlService:
                     route
                     for route in self.compute_states.list_agent_route_states(
                         provided.workspace_id,
-                        provided.pool,
+                        provided.capacity_owner_id,
                         provided.machine_id,
                     )
                 ]
                 slots = self.compute_states.list_agent_worker_slot_states(
                     provided.workspace_id,
-                    provided.pool,
+                    provided.capacity_owner_id,
                     provided.machine_id,
                 )
             snapshot = plan_agent_stream_snapshot(provided, current, routes, slots)
@@ -2178,7 +2178,7 @@ class GatewayControlService:
     ) -> list[ComputeAgentWorkerSlotState]:
         slots = self.compute_states.list_agent_worker_slot_states(
             agent_state.workspace_id,
-            agent_state.pool,
+            agent_state.capacity_owner_id,
             agent_state.machine_id,
         )
         worker = self._agent_machine_worker(agent_state)
@@ -2354,7 +2354,7 @@ class GatewayControlService:
                 )
             self.compute_states.delete_agent_worker_slot_state(
                 agent_state.workspace_id,
-                agent_state.pool,
+                agent_state.capacity_owner_id,
                 agent_state.machine_id,
                 slot.worker_id,
             )

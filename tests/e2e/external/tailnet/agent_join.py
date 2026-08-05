@@ -30,8 +30,10 @@ def main() -> int:
         token=token,
         workspace=workspace,
     )
-    pools = [unit for unit in resources.list_units().pools if unit.name == args.pool]
-    if len(pools) != 1 or pools[0].labels.get("transport") != "tsnet_restricted":
+    # Selected by the pool the units feed, not by a unit's own name: several
+    # units can serve one pool, and the workload names the pool.
+    units = [unit for unit in resources.list_units().pools if unit.pool == args.pool]
+    if not units or any(unit.labels.get("transport") != "tsnet_restricted" for unit in units):
         raise RuntimeError("guarded pool is not the prepared Tailnet-backed pool")
     workers = [worker for worker in resources.list_workers().workers if worker.id == args.worker_id]
     if len(workers) != 1:

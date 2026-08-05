@@ -23,7 +23,10 @@ from scheduler.state import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
 )
-from shared.compute_policy import UnitName
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.contracts import ContractModel
 from shared.events import EventLevel
 from shared.identity import AuthScope, TokenKind
@@ -185,7 +188,7 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
 
     isolated_services.compute.create_unit(UnitName("default-pool"))
     isolated_services.compute.create_unit(UnitName("team-pool"), workspace=workspace.id)
-    isolated_services.compute.create_machine(pool="team-pool", workspace=workspace.id)
+    isolated_services.compute.create_machine(pool=MachinePool("team-pool"), workspace=workspace.id)
 
     pools = client.get(
         f"/api/v1/units?workspace={workspace.id}",

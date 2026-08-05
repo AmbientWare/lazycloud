@@ -102,6 +102,7 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
@@ -244,7 +245,7 @@ class AgentDaemonOptions(ContractModel):
 
 class AgentDaemonRunResult(ContractModel):
     workspace_id: str = ""
-    pool: str = ""
+    pool: MachinePool = MachinePool("")
     machine_id: str = ""
     stream_iterations: int = 0
     route_count: int = 0

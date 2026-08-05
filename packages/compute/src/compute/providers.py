@@ -14,6 +14,7 @@ from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
     ComputeUnitRecord,
+    MachinePool,
     UnitName,
 )
 from shared.contracts import ContractModel
@@ -122,7 +123,7 @@ class ProviderUnitSnapshot(ContractModel):
 
 class DirectMachineLaunchRequest(ContractModel):
     workspace_id: str
-    pool: str
+    pool: MachinePool
     registration_token: str
     machine_id: str
     operation_id: str
@@ -140,7 +141,7 @@ class DirectMachineProvider(Protocol):
 
     def reconcile_machines(
         self,
-        pool: str,
+        pool: MachinePool,
         expected_machine_ids: set[str],
         *,
         terminate_stale: bool = False,

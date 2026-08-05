@@ -7,6 +7,7 @@ from typing import Annotated, Any
 
 import typer
 from shared.aws_connections import AwsAccountConnectionPhase
+from shared.compute_policy import MachinePool
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute import (
     ContainerResponse,
@@ -131,7 +132,7 @@ def compute_workloads(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    rows = [[item.name, item.kind.value, item.pool] for item in response.data]
+    rows = [[item.name, item.kind.value, str(item.pool)] for item in response.data]
     console.print(table("Compute workloads", ["name", "kind", "pool"], rows))
 
 
@@ -728,7 +729,7 @@ def machine_join(
     response = compute_client(workspace=workspace).machine_join_command(
         MachineJoinCommandRequest(
             ttl=ttl,
-            pool=pool,
+            pool=MachinePool(pool),
             gpu=list(gpu or []),
         )
     )

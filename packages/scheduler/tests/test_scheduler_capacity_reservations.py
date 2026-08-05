@@ -106,6 +106,7 @@ class _Controller:
     capacity_owner_id: str = OWNER_ID
     owner_kind: CapacityOwnerKind = CapacityOwnerKind.ManagedUnit
     unit_name: UnitName = UnitName("default")
+    pool: MachinePool = MachinePool("default")
     registration_timeout: timedelta = timedelta(minutes=10)
     ensure_calls: list[str] = field(default_factory=list)
     release_calls: list[str] = field(default_factory=list)
@@ -133,7 +134,7 @@ class _Controller:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=self.capacity_owner_id,
-            pool=self.unit_name,
+            pool=self.pool,
             current_units=0,
             target_units=0,
             headroom=WorkerPoolEffectiveHeadroom(),
@@ -143,7 +144,7 @@ class _Controller:
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
         if request.pool_selector:
-            return request.pool_selector == self.unit_name
+            return request.pool_selector == self.pool
         return self.default_eligible
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
@@ -345,7 +346,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
     with repository.mutation_lock(OWNER_ID):
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=_request("container-1"),
             shape=_shape(),
@@ -354,7 +355,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         )
         repeated = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=_request("container-1"),
             shape=_shape(),
@@ -363,7 +364,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         )
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=_request("container-2"),
             shape=_shape(),
@@ -389,7 +390,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
     with repository.mutation_lock(OWNER_ID):
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="shared-name",
+            pool=MachinePool("shared-name"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=_request("container-1", cpu=3_000),
             shape=_shape(),
@@ -398,7 +399,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
         )
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="shared-name",
+            pool=MachinePool("shared-name"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=_request("container-2", cpu=3_000),
             shape=_shape(),
@@ -409,7 +410,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
     with repository.mutation_lock(OTHER_OWNER_ID):
         other = repository.reserve(
             capacity_owner_id=OTHER_OWNER_ID,
-            pool="shared-name",
+            pool=MachinePool("shared-name"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=other_request,
             shape=_shape(),
@@ -869,7 +870,7 @@ def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
     with reservations.mutation_lock(OWNER_ID):
         decision = reservations.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=request,
             shape=_shape(),
@@ -928,7 +929,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
     with repository.mutation_lock(OWNER_ID):
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=first_request,
             shape=shape,
@@ -937,7 +938,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
         )
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=second_request,
             shape=shape,
@@ -999,7 +1000,7 @@ def test_reservation_repository_rejects_registered_state_regression(
     with repository.mutation_lock(OWNER_ID):
         decision = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool="default",
+            pool=MachinePool("default"),
             owner_kind=CapacityOwnerKind.ManagedUnit,
             request=_request("state-regression"),
             shape=_shape(),
@@ -1042,7 +1043,7 @@ def test_capacity_owner_mutation_lock_renews_during_slow_owner_operation(
 def _worker(capacity_owner_id: str, *, created_at: datetime) -> SchedulerWorkerRecord:
     return SchedulerWorkerRecord(
         worker_id=f"worker-{capacity_owner_id[:4]}",
-        pool="default",
+        pool=MachinePool("default"),
         capacity_owner_id=capacity_owner_id,
         machine_id="machine-1",
         status=SchedulerWorkerStatus.Available,

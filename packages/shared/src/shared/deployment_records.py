@@ -6,7 +6,7 @@ from typing import Annotated
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.deployments import DeploymentKind
 from shared.http.client_manifests import ClientContract
@@ -273,7 +273,7 @@ class Deployment(ContractModel):
     stub_id: str | None = None
     version: int = 1
     spec: DeploymentSpec
-    pool: str = LAZYCLOUD_MACHINE_POOL
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     """Pool this deployment was pinned to when it was created.
 
     Resolved once at deploy time: a workspace that later changes its default

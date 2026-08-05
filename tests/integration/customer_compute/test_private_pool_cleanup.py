@@ -72,7 +72,7 @@ def test_delete_pool_cleans_private_agent_state(
         unit.capacity_owner_id,
         WorkerPoolStateSnapshot(
             capacity_owner_id=unit.capacity_owner_id,
-            pool=unit.name,
+            pool=unit.pool,
         ),
     )
     scheduler_replicas_key = scheduler_pool_states.keys.worker_pool_replicas(unit.capacity_owner_id)
@@ -107,7 +107,7 @@ def test_delete_pool_cleans_private_agent_state(
         AgentBackendRoute(
             route_id="route-one",
             workspace_id=workspace_id,
-            pool="cleanup-pool",
+            pool=MachinePool("cleanup-pool"),
             machine_id="machine-one",
             worker_id="worker-one",
             container_id="container-one",
@@ -118,7 +118,7 @@ def test_delete_pool_cleans_private_agent_state(
         SchedulerWorkerRecord(
             capacity_owner_id=unit.capacity_owner_id,
             worker_id="worker-one",
-            pool="cleanup-pool",
+            pool=MachinePool("cleanup-pool"),
             machine_id="machine-one",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
@@ -134,7 +134,7 @@ def test_delete_pool_cleans_private_agent_state(
         SchedulerWorkerRecord(
             capacity_owner_id=_FOREIGN_CAPACITY_OWNER_ID,
             worker_id="worker-foreign",
-            pool="cleanup-pool",
+            pool=MachinePool("cleanup-pool"),
             machine_id="machine-two",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,

@@ -16,6 +16,7 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
 )
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
+from shared.compute_policy import MachinePool
 from shared.identity import TokenKind
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -30,7 +31,7 @@ class WorkerBootstrapArguments(argparse.Namespace):
     """
 
     worker_id: str | None
-    pool: str | None
+    pool: MachinePool | None
     machine_id: str | None
     ttl_seconds: int
 
@@ -44,7 +45,7 @@ class WorkerTokenArguments(argparse.Namespace):
 @dataclass(frozen=True)
 class WorkerBootstrapResult:
     worker_id: str
-    pool: str
+    pool: MachinePool
     machine_id: str
     status: str
     ttl_seconds: int

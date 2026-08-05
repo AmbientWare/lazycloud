@@ -202,7 +202,7 @@ def _route(
     return AgentBackendRoute(
         route_id="route-one",
         workspace_id="workspace-one",
-        pool="pool-one",
+        pool=MachinePool("pool-one"),
         machine_id="machine-one",
         worker_id="worker-one",
         container_id="container-one",

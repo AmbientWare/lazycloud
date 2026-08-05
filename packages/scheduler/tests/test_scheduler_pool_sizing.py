@@ -8,7 +8,10 @@ from scheduler.pool_sizing import (
     plan_worker_pool_sizing,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource, CapacityPoolSizingSnapshot
-from shared.compute_policy import ComputeUnitRecord
+from shared.compute_policy import (
+    ComputeUnitRecord,
+    MachinePool,
+)
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -58,7 +61,7 @@ def _worker(
     return SchedulerWorkerRecord(
         worker_id=worker_id,
         capacity_owner_id=OWNER_ID,
-        pool="cpu",
+        pool=MachinePool("cpu"),
         status=status,
         runtime_classes=["runc"],
         free_cpu_millicores=free_cpu,

@@ -13,6 +13,7 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
+    MachinePool,
 )
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
@@ -159,7 +160,7 @@ class WorkspaceComputeWorkloadResponse(HttpModel):
     app_id: str | None = None
     name: str
     kind: DeploymentKind
-    pool: str
+    pool: MachinePool
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
     gpu: str | None = None

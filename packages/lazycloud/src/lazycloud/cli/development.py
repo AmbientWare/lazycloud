@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
@@ -50,7 +51,7 @@ def dev(
         env=env,
         secrets=secrets,
         ports=ports,
-        pool=pool,
+        pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
     )

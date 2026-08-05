@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
+from shared.compute_policy import MachinePool
 from shared.http.compute import (
     MachineCreateRequest,
     MachineJoinCommandRequest,
@@ -46,7 +47,7 @@ def list_machines(
 )
 def list_machines_in_pool(
     workspace_id: read_workspace,
-    pool: str = SELF_HOSTED_FLEET_POOL_NAME,
+    pool: MachinePool = MachinePool(SELF_HOSTED_FLEET_POOL_NAME),
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),

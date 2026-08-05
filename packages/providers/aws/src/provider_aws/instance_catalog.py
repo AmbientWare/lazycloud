@@ -6,6 +6,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from shared.compute_policy import UnitName
 
 
 class AwsInstanceCatalogModel(BaseModel):
@@ -118,21 +119,26 @@ def aws_instance_catalog_entry(instance_type: str) -> AwsInstanceCatalogEntry:
 def aws_managed_capacity_resource_name(
     kind: str,
     workspace_id: str,
-    pool: str,
+    unit_name: UnitName,
     *,
     max_length: int,
 ) -> str:
+    """Derive one AWS resource name for one provisioning unit.
+
+    Keyed by the unit's name, not by the pool it feeds: several units share a
+    pool, and two of them must not derive the same Auto Scaling group.
+    """
     normalized_kind = _resource_part(kind) or "resource"
-    normalized_pool = _resource_part(pool) or "pool"
+    normalized_unit = _resource_part(unit_name) or "unit"
     digest = hashlib.sha256(
-        f"managed-capacity\0{kind}\0{workspace_id}\0{pool}".encode()
+        f"managed-capacity\0{kind}\0{workspace_id}\0{unit_name}".encode()
     ).hexdigest()[:10]
     prefix = f"cloud-pool-{normalized_kind}-"
-    pool_limit = max_length - len(prefix) - len(digest) - 1
-    if pool_limit < 1:
+    unit_limit = max_length - len(prefix) - len(digest) - 1
+    if unit_limit < 1:
         raise ValueError("resource name maximum length is too small")
-    trimmed_pool = normalized_pool[:pool_limit].rstrip("-") or "p"
-    return f"{prefix}{trimmed_pool}-{digest}"
+    trimmed_unit = normalized_unit[:unit_limit].rstrip("-") or "p"
+    return f"{prefix}{trimmed_unit}-{digest}"
 
 
 def aws_partition_for_region(region: str) -> str:

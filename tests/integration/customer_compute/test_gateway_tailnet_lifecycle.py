@@ -175,16 +175,14 @@ def _enroll(
     services: ApiServices,
     gateway: GatewayControlService,
     *,
-    pool: str,
+    pool: MachinePool,
     fingerprint: str = "customer-machine",
     workspace_id: str | None = None,
 ) -> _EnrolledMachine:
     if workspace_id is None:
         with services.context.database.session() as session:
             workspace_id = services.context.default_workspace_id(session)
-    unit = services.compute.create_unit(
-        UnitName(pool), provider="agent", workspace=workspace_id
-    )
+    unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
     bootstrap = gateway.unit_state_coordinator.create_unit_join_token(
         UnitName(pool),
         workspace_id=workspace_id,
@@ -239,7 +237,7 @@ def test_resource_pool_delete_runs_canonical_cleanup_and_rescans_late_device(
         key_prefix="resource-pool-delete",
         redis=real_redis_actors.client(),
     )
-    enrolled = _enroll(isolated_services, gateway, pool="resource-pool-delete")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("resource-pool-delete"))
     _, hostname = _issue(gateway, enrolled)
     _leave(gateway, enrolled)
     client = client_stack.enter_context(
@@ -279,7 +277,7 @@ def test_resource_pool_delete_requires_host_leave_before_mutation(
         key_prefix="resource-pool-delete-retry",
         redis=real_redis_actors.client(),
     )
-    enrolled = _enroll(isolated_services, gateway, pool="resource-pool-delete-retry")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("resource-pool-delete-retry"))
     _issue(gateway, enrolled)
     blocked_gateway = replace(gateway, tailnet_control=None)
     client = client_stack.enter_context(
@@ -369,7 +367,7 @@ def test_workspace_deletion_conflicts_before_self_hosted_tailnet_authority_chang
     enrolled = _enroll(
         isolated_services,
         gateway,
-        pool="tailnet-workspace-delete",
+        pool=MachinePool("tailnet-workspace-delete"),
         workspace_id=workspace.id,
     )
     _issue(gateway, enrolled)
@@ -445,7 +443,7 @@ def test_transport_credential_is_one_off_and_supersedes_unused_key(
     enrolled = _enroll(
         isolated_services,
         gateway,
-        pool="tailnet-key-lifecycle",
+        pool=MachinePool("tailnet-key-lifecycle"),
     )
 
     first_secret, expected_hostname = _issue(gateway, enrolled)
@@ -489,7 +487,7 @@ def test_verified_provider_device_is_required_and_agent_claims_are_ignored(
     enrolled = _enroll(
         isolated_services,
         gateway,
-        pool="tailnet-device-binding",
+        pool=MachinePool("tailnet-device-binding"),
     )
 
     before_binding = gateway.stream_agent(StreamAgentRequest(agent_token=enrolled.agent_token))
@@ -551,7 +549,7 @@ def test_restart_reuses_verified_device_without_issuing_another_key(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-restart")
-    enrolled = _enroll(isolated_services, gateway, pool="tailnet-restart")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("tailnet-restart"))
     _, expected_hostname = _issue(gateway, enrolled)
     _bind(
         gateway,
@@ -575,7 +573,7 @@ def test_stale_registration_cannot_restore_device_removed_by_rotation(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-register-rotation-race")
-    enrolled = _enroll(isolated_services, gateway, pool="register-rotation-race")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("register-rotation-race"))
     _, first_hostname = _issue(gateway, enrolled)
     _bind(
         gateway,
@@ -626,7 +624,7 @@ def test_rotation_reconciles_device_created_before_registration_process_loss(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-unregistered-rotation")
-    enrolled = _enroll(isolated_services, gateway, pool="unregistered-rotation")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("unregistered-rotation"))
     _, abandoned_hostname = _issue(gateway, enrolled)
     control.devices["abandoned-node"] = TailnetDevice(
         id="abandoned-device",
@@ -648,7 +646,7 @@ def test_new_rotation_supersedes_in_flight_generation(
 ) -> None:
     control = _RecordingTailnetControl(blocked_issue_call=1)
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-concurrent-rotation")
-    enrolled = _enroll(isolated_services, gateway, pool="concurrent-rotation")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("concurrent-rotation"))
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         first_rotation = executor.submit(_issue, gateway, enrolled)
@@ -679,7 +677,7 @@ def test_stale_rotating_generation_is_recoverable_after_process_loss(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-crash-recovery")
-    enrolled = _enroll(isolated_services, gateway, pool="crash-recovery")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("crash-recovery"))
     stale_device = TailnetDevice(
         id="stale-device",
         node_id="stale-node",
@@ -730,7 +728,7 @@ def test_failed_rotation_retains_cleanup_ownership_for_retry(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-rotation-retry")
-    enrolled = _enroll(isolated_services, gateway, pool="rotation-retry")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("rotation-retry"))
     _, hostname = _issue(gateway, enrolled)
     first_key_id = control.issued[0][0]
     _bind(
@@ -786,7 +784,7 @@ def test_terminal_deletion_supersedes_in_flight_rotation(
 ) -> None:
     control = _RecordingTailnetControl(blocked_issue_call=1)
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-delete-rotation-race")
-    enrolled = _enroll(isolated_services, gateway, pool="delete-rotation-race")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("delete-rotation-race"))
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         rotation = executor.submit(_issue, gateway, enrolled)
@@ -811,7 +809,7 @@ def test_terminal_deletion_cleans_abandoned_rotation_resources(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-delete-abandoned")
-    enrolled = _enroll(isolated_services, gateway, pool="delete-abandoned")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("delete-abandoned"))
     abandoned_device = TailnetDevice(
         id="abandoned-device",
         node_id="abandoned-node",
@@ -858,7 +856,7 @@ def test_terminal_cleanup_discovers_unregistered_device_and_retries(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-unregistered-delete")
-    enrolled = _enroll(isolated_services, gateway, pool="unregistered-delete")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("unregistered-delete"))
     _, hostname = _issue(gateway, enrolled)
     control.devices["unregistered-node"] = TailnetDevice(
         id="unregistered-device",
@@ -897,7 +895,7 @@ def test_terminal_cleanup_retains_tombstone_for_device_visible_after_initial_sca
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-late-visibility")
-    enrolled = _enroll(isolated_services, gateway, pool="late-visibility")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("late-visibility"))
     _, hostname = _issue(gateway, enrolled)
 
     _leave(gateway, enrolled)
@@ -934,13 +932,13 @@ def test_terminal_hostname_reconciliation_is_machine_scoped(
     first = _enroll(
         isolated_services,
         gateway,
-        pool="machine-isolation-first",
+        pool=MachinePool("machine-isolation-first"),
         fingerprint="machine-isolation-first",
     )
     second = _enroll(
         isolated_services,
         gateway,
-        pool="machine-isolation-second",
+        pool=MachinePool("machine-isolation-second"),
         fingerprint="machine-isolation-second",
     )
     _, first_hostname = _issue(gateway, first)
@@ -976,7 +974,7 @@ def test_machine_and_pool_deletion_remove_tailnet_identity_and_key(
         key_prefix="tailnet-cleanup",
         redis=real_redis_actors.client(),
     )
-    machine = _enroll(isolated_services, gateway, pool="machine-cleanup")
+    machine = _enroll(isolated_services, gateway, pool=MachinePool("machine-cleanup"))
     _, machine_hostname = _issue(gateway, machine)
     machine_key_id = control.issued[-1][0]
     _bind(
@@ -993,7 +991,7 @@ def test_machine_and_pool_deletion_remove_tailnet_identity_and_key(
     assert control.removed_device_ids == ["machine-device"]
     assert control.revoked_key_ids == [machine_key_id]
 
-    pool_machine = _enroll(isolated_services, gateway, pool="pool-cleanup")
+    pool_machine = _enroll(isolated_services, gateway, pool=MachinePool("pool-cleanup"))
     _, pool_hostname = _issue(gateway, pool_machine)
     pool_key_id = control.issued[-1][0]
     _bind(
@@ -1022,7 +1020,7 @@ def test_cleanup_revokes_platform_authority_before_retryable_device_removal(
 ) -> None:
     control = _RecordingTailnetControl()
     gateway = _gateway(isolated_services, control, key_prefix="tailnet-cleanup-retry")
-    enrolled = _enroll(isolated_services, gateway, pool="cleanup-retry")
+    enrolled = _enroll(isolated_services, gateway, pool=MachinePool("cleanup-retry"))
     _, expected_hostname = _issue(gateway, enrolled)
     _bind(
         gateway,

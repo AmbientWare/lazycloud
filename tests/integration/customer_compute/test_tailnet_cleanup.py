@@ -26,7 +26,10 @@ from scheduler.service import (
     SchedulerMaintenanceControls,
     UnavailableTailnetCleanupService,
 )
-from shared.compute_policy import UnitName
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.identity import TokenKind, WorkspaceStatus
 from sqlalchemy import delete
 from tests.redis_fakes import FakeRedis
@@ -76,7 +79,7 @@ def test_tombstone_survives_ownership_deletion_and_scheduler_removes_late_device
     isolated_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace.id)
     machine = isolated_services.compute.create_machine(
         workspace=workspace.id,
-        pool=pool,
+        pool=MachinePool(pool),
     )
     now = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
     expires_at = now + timedelta(minutes=5)
@@ -88,7 +91,7 @@ def test_tombstone_survives_ownership_deletion_and_scheduler_removes_late_device
 
     initial = coordinator.defer_machine_cleanup(
         workspace_id=workspace.id,
-        pool=pool,
+        pool=MachinePool(pool),
         machine_id=machine.id,
         generations=(1,),
         auth_key_ids=("one-off-key",),
@@ -154,7 +157,7 @@ def test_new_schedule_revision_supersedes_in_flight_cleanup_claim(
     assert store.pending_count() == 0
     first = store.schedule(
         workspace_id="workspace-deleted",
-        pool="pool-deleted",
+        pool=MachinePool("pool-deleted"),
         machine_id="machine-revision",
         generations=[1],
         auth_key_ids=["key-1"],
@@ -171,7 +174,7 @@ def test_new_schedule_revision_supersedes_in_flight_cleanup_claim(
 
     second = store.schedule(
         workspace_id="workspace-deleted",
-        pool="pool-deleted",
+        pool=MachinePool("pool-deleted"),
         machine_id=first.machine_id,
         generations=[2],
         auth_key_ids=["key-2"],
@@ -207,7 +210,7 @@ def test_scheduler_reports_pending_cleanup_when_control_credentials_are_unavaila
     )
     store.schedule(
         workspace_id="workspace-deleted",
-        pool="pool-deleted",
+        pool=MachinePool("pool-deleted"),
         machine_id="machine-pending-control",
         generations=[1],
         auth_key_ids=["key-pending-control"],
@@ -256,7 +259,7 @@ def test_postgresql_concurrent_first_schedules_merge_and_supersede_claim() -> No
         with database.session() as session:
             TailnetCleanupTombstoneRepository(session).schedule(
                 workspace_id="deleted-workspace",
-                pool="deleted-pool",
+                pool=MachinePool("deleted-pool"),
                 machine_id=machine_id,
                 generations=[generation],
                 auth_key_ids=[auth_key_id],
@@ -305,7 +308,7 @@ def test_postgresql_concurrent_first_schedules_merge_and_supersede_claim() -> No
         with database.session() as session:
             superseding = TailnetCleanupTombstoneRepository(session).schedule(
                 workspace_id="deleted-workspace",
-                pool="deleted-pool",
+                pool=MachinePool("deleted-pool"),
                 machine_id=machine_id,
                 generations=[3],
                 auth_key_ids=["key-3"],

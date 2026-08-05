@@ -16,6 +16,7 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
 )
 from shared.compute_enrollment import AgentCapacityState
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.scheduling import (
     SchedulerContainerState,
@@ -85,7 +86,7 @@ def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool="cpu",
+            pool=MachinePool("cpu"),
             capacity_owner_id=OWNER_ID,
             machine_id="machine-1",
             status=SchedulerWorkerStatus.Available,
@@ -108,7 +109,7 @@ def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
         enrollment_id="notice-1",
         credential_generation=1,
         workspace_id="workspace-1",
-        pool="cpu",
+        pool=MachinePool("cpu"),
         machine_id="machine-1",
         state=AgentCapacityState.Preempting,
         reason="provider interruption notice",
@@ -147,7 +148,7 @@ def test_preemption_rejects_stale_worker_session_fence(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool="cpu",
+            pool=MachinePool("cpu"),
             capacity_owner_id=OWNER_ID,
             machine_id="machine-1",
         ),

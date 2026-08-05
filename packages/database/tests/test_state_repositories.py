@@ -11,6 +11,10 @@ from compute.state import (
 )
 from coordination.redis_client import RedisClient
 from shared.compute_policy import MachinePool, UnitName
+
+OWNER_ID = "11111111-1111-4111-8111-111111111111"
+ORPHAN_OWNER_ID = "33333333-3333-4333-8333-333333333333"
+
 from shared.routing import AgentBackendRoute
 from tests.redis_fakes import FakeRedis
 
@@ -24,16 +28,18 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     pool = ComputeUnitState(
         workspace_id="ws-1",
         name=UnitName("default"),
-        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        capacity_owner_id=OWNER_ID,
         provider="agent",
         desired_machines=2,
         updated_at=now,
     )
     repo.save_unit_state(pool)
-    assert repo.get_unit_state("ws-1", "default") == pool
+    assert repo.get_unit_state("ws-1", OWNER_ID) == pool
     assert repo.list_all_pool_states() == [pool]
-    assert repo.pool_lock_plan("ws-1", "default").key == (
-        "test:compute:workspaces:ws-1:pools:default:lock"
+    # No name appears in a hot-state key: the owner id is the only identity a
+    # writer and a reader can agree on.
+    assert repo.pool_lock_plan("ws-1", OWNER_ID).key == (
+        f"test:compute:workspaces:ws-1:units:{OWNER_ID}:lock"
     )
 
     join = ComputeJoinTokenState(
@@ -59,7 +65,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     assert repo.get_agent_token_state("agent-hash") == agent
     assert repo.get_agent_machine_state_for_workspace("ws-1", "machine-1") == agent
 
-    fake.values.pop("test:compute:workspaces:ws-1:machines:machine-1:pool")
+    fake.values.pop("test:compute:workspaces:ws-1:machines:machine-1:unit")
     assert repo.get_agent_machine_state_for_workspace("ws-1", "machine-1") == agent
 
     slot = ComputeAgentWorkerSlotState(
@@ -72,46 +78,47 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         updated_at=now,
     )
     saved_slot = repo.save_agent_worker_slot_state(slot, now=now)
-    assert repo.list_agent_worker_slot_states("ws-1", "default", "machine-1") == [saved_slot]
-    assert repo.delete_agent_worker_slot_state("ws-1", "default", "machine-1", "worker-1")
+    assert repo.list_agent_worker_slot_states("ws-1", OWNER_ID, "machine-1") == [saved_slot]
+    assert repo.delete_agent_worker_slot_state("ws-1", OWNER_ID, "machine-1", "worker-1")
 
     route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
-        pool="default",
+        pool=MachinePool("default"),
+        capacity_owner_id=OWNER_ID,
         machine_id="machine-1",
         worker_id="worker-1",
         container_id="container-1",
         port=8080,
     )
     repo.save_agent_route_state(route)
-    assert repo.list_agent_route_states("ws-1", "default", "machine-1") == [route]
-    assert fake.values[repo.keys.agent_route_revision("ws-1", "default", "machine-1")] == "1"
-    assert repo.delete_agent_route_state("ws-1", "default", "machine-1", "route-1")
-    assert repo.list_agent_route_states("ws-1", "default", "machine-1") == []
+    assert repo.list_agent_route_states("ws-1", OWNER_ID, "machine-1") == [route]
+    assert fake.values[repo.keys.agent_route_revision("ws-1", OWNER_ID, "machine-1")] == "1"
+    assert repo.delete_agent_route_state("ws-1", OWNER_ID, "machine-1", "route-1")
+    assert repo.list_agent_route_states("ws-1", OWNER_ID, "machine-1") == []
 
-    fake.sets[repo.keys.agent_machine_index("ws-1", "default")].add("machine-stale")
-    assert repo.prune_agent_machine_index("ws-1", "default") == 1
+    fake.sets[repo.keys.agent_machine_index("ws-1", OWNER_ID)].add("machine-stale")
+    assert repo.prune_agent_machine_index("ws-1", OWNER_ID) == 1
 
     repo.save_agent_worker_slot_state(slot, now=now)
-    assert repo.delete_agent_machine_state("ws-1", UnitName("default"), "machine-1")
+    assert repo.delete_agent_machine_state("ws-1", OWNER_ID, "machine-1")
     assert repo.get_agent_token_state("agent-hash") is None
-    assert repo.list_agent_worker_slot_states("ws-1", "default", "machine-1") == []
-    assert repo.delete_unit_state("ws-1", UnitName("default"))
+    assert repo.list_agent_worker_slot_states("ws-1", OWNER_ID, "machine-1") == []
+    assert repo.delete_unit_state("ws-1", OWNER_ID)
 
-    orphan_revision = repo.keys.agent_route_revision("ws-1", "orphaned-pool", "orphaned-machine")
-    peer_revision = repo.keys.agent_route_revision("ws-peer", "orphaned-pool", "orphaned-machine")
+    orphan_revision = repo.keys.agent_route_revision("ws-1", ORPHAN_OWNER_ID, "orphaned-machine")
+    peer_revision = repo.keys.agent_route_revision("ws-peer", ORPHAN_OWNER_ID, "orphaned-machine")
     fake.set(orphan_revision, "1")
     fake.set(peer_revision, "1")
 
-    assert repo.delete_unit_state("ws-1", UnitName("orphaned-pool"))
+    assert repo.delete_unit_state("ws-1", ORPHAN_OWNER_ID)
     assert fake.get(orphan_revision) is None
     assert fake.get(peer_revision) == "1"
 
     cleanup_pool = ComputeUnitState(
         workspace_id="ws-1",
-        name=UnitName("cleanup"),
-        capacity_owner_id="22222222-2222-4222-8222-222222222222",
+        name=UnitName("default"),
+        capacity_owner_id=OWNER_ID,
         provider="agent",
     )
     cleanup_agent = ComputeAgentTokenState(
@@ -134,7 +141,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     cleanup_route = AgentBackendRoute(
         route_id="cleanup-route",
         workspace_id="ws-1",
-        pool="cleanup",
+        pool=MachinePool("cleanup"),
         machine_id="cleanup-machine",
         worker_id="cleanup-worker",
         container_id="cleanup-container",
@@ -145,12 +152,12 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     repo.save_agent_worker_slot_state(cleanup_slot, now=now)
     repo.save_agent_route_state(cleanup_route)
 
-    assert repo.delete_unit_state("ws-1", UnitName("cleanup"))
-    assert repo.get_unit_state("ws-1", "cleanup") is None
+    assert repo.delete_unit_state("ws-1", OWNER_ID)
+    assert repo.get_unit_state("ws-1", OWNER_ID) is None
     assert repo.get_agent_token_state("cleanup-agent-hash") is None
-    assert repo.list_agent_token_states("ws-1", "cleanup") == []
-    assert repo.list_agent_worker_slot_states("ws-1", "cleanup", "cleanup-machine") == []
-    assert repo.list_agent_route_states("ws-1", "cleanup", "cleanup-machine") == []
+    assert repo.list_agent_token_states("ws-1", OWNER_ID) == []
+    assert repo.list_agent_worker_slot_states("ws-1", OWNER_ID, "cleanup-machine") == []
+    assert repo.list_agent_route_states("ws-1", OWNER_ID, "cleanup-machine") == []
 
 
 def test_compute_state_repository_deletes_exact_workspace_residue() -> None:

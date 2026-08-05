@@ -58,7 +58,7 @@ class _Compute:
     def release_internal_unit_machine(
         self,
         workspace_id: str,
-        pool: str,
+        pool: MachinePool,
         machine_id: str,
     ) -> ComputeUnitRecord:
         _ = workspace_id
@@ -110,7 +110,7 @@ def _add_worker(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool=POOL,
+            pool=MachinePool(POOL),
             capacity_owner_id=capacity_owner_id,
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,

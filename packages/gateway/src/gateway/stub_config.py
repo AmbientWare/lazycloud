@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from control.service import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.autoscaling import QueueDepthAutoscaler
+from shared.compute_policy import MachinePool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DeploymentSpec,
@@ -168,7 +169,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             outputs=request.outputs.model_dump(mode="json"),
         ),
         tcp=request.tcp,
-        pool=pool_selector,
+        pool=MachinePool(pool_selector),
     )
 
 

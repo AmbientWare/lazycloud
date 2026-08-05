@@ -9,6 +9,7 @@ from typing import Protocol
 
 from pydantic import Field, JsonValue
 from shared.app_identity import PRIVATE_RESOURCE_PREFIX
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
 
@@ -170,7 +171,7 @@ class AgentMachineMetrics(ContractModel):
 
 class AgentTelemetryState(ContractModel):
     workspace_id: str
-    pool: str
+    pool: MachinePool
     machine_id: str
     executor: str = ""
     os: str = ""

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from shared.compute_policy import MachinePool
+
 WorkflowValue = str | float | int | bool | dict[str, str] | dict[str, int] | list[str] | None
 
 
@@ -20,7 +22,7 @@ class DeploymentOverrides:
     ports: dict[str, int] = field(default_factory=dict)
     keep_warm: int | None = None
     tcp: bool | None = None
-    pool: str | None = None
+    pool: MachinePool | None = None
     preemptible: bool | None = None
     entrypoint: list[str] = field(default_factory=list)
     sync_dir: str | None = None
@@ -65,7 +67,7 @@ def build_deployment_overrides(
     ports: list[str] | None = None,
     keep_warm: int | None = None,
     tcp: bool | None = None,
-    pool: str | None = None,
+    pool: MachinePool | None = None,
     preemptible: bool | None = None,
     entrypoint: list[str] | None = None,
     sync_dir: str | None = None,
