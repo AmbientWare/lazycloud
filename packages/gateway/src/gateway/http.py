@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from compute.projection import PrivatePoolFallback
+from compute.agent_control import AgentBootstrapConfig
 from pydantic import Field, JsonValue, field_validator
 from shared.bytes_transport import decode_bytes, encode_bytes
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
@@ -49,37 +49,6 @@ class SignPayloadRequest(HttpModel):
 class SignPayloadResponse(HttpModel):
     signature: str = ""
     timestamp: int = 0
-
-
-class AgentTelemetrySinkConfig(HttpModel):
-    destination: str = ""
-    credential: str = ""
-    stream_prefix: str = ""
-
-
-class AgentTelemetryConfig(HttpModel):
-    enabled: bool = False
-    stream_prefix: str = ""
-    logs: AgentTelemetrySinkConfig | None = None
-    events: AgentTelemetrySinkConfig | None = None
-
-
-class AgentBootstrapConfig(HttpModel):
-    gateway_public_http_url: str = ""
-    gateway_runtime_http_url: str = ""
-    gateway_grpc_host: str = ""
-    gateway_grpc_port: int = 443
-    gateway_grpc_tls: bool = True
-    workspace_id: str = ""
-    pool_name: str = ""
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
-    executor: str = ""
-    fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
-    disabled_services: list[str] = Field(default_factory=list)
-    image_registry_store: str = ""
-    image_clip_version: int = 2
-    image_local_cache_enabled: bool = True
-    telemetry: AgentTelemetryConfig = Field(default_factory=AgentTelemetryConfig)
 
 
 class JoinAgentRequest(HttpModel):
@@ -277,10 +246,8 @@ __all__ = [
     "AgentLogRecord",
     "AgentMetricSnapshot",
     "AgentRoute",
-    "AgentTelemetryConfig",
     "AgentTelemetryRequest",
     "AgentTelemetryResponse",
-    "AgentTelemetrySinkConfig",
     "AgentWorkerSlot",
     "AuthorizeRequest",
     "AuthorizeResponse",

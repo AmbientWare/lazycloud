@@ -6,7 +6,11 @@ import json
 import shutil
 from pathlib import Path
 
-from images.managed_runtime import (
+from shared.managed_runtime_integrity import (
+    managed_package_source_digest,
+    managed_runtime_artifact_digest,
+)
+from worker.managed_runtime_catalog import (
     MANAGED_RUNTIME_ARCHITECTURES,
     MANAGED_RUNTIME_DISTRIBUTIONS,
     MANAGED_RUNTIME_PYTHON_VERSIONS,
@@ -14,10 +18,6 @@ from images.managed_runtime import (
     ManagedRuntimeCatalogManifest,
     ManagedRuntimeManifest,
     managed_runtime_catalog_digest,
-)
-from shared.managed_runtime_integrity import (
-    managed_package_source_digest,
-    managed_runtime_artifact_digest,
 )
 
 _MANAGED_PACKAGE_MODULES = ("foundation", "runner", "lazycloud", "shared")

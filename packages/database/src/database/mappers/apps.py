@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from shared.app_lifecycle import (
     AppDeploymentIntentTarget,
     AppLifecycleState,
     AppLifecycleTarget,
 )
+from shared.timestamps import to_utc, to_utc_or_none
 
 from database.records.apps import (
     AppContainerShutdownIntentRecord,
@@ -40,17 +39,17 @@ def app_record_from_table(row: AppTable) -> AppRecord:
         reconcile_claim_id=(
             str(row.reconcile_claim_id) if row.reconcile_claim_id is not None else None
         ),
-        reconcile_claimed_at=_utc_datetime_or_none(row.reconcile_claimed_at),
+        reconcile_claimed_at=to_utc_or_none(row.reconcile_claimed_at),
         reconcile_attempt_count=row.reconcile_attempt_count,
         lifecycle_event_id=(
             str(row.lifecycle_event_id) if row.lifecycle_event_id is not None else None
         ),
-        lifecycle_event_created_at=_utc_datetime_or_none(row.lifecycle_event_created_at),
-        lifecycle_change_published_at=_utc_datetime_or_none(row.lifecycle_change_published_at),
+        lifecycle_event_created_at=to_utc_or_none(row.lifecycle_event_created_at),
+        lifecycle_change_published_at=to_utc_or_none(row.lifecycle_change_published_at),
         metadata=dict(row.payload),
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
-        deleted_at=_utc_datetime_or_none(row.deleted_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+        deleted_at=to_utc_or_none(row.deleted_at),
     )
 
 
@@ -86,10 +85,10 @@ def app_deployment_intent_from_table(
         operation_revision=row.operation_revision,
         target=AppDeploymentIntentTarget(row.target),
         event_id=str(row.event_id) if row.event_id is not None else None,
-        event_created_at=_utc_datetime_or_none(row.event_created_at),
-        workspace_change_published_at=_utc_datetime_or_none(row.workspace_change_published_at),
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
+        event_created_at=to_utc_or_none(row.event_created_at),
+        workspace_change_published_at=to_utc_or_none(row.workspace_change_published_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
     )
 
 
@@ -101,17 +100,9 @@ def app_container_shutdown_intent_from_table(
         container_id=str(row.container_id),
         worker_id=row.worker_id,
         operation_revision=row.operation_revision,
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
     )
-
-
-def _utc_datetime(value: datetime) -> datetime:
-    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-def _utc_datetime_or_none(value: datetime | None) -> datetime | None:
-    return _utc_datetime(value) if value is not None else None
 
 
 __all__ = [

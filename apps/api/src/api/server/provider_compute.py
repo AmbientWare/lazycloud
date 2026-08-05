@@ -16,6 +16,8 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from observability.workspace_changes import WorkspaceChangePublisher
+from provider_aws import require_resolvable_aws_credentials
+from provider_aws.provider_node_identity import AWS_STS_PROOF_CONNECT_TIMEOUT_SECONDS
 from provider_clients import configured_aws_account_connection_components
 from provider_clients.provider_nodes import (
     ProviderNodeIdentityHttpError,
@@ -81,9 +83,14 @@ class BoundedProviderNodeIdentityHttpClient:
         connection = http.client.HTTPSConnection(
             parsed.hostname,
             parsed.port or 443,
-            timeout=timeout_seconds,
+            timeout=min(AWS_STS_PROOF_CONNECT_TIMEOUT_SECONDS, timeout_seconds),
         )
         try:
+            # Connect on the short budget, then read on the full one: a
+            # black-holed endpoint must not spend the whole budget twice.
+            connection.connect()
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout_seconds)
             connection.request(
                 "GET",
                 target,
@@ -128,6 +135,7 @@ def aws_account_connection_composition_from_settings(
     connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
     gateway_origin: str,
+    internal_origin: str,
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -137,10 +145,17 @@ def aws_account_connection_composition_from_settings(
     # the settings validator already rejected that, so absence here is genuine absence.
     if not connection_settings.configured:
         return None
+    # Credentials are a fact of the deployment, not of the settings, so the check
+    # belongs here rather than inside composition: a stack that mounts no AWS
+    # configuration must fail at startup instead of reporting healthy and failing
+    # every connection later, and composition must stay resolvable without an
+    # environment to read.
+    require_resolvable_aws_credentials()
     components = configured_aws_account_connection_components(
         connection_settings,
         capacity=capacity_settings,
         gateway_origin=gateway_origin,
+        internal_origin=internal_origin,
         tailnet_runtime=tailnet_runtime,
         tailnet_control=tailnet_control,
         backend_route=backend_route,

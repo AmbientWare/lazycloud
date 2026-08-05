@@ -56,11 +56,9 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
-    CapacityPoolSizingStateUpdate,
     CapacityReleaseRequest,
 )
 from shared.compute_enrollment import (
@@ -99,6 +97,7 @@ class _PooledProvider:
     lingering_storage: set[str] = field(default_factory=set)
     before_capacity: Callable[[ProviderPoolRequest], None] | None = None
     capacity_failure: Exception | None = None
+    delete_failure: Exception | None = None
 
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (_offer(),)
@@ -144,6 +143,8 @@ class _PooledProvider:
         return self._snapshot(request.model_copy(update={"desired_machines": self.desired}))
 
     def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+        if self.delete_failure is not None:
+            raise self.delete_failure
         self.delete_calls.append(request)
         self.desired = 0
         return self._snapshot(request, phase=ProviderCapacityPhase.Deleted)
@@ -262,6 +263,7 @@ class _Resolver(ComputeProviderResolver):
 @dataclass(slots=True)
 class _SchedulerHooks:
     retired: list[tuple[str, str, str, str]] = field(default_factory=list)
+    available_machines: set[str] = field(default_factory=set)
     revoked_join_tokens: list[str] = field(default_factory=list)
 
     def register_pool(self, state: PrivatePoolState) -> None:
@@ -275,6 +277,9 @@ class _SchedulerHooks:
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
         del machine_id, reason
+
+    def machine_worker_available(self, machine_id: str) -> bool:
+        return machine_id in self.available_machines
 
     def retire_machine(
         self,
@@ -504,7 +509,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     assert drained.desired_machines == 0
 
 
-def test_scale_zero_persists_intent_and_retires_sizing_before_provider_mutation(
+def test_scale_zero_persists_intent_and_releases_operations_before_provider_mutation(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -526,20 +531,6 @@ def test_scale_zero_persists_intent_and_retires_sizing_before_provider_mutation(
     )
     compute.reconcile_pooled_capacity()
     started_at = datetime(2026, 7, 22, 12, tzinfo=UTC)
-    sizing = compute.get_pool_sizing_state(pool.capacity_owner_id)
-    compute.compare_and_set_pool_sizing_state(
-        CapacityPoolSizingStateUpdate(
-            capacity_owner_id=pool.capacity_owner_id,
-            expected_revision=sizing.revision,
-            operation_id="pending-scale-up",
-            target_units=1,
-            operation_started_at=started_at - timedelta(minutes=3),
-            last_scale_up_at=started_at - timedelta(minutes=3),
-            retry_after_at=started_at + timedelta(minutes=2),
-            consecutive_failures=3,
-            terminal_reason="capacity retry pending",
-        )
-    )
     before = compute.get_internal_pool(pool.workspace_id, pool.name)
     guard_observations: list[int] = []
 
@@ -550,23 +541,14 @@ def test_scale_zero_persists_intent_and_retires_sizing_before_provider_mutation(
     def inspect_durable_intent(request: ProviderPoolRequest) -> None:
         with isolated_services.context.database.session() as session:
             durable = ComputePoolRepository(session).get(request.pool_id)
-            retired = PoolRepository(session).get_sizing_state(request.pool_id)
+            open_operations = ComputeCapacityOperationRepository(session).list_open_for_owner(
+                pool.capacity_owner_id
+            )
         assert durable is not None
         assert durable.desired_machines == 0
         assert durable.generation == before.generation + 1
         assert durable.phase is ComputePoolPhase.Updating
-        assert retired is not None
-        assert retired.initial_target_reached
-        assert retired.operation_id == ""
-        assert retired.target_units == 0
-        assert retired.operation_started_at is None
-        assert retired.last_scale_up_at is not None
-        assert retired.last_scale_up_at.replace(tzinfo=UTC) == started_at - timedelta(minutes=3)
-        assert retired.last_scale_down_at is not None
-        assert retired.last_scale_down_at.replace(tzinfo=UTC) == started_at
-        assert retired.retry_after_at is None
-        assert retired.consecutive_failures == 0
-        assert retired.terminal_reason == ""
+        assert open_operations == []
 
     provider.before_capacity = inspect_durable_intent
     scaled = compute.scale_internal_pool(
@@ -615,13 +597,9 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
         )
 
     degraded = compute.get_internal_pool(pool.workspace_id, pool.name)
-    sizing = compute.get_pool_sizing_state(pool.capacity_owner_id)
     assert degraded.desired_machines == 0
     assert degraded.observed_machines == 1
     assert degraded.phase is ComputePoolPhase.Degraded
-    assert sizing.initial_target_reached
-    assert sizing.operation_id == ""
-    assert sizing.target_units == 0
     provider.capacity_failure = None
 
     repaired = compute.scale_internal_pool(
@@ -706,9 +684,11 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
         before_mutation=_allow_scale,
     )
 
-    assert provider.capacity_calls == [(0, 10)]
-    assert len(provider.describe_calls) == 1
-    assert provider.describe_calls[0].desired_machines == 0
+    # Control-plane startup drives every workspace through this path on every
+    # boot. A pool already durably at zero must cost a describe and nothing else
+    # — no capacity write, no generation churn.
+    assert provider.capacity_calls == []
+    assert [request.desired_machines for request in provider.describe_calls] == [0, 0]
     assert second.generation == generation
     assert second == first
 
@@ -757,8 +737,8 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
         before_mutation=_allow_scale,
     )
 
-    assert len(provider.describe_calls) == 1
-    assert provider.capacity_calls == [(0, 10), (0, 10)]
+    assert len(provider.describe_calls) == 2
+    assert provider.capacity_calls == [(0, 10)]
     assert repaired.generation == converged.generation + 1
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
@@ -916,7 +896,7 @@ def test_pooled_reconcile_fails_closed_without_capacity_owner_lease(
         compute.reconcile_pooled_capacity()
 
 
-def test_pooled_capacity_plan_uses_authoritative_desired_state_without_mutation(
+def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -936,12 +916,11 @@ def test_pooled_capacity_plan_uses_authoritative_desired_state_without_mutation(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
+    # The pool was reconciled at 0; the provider is the authority that says 3.
     provider.desired = 3
-    capacity_calls_before_plan = list(provider.capacity_calls)
-    ensure_calls_before_plan = list(provider.ensure_calls)
 
-    planned = compute.plan_capacity_acquisition(
-        CapacityAcquisitionPlanningRequest(
+    planned = compute.ensure_capacity(
+        CapacityAcquisitionRequest(
             capacity_owner_id=pool.capacity_owner_id,
             reservation_id=str(uuid4()),
             operation_id=str(uuid4()),
@@ -954,9 +933,7 @@ def test_pooled_capacity_plan_uses_authoritative_desired_state_without_mutation(
 
     assert planned.status is CapacityAcquisitionStatus.Requested
     assert planned.desired_unit == 4
-    assert provider.capacity_calls == capacity_calls_before_plan
-    assert provider.ensure_calls == ensure_calls_before_plan
-    assert provider.desired == 3
+    assert provider.desired == 4
 
 
 def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
@@ -983,20 +960,18 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=1,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
     )
     second = CapacityAcquisitionRequest(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
     )
 
-    requested = compute.acquire_capacity(first)
-    retried = compute.acquire_capacity(first)
-    sibling = compute.acquire_capacity(second)
+    requested = compute.ensure_capacity(first)
+    retried = compute.ensure_capacity(first)
+    sibling = compute.ensure_capacity(second)
     released = compute.release_acquired_capacity(
         CapacityReleaseRequest(
             capacity_owner_id=first.capacity_owner_id,
@@ -1066,6 +1041,58 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
     assert reconciled == []
     assert len(provider.ensure_calls) == 1
     assert len(provider.delete_calls) == 1
+
+
+def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
+    isolated_services: ApiServices,
+) -> None:
+    """Deleting a pool has to delete the capacity the provider holds for it.
+
+    A pool sitting at zero machines still owns a provider pool, and the durable
+    record is the only thing that can name it. Deleting the record while that
+    pool survives leaves a group nothing reconciles, still able to launch
+    billable machines no pool can be billed for, so a release that fails keeps
+    the pool owned for the next attempt.
+    """
+
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    provider.delete_failure = RuntimeError("provider pool deletion failed")
+
+    with pytest.raises(UpstreamUnavailableError, match="provider pool deletion failed"):
+        compute.delete_pool(pool.name, workspace=pool.workspace_id)
+
+    with isolated_services.context.database.session() as session:
+        retained = ComputePoolRepository(session).get(pool.id)
+        retained_policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
+    assert retained is not None
+    assert retained_policy is not None
+    assert provider.delete_calls == []
+
+    provider.delete_failure = None
+    compute.delete_pool(pool.name, workspace=pool.workspace_id)
+
+    with isolated_services.context.database.session() as session:
+        deleted = ComputePoolRepository(session).get(pool.id)
+        deleted_policy = PoolRepository(session).get(pool.name, workspace_id=pool.workspace_id)
+    assert [request.pool_id for request in provider.delete_calls] == [pool.id]
+    assert deleted is None
+    assert deleted_policy is None
 
 
 def test_pooled_scale_down_waits_for_exact_volume_absence(
@@ -1675,19 +1702,35 @@ def _offer() -> ComputeOffer:
     )
 
 
-def _bootstrap(pool: ComputePoolRecord, offer: ComputeOffer) -> ProviderPoolBootstrap:
-    del offer
-    return ProviderPoolBootstrap(
-        control_plane_url="https://control.example.com",
-        enrollment_request_id=pool.id,
-        agent_version="0.1.0",
-        agent_sha256="a" * 64,
-        agent_binary_url=(
-            f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-            "lazycloud-agent-linux-amd64"
-        ),
-        worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
-    )
+class _Bootstrap:
+    """A pool bootstrap provisioner with no tailnet behind it."""
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    def bootstrap(
+        self,
+        pool: ComputePoolRecord,
+        offer: ComputeOffer,
+    ) -> ProviderPoolBootstrap:
+        del offer
+        return ProviderPoolBootstrap(
+            control_plane_url="https://control.example.com",
+            enrollment_request_id=pool.id,
+            agent_version="0.1.0",
+            agent_sha256="a" * 64,
+            agent_binary_url=(
+                f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
+                "lazycloud-agent-linux-amd64"
+            ),
+            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
+        )
+
+    def release(self, pool: ComputePoolRecord) -> None:
+        self.released.append(pool.id)
+
+
+_bootstrap = _Bootstrap()
 
 
 def _allow_scale(pool: ComputePoolRecord) -> None:
@@ -1759,3 +1802,74 @@ def _seed_connection(isolated_services: ApiServices) -> None:
                 updated_at=now,
             )
         )
+
+
+def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
+    isolated_services: ApiServices,
+) -> None:
+    """A pool that exhausted its launch attempts must stop buying machines.
+
+    Only the reconciler honoured the durable degraded reason: acquisition never
+    read it, and preparing capacity for a placement cleared it outright. A pool
+    whose machines launch but never become workers therefore relaunched on every
+    scheduler tick, so a bounded bootstrap failure billed as an unbounded one.
+    """
+
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    with isolated_services.context.database.session() as session:
+        pools = ComputePoolRepository(session)
+        stored = pools.get(pool.id)
+        assert stored is not None
+        pools.upsert(
+            stored.model_copy(
+                update={
+                    "provider_state": stored.provider_state.model_copy(
+                        update={"degraded_reason": "bootstrap_launch_attempts_exhausted"}
+                    )
+                }
+            )
+        )
+    capacity_calls_before = list(provider.capacity_calls)
+
+    refused = compute.ensure_capacity(
+        CapacityAcquisitionRequest(
+            capacity_owner_id=pool.capacity_owner_id,
+            reservation_id=str(uuid4()),
+            operation_id=str(uuid4()),
+            shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+        )
+    )
+
+    assert refused.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert refused.reason == "bootstrap_launch_attempts_exhausted"
+    assert provider.capacity_calls == capacity_calls_before
+
+    # Preparing capacity again is what a queued placement does every dispatch.
+    compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    with isolated_services.context.database.session() as session:
+        after = ComputePoolRepository(session).get(pool.id)
+    assert after is not None
+    assert after.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"

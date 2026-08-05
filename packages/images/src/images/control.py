@@ -33,6 +33,7 @@ from images.building import (
     ImageSourceReference,
     build_image_plan,
     image_build_source_plan,
+    image_build_stream_event_key,
     marshal_registry_credentials,
     pin_dockerfile_base_images,
     plan_image_build_failure_event,
@@ -705,7 +706,7 @@ def _new_event_responses(
     seen: set[tuple[str, str, str, str, str, bool, str]],
 ) -> Iterator[BuildImageResponse]:
     for event in events:
-        key = _stream_event_key(event)
+        key = image_build_stream_event_key(event)
         if key in seen:
             continue
         seen.add(key)
@@ -716,20 +717,6 @@ def _terminal_event_seen(
     seen: set[tuple[str, str, str, str, str, bool, str]],
 ) -> bool:
     return any(done for _, _, _, _, _, done, _ in seen)
-
-
-def _stream_event_key(
-    event: ImageBuildStreamEventPlan,
-) -> tuple[str, str, str, str, str, bool, str]:
-    return (
-        event.kind.value,
-        event.build_id,
-        event.message,
-        event.status.value,
-        event.phase.value,
-        event.done,
-        event.error,
-    )
 
 
 def _validate_secret_references(secrets: list[str]) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -87,7 +88,7 @@ class AgentMetricSampler:
         disk = agent_disk_sample(self.state_dir)
         network = agent_network_sample()
         return AgentMetricSnapshot(
-            timestamp_unix_nano=_now_unix_nano(),
+            timestamp_unix_nano=time.time_ns(),
             cpu_utilization_pct=agent_cpu_utilization_pct(),
             memory_used_mb=memory.used_mb,
             memory_total_mb=memory.total_mb,
@@ -266,9 +267,3 @@ def _sysconf_memory_mb() -> int:
     if not isinstance(pages, int) or not isinstance(page_size, int):
         return 1024
     return max((pages * page_size) // (1024 * 1024), 1)
-
-
-def _now_unix_nano() -> int:
-    import time
-
-    return time.time_ns()

@@ -1,13 +1,19 @@
 # Public SDK
 
-`lazycloud` is the backend-free user SDK and public CLI. It may depend on
-`shared`, never apps, backend domains, SQLAlchemy, Redis, FastAPI, schedulers,
-or workers. Keep decorator/resource APIs ergonomic, low-level clients under
-`lazycloud.clients`, bound high-level workflows under `lazycloud.session`, and
-shared public commands under `lazycloud.cli`.
+`lazycloud` is the backend-free user SDK and the public CLI—everything a user of
+the platform imports or runs.
 
-Clients use current `/api/v1` and `/gateway` contracts. Transport failures raise
-`HttpApiError`; abstractions translate them into typed operation errors. Delete
-old import paths and use explicit client injection. Accept changed public calls
-against their real HTTP/control owner, preserving serialization, targeting,
-timeouts, error mapping, and secret handling.
+It may depend on `shared` and on nothing else in this repository: never apps,
+backend domains, SQLAlchemy, Redis, FastAPI, schedulers, or workers. That
+constraint is what makes it installable beside arbitrary user code, so it is a
+boundary rather than a preference.
+
+Keep the decorator and resource APIs ergonomic, low-level clients under
+`lazycloud.clients`, bound high-level workflows under `lazycloud.session`, and
+shared public commands under `lazycloud.cli`. Clients speak the current public
+HTTP contracts; transport failures raise `HttpApiError`, and abstractions
+translate those once into typed operation errors.
+
+Use explicit client injection rather than ambient construction, and delete old
+import paths instead of aliasing them. A public surface is only cheap to keep
+honest while it is still small.

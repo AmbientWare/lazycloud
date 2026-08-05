@@ -15,7 +15,7 @@ from database.repositories.compute import (
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.orchestration import PoolRepository, WorkerRepository
+from database.repositories.orchestration import PoolRepository
 from database.types import DatabaseSession
 from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue
@@ -24,8 +24,8 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
+    MachineServiceState,
 )
-from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
     ComputePlacement,
@@ -42,9 +42,13 @@ from shared.errors import ConflictError, InvalidInputError
 from shared.identity import WorkspaceStatus
 from shared.timestamps import utc_now
 
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import (
+    MachineWorkerState,
+    machine_serves_workloads,
+)
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
+from compute.provider_machines import _provider_booted_template_version
 
 
 class _DeploymentPoolMetadata(ContractModel):
@@ -74,8 +78,11 @@ class ComputeInstanceView:
     record: ComputeProviderInstanceRecord
     region: str
     bootstrap_phase: MachineBootstrapPhase
+    service_state: MachineServiceState
     bootstrap_failure_reason: MachineBootstrapFailureReason | None
+    bootstrap_failure_detail: str
     bootstrap_observed_at: datetime
+    booted_template_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,12 +124,15 @@ class AwsDefaultCapacityOwner(Protocol):
 
 
 def _aws_capacity_is_zero(aws: AwsWorkspaceComputePolicy) -> bool:
-    return (
-        aws.min_cpu_workers == 0
-        and aws.initial_cpu_workers == 0
-        and aws.max_cpu_instances == 0
-        and aws.max_gpu_instances == 0
-    )
+    """Whether this baseline should hold no machines.
+
+    Only the CPU knobs answer that. This owner provisions CPU machines and
+    nothing else — `reconcile_aws_default_capacity` takes no GPU argument — and
+    `max_gpu_instances` is a placement ceiling, not a floor, so a workspace that
+    zeroed every control it was given kept paying while that ceiling sat at its
+    default.
+    """
+    return aws.min_cpu_workers == 0 and aws.initial_cpu_workers == 0 and aws.max_cpu_instances == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +172,7 @@ class WorkspaceComputePolicyService:
     context: ComputeContext
     available_catalog: tuple[ComputeCatalogRegion, ...] = ()
     aws_default_capacity: AwsDefaultCapacityBaseline | None = None
+    worker_state: MachineWorkerState | None = None
 
     def get_policy(self, *, workspace: str) -> WorkspaceComputePolicy:
         with self.context.database.session() as session:
@@ -334,7 +345,9 @@ class WorkspaceComputePolicyService:
             pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
             instances = ComputeProviderInstanceRepository(session)
             enrollments = ComputeMachineEnrollmentRepository(session)
-            workers = WorkerRepository(session)
+            if self.worker_state is None:
+                msg = "workspace compute policy service requires scheduler worker state"
+                raise RuntimeError(msg)
             views = [
                 _compute_instance_view(
                     record,
@@ -342,7 +355,7 @@ class WorkspaceComputePolicyService:
                     workspace_id=workspace_id,
                     pool_name=pool.name,
                     enrollments=enrollments,
-                    workers=workers,
+                    worker_state=self.worker_state,
                 )
                 for pool in pools
                 for record in instances.list_for_pool(pool.id)
@@ -383,14 +396,13 @@ class WorkspaceComputePolicyService:
             workspace_id = self.context.workspace(session, workspace).id
             connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
         ready_instance_count = sum(
-            item.bootstrap_phase is MachineBootstrapPhase.Ready for item in instances
+            item.service_state is MachineServiceState.Serving for item in instances
         )
         pending_instance_count = sum(
-            item.bootstrap_phase
+            item.service_state
             in {
-                MachineBootstrapPhase.Requested,
-                MachineBootstrapPhase.Provisioning,
-                MachineBootstrapPhase.Joining,
+                MachineServiceState.Provisioning,
+                MachineServiceState.Joining,
             }
             for item in instances
         )
@@ -416,57 +428,6 @@ class WorkspaceComputePolicyService:
             pool.phase is not ComputePoolPhase.Deleted for pool in pools
         ):
             raise ConflictError("disconnect AWS compute before deleting this workspace")
-
-    def _resolve_in_session(
-        self,
-        *,
-        session: DatabaseSession,
-        workspace_id: str,
-        requested: ComputePlacementTarget | None,
-        attached_pool: str,
-    ) -> ComputePlacement:
-        if requested is not None and attached_pool:
-            raise InvalidInputError(
-                "workload placement cannot combine an explicit target with a self-hosted pool"
-            )
-        policy = self._policy_in_session(session, workspace_id)
-        if attached_pool:
-            pool = ComputePoolRepository(session).get_by_name(workspace_id, attached_pool)
-            if pool is not None:
-                return self._attached_pool_placement(pool)
-            scheduler_pool = PoolRepository(session).get(
-                attached_pool,
-                workspace_id=workspace_id,
-            )
-            if scheduler_pool is not None:
-                return ComputePlacement(
-                    target=ComputePlacementTarget.Managed,
-                    source=ComputePlacementSource.AttachedPool,
-                    provider=scheduler_pool.provider,
-                    pool_name=scheduler_pool.name,
-                )
-            raise InvalidInputError(f"attached compute pool {attached_pool!r} was not found")
-        target = requested if requested is not None else policy.default_placement
-        source = (
-            ComputePlacementSource.WorkloadOverride
-            if requested is not None
-            else ComputePlacementSource.WorkspaceDefault
-        )
-        if target is ComputePlacementTarget.Managed:
-            return ComputePlacement(target=target, source=source, provider="managed")
-        connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-        if connection is None or not connection.accepts_placement:
-            raise ConflictError("AWS placement requires a ready workspace connection")
-        region = policy.aws.default_region
-        if region not in policy.aws.allowed_regions:
-            raise InvalidInputError(f"AWS region {region!r} is not allowed by workspace policy")
-        return ComputePlacement(
-            target=target,
-            source=source,
-            provider="aws",
-            region=region,
-            provider_ref=f"aws:{connection.id}",
-        )
 
     @staticmethod
     def _attached_pool_placement(pool: ComputePoolRecord) -> ComputePlacement:
@@ -547,6 +508,27 @@ def _memory_mb(value: str | None) -> int:
     return parse_memory_mib(value) or 0
 
 
+_SERVICE_STATE_BY_PHASE: dict[MachineBootstrapPhase, MachineServiceState] = {
+    MachineBootstrapPhase.Requested: MachineServiceState.Provisioning,
+    MachineBootstrapPhase.Provisioning: MachineServiceState.Provisioning,
+    MachineBootstrapPhase.Booting: MachineServiceState.Joining,
+    MachineBootstrapPhase.Joining: MachineServiceState.Joining,
+    MachineBootstrapPhase.Failed: MachineServiceState.Failed,
+    MachineBootstrapPhase.Deleting: MachineServiceState.Deleting,
+}
+
+
+def _service_state(
+    phase: MachineBootstrapPhase,
+    *,
+    serving: bool,
+) -> MachineServiceState:
+    """What the platform concludes, from what the node reported plus who takes work."""
+    if serving:
+        return MachineServiceState.Serving
+    return _SERVICE_STATE_BY_PHASE[phase]
+
+
 def _compute_instance_view(
     record: ComputeProviderInstanceRecord,
     *,
@@ -554,11 +536,12 @@ def _compute_instance_view(
     workspace_id: str,
     pool_name: str,
     enrollments: ComputeMachineEnrollmentRepository,
-    workers: WorkerRepository,
+    worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:
     phase = record.bootstrap_phase
     failure_reason = record.bootstrap_failure_reason
     observed_at = record.bootstrap_observed_at
+    serving = False
     if record.status == ReservationStatus.Terminating.value:
         phase = MachineBootstrapPhase.Deleting
     elif record.status == ReservationStatus.Failed.value:
@@ -573,19 +556,15 @@ def _compute_instance_view(
             record.machine_id,
             pool_name=pool_name,
         )
-        worker = workers.get(
-            agent_machine_worker_id(record.machine_id),
-            workspace_id=workspace_id,
-        )
-        if (
-            enrollment is not None
-            and enrollment.readiness_phase is MachineReadinessPhase.Ready
-            and worker is not None
-            and worker.status is ResourceStatus.Running
+        if machine_serves_workloads(
+            enrollment,
+            machine_id=record.machine_id,
+            worker_state=worker_state,
         ):
-            phase = MachineBootstrapPhase.Ready
+            assert enrollment is not None
+            serving = True
             failure_reason = None
-            observed_at = max(observed_at, enrollment.updated_at, worker.last_seen_at)
+            observed_at = max(observed_at, enrollment.updated_at)
         elif enrollment is not None and enrollment.readiness_phase in {
             MachineReadinessPhase.Blocked,
             MachineReadinessPhase.Offline,
@@ -604,8 +583,11 @@ def _compute_instance_view(
         record=record,
         region=region,
         bootstrap_phase=phase,
+        service_state=_service_state(phase, serving=serving),
         bootstrap_failure_reason=failure_reason,
+        bootstrap_failure_detail=record.bootstrap_failure_detail,
         bootstrap_observed_at=observed_at,
+        booted_template_version=_provider_booted_template_version(record),
     )
 
 

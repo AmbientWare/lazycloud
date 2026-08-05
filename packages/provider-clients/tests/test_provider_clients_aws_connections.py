@@ -111,6 +111,7 @@ def _connection_components(
         settings.connection,
         capacity=settings.capacity,
         gateway_origin=settings.gateway_origin,
+        internal_origin="http://lazycloud-control-plane.tailnet-example.ts.net:9000",
         tailnet_runtime=settings.runtime,
         tailnet_control=settings.control,
         backend_route=settings.backend_route,

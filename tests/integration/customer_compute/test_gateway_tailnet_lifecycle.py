@@ -160,9 +160,10 @@ def _gateway(
     )
 
 
-def _workspace_auth(services: ApiServices, *, workspace_id: str = "default") -> dict[str, str]:
+def _operator_auth(services: ApiServices, *, workspace_id: str = "default") -> dict[str, str]:
     token, _ = AuthService(services.context).create_token(
-        "tailnet-public-delete",
+        "tailnet-operator-delete",
+        kind=TokenKind.Admin,
         workspace_id=workspace_id,
     )
     return {"Authorization": f"Bearer {token}"}
@@ -242,7 +243,7 @@ def test_resource_pool_delete_runs_canonical_cleanup_and_rescans_late_device(
 
     response = client.delete(
         f"/api/v1/pools/{enrolled.pool_name}",
-        headers=_workspace_auth(isolated_services),
+        headers=_operator_auth(isolated_services),
     )
 
     assert response.status_code == 204
@@ -282,7 +283,7 @@ def test_resource_pool_delete_requires_host_leave_before_mutation(
 
     blocked = client.delete(
         f"/api/v1/pools/{enrolled.pool_name}",
-        headers=_workspace_auth(isolated_services),
+        headers=_operator_auth(isolated_services),
     )
 
     assert blocked.status_code == 409
@@ -304,7 +305,7 @@ def test_resource_pool_delete_requires_host_leave_before_mutation(
     )
     retried = retry_client.delete(
         f"/api/v1/pools/{enrolled.pool_name}",
-        headers=_workspace_auth(isolated_services),
+        headers=_operator_auth(isolated_services),
     )
     assert retried.status_code == 204
 
@@ -332,7 +333,7 @@ def test_resource_pool_delete_cannot_delete_another_workspace_pool(
 
     response = client.delete(
         "/api/v1/pools/foreign-pool",
-        headers=_workspace_auth(isolated_services),
+        headers=_operator_auth(isolated_services),
     )
 
     assert response.status_code == 404

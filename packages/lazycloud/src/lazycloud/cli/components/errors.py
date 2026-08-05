@@ -124,6 +124,10 @@ def normalize_exception(
             hint=selected_policy.connection_hint(exc),
         )
 
+    coded = _details_from_error_code(exc, message)
+    if coded is not None:
+        return coded
+
     for classifier in selected_policy.classifiers:
         details = classifier(exc, message)
         if details is not None:
@@ -135,6 +139,35 @@ def normalize_exception(
         message=message,
         hint=selected_policy.debug_hint,
     )
+
+
+_CODE_TITLES: dict[str, str] = {
+    "not_found": "Not found",
+    "conflict": "Conflict",
+    "expired_cursor": "Cursor expired",
+    "invalid_input": "Invalid input",
+    "upstream_unavailable": "Upstream unavailable",
+}
+
+
+def _details_from_error_code(
+    exc: BaseException,
+    message: str,
+) -> ClientErrorDetails | None:
+    """Classify from the code the server sent rather than its prose."""
+    for item in exception_chain(exc):
+        if not isinstance(item, HttpApiError) or not item.code:
+            continue
+        return ClientErrorDetails(
+            type=item.code,
+            title=_CODE_TITLES.get(item.code, _titleize(item.code)),
+            message=message,
+        )
+    return None
+
+
+def _titleize(code: str) -> str:
+    return code.replace("_", " ").capitalize()
 
 
 def render_exception(

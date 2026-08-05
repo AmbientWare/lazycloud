@@ -75,7 +75,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
     assert applied
     assert config.execution.capacity.cpu_millicores == 4000
     assert config.execution.capacity.memory_mib == 8192
-    assert config.network.network_prefix == "private-pool:machine-one"
+    assert "WORKER_NETWORK_PREFIX=private-pool:machine-one" in docker_run
     assert "worker-secret" not in contents
     assert config_path.stat().st_mode & 0o777 == 0o600
     assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run

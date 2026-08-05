@@ -12,17 +12,12 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
-import container_worker_app.production as production
 import pytest
-from container_worker_app.production import (
+from container_worker_app.image_archives import (
     BrokeredImageArchiveSourceLoader,
-    ProductionWorkerSettings,
-    RemoteCheckpointPersister,
     TarImageArchiveMounter,
-    build_production_worker_process_services,
 )
 from pydantic import JsonValue
-from worker.checkpoints import CheckpointPersistenceAction, CheckpointPersistencePlan
 from worker.container_checkpoints import TarContainerImageArchiver
 from worker.container_startup import (
     IMAGE_MOUNT_MANIFEST_NAME,
@@ -32,21 +27,8 @@ from worker.container_startup import (
     WorkerImageSourceLoadRequest,
 )
 from worker.origin_access import CacheOriginCredentials
-from worker.repository_client import (
-    WorkerRepositoryClientError,
-    WorkerRepositoryHttpClient,
-)
-from worker.repository_payloads import (
-    GetCacheOriginCredentialsResponse,
-    PersistCheckpointArchiveResponse,
-    PrepareCheckpointArchiveUploadResponse,
-)
-from worker.runtime_config import (
-    OciRuntimeName,
-    RuntimeBinaryConfig,
-)
-
-_CAPACITY_OWNER_ID = "839fc92e-c26d-4e31-84c1-a827c2768607"
+from worker.repository_client import WorkerRepositoryHttpClient
+from worker.repository_payloads import GetCacheOriginCredentialsResponse
 
 
 @contextmanager
@@ -337,35 +319,6 @@ def test_tar_image_archive_mounter_rejects_path_traversal_members(tmp_path: Path
     assert not (tmp_path / "escape").exists()
 
 
-@pytest.mark.parametrize(
-    ("repository_url", "worker_token", "message"),
-    [
-        ("", "worker-token", "worker repository endpoint is required"),
-        ("http://control-plane:9000", "", "worker repository token is required"),
-    ],
-)
-def test_production_worker_requires_repository_credentials_before_registration(
-    tmp_path: Path,
-    repository_url: str,
-    worker_token: str,
-    message: str,
-) -> None:
-    with pytest.raises(WorkerRepositoryClientError, match=message):
-        build_production_worker_process_services(
-            settings=ProductionWorkerSettings(
-                worker_id="worker-1",
-                worker_repository_url=repository_url,
-                worker_token=worker_token,
-                capacity_owner_id=_CAPACITY_OWNER_ID,
-                bundle_root=tmp_path / "bundles",
-                image_cache_path=str(tmp_path / "image-cache"),
-                image_mount_root=str(tmp_path / "image-mounts"),
-                checkpoint_root=str(tmp_path / "checkpoints"),
-            ),
-            runtime_configs={OciRuntimeName.Runc: RuntimeBinaryConfig()},
-        )
-
-
 def test_brokered_image_source_loader_downloads_presigned_archive(tmp_path: Path) -> None:
     source = tmp_path / "source.rclip"
     source.write_bytes(b"archive")
@@ -406,117 +359,6 @@ def test_brokered_image_source_loader_downloads_presigned_archive(tmp_path: Path
     assert transport.posts[0][1]["workspace_id"] == "workspace-1"
     assert transport.posts[0][1]["container_id"] == "ctr-1"
     assert transport.posts[0][1]["image_id"] == "image-1"
-
-
-def test_remote_checkpoint_persister_streams_archive_to_presigned_url(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    checkpoint_root = tmp_path / "checkpoints"
-    checkpoint_path = checkpoint_root / "checkpoint-1"
-    checkpoint_path.mkdir(parents=True)
-    (checkpoint_path / "state.txt").write_text("ready\n", encoding="utf-8")
-    archive_path = tmp_path / "checkpoint-1.tar"
-    transport = _FakeWorkerRepositoryTransport(
-        posts={
-            "/worker-repository/prepare-checkpoint-archive-upload": (
-                PrepareCheckpointArchiveUploadResponse(
-                    upload_url="http://storage/checkpoint-1",
-                ).model_dump(mode="json")
-            ),
-            "/worker-repository/persist-checkpoint-archive": (
-                PersistCheckpointArchiveResponse().model_dump(mode="json")
-            ),
-        }
-    )
-    uploaded: list[bytes] = []
-
-    def capture_upload(_url: str, path: Path, *, content_length: int) -> None:
-        uploaded.append(path.read_bytes() if path.stat().st_size == content_length else b"")
-
-    monkeypatch.setattr(
-        production,
-        "_put_presigned_checkpoint_archive",
-        capture_upload,
-    )
-    plan = CheckpointPersistencePlan(
-        action=CheckpointPersistenceAction.Persist,
-        checkpoint_id="checkpoint-1",
-        checkpoint_path=str(checkpoint_path),
-        archive_path=str(archive_path),
-        origin_key="checkpoints/checkpoint-1.tar",
-        create_archive=True,
-        upload_to_origin_storage=True,
-        store_archive_in_cache=True,
-    )
-
-    result = RemoteCheckpointPersister(
-        WorkerRepositoryHttpClient(transport),
-        checkpoint_bucket="checkpoint-bucket",
-        cache_namespace="checkpoints",
-    ).persist_checkpoint(plan)
-
-    prepare_path, prepare_payload = transport.posts[0]
-    path, payload = transport.posts[1]
-    payload_tar = tmp_path / "payload.tar"
-    payload_tar.write_bytes(uploaded[0])
-    with tarfile.open(payload_tar) as archive:
-        names = archive.getnames()
-    assert prepare_path == "/worker-repository/prepare-checkpoint-archive-upload"
-    assert prepare_payload["checkpoint_bucket"] == "checkpoint-bucket"
-    assert path == "/worker-repository/persist-checkpoint-archive"
-    assert result.checkpoint_id == "checkpoint-1"
-    assert result.origin_key == "checkpoints/checkpoint-1.tar"
-    assert payload["checkpoint_bucket"] == "checkpoint-bucket"
-    assert payload["cache_namespace"] == "checkpoints"
-    assert "checkpoint-1/state.txt" in names
-
-
-def test_checkpoint_transfer_errors_never_disclose_capability_query(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sentinel = "never-log-this-checkpoint-signature"
-
-    class FailingConnection:
-        def __init__(
-            self,
-            host: str,
-            port: int | None = None,
-            timeout: float | None = None,
-        ) -> None:
-            _ = host, port, timeout
-
-        def request(self, *args: object, **kwargs: object) -> None:
-            _ = args, kwargs
-            raise RuntimeError(f"failed request with {sentinel}")
-
-        def close(self) -> None:
-            return
-
-    monkeypatch.setattr(production.http.client, "HTTPSConnection", FailingConnection)
-    capability = f"https://objects.example.test/archive?X-Amz-Signature={sentinel}"
-    checkpoint = tmp_path / "checkpoint.tar"
-    checkpoint.write_bytes(b"checkpoint")
-
-    with pytest.raises(RuntimeError) as upload_error:
-        production._put_presigned_checkpoint_archive(
-            capability,
-            checkpoint,
-            content_length=checkpoint.stat().st_size,
-        )
-    with pytest.raises(RuntimeError) as download_error:
-        production._download_presigned_url(
-            capability,
-            tmp_path / "download.tar",
-            timeout_seconds=5,
-            resource_name="checkpoint archive",
-        )
-
-    assert sentinel not in str(upload_error.value)
-    assert sentinel not in str(download_error.value)
-    assert upload_error.value.__cause__ is None
-    assert download_error.value.__cause__ is None
 
 
 class _FakeWorkerRepositoryTransport:

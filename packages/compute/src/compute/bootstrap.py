@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from urllib.parse import urlparse
 
+from foundation.shell import shell_quote
 from pydantic import field_validator
 from shared.contracts import ContractModel
 
@@ -69,13 +70,8 @@ def machine_bootstrap_user_data_base64(config: MachineBootstrapConfig) -> str:
     return base64.b64encode(machine_bootstrap_user_data(config).encode()).decode()
 
 
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
-
-
 __all__ = [
     "MachineBootstrapConfig",
     "machine_bootstrap_user_data",
     "machine_bootstrap_user_data_base64",
-    "shell_quote",
 ]

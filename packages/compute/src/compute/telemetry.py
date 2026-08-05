@@ -12,6 +12,8 @@ from shared.app_identity import PRIVATE_RESOURCE_PREFIX
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
 
+from compute.state import ComputeAgentTokenState
+
 TELEMETRY_CREDENTIAL_TIMEOUT_SECONDS = 10.0
 AGENT_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 AGENT_HEARTBEAT_FUTURE_TOLERANCE_SECONDS = 5.0
@@ -186,6 +188,29 @@ class AgentTelemetryState(ContractModel):
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
     metrics: AgentMachineMetrics = Field(default_factory=AgentMachineMetrics)
+
+
+def agent_telemetry_state(state: ComputeAgentTokenState) -> AgentTelemetryState:
+    return AgentTelemetryState(
+        workspace_id=state.workspace_id,
+        pool_name=state.pool_name,
+        machine_id=state.machine_id,
+        executor=state.executor,
+        os=state.os,
+        arch=state.arch,
+        hostname=state.hostname,
+        cpu_count=state.cpu_count,
+        cpu_millicores=state.cpu_millicores,
+        memory_mb=state.memory_mb,
+        gpus=state.gpus,
+        gpu_ids=state.gpu_ids,
+        gpu_count=state.gpu_count,
+        schedulable=state.schedulable,
+        preflight_error=any(not item.ok for item in state.preflight),
+        last_join_at=state.last_join_at,
+        last_heartbeat_at=state.last_heartbeat_at,
+        last_disconnect_at=state.last_disconnect_at,
+    )
 
 
 class PoolTelemetryState(ContractModel):

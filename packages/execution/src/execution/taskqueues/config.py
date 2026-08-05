@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from foundation.resources import parse_memory_mib
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from shared.app_identity import TASK_QUEUE_IMAGE
-from shared.deployment_records import DEFAULT_DISK, DEFAULT_MAX_PENDING_TASKS
+from shared.deployment_records import DEFAULT_MAX_PENDING_TASKS
 from shared.lifecycle import LifecycleHooks
-from shared.mounts import MountAuthMode, validate_mount_auth
 from shared.tasks import RetryPolicy
 
 from execution.config import (
+    ContainerResourceConfig,
     ExecutionPythonVersion,
     ExecutionPythonVersionInput,
     ManagedPythonExecutable,
+    VolumeConfig,
+    VolumeMountInput,
     managed_python_executable,
 )
 from execution.taskqueues.planning import DEFAULT_TASK_QUEUE_TASK_TTL_SECONDS
@@ -41,116 +42,10 @@ class TaskQueueTaskPolicy(BaseModel):
         return self.ttl or self.ttl_seconds or DEFAULT_TASK_QUEUE_TASK_TTL_SECONDS
 
 
-class TaskQueueRuntimeConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    cpu: int | float | None = Field(default=None, ge=0)
-    cpu_millicores: int = Field(default=0, ge=0)
-    memory: str | int | None = None
-    memory_mib: int = Field(default=0, ge=0)
-    disk: str | int = DEFAULT_DISK
-    gpu: str | None = None
-    gpu_type: str | None = None
-    gpu_count: int = Field(default=0, ge=0)
-    image_id: str | None = None
+class TaskQueueRuntimeConfig(ContainerResourceConfig):
     keep_warm: int = Field(default=0, ge=0)
     concurrency: int = Field(default=1, ge=1)
-    pool_selector: str | None = None
-    runtime: str = "runc"
-    runtime_class: str | None = None
-    docker_enabled: bool = False
-    preemptible: bool = False
-    gpu_limit: int = Field(default=0, ge=0)
-    cpu_limit_millicores: int = Field(default=0, ge=0)
     checkpoint_enabled: bool = False
-
-    @field_validator("disk", mode="before")
-    @classmethod
-    def disk_defaults_to_the_platform_ceiling(cls, value: object) -> object:
-        # Every container has a ceiling, so an absent value is the default
-        # rather than 'unlimited'.
-        if value is None or value == "":
-            return DEFAULT_DISK
-        return value
-
-    @field_validator("memory")
-    @classmethod
-    def memory_must_be_valid(cls, value: str | int | None) -> str | int | None:
-        parsed = parse_memory_mib(value)
-        if parsed is not None and parsed < 0:
-            msg = "memory must be non-negative"
-            raise ValueError(msg)
-        return value
-
-    @property
-    def requested_cpu_millicores(self) -> int:
-        if self.cpu_millicores:
-            return self.cpu_millicores
-        return int(float(self.cpu) * 1000) if self.cpu is not None else 0
-
-    @property
-    def requested_memory_mib(self) -> int:
-        if self.memory_mib:
-            return self.memory_mib
-        return parse_memory_mib(self.memory) or 0
-
-    @property
-    def requested_disk_mib(self) -> int:
-        # Reuses the memory parser: the units are the same and disk accepts the
-        # same "10Gi" strings users already write for memory.
-        return parse_memory_mib(self.disk) or 0
-
-    @property
-    def requested_gpu_type(self) -> str:
-        return self.gpu or self.gpu_type or ""
-
-
-class TaskQueueVolumeProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    read_only: bool = False
-    bucket_name: str = ""
-    prefix: str = ""
-    auth_mode: MountAuthMode = MountAuthMode.Ambient
-    access_key: str = ""
-    secret_key: str = ""
-    endpoint_url: str = ""
-    region: str = ""
-    force_path_style: bool = False
-
-    @model_validator(mode="after")
-    def credentials_match_auth_mode(self) -> TaskQueueVolumeProviderConfig:
-        validate_mount_auth(self.auth_mode, self.access_key, self.secret_key)
-        return self
-
-    def for_mount(self, *, read_only: bool) -> TaskQueueVolumeProviderConfig:
-        return self.model_copy(update={"read_only": read_only or self.read_only})
-
-
-class TaskQueueVolumeMountInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    id: str
-    mount_path: str
-    config: TaskQueueVolumeProviderConfig
-
-
-class TaskQueueVolumeConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    id: str = ""
-    name: str = ""
-    mount_path: str = ""
-    read_only: bool = False
-    config: TaskQueueVolumeProviderConfig | None = None
-
-    def mount_input(self) -> TaskQueueVolumeMountInput:
-        provider = self.config or TaskQueueVolumeProviderConfig()
-        return TaskQueueVolumeMountInput(
-            id=self.name or self.id,
-            mount_path=self.mount_path,
-            config=provider.for_mount(read_only=self.read_only),
-        )
 
 
 def _is_empty_mapping(value: object) -> bool:
@@ -166,7 +61,7 @@ class TaskQueueStubConfig(BaseModel):
     task_policy: TaskQueueTaskPolicy = Field(default_factory=TaskQueueTaskPolicy)
     env: dict[str, str] = Field(default_factory=dict)
     secrets: list[str] = Field(default_factory=list)
-    volumes: list[TaskQueueVolumeConfig] = Field(default_factory=list)
+    volumes: list[VolumeConfig] = Field(default_factory=list)
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
     max_pending_tasks: int | None = Field(default=None, ge=0)
@@ -201,7 +96,7 @@ class TaskQueueStubConfig(BaseModel):
         return self.runtime.concurrency
 
     @property
-    def volume_inputs(self) -> list[TaskQueueVolumeMountInput]:
+    def volume_inputs(self) -> list[VolumeMountInput]:
         return [volume.mount_input() for volume in self.volumes]
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
@@ -92,7 +93,7 @@ class AgentTelemetryBuffer:
                         level=level,
                         stream=str(stream),
                         line=text,
-                        timestamp_unix_nano=timestamp_unix_nano or _now_unix_nano(),
+                        timestamp_unix_nano=timestamp_unix_nano or time.time_ns(),
                     )
                 ],
             )
@@ -120,7 +121,7 @@ class AgentTelemetryBuffer:
                         status=status,
                         message=message,
                         attrs=attrs or {},
-                        timestamp_unix_nano=timestamp_unix_nano or _now_unix_nano(),
+                        timestamp_unix_nano=timestamp_unix_nano or time.time_ns(),
                     )
                 ],
             )
@@ -260,9 +261,3 @@ def _telemetry_record_count(
 def _agent_telemetry_request_size(request: AgentTelemetryRequest) -> int:
     size = _telemetry_record_count(request.logs, request.events, request.metrics)
     return size or 1
-
-
-def _now_unix_nano() -> int:
-    import time
-
-    return time.time_ns()

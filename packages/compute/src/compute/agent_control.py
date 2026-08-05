@@ -4,16 +4,25 @@ import hashlib
 import ipaddress
 import secrets
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlparse
 from uuid import NAMESPACE_URL, uuid5
 
 from foundation.network import worker_network_prefix
 from foundation.shell import shell_quote
-from pydantic import Field, JsonValue, field_validator
+from pydantic import Field, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_enrollment import (
+    AgentCapacityState,
+    ComputeMachineEnrollmentStatus,
+    ComputePreflightCheck,
+    MachineReadinessPhase,
+)
+
+if TYPE_CHECKING:
+    from database.repositories.compute import ComputeMachineEnrollmentRecord
 from shared.contracts import ContractModel
 from shared.gpu import GPU_ANY, normalize_gpu_type
 from shared.routing import (
@@ -22,7 +31,7 @@ from shared.routing import (
     BackendRouteTransport,
     RoutePrewarmDecision,
 )
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 from compute.projection import (
     PoolConfig,
@@ -45,14 +54,6 @@ AGENT_STREAM_HEARTBEAT_SECONDS = 10.0
 AGENT_STREAM_EVENT_COALESCE_SECONDS = 0.025
 ROUTE_PREWARM_INTERVAL_SECONDS = 30.0
 ROUTE_PREWARM_TIMEOUT_SECONDS = 3.0
-DEFAULT_DISABLED_AGENT_SERVICES = (
-    "redis",
-    "postgres",
-    "juicefs",
-    "fluent-bit",
-    "configman",
-    "k3s",
-)
 
 
 class JoinTokenDecision(StrEnum):
@@ -221,8 +222,6 @@ class AgentBootstrapConfig(ContractModel):
     image_registry_store: str = ""
     image_clip_version: int = 2
     image_local_cache_enabled: bool = True
-    telemetry: dict[str, JsonValue] = Field(default_factory=dict)
-    disabled_services: tuple[str, ...] = DEFAULT_DISABLED_AGENT_SERVICES
 
 
 class AgentStreamTimingPlan(ContractModel):
@@ -371,6 +370,40 @@ def managed_machine_id(workspace_id: str, pool_name: str, seed: str) -> str:
 
 def agent_machine_worker_id(machine_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"agent-worker\x00{machine_id}"))
+
+
+class MachineWorkerState(Protocol):
+    """Narrow view of the scheduler's hot worker state.
+
+    Implementations raise when the state store is unreachable rather than
+    answering False: the reclaim path terminates billable machines on this
+    answer, and an outage must read as "unknown", never as "gone".
+    """
+
+    def machine_worker_available(self, machine_id: str) -> bool: ...
+
+
+def machine_serves_workloads(
+    enrollment: ComputeMachineEnrollmentRecord | None,
+    *,
+    machine_id: str,
+    worker_state: MachineWorkerState,
+) -> bool:
+    """Whether this machine accepts workloads right now.
+
+    Two facts with two owners, and both must hold: the durable enrollment says
+    the agent is alive and ready, and the scheduler's hot record says the
+    worker takes work. The API summary and bootstrap reclaim previously each
+    composed their own version from the durable `Worker` row, which asserts
+    `Running` at registration — before the worker can accept anything.
+    """
+    if enrollment is None:
+        return False
+    if enrollment.status is not ComputeMachineEnrollmentStatus.Active:
+        return False
+    if enrollment.readiness_phase is not MachineReadinessPhase.Ready:
+        return False
+    return worker_state.machine_worker_available(machine_id)
 
 
 def join_token_ttl_seconds(value: str) -> int:
@@ -859,6 +892,38 @@ def validate_agent_transport_config(
 
 
 _LOCAL_RUNTIME_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+# Tailscale addresses a remote machine genuinely reaches. IPv4 uses the CGNAT
+# range, which `ipaddress` already reports as non-private; IPv6 uses a ULA
+# prefix, which it reports as private, so the prefix is named here rather than
+# leaving a working tailnet configuration to be refused as unroutable.
+_TAILNET_NETWORKS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
+
+def _is_tailnet_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(address in network for network in _TAILNET_NETWORKS)
+
+
+def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
+    """Whether a remote machine could never reach this host.
+
+    A literal address is classified rather than pattern-matched: `10.0.0.150`
+    carries dots and is not loopback, so a name-shaped check accepts a LAN
+    address that resolves only on the control plane's own network. A name is
+    accepted here and left to DNS, except a single label, which resolves only
+    inside a container network.
+    """
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host
+    if _is_tailnet_address(address):
+        return False
+    return (
+        address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified
+    )
 
 
 def _reject_unroutable_runtime_url(
@@ -880,7 +945,7 @@ def _reject_unroutable_runtime_url(
     host = urlparse(url).hostname or ""
     if not host:
         raise ValueError("remote-machine runtime callback URL has no host")
-    if host in _LOCAL_RUNTIME_HOSTS or "." not in host:
+    if host in _LOCAL_RUNTIME_HOSTS or host_is_unreachable_from_a_remote_machine(host):
         raise ValueError(
             f"pool {pool_name!r} serves remote machines and cannot use runtime callback host "
             f"{host!r}: a remote machine cannot resolve it. Set "
@@ -896,7 +961,6 @@ def build_agent_bootstrap_config(
     *,
     gateway_runtime_http_url: str,
     tailnet: TailnetConfig,
-    telemetry: dict[str, JsonValue] | None = None,
     executor: str = DEFAULT_PRIVATE_EXECUTOR,
 ) -> AgentBootstrapConfig:
     normalized = normalize_pool_config(pool_state.config or PoolConfig(name=pool_state.name))
@@ -925,7 +989,6 @@ def build_agent_bootstrap_config(
         image_registry_store=image.registry_store,
         image_clip_version=image.clip_version,
         image_local_cache_enabled=image.local_cache_enabled,
-        telemetry=telemetry or {},
     )
 
 
@@ -1010,7 +1073,7 @@ def plan_agent_stream_snapshot(
 
 
 def agent_routes_for_stream(routes: list[AgentBackendRoute]) -> list[AgentBackendRoute]:
-    return [route for route in routes if _route_state(route.state) is not BackendRouteState.Closing]
+    return [route for route in routes if route.state is not BackendRouteState.Closing]
 
 
 def plan_route_status_update(
@@ -1029,7 +1092,7 @@ def plan_route_status_update(
     ):
         return AgentRouteStatusPlan(accepted=False, err_msg="route does not belong to this agent")
 
-    previous_state = _route_state(route.state)
+    previous_state = route.state
     previous_proxy_target = route.proxy_target
     previous_error = route.error
     update_state = _route_state(request.state) if request.state else previous_state
@@ -1041,11 +1104,11 @@ def plan_route_status_update(
             "updated_at": int(_utc(now).timestamp()),
         }
     )
-    state_changed = previous_state is not _route_state(updated.state)
+    state_changed = previous_state is not updated.state
     proxy_changed = previous_proxy_target != updated.proxy_target
     error_changed = previous_error != updated.error
     should_emit = state_changed or proxy_changed or error_changed
-    should_prewarm = _route_state(updated.state) is BackendRouteState.Ready and (
+    should_prewarm = updated.state is BackendRouteState.Ready and (
         previous_state is not BackendRouteState.Ready or proxy_changed
     )
     return AgentRouteStatusPlan(
@@ -1086,7 +1149,7 @@ def plan_route_prewarm_attempt(
     current_time = _utc(now)
     proxy_target = route.proxy_target.strip()
     next_attempts = dict(attempts or {})
-    if _route_state(route.state) is not BackendRouteState.Ready:
+    if route.state is not BackendRouteState.Ready:
         return RoutePrewarmAttemptPlan(
             decision=RoutePrewarmDecision.NotReady,
             should_attempt=False,
@@ -1377,8 +1440,4 @@ def _proxy_target_host(proxy_target: str) -> str:
 
 
 def _utc(value: datetime | None) -> datetime:
-    if value is None:
-        return utc_now()
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return utc_now() if value is None else to_utc(value)

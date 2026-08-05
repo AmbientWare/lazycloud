@@ -52,8 +52,8 @@ Tag or dispatch `.github/workflows/release.yml`. The connected-AWS job:
 2. builds and pushes `container-worker` to Amazon ECR Public;
 3. bakes the per-region node AMI with `deploy/ami/bake.py` (skippable through
    the `bake_ami` dispatch input for a template-only release);
-4. stages the bundled CloudFormation bytes, agent, image digest, baked CPU AMI
-   catalog, and deployment settings with `deploy/aws-release-assets/release.py`;
+4. stages the bundled CloudFormation bytes, agent, image digest, and baked CPU
+   AMI catalog into one manifest with `deploy/aws-release-assets/release.py`;
 5. publishes objects with SHA-256 checksums and immutable cache headers;
 6. downloads every S3 object and inspects the worker image with empty credential
    directories, proving customer nodes can access them anonymously. Baked AMIs
@@ -75,31 +75,39 @@ dist/connected-aws/$VERSION/
 ```
 
 The agent object's `local_path` is relative to the bundle. No machine-specific
-artifact root is written to the published manifest. The Compose configuration
-command validates the retained executable and derives its absolute
-`agent-binarys` root from the local manifest path before activation.
+artifact root is written to the published manifest. `validate-local` checks the
+retained executable and derives its absolute `agent-binarys` root from the local
+manifest path.
 
-The uploaded workflow evidence contains `manifest.json`. Its
-`deployment_environment` object is the canonical Compose configuration.
+## What A Deployment Configures
 
-```text
-agentArtifact.version                     LAZYCLOUD_AGENT_BINARY_VERSION
-agentArtifact.url                         agent object public_url
-agentArtifact.sha256ByArch.amd64           manifest agent_artifact_sha256
-awsCapacity.connectionTemplateUrl          LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL
-awsCapacity.workerImageDigest              LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST
-awsCapacity.agentArtifactUrl               LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL
-awsCapacity.cpuAmiIds                      LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS
-```
+`LAZYCLOUD_RELEASE_MANIFEST_URL` — the published `manifest_public_url`, and
+the only value a deployment takes from a release. The control plane fetches that
+manifest at startup and resolves the agent artifact version and digest, the URL
+that serves it, the container-worker image, the customer authorization
+template, and the baked CPU AMI catalog from the release itself. None of the six
+are environment-readable, so no deployment can hold five of them from one
+release and one from another. `deploy/release.py` writes the URL into `.env`;
+see `deploy/RUNBOOK.md`.
 
-`LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS` is present when the release baked node
-AMIs; it is the JSON region-to-AMI map from `manifest.capacity_cpu_ami_ids`
-(see `deploy/ami/README.md`).
+The manifest's `deployment_environment` object is a self-check the release
+carries, not settings to transcribe: the schema validates it against the
+release's own facts and rejects a manifest whose block disagrees. Published
+manifests are immutable, so it stays in the document.
 
-When `agentArtifact.url` is configured, the chart downloads and verifies the
-binary in an init container before the API starts. `agentArtifact.volume.existingClaim`
-remains available for operators that mirror immutable artifacts into cluster
-storage; the URL and claim modes are mutually exclusive.
+What no release can know stays authored beside the deployment: the local
+agent-binary mount (`LAZYCLOUD_AGENT_BINARY_DIR`), the regional GPU AMI catalog
+(`LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS`), instance price estimates
+(`LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS`), and the connected-AWS
+control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`). Managed
+capacity is those plus the three the release publishes or none of them, and a
+deployment missing either half fails at startup naming which half it is.
+
+`capacity_cpu_ami_ids` is whatever reached `stage --cpu-ami-ids`:
+`deploy/ami/bake.py` in the workflow, `--cpu-ami` on `deploy/release.py`
+locally. It is empty for a release given neither, and managed capacity on that
+release fails the rule above rather than launching without them (see
+`deploy/ami/README.md`).
 
 ## Focused Acceptance
 

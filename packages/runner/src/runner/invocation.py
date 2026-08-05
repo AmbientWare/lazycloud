@@ -8,7 +8,8 @@ from collections.abc import Callable
 from typing import Any, get_type_hints
 
 import cloudpickle
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from pydantic.errors import PydanticSchemaGenerationError
 
 
 def cloudpickle_bytes(value: Any) -> bytes:
@@ -76,14 +77,18 @@ def coerce_arguments(
 def _coerce_value(annotation: Any, value: Any) -> Any:
     try:
         return TypeAdapter(annotation).validate_python(value)
-    except Exception:
+    except (ValidationError, PydanticSchemaGenerationError):
+        # An annotation Pydantic cannot build or satisfy leaves the argument as
+        # the caller sent it; the handler's own signature is the next check.
         return value
 
 
 def _type_hints(target: Callable[..., Any]) -> dict[str, Any]:
     try:
         return get_type_hints(target, include_extras=True)
-    except Exception:
+    except (NameError, TypeError):
+        # A forward reference that does not resolve in this process still has a
+        # usable raw annotation.
         return dict(getattr(target, "__annotations__", {}))
 
 

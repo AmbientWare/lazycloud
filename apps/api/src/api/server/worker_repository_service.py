@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from compute.state import ComputeAgentRouteState, RedisComputeStateRepository
+from compute.state import RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
 from coordination.event_bus import (
     EventBusEvent,
@@ -50,7 +50,6 @@ from scheduler.state import (
 )
 from shared.app_identity import NAME
 from shared.cache_records import CacheEntry
-from shared.compute_fleet import ResourceStatus
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import (
@@ -65,12 +64,13 @@ from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
 from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
+from shared.routing import AgentBackendRoute
 from shared.scheduling import (
-    SchedulerBackendRoute,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
+    WorkerUnavailableReason,
 )
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
@@ -102,6 +102,7 @@ from worker.repository_payloads import (
     ClaimSourceCacheCleanupResponse,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
+    DisableWorkerRequest,
     GetCacheOriginCredentialsResponse,
     GetCheckpointRestoreRequest,
     GetCheckpointRestoreResponse,
@@ -494,9 +495,9 @@ class WorkerRepositoryService:
                 self._require_source_cache_available(request, principal=principal)
             except WorkerSourceCacheUnavailableError:
                 # A cache generation that is still initializing is an expected
-                # transient, not a server fault. Raising here escaped as an
-                # unhandled ASGI error because the streaming response had already
-                # started, so it could never be mapped and instead buried real
+                # transient, not a server fault. Raising here escapes as an
+                # unhandled ASGI error because the streaming response has already
+                # started, so it can never be mapped and instead buries real
                 # failures under repeated tracebacks. Ending the stream lets the
                 # worker poll again once its generation is available.
                 return
@@ -749,11 +750,13 @@ class WorkerRepositoryService:
                     f"remote worker enrollment is unavailable: {worker.worker_id}"
                 )
             workers.upsert(
+                # Registration is inventory, not readiness. Whether this worker
+                # takes work is the scheduler record's answer, and asserting it
+                # here claimed it before the worker had validated anything.
                 durable_worker.model_copy(
                     update={
                         "machine_id": worker.machine_id,
                         "pool": worker.pool_name,
-                        "status": ResourceStatus.Running,
                         "last_seen_at": now,
                     }
                 ),
@@ -820,9 +823,15 @@ class WorkerRepositoryService:
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
 
-    def disable_worker(self, request: WorkerIdRequest) -> WorkerRecordResponse:
+    def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         try:
-            return WorkerRecordResponse(worker=self.workers.disable_worker(request.worker_id))
+            return WorkerRecordResponse(
+                worker=self.workers.disable_worker(
+                    request.worker_id,
+                    reason=request.reason,
+                    detail=request.detail,
+                )
+            )
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
 
@@ -859,7 +868,10 @@ class WorkerRepositoryService:
             generation_id=request.cache_generation_id,
             session_fence=request.cache_session_fence,
         )
-        if generation.state is not WorkerCacheGenerationState.Available:
+        if generation.state not in {
+            WorkerCacheGenerationState.Available,
+            WorkerCacheGenerationState.Draining,
+        }:
             self._project_source_cache_unavailable(request.worker_id)
             return WorkerKeepAliveResponse(source_cache_state=generation.state)
         try:
@@ -883,10 +895,7 @@ class WorkerRepositoryService:
             session_fence=request.cache_session_fence,
             limit=request.limit,
         )
-        if claim.generation_state in {
-            WorkerCacheGenerationState.Initializing,
-            WorkerCacheGenerationState.Draining,
-        }:
+        if claim.generation_state is WorkerCacheGenerationState.Initializing:
             self._project_source_cache_unavailable(request.worker_id)
         return ClaimSourceCacheCleanupResponse(targets=claim.targets)
 
@@ -948,7 +957,10 @@ class WorkerRepositoryService:
                 SchedulerWorkerStatus.Available,
                 SchedulerWorkerStatus.Pending,
             }:
-                self.workers.disable_worker(worker_id)
+                self.workers.disable_worker(
+                    worker_id,
+                    reason=WorkerUnavailableReason.SourceCacheUnavailable,
+                )
         except SchedulerRepositoryError:
             return
 
@@ -1095,16 +1107,16 @@ class WorkerRepositoryService:
             address=self.containers.get_worker_address(request.container_id)
         )
 
-    def _publish_agent_routes(self, routes: list[SchedulerBackendRoute]) -> None:
+    def _publish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
             return
         repository = RedisComputeStateRepository(self.redis)
         for route in routes:
             if not (route.route_id and route.workspace_id and route.pool_name and route.machine_id):
                 continue
-            repository.save_agent_route_state(_compute_agent_route_state(route))
+            repository.save_agent_route_state(route)
 
-    def _unpublish_agent_routes(self, routes: list[SchedulerBackendRoute]) -> None:
+    def _unpublish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
             return
         repository = RedisComputeStateRepository(self.redis)
@@ -1121,7 +1133,7 @@ class WorkerRepositoryService:
                 route_id,
             )
 
-    def _container_agent_routes(self, container_id: str) -> list[SchedulerBackendRoute]:
+    def _container_agent_routes(self, container_id: str) -> list[AgentBackendRoute]:
         routes = list(self.containers.get_container_address_map(container_id).routes)
         address = self.containers.get_container_address(container_id)
         if address is not None and address.route is not None:
@@ -1846,6 +1858,12 @@ class WorkerRepositoryService:
         worker: SchedulerWorkerRecord,
         container_id: str,
     ) -> None:
+        if container_id == worker.worker_id:
+            # A worker reserving an address for itself, which readiness does
+            # before any container exists. The principal already proves this
+            # worker, and the prefix is already its own, so there is nothing
+            # further to authorize against.
+            return
         state = self.containers.get_container_state(container_id)
         if state is not None:
             if state.worker_id != worker.worker_id:
@@ -2256,26 +2274,6 @@ def _container_startup_failure_error(payload: ContainerLifecyclePayload) -> str:
     if detail:
         return f"container startup failed during {payload.id}: {detail}"
     return f"container startup failed during {payload.id}"
-
-
-def _compute_agent_route_state(route: SchedulerBackendRoute) -> ComputeAgentRouteState:
-    return ComputeAgentRouteState(
-        route_id=route.route_id,
-        workspace_id=route.workspace_id,
-        pool_name=route.pool_name,
-        machine_id=route.machine_id,
-        worker_id=route.worker_id,
-        container_id=route.container_id,
-        kind=route.kind,
-        port=route.port,
-        protocol=route.protocol,
-        transport=route.transport,
-        local_target=route.local_target,
-        proxy_target=route.proxy_target,
-        state=route.state,
-        error=route.error,
-        updated_at=route.updated_at,
-    )
 
 
 def _runtime_container_status_from_scheduler(

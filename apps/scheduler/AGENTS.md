@@ -1,6 +1,7 @@
 # Scheduler App
 
-Own only scheduler settings, concrete adapter composition, and process loop.
-Scheduling decisions stay in `packages/scheduler`. Keep environment names
-aligned with deployment assets and accept composition changes through one real
-repository-backed scheduler iteration.
+Scheduler settings, concrete adapter composition, and the process loop.
+
+Scheduling decisions stay in `packages/scheduler`; this app chooses the concrete
+adapters and runs the loop. Environment names here are part of the deployment
+contract and change together with the deployment assets that set them.

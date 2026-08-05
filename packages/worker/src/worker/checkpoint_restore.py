@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import shutil
 import tarfile
 from collections.abc import Callable
@@ -23,6 +22,7 @@ from worker.checkpoints import (
     CheckpointStatePayload,
     WorkerCheckpointStatus,
     build_restore_plan,
+    checkpoint_archive_hash_and_size,
     mark_checkpoint_restored_payload,
     plan_checkpoint_archive_materialization,
     plan_checkpoint_restore,
@@ -273,7 +273,7 @@ class RuntimeCheckpointRestorer:
             )
             if not from_cache:
                 self.source.download_checkpoint(checkpoint, archive_path)
-            actual_hash, actual_size = _file_hash_and_size(archive_path)
+            actual_hash, actual_size = checkpoint_archive_hash_and_size(archive_path)
             validation = validate_checkpoint_archive(
                 expected_hash=checkpoint.cache_hash,
                 expected_size_bytes=checkpoint.cache_size_bytes,
@@ -356,13 +356,3 @@ def _extract_checkpoint_archive(
         extracted.replace(checkpoint_path)
     finally:
         shutil.rmtree(temporary_root, ignore_errors=True)
-
-
-def _file_hash_and_size(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size

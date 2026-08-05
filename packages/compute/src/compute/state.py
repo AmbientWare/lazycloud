@@ -15,6 +15,7 @@ from pydantic import Field, JsonValue, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
 from shared.contracts import ContractModel
+from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 
 DEFAULT_COMPUTE_POOL_LOCK_TTL_SECONDS = 300
@@ -147,33 +148,6 @@ class ComputeAgentWorkerSlotState(ContractModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class ComputeAgentRouteState(ContractModel):
-    route_id: str
-    workspace_id: str
-    pool_name: str
-    machine_id: str
-    worker_id: str = ""
-    container_id: str = ""
-    kind: str = "container"
-    port: int = 0
-    protocol: str = "tcp"
-    transport: str = "tsnet_restricted"
-    local_target: str = ""
-    proxy_target: str = ""
-    state: str = "opening"
-    error: str = ""
-    updated_at: int = 0
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-    @field_validator("port")
-    @classmethod
-    def port_cannot_be_negative(cls, value: int) -> int:
-        if value < 0:
-            msg = "agent route port cannot be negative"
-            raise ValueError(msg)
-        return value
 
 
 class ComputePoolLockPlan(ContractModel):
@@ -597,7 +571,7 @@ class RedisComputeStateRepository:
             removed += int(self.redis.set_remove(index_key, machine_id))
         return removed
 
-    def save_agent_route_state(self, state: ComputeAgentRouteState) -> ComputeAgentRouteState:
+    def save_agent_route_state(self, state: AgentBackendRoute) -> AgentBackendRoute:
         self.redis.set(
             self.keys.agent_route(
                 state.workspace_id,
@@ -620,18 +594,18 @@ class RedisComputeStateRepository:
         pool_name: str,
         machine_id: str,
         route_id: str,
-    ) -> ComputeAgentRouteState | None:
+    ) -> AgentBackendRoute | None:
         raw = self.redis.get(self.keys.agent_route(workspace_id, pool_name, machine_id, route_id))
         if raw is None:
             return None
-        return load_model_json(ComputeAgentRouteState, raw)
+        return load_model_json(AgentBackendRoute, raw)
 
     def list_agent_route_states(
         self,
         workspace_id: str,
         pool_name: str,
         machine_id: str,
-    ) -> list[ComputeAgentRouteState]:
+    ) -> list[AgentBackendRoute]:
         route_ids = sorted(
             redis_strings(
                 self.redis.set_members(
@@ -655,7 +629,7 @@ class RedisComputeStateRepository:
         states.sort(key=lambda item: item.route_id)
         return states
 
-    def scan_agent_route_states(self) -> list[ComputeAgentRouteState]:
+    def scan_agent_route_states(self) -> list[AgentBackendRoute]:
         pattern = self.redis.key(
             self.keys.namespace,
             "workspaces",
@@ -667,11 +641,11 @@ class RedisComputeStateRepository:
             "routes",
             "*",
         )
-        states: list[ComputeAgentRouteState] = []
+        states: list[AgentBackendRoute] = []
         for key in self.redis.scan(pattern):
             raw = self.redis.get(key)
             if raw is not None:
-                states.append(load_model_json(ComputeAgentRouteState, raw))
+                states.append(load_model_json(AgentBackendRoute, raw))
         states.sort(
             key=lambda item: (
                 item.workspace_id,

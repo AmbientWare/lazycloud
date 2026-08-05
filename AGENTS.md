@@ -71,6 +71,16 @@ normalization; preserve meaningful distinctions such as omitted versus `0`.
 Work from the repository root with `uv`; Bun is the only web package manager.
 Use `apply_patch` for manual edits and Ruff for Python formatting/imports.
 
+Comment sparingly, and only about the code as it now stands. A comment earns its
+place by explaining what the code cannot say itself: a non-obvious constraint, an
+ordering that must hold, a rejected alternative that looks correct. Do not narrate
+what the next line does, restate a name, or describe a change relative to what was
+there before — the reader has the current code, not the diff, and a comment about
+"used to" or "now" is stale the moment it is written. Rationale that belongs to a
+change belongs in the commit message; rationale that belongs to a decision belongs
+in the owning `AGENTS.md`. Delete comments that no longer describe the code when
+you touch the surrounding lines.
+
 ## Public Boundaries
 
 - Resources use `/api/v1/<resource>`; `/gateway/*` is reserved for RPC-style
@@ -107,6 +117,27 @@ instead of a finding, and hides that the test reached outside its owner at all.
 Keep the output observable rather than piping a long run to `tail`, and prefer
 fail-fast (`pytest -x`) with narrow owner scopes so the first real failure
 surfaces immediately.
+
+### Never Wait On A State, Always Poll
+
+Waiting for a state to be reached is not allowed. A wait keyed on the outcome—a
+phase becoming `ready`, a row appearing, a worker registering—is keyed on
+exactly the thing that does not happen when something is wrong, so it consumes
+its whole timeout and then reports nothing about why.
+
+Poll instead, fast, and read several independent signals every cycle: the
+durable record, the logs at both ends, the external system's own view, and
+whether the request arrived at all. Print them whether or not they changed.
+Fast cycles are the point—they are how a wrong turn surfaces in seconds rather
+than at a deadline. No progress after a cycle or two is a finding to
+investigate immediately, not a reason to keep waiting; reach into the running
+thing (`docker compose exec`, SSM, `journalctl`) rather than waiting for it to
+report out.
+
+A terminal state may still end the loop early, but it is never what the loop
+depends on, and the loop always emits its signals on the way. A silent watcher
+that returns "still pending" after five minutes has produced nothing; the same
+five minutes of polling would have named the cause.
 
 Tests are optional evidence, not a completion ritual or count target. Add one
 only when it is the cheapest unique proof of a material contract, failure,
@@ -176,14 +207,15 @@ after exhausting meaningful local evidence; never replace it with a mock or
 local-only backend. Fix failures caused by the change or blocking its outcome
 and report unrelated failures separately.
 
-For live testing, whichever Tailnet the user selects or supplies for the run is
-approved; do not reject it because its account name appears personal, shared,
-or otherwise non-dedicated. Treat every provided Tailnet as shared external
-state: inspect the current configuration before mutation, scope changes to
-explicitly LazyCloud-owned test tags, grants, clients, keys, routes, and
-devices, preserve every unrelated user and resource, and prove cleanup is
-equally scoped. Never replace the complete Tailnet policy or delete or rotate a
-resource that is not proven to belong to the current test.
+A target the owner explicitly selects or supplies for a run is approved; do not
+refuse it because its account or network name looks personal or shared. Treat
+every external system a live run touches—provider account, cluster, tailnet, DNS
+zone, registry—as shared state you do not own. Read its current configuration
+before mutating it, scope every change to resources the run created and can name
+exactly, preserve every unrelated user and resource, and prove cleanup is
+equally scoped. Never replace a whole policy or configuration document, and
+never delete or rotate a resource that is not proven to belong to the current
+run.
 
 ## Product Phase And Destructive Work
 

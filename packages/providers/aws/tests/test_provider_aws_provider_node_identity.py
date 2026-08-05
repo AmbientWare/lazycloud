@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from itertools import count
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
@@ -11,6 +11,7 @@ from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from provider_aws import (
+    AWS_STS_PROOF_NONCE_KEY,
     AwsProviderNodeIdentityError,
     AwsProviderNodeIdentityErrorCode,
     AwsProviderNodeIdentityTarget,
@@ -20,6 +21,7 @@ from provider_aws import (
     AwsStsGetCallerIdentityProof,
     AwsStsProofHttpResponse,
 )
+from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr, ValidationError
 
 _ACCOUNT_ID = "123456789012"
@@ -45,11 +47,16 @@ def _target(**updates: str) -> AwsProviderNodeIdentityTarget:
     return AwsProviderNodeIdentityTarget.model_validate(values)
 
 
-@lru_cache(maxsize=4)
+_NONCE = count(1)
+
+
 def _presigned_url(region: str = _REGION) -> str:
     request = AWSRequest(
         method="GET",
-        url=(f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"),
+        url=(
+            f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15"
+            f"&{AWS_STS_PROOF_NONCE_KEY}={next(_NONCE):032x}"
+        ),
     )
     signer = SigV4QueryAuth(
         Credentials(
@@ -271,7 +278,7 @@ def test_identity_verifier_accepts_connection_and_managed_inventory() -> None:
     assert http.calls == [
         {
             "url": url,
-            "timeout_seconds": 3.0,
+            "timeout_seconds": AWS_STS_PROOF_TIMEOUT_SECONDS,
             "max_response_bytes": 32 * 1024,
             "follow_redirects": False,
         }

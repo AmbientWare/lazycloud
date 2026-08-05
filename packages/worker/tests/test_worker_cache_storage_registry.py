@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from scheduler.state import SchedulerWorkerRecord, WorkerRemovalResult
 from shared.container_requests import StopContainerReason
+from shared.scheduling import WorkerUnavailableReason
 from shared.timestamps import utc_now
 from worker.events import ContainerRequestContext
 from worker.worker_lifecycle import (
@@ -121,8 +122,18 @@ class _FakeLifecycleRepo:
             msg = f"worker {worker_id!r} state is missing"
             raise RuntimeError(msg)
 
-    def disable_worker(self, worker_id: str, *, ttl_seconds: int) -> None:
-        _ = worker_id, ttl_seconds
+    def prepare_source_cache(self) -> None:
+        self.actions.append("activated")
+
+    def disable_worker(
+        self,
+        worker_id: str,
+        *,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
+        ttl_seconds: int,
+    ) -> None:
+        _ = worker_id, reason, detail, ttl_seconds
         self.actions.append("disabled")
 
     def remove_worker(self, worker_id: str) -> WorkerRemovalResult:
@@ -153,8 +164,15 @@ class _ShutdownAwareLifecycleRepo:
     def set_keep_alive(self, worker_id: str, *, ttl_seconds: int) -> None:
         _ = worker_id, ttl_seconds
 
-    def disable_worker(self, worker_id: str, *, ttl_seconds: int) -> None:
-        _ = worker_id, ttl_seconds
+    def disable_worker(
+        self,
+        worker_id: str,
+        *,
+        reason: WorkerUnavailableReason,
+        detail: str = "",
+        ttl_seconds: int,
+    ) -> None:
+        _ = worker_id, reason, detail, ttl_seconds
         self.actions.append("disabled")
 
     def remove_worker(self, worker_id: str) -> WorkerRemovalResult:

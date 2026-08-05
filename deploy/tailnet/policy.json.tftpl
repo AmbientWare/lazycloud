@@ -8,6 +8,11 @@
       "src": ["${control_plane_tag}"],
       "dst": ["${agent_tag}"],
       "ip": ["tcp:${agent_proxy_port}"]
+    },
+    {
+      "src": ["${agent_tag}"],
+      "dst": ["${control_plane_tag}"],
+      "ip": ["tcp:${control_plane_port}"]
     }
   ],
   "tests": [
@@ -15,12 +20,20 @@
       "src": "${control_plane_tag}",
       "proto": "tcp",
       "accept": ["${agent_tag}:${agent_proxy_port}"],
-      "deny": ["${agent_tag}:22", "${control_plane_tag}:${agent_proxy_port}"]
+      "deny": [
+        "${agent_tag}:22",
+        "${control_plane_tag}:${agent_proxy_port}"
+      ]
     },
     {
       "src": "${agent_tag}",
       "proto": "tcp",
-      "deny": ["${agent_tag}:${agent_proxy_port}", "${control_plane_tag}:${agent_proxy_port}"]
+      "accept": ["${control_plane_tag}:${control_plane_port}"],
+      "deny": [
+        "${agent_tag}:${agent_proxy_port}",
+        "${control_plane_tag}:${agent_proxy_port}",
+        "${control_plane_tag}:22"
+      ]
     }
   ]
 }

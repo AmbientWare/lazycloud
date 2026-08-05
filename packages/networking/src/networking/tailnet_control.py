@@ -8,7 +8,14 @@ from typing import Protocol
 from urllib.parse import quote, urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+)
 from shared.app_identity import AGENT_NAME
 
 DEFAULT_TAILSCALE_API_URL = "https://api.tailscale.com"
@@ -73,17 +80,14 @@ class TailnetDevice(BaseModel):
     last_seen_at: datetime | None = None
 
 
-class TailnetControl(Protocol):
-    def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey: ...
+class TailnetIdentityCleanup(Protocol):
+    """Closing identities, without the ability to open new ones.
+
+    Cleanup runs from a retry loop against durable tombstones. It has no reason
+    to mint a credential, and narrowing what it can reach keeps that true.
+    """
 
     def revoke_auth_key(self, key_id: str) -> None: ...
-
-    def verify_device(
-        self,
-        node_id: str,
-        *,
-        expected_hostname: str,
-    ) -> TailnetDevice: ...
 
     def find_devices(
         self,
@@ -94,6 +98,17 @@ class TailnetControl(Protocol):
     def remove_device(self, device_id: str) -> None: ...
 
 
+class TailnetControl(TailnetIdentityCleanup, Protocol):
+    def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey: ...
+
+    def verify_device(
+        self,
+        node_id: str,
+        *,
+        expected_hostname: str,
+    ) -> TailnetDevice: ...
+
+
 @dataclass(frozen=True, slots=True)
 class TailnetMachineCleanupResult:
     removed_device_ids: tuple[str, ...]
@@ -101,7 +116,7 @@ class TailnetMachineCleanupResult:
 
 @dataclass(frozen=True, slots=True)
 class TailnetMachineIdentityReconciler:
-    control: TailnetControl
+    control: TailnetIdentityCleanup
 
     def cleanup(
         self,
@@ -160,6 +175,9 @@ class TailscaleTailnetControlConfig(BaseModel):
         ge=30,
         le=3600,
     )
+    # Deliberately a separate bound from `auth_key_ttl_seconds`: that key is
+    # single-use and redeemed within seconds, and widening it would weaken every
+    # machine identity to buy a launch template a longer life.
     request_timeout_seconds: float = Field(
         default=DEFAULT_TAILNET_CONTROL_TIMEOUT_SECONDS,
         gt=0,
@@ -192,11 +210,16 @@ class TailscaleTailnetControlConfig(BaseModel):
 
     @field_validator("agent_tag")
     @classmethod
-    def agent_tag_must_be_valid(cls, value: str) -> str:
+    def tag_must_be_valid(cls, value: str) -> str:
         normalized = value.strip().lower()
         if not normalized.startswith("tag:") or len(normalized) == len("tag:"):
-            raise ValueError("Tailscale agent tag must use the tag:<name> form")
+            raise ValueError("Tailscale tag must use the tag:<name> form")
         return normalized
+
+    @property
+    def issuable_tags(self) -> tuple[str, ...]:
+        """The tags this control plane may mint auth keys for."""
+        return (self.agent_tag,)
 
 
 class _TailscaleResponseModel(BaseModel):
@@ -289,7 +312,12 @@ class _CachedOAuthToken(BaseModel):
 class TailscaleTailnetControl:
     config: TailscaleTailnetControlConfig
     transport: httpx.BaseTransport | None = field(default=None, repr=False)
-    _token: _CachedOAuthToken | None = field(default=None, init=False, repr=False)
+    # One token per tag. Tailscale narrows a token to a single tag, and a
+    # token narrowed to one can mint only that one — so a shared token would
+    # make whichever issuer did not own it permanently unable to mint.
+    _tokens: dict[str, _CachedOAuthToken] = field(
+        default_factory=dict[str, _CachedOAuthToken], init=False, repr=False
+    )
     _token_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey:
@@ -308,6 +336,7 @@ class TailscaleTailnetControl:
             "POST",
             "/api/v2/tailnet/-/keys",
             content=request.model_dump_json(by_alias=True),
+            tag=self.config.agent_tag,
         )
         parsed = self._parse_response(response, _CreateAuthKeyResponse, "auth-key creation")
         return TailnetAuthKey(
@@ -430,8 +459,13 @@ class TailscaleTailnetControl:
         *,
         content: str | None = None,
         allowed_status_codes: tuple[int, ...] = (200,),
+        tag: str = "",
     ) -> httpx.Response:
-        token = self._access_token()
+        # Minting is the only tag-sensitive call; reading and removing devices
+        # act on the tailnet, so they use the agent identity this control plane
+        # is primarily configured as.
+        authority = tag or self.config.agent_tag
+        token = self._access_token(authority)
         response = self._request(
             method,
             path,
@@ -439,8 +473,8 @@ class TailscaleTailnetControl:
             content=content,
         )
         if response.status_code == 401:
-            self._invalidate_token(token)
-            token = self._access_token()
+            self._invalidate_token(authority, token)
+            token = self._access_token(authority)
             response = self._request(
                 method,
                 path,
@@ -448,7 +482,7 @@ class TailscaleTailnetControl:
                 content=content,
             )
         if response.status_code not in allowed_status_codes:
-            raise _http_error(method, path, response.status_code)
+            raise _http_error(method, path, response.status_code, _error_detail(response))
         return response
 
     def _request(
@@ -475,27 +509,27 @@ class TailscaleTailnetControl:
                 retryable=True,
             ) from exc
 
-    def _access_token(self) -> SecretStr:
+    def _access_token(self, tag: str) -> SecretStr:
         now = datetime.now(UTC)
-        cached = self._token
+        cached = self._tokens.get(tag)
         if cached is not None and cached.usable_at(now):
             return cached.access_token
         with self._token_lock:
             now = datetime.now(UTC)
-            cached = self._token
+            cached = self._tokens.get(tag)
             if cached is not None and cached.usable_at(now):
                 return cached.access_token
-            response = self._request_oauth_token()
+            response = self._request_oauth_token(tag)
             parsed = self._parse_response(response, _OAuthTokenResponse, "OAuth token exchange")
             refresh_skew = min(TOKEN_REFRESH_SKEW_SECONDS, max(parsed.expires_in // 10, 1))
             token = _CachedOAuthToken(
                 access_token=parsed.access_token,
                 refresh_at=now + timedelta(seconds=parsed.expires_in - refresh_skew),
             )
-            self._token = token
+            self._tokens[tag] = token
             return token.access_token
 
-    def _request_oauth_token(self) -> httpx.Response:
+    def _request_oauth_token(self, tag: str) -> httpx.Response:
         try:
             with self._client() as client:
                 response = client.post(
@@ -505,7 +539,10 @@ class TailscaleTailnetControl:
                         "client_id": self.config.oauth_client_id,
                         "client_secret": self.config.oauth_client_secret.get_secret_value(),
                         "scope": TAILSCALE_OAUTH_SCOPES,
-                        "tags": self.config.agent_tag,
+                        # Exactly one tag. Tailscale rejects a list here, and the
+                        # resulting token can mint that tag and no other, which
+                        # is why each caller asks for the tag it is about to use.
+                        "tags": tag,
                     },
                     headers={"Accept": "application/json"},
                 )
@@ -516,14 +553,19 @@ class TailscaleTailnetControl:
                 retryable=True,
             ) from exc
         if response.status_code != 200:
-            raise _http_error("POST", "/api/v2/oauth/token", response.status_code)
+            raise _http_error(
+                "POST",
+                "/api/v2/oauth/token",
+                response.status_code,
+                _error_detail(response),
+            )
         return response
 
-    def _invalidate_token(self, token: SecretStr) -> None:
+    def _invalidate_token(self, tag: str, token: SecretStr) -> None:
         with self._token_lock:
-            cached = self._token
+            cached = self._tokens.get(tag)
             if cached is not None and cached.access_token == token:
-                self._token = None
+                del self._tokens[tag]
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -647,7 +689,24 @@ def _machine_device_name_matches(
     return not name or name == hostname or name.startswith(f"{hostname}.")
 
 
-def _http_error(method: str, path: str, status_code: int) -> TailnetControlError:
+class _TailscaleErrorBody(_TailscaleResponseModel):
+    message: str = ""
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Tailscale's own explanation, bounded and without echoing a request body."""
+    try:
+        return _TailscaleErrorBody.model_validate_json(response.content).message[:200]
+    except ValidationError:
+        return ""
+
+
+def _http_error(
+    method: str,
+    path: str,
+    status_code: int,
+    detail: str = "",
+) -> TailnetControlError:
     if status_code == 401:
         code = TailnetControlErrorCode.AuthenticationFailed
         retryable = False
@@ -669,9 +728,13 @@ def _http_error(method: str, path: str, status_code: int) -> TailnetControlError
     else:
         code = TailnetControlErrorCode.InvalidConfiguration
         retryable = False
+    # Tailscale explains its 4xx responses in the body, and without that a
+    # rejected tag and a malformed description are the same bare 400. The body
+    # names the resource, never a credential.
+    explanation = f": {detail}" if detail else ""
     return TailnetControlError(
         code,
-        f"Tailscale API returned status {status_code} for {method} {path}",
+        f"Tailscale API returned status {status_code} for {method} {path}{explanation}",
         retryable=retryable,
     )
 

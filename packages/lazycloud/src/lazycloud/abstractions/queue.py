@@ -76,7 +76,7 @@ class Queue:
         return self.control_client.size(self.name).size
 
     def put(self, value: Any) -> bool:
-        self.control_client.put(self.name, _serialize(value))
+        self.control_client.put(self.name, encode_value(value))
         return True
 
     def pop(self) -> Any:
@@ -101,10 +101,6 @@ def _default_queue_client(config: ControlClientConfig) -> SimpleQueueControlClie
         timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
     )
-
-
-def _serialize(value: Any) -> bytes:
-    return encode_value(value)
 
 
 def _deserialize_queue_value(value: bytes) -> Any:

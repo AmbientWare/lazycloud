@@ -56,12 +56,12 @@ def test_resource_client_percent_encodes_path_identifiers() -> None:
     identifier = "nested/name?draft#one"
 
     assert client.app(identifier) == active
-    client.delete_pool(identifier)
+    client.delete_app(identifier)
 
     encoded = "nested%2Fname%3Fdraft%23one"
     assert channel.calls == [
         ("GET", f"/api/v1/apps/{encoded}?workspace=workspace%2Fone", None),
-        ("DELETE", f"/api/v1/pools/{encoded}?workspace=workspace%2Fone", None),
+        ("DELETE", f"/api/v1/apps/{encoded}?workspace=workspace%2Fone", None),
     ]
 
 

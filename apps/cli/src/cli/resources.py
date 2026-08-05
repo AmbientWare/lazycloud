@@ -37,6 +37,7 @@ queue_app = typer.Typer(help="Manage queues.")
 map_app = typer.Typer(help="Manage durable maps.")
 worker_app = typer.Typer(help="Manage worker records.")
 container_app = typer.Typer(help="Manage containers.")
+pool_app = typer.Typer(help="Manage workspace compute pools and capacity.")
 
 
 def _queue_client() -> SimpleQueueControlClient:
@@ -402,6 +403,22 @@ def pool_delete(name: str) -> None:
     console.print(f"deleted pool {name}")
 
 
+def pool_clear_degraded(
+    ctx: typer.Context,
+    name: str,
+    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
+) -> None:
+    response = admin_api_client(workspace).clear_pool_degradation(name)
+    if json_output_enabled(ctx):
+        print_payload(ctx, response.model_dump(mode="json"))
+        return
+    console.print(
+        f"Pool {response.name}: desired {response.desired_machines} nodes, "
+        f"observed {response.observed_machines}, maximum {response.max_machines} "
+        f"({response.phase.value}: {response.status})"
+    )
+
+
 def pool_join(
     ctx: typer.Context,
     name: str,
@@ -411,7 +428,7 @@ def pool_join(
     worker_image: Annotated[str, typer.Option("--worker-image")] = "",
     print_only: Annotated[bool, typer.Option("--print-only")] = False,
 ) -> None:
-    response = compute_client().pool_join_command(name, PoolJoinCommandRequest(ttl=ttl))
+    response = admin_api_client().pool_join_command(name, PoolJoinCommandRequest(ttl=ttl))
     command = build_pool_join_command(
         response.command,
         agent_bin=agent_bin,
@@ -553,11 +570,14 @@ container_app.command("attach")(container_attach)
 container_app.command("checkpoint")(container_checkpoint)
 
 
-def register_pool_extensions(group: typer.Typer) -> None:
-    group.command("create")(pool_create)
-    group.command("list")(pool_list)
-    group.command("delete")(pool_delete)
-    group.command("join")(pool_join)
+pool_app.command("create")(pool_create)
+pool_app.command("list")(pool_list)
+pool_app.command("delete")(pool_delete)
+pool_app.command("join")(pool_join)
+pool_app.command(
+    "clear-degraded",
+    help="Let a pool that exhausted its relaunch attempts buy machines again.",
+)(pool_clear_degraded)
 
 
 def register_machine_extensions(group: typer.Typer) -> None:
@@ -571,8 +591,8 @@ def register_machine_extensions(group: typer.Typer) -> None:
 __all__ = [
     "container_app",
     "map_app",
+    "pool_app",
     "queue_app",
     "register_machine_extensions",
-    "register_pool_extensions",
     "worker_app",
 ]

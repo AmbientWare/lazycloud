@@ -18,6 +18,7 @@ from execution.volumes.control import VolumeControlService
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from gateway.events import (
+    GatewayEventSink,
     GatewayRequestEventMiddleware,
     authorization_header_from_scope,
 )
@@ -42,6 +43,7 @@ from starlette.types import Scope
 from api.control_runtime import ControlPlaneRuntime
 from api.server import include_api_routers, service_dependencies
 from api.server.host_routing import GeneratedInvokeHostRoutingMiddleware
+from api.server.rate_limit import UnauthenticatedRateLimitMiddleware
 from api.server.services import (
     ApiServices,
     EndpointApiService,
@@ -50,6 +52,7 @@ from api.server.services import (
 )
 from api.server.tcp_ingress import tcp_ingress_server_from_settings
 from api.server.worker_repository_service import WorkerRepositoryService
+from api.settings import PublicIngressSettings
 from api.web_static import mount_web_app
 from database import ControlPlaneRecoveryFence
 
@@ -163,6 +166,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                         interval_seconds=(
                             api_services.agent_route_reconciliation_settings.interval_seconds
                         ),
+                        event_sink=api_services.events,
                     )
                 )
                 cleanup.push_async_callback(
@@ -177,6 +181,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                             api_services.aws_connections,
                             interval_seconds=reconciliation.interval_seconds,
                             limit=reconciliation.limit,
+                            event_sink=api_services.events,
                         )
                     )
                     cleanup.push_async_callback(
@@ -206,21 +211,44 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         lifespan=lifespan,
     )
     services_provider = _FastApiServicesProvider(app)
+    public_ingress = PublicIngressSettings()
     app.add_middleware(
         GeneratedInvokeHostRoutingMiddleware,
         services_provider=services_provider,
     )
     app.add_middleware(
+        UnauthenticatedRateLimitMiddleware,
+        redis=lambda: services_provider.current().redis(),
+        client_ip_header=public_ingress.client_ip_header,
+    )
+    app.add_middleware(
         GatewayRequestEventMiddleware,
         event_sink=_CurrentGatewayEventSink(services_provider),
         workspace_resolver=_CurrentWorkspaceResolver(services_provider),
+        metrics_sink=_CurrentGatewayMetricsSink(services_provider),
     )
 
     @app.exception_handler(DomainError)
-    async def domain_error_handler(_: Request, exc: DomainError) -> JSONResponse:
+    async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
+        # A domain error carries one sentence. Almost every one is raised `from`
+        # something that says what actually happened, and that chain ended here
+        # unread — so the cheapest failures to explain were the ones this
+        # codebase explained least. Expected does not mean uninteresting.
+        status_code = _domain_error_status(exc)
+        request_id = request.headers.get("x-request-id") or uuid4().hex
+        log = logger.warning if status_code < 500 else logger.error
+        log(
+            "%s serving %s %s (request_id=%s)",
+            type(exc).__name__,
+            request.method,
+            request.url.path,
+            request_id,
+            exc_info=exc,
+        )
         return JSONResponse(
-            ErrorResponse(detail=exc.message).model_dump(),
-            status_code=_domain_error_status(exc),
+            ErrorResponse(detail=exc.message, code=exc.code).model_dump(),
+            status_code=status_code,
+            headers={"X-Request-ID": request_id},
         )
 
     @app.exception_handler(AuthError)
@@ -265,10 +293,30 @@ def create_production_app() -> FastAPI:
     return _create_app(runtime)
 
 
+def _emit_reconciliation_failure(
+    event_sink: GatewayEventSink | None,
+    loop_name: str,
+    exc: Exception,
+) -> None:
+    """A failed reconcile pass must outlive the log line that mentions it."""
+    if event_sink is None:
+        return
+    with suppress(Exception):
+        event_sink.emit(
+            f"reconciliation.{loop_name}.failed",
+            resource_type="reconciliation-loop",
+            resource_id=loop_name,
+            message=f"{loop_name} reconciliation failed ({type(exc).__name__}: {exc})",
+            level=EventLevel.Error,
+            data={"loop": loop_name, "error_type": type(exc).__name__},
+        )
+
+
 async def _reconcile_agent_routes(
     repository: WorkerRepositoryService,
     *,
     interval_seconds: float,
+    event_sink: GatewayEventSink | None = None,
 ) -> None:
     while True:
         try:
@@ -279,8 +327,9 @@ async def _reconcile_agent_routes(
                     result.scanned,
                     result.removed,
                 )
-        except Exception:
+        except Exception as exc:
             logger.exception("agent route registry reconciliation failed")
+            _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 
@@ -289,6 +338,7 @@ async def _reconcile_aws_connections(
     *,
     interval_seconds: float,
     limit: int,
+    event_sink: GatewayEventSink | None = None,
 ) -> None:
     while True:
         try:
@@ -301,8 +351,9 @@ async def _reconcile_aws_connections(
                     batch.completed_count,
                     batch.failure_count,
                 )
-        except Exception:
+        except Exception as exc:
             logger.exception("AWS connection reconciliation failed")
+            _emit_reconciliation_failure(event_sink, "aws-connections", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 
@@ -340,6 +391,31 @@ class _CurrentGatewayEventSink:
             level=level,
             data=data,
             workspace_id=workspace_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentGatewayMetricsSink:
+    services_provider: _FastApiServicesProvider
+
+    def increment(
+        self,
+        name: str,
+        amount: float = 1,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object:
+        return self.services_provider.current().metrics.increment(name, amount, labels=labels)
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object:
+        return self.services_provider.current().metrics.observe_histogram(
+            name, value, labels=labels
         )
 
 

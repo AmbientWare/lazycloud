@@ -34,8 +34,9 @@ from database.repositories.compute import (
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from gateway.http import JoinAgentRequest
+from scheduler.compute_hooks import SchedulerComputeHooks
+from scheduler.state import RedisSchedulerWorkerRepository
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
@@ -52,6 +53,10 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import ComputePoolRecord
 from shared.errors import ConflictError
+from shared.scheduling import (
+    SchedulerWorkerRecord,
+    SchedulerWorkerStatus,
+)
 from shared.source_cache_cleanup import (
     SourceCacheCleanupCompletionReason,
     WorkerCacheGenerationState,
@@ -242,6 +247,7 @@ class _RecordingBilling:
 @dataclass(slots=True)
 class _RecordingSchedulerHooks:
     registered_pools: list[str] = field(default_factory=list)
+    available_machines: set[str] = field(default_factory=set)
     registered_machines: list[str] = field(default_factory=list)
     disabled_machines: list[str] = field(default_factory=list)
 
@@ -258,6 +264,9 @@ class _RecordingSchedulerHooks:
         del reason
         self.disabled_machines.append(machine_id)
 
+    def machine_worker_available(self, machine_id: str) -> bool:
+        return machine_id in self.available_machines
+
     def retire_machine(
         self,
         workspace_id: str,
@@ -273,6 +282,27 @@ class _RecordingSchedulerHooks:
 
 def _phase_deadlines(seconds: int) -> dict[str, int]:
     return dict.fromkeys(("requested", "provisioning", "booting", "joining"), seconds)
+
+
+def _scheduler_worker_available(services: ApiServices, machine_id: str, *, pool: str) -> None:
+    """Make the scheduler's hot record say this machine's worker takes work.
+
+    Readiness is decided by that record, not by the durable `Worker` row — a row
+    that says `Running` from the moment of registration.
+    """
+    hooks = services.compute.scheduler_hooks
+    assert isinstance(hooks, SchedulerComputeHooks)
+    workers = hooks.workers
+    assert isinstance(workers, RedisSchedulerWorkerRepository)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=agent_machine_worker_id(machine_id),
+            pool_name=pool,
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            machine_id=machine_id,
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
 
 
 def _offer(provider: str, *, hourly_cost_micros: int, available: int = 4) -> ComputeOffer:
@@ -293,7 +323,7 @@ def _install_providers(services: ApiServices, providers: dict[str, _DirectProvid
     services.compute.provider_resolver = None
 
 
-def test_direct_capacity_plan_is_read_only_and_retry_preserves_exact_intent(
+def test_direct_capacity_retry_reuses_one_operation_and_launches_once(
     isolated_services: ApiServices,
 ) -> None:
     alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
@@ -310,34 +340,32 @@ def test_direct_capacity_plan_is_read_only_and_retry_preserves_exact_intent(
     with isolated_services.context.database.session() as session:
         pool = ComputePoolRepository(session).get_by_name(state.workspace_id, state.name)
     assert pool is not None
-    planning = CapacityAcquisitionPlanningRequest(
+    planning = CapacityAcquisitionRequest(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
-    launch_calls_before_plan = list(alpha.launch_calls)
+    launch_calls_before = list(alpha.launch_calls)
 
-    planned = isolated_services.compute.plan_capacity_acquisition(planning)
-
-    assert planned.status is CapacityAcquisitionStatus.Requested
-    assert planned.desired_unit == 2
-    assert alpha.launch_calls == launch_calls_before_plan
-    requested = isolated_services.compute.acquire_capacity(
-        CapacityAcquisitionRequest(
-            **planning.model_dump(),
-            desired_unit=planned.desired_unit,
-        )
-    )
-    launch_calls_after_acquire = list(alpha.launch_calls)
-
-    retried_plan = isolated_services.compute.plan_capacity_acquisition(planning)
+    requested = isolated_services.compute.ensure_capacity(planning)
+    launch_calls_after = list(alpha.launch_calls)
+    retried = isolated_services.compute.ensure_capacity(planning)
 
     assert requested.status is CapacityAcquisitionStatus.Requested
-    assert retried_plan.status is CapacityAcquisitionStatus.Requested
-    assert retried_plan.desired_unit == planned.desired_unit
-    assert retried_plan.target_machine_id == requested.target_machine_id
-    assert alpha.launch_calls == launch_calls_after_acquire
+    assert requested.desired_unit == 2
+    assert len(launch_calls_after) == len(launch_calls_before) + 1
+    # The retry re-derives the same intent and buys nothing further.
+    assert retried.desired_unit == requested.desired_unit
+    assert retried.target_machine_id == requested.target_machine_id
+    assert alpha.launch_calls == launch_calls_after
+    with isolated_services.context.database.session() as session:
+        # `one_or_none` raises if the retry created a second operation row.
+        operation = ComputeCapacityOperationRepository(session).get_by_reservation(
+            planning.reservation_id
+        )
+    assert operation is not None
+    assert operation.desired_unit == requested.desired_unit
 
 
 def test_direct_capacity_plan_rejects_limit_and_fixed_shape_without_mutation(
@@ -367,14 +395,14 @@ def test_direct_capacity_plan_rejects_limit_and_fixed_shape_without_mutation(
     }
     launch_calls_before_plan = list(alpha.launch_calls)
 
-    at_limit = isolated_services.compute.plan_capacity_acquisition(
-        CapacityAcquisitionPlanningRequest(
+    at_limit = isolated_services.compute.ensure_capacity(
+        CapacityAcquisitionRequest(
             **request_fields,
             shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
         )
     )
-    fixed_shape_rejection = isolated_services.compute.plan_capacity_acquisition(
-        CapacityAcquisitionPlanningRequest(
+    fixed_shape_rejection = isolated_services.compute.ensure_capacity(
+        CapacityAcquisitionRequest(
             **{
                 **request_fields,
                 "reservation_id": str(uuid4()),
@@ -412,12 +440,11 @@ def test_direct_capacity_acquisition_retries_without_launching_a_second_machine(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    requested = isolated_services.compute.acquire_capacity(acquisition)
-    retried = isolated_services.compute.acquire_capacity(acquisition)
+    requested = isolated_services.compute.ensure_capacity(acquisition)
+    retried = isolated_services.compute.ensure_capacity(acquisition)
 
     assert requested.status is CapacityAcquisitionStatus.Requested
     assert retried.status is CapacityAcquisitionStatus.ExistingPending
@@ -463,15 +490,14 @@ def test_direct_capacity_acquisition_recovers_a_lost_provider_response(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
     alpha.raise_after_launch = True
 
-    unavailable = isolated_services.compute.acquire_capacity(acquisition)
+    unavailable = isolated_services.compute.ensure_capacity(acquisition)
     alpha.hide_remote_reconciliations = 1
     alpha.raise_after_launch = False
-    recovered = isolated_services.compute.acquire_capacity(acquisition)
+    recovered = isolated_services.compute.ensure_capacity(acquisition)
 
     assert unavailable.status is CapacityAcquisitionStatus.TemporarilyUnavailable
     assert recovered.status is CapacityAcquisitionStatus.Requested
@@ -1499,6 +1525,11 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
             )
         )
 
+    _scheduler_worker_available(
+        isolated_services,
+        registered_machine_id,
+        pool="reclaim-pool",
+    )
     before_deadline = launched_at + timedelta(seconds=1200)
     isolated_services.compute.reconcile_provider_capacity(now=before_deadline)
     assert alpha.terminate_calls == []
@@ -1537,6 +1568,122 @@ def test_never_registered_machine_is_reclaimed_after_the_deadline(
     }
     assert registered_machine_id in machines
     assert machines.get(silent_machine_id, ResourceStatus.Deleted) is ResourceStatus.Deleted
+
+
+def test_a_machine_that_reported_its_failure_is_reclaimed_under_that_reason(
+    isolated_services: ApiServices,
+) -> None:
+    """Reporting a failure must not cost more than dying silently.
+
+    `Failed` had no deadline, and `Failed -> Deleting` is the only transition
+    out of it, so a machine that said why it failed ran and billed until someone
+    noticed — while one that said nothing was reclaimed on the phase clock. The
+    reported reason also has to survive the reclaim: re-labelling it
+    `BootstrapTimedOut` discards the only diagnosis the node managed to send.
+    """
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    _install_providers(isolated_services, {"alpha": alpha})
+    # The shipped defaults, deliberately: the bound on `Failed` is the subject.
+    isolated_services.compute.reclaim = ComputeReclaimPolicy()
+    state = isolated_services.compute.launch_pool_capacity(
+        PoolConfig(name="reclaim-pool", providers=["alpha"], nodes=1, ttl="4h", max_spend=9.0)
+    )
+    reported_at = utc_now()
+    machine_id = state.reservations[0].machine_id
+    instance_id = state.reservations[0].instance_id
+    with isolated_services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, "reclaim-pool")
+        assert pool is not None
+        repository = ComputeProviderInstanceRepository(session)
+        for record in repository.list_for_pool(pool.id):
+            if record.machine_id == machine_id:
+                repository.upsert(
+                    record.model_copy(
+                        update={
+                            "bootstrap_phase": MachineBootstrapPhase.Failed,
+                            "bootstrap_failure_reason": (
+                                MachineBootstrapFailureReason.NetworkJoinFailed
+                            ),
+                            "bootstrap_observed_at": reported_at,
+                        }
+                    )
+                )
+
+    isolated_services.compute.reconcile_provider_capacity(now=reported_at + timedelta(seconds=120))
+    assert alpha.terminate_calls == []
+
+    isolated_services.compute.reconcile_provider_capacity(now=reported_at + timedelta(seconds=360))
+
+    assert alpha.terminate_calls == [instance_id]
+    with isolated_services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, "reclaim-pool")
+        assert pool is not None
+        record = next(
+            item
+            for item in ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            if item.machine_id == machine_id
+        )
+    assert record.bootstrap_failure_reason is MachineBootstrapFailureReason.NetworkJoinFailed
+
+
+def test_unreachable_worker_state_keeps_the_machine(
+    isolated_services: ApiServices,
+) -> None:
+    """Reclaim terminates billable machines on this answer; an outage is not one.
+
+    When the worker-state store cannot be read, the machine's readiness is
+    unknown, and unknown machines are kept — never read as gone and terminated.
+    """
+
+    @dataclass(slots=True)
+    class _UnreachableWorkerState(_RecordingSchedulerHooks):
+        def machine_worker_available(self, machine_id: str) -> bool:
+            raise ConnectionError("worker state store is unreachable")
+
+    alpha = _DirectProvider(name="alpha", offers=[_offer("alpha", hourly_cost_micros=100_000)])
+    _install_providers(isolated_services, {"alpha": alpha})
+    isolated_services.compute.reclaim = ComputeReclaimPolicy(
+        bootstrap_phase_deadline_seconds=_phase_deadlines(300)
+    )
+    state = isolated_services.compute.launch_pool_capacity(
+        PoolConfig(name="reclaim-pool", providers=["alpha"], nodes=1, ttl="4h", max_spend=9.0)
+    )
+    launched_at = utc_now()
+    machine_id = state.reservations[0].machine_id
+    assert machine_id is not None
+    with isolated_services.context.database.session() as session:
+        pool = ComputePoolRepository(session).get_by_name(state.workspace_id, "reclaim-pool")
+        assert pool is not None
+        repository = ComputeProviderInstanceRepository(session)
+        for record in repository.list_for_pool(pool.id):
+            repository.upsert(
+                record.model_copy(
+                    update={
+                        "bootstrap_phase": MachineBootstrapPhase.Joining,
+                        "bootstrap_observed_at": launched_at,
+                    }
+                )
+            )
+        ComputeMachineEnrollmentRepository(session).create(
+            ComputeMachineEnrollmentCreate(
+                workspace_id=state.workspace_id,
+                pool_name="reclaim-pool",
+                machine_id=machine_id,
+                machine_fingerprint_hash="a" * 64,
+                credential_hash="b" * 64,
+                status=ComputeMachineEnrollmentStatus.Active,
+                heartbeat_confirmed=True,
+                schedulable=True,
+                readiness_phase=MachineReadinessPhase.Ready,
+                last_join_at=launched_at,
+                last_heartbeat_at=launched_at,
+            )
+        )
+    isolated_services.compute.scheduler_hooks = _UnreachableWorkerState()
+
+    isolated_services.compute.reconcile_provider_capacity(now=launched_at + timedelta(seconds=600))
+
+    assert alpha.terminate_calls == []
 
 
 def _pool_for_capacity(
@@ -1583,11 +1730,10 @@ def test_compensated_launch_attempt_renews_join_authority_and_idempotency_key(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    requested = isolated_services.compute.acquire_capacity(acquisition)
+    requested = isolated_services.compute.ensure_capacity(acquisition)
     assert requested.status is CapacityAcquisitionStatus.Requested
 
     # The reconciler revokes an overdue launch intent's unused credential.
@@ -1596,7 +1742,7 @@ def test_compensated_launch_attempt_renews_join_authority_and_idempotency_key(
         ComputeJoinCredentialRepository(session).save(existing.revoke(now=utc_now()))
     alpha.hide_remote_reconciliations = 1
 
-    renewed = isolated_services.compute.acquire_capacity(acquisition)
+    renewed = isolated_services.compute.ensure_capacity(acquisition)
 
     assert renewed.status is CapacityAcquisitionStatus.Requested
     assert renewed.target_machine_id == requested.target_machine_id
@@ -1620,11 +1766,10 @@ def test_consumed_join_authority_is_never_reminted(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    requested = isolated_services.compute.acquire_capacity(acquisition)
+    requested = isolated_services.compute.ensure_capacity(acquisition)
     assert requested.status is CapacityAcquisitionStatus.Requested
 
     [existing] = _capacity_credentials(isolated_services, pool, requested.target_machine_id)
@@ -1632,7 +1777,7 @@ def test_consumed_join_authority_is_never_reminted(
         ComputeJoinCredentialRepository(session).save(existing.model_copy(update={"use_count": 1}))
     alpha.hide_remote_reconciliations = 1
 
-    rejected = isolated_services.compute.acquire_capacity(acquisition)
+    rejected = isolated_services.compute.ensure_capacity(acquisition)
 
     assert rejected.status is CapacityAcquisitionStatus.TemporarilyUnavailable
     assert len(_capacity_credentials(isolated_services, pool, requested.target_machine_id)) == 1
@@ -1656,11 +1801,10 @@ def test_provider_failure_is_typed_and_never_carries_upstream_text(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
-        desired_unit=2,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=8_192),
     )
 
-    result = isolated_services.compute.acquire_capacity(acquisition)
+    result = isolated_services.compute.ensure_capacity(acquisition)
 
     assert result.status is CapacityAcquisitionStatus.TemporarilyUnavailable
     assert result.failure_code is CapacityFailureCode.ProviderLaunchFailed

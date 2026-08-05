@@ -50,7 +50,6 @@ class Worker(ContractModel):
     machine_id: str | None = None
     pool: str = "default"
     status: ResourceStatus = ResourceStatus.Created
-    version: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     last_seen_at: datetime = Field(default_factory=utc_now)
     created_at: datetime = Field(default_factory=utc_now)

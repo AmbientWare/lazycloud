@@ -103,6 +103,15 @@ class _TableRecordStore[TModel: BaseModel]:
         name: str | None,
         status: str | None,
     ) -> TModel:
+        # Creates validate; upserts did not, and `model_copy(update=...)` is how
+        # this codebase mutates a record — it is documented to skip validation,
+        # so a caller passing a serialized value for a typed field persisted a
+        # record whose in-memory type contradicted its own annotation.
+        #
+        # `dict(model)` reads raw field values without invoking the serializer.
+        # `model_dump(mode="python")` would serialize, and on a drifted record
+        # that emits the very warning this guard exists to prevent.
+        model = self.config.model_type.model_validate(dict(model))
         payload = _json_object(model)
         lookup_key = key or _payload_key(payload, self.config.key_field)
         row = (

@@ -34,7 +34,9 @@ from shared.env import (
     GATEWAY_HTTP_PORT_ENV,
     GATEWAY_HTTP_TLS_ENV,
     GATEWAY_HTTP_URL_ENV,
+    WORKER_PEER_RESOLVER_ADDRESS_ENV,
     WORKER_REPOSITORY_URL_ENV,
+    WORKER_TAILNET_DNS_SUFFIX_ENV,
 )
 from shared.gpu import normalize_gpu_type
 from shared.routing import BackendRouteTransport
@@ -70,6 +72,7 @@ from agent.service_manager import (
 AGENT_WORKER_CONTAINER_SERVICE_BASE_PORT = 19000
 AGENT_WORKER_CONTAINER_SERVICE_PORT_SPAN = 20000
 AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
+AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
 DOCKER_NETWORK_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
 
@@ -223,6 +226,8 @@ MACHINE_FINGERPRINT=""
 AGENT_HOSTNAME=""
 DEV="0"
 AGENT_BIN="${LAZYCLOUD_AGENT_BIN:-}"
+AGENT_URL="${LAZYCLOUD_AGENT_URL:-}"
+INSTALL_ONLY="0"
 AGENT_VERSION="${LAZYCLOUD_AGENT_VERSION:-}"
 AGENT_SHA256="${LAZYCLOUD_AGENT_SHA256:-}"
 AGENT_AMD64_SHA256="${LAZYCLOUD_AGENT_AMD64_SHA256:-}"
@@ -264,6 +269,10 @@ main() {
   ensure_docker
   ensure_tailscale
   install_agent
+  if [ "$INSTALL_ONLY" = "1" ]; then
+    say "Installed __AGENT_NAME__ runtime without enrolling"
+    return
+  fi
   run_agent
 }
 
@@ -291,6 +300,8 @@ parse_args() {
       --hostname) require_value "$1" "${2:-}"; AGENT_HOSTNAME="$2"; shift 2 ;;
       --dev) DEV="1"; shift ;;
       --agent-bin) require_value "$1" "${2:-}"; AGENT_BIN="$2"; shift 2 ;;
+      --agent-url) require_value "$1" "${2:-}"; AGENT_URL="$2"; shift 2 ;;
+      --install-only) INSTALL_ONLY="1"; shift ;;
       --agent-version) require_value "$1" "${2:-}"; AGENT_VERSION="$2"; shift 2 ;;
       --agent-sha256) require_value "$1" "${2:-}"; AGENT_SHA256="$2"; shift 2 ;;
       --agent-amd64-sha256)
@@ -365,14 +376,26 @@ resolve_agent_artifact_digest() {
 }
 
 validate_input() {
-  if [ -z "$GATEWAY" ]; then
-    fail "--gateway is required" 2
-  fi
-  if [ -n "$JOIN_TOKEN" ] && [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
-    fail "--join-token and --provider-enrollment-request cannot be combined" 2
-  fi
-  if [ -z "$JOIN_TOKEN" ] && [ -z "$PROVIDER_ENROLLMENT_REQUEST" ]; then
-    fail "--join-token or --provider-enrollment-request is required" 2
+  # An image bake installs the runtime and never enrols: there is no control
+  # plane to name and no credential to carry, and demanding either would mean
+  # baking a machine identity into an image every instance boots from.
+  if [ "$INSTALL_ONLY" = "1" ]; then
+    if [ -n "$JOIN_TOKEN" ] || [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
+      fail "--install-only cannot be combined with an enrollment credential" 2
+    fi
+    if [ -z "$AGENT_URL" ]; then
+      fail "--install-only requires --agent-url" 2
+    fi
+  else
+    if [ -z "$GATEWAY" ]; then
+      fail "--gateway is required" 2
+    fi
+    if [ -n "$JOIN_TOKEN" ] && [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
+      fail "--join-token and --provider-enrollment-request cannot be combined" 2
+    fi
+    if [ -z "$JOIN_TOKEN" ] && [ -z "$PROVIDER_ENROLLMENT_REQUEST" ]; then
+      fail "--join-token or --provider-enrollment-request is required" 2
+    fi
   fi
   if [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
     if [ "$PROVIDER" != "aws" ] || [ "$PROVIDER_INSTANCE_IDENTITY" != "imds-v2" ]; then
@@ -380,22 +403,41 @@ validate_input() {
 --provider-instance-identity imds-v2" 2
     fi
   fi
-  case "$GATEWAY" in
-    http://*|https://*) ;;
-    *) fail "--gateway must start with http:// or https://" 2 ;;
-  esac
+  if [ -n "$GATEWAY" ]; then
+    case "$GATEWAY" in
+      http://*|https://*) ;;
+      *) fail "--gateway must start with http:// or https://" 2 ;;
+    esac
+  fi
+  if [ -n "$AGENT_URL" ]; then
+    # The artifact is public and unauthenticated, so it must not be reached
+    # over a scheme that would carry the enrolment credential in the clear.
+    case "$AGENT_URL" in
+      https://*) ;;
+      *) fail "--agent-url must start with https://" 2 ;;
+    esac
+    case "$AGENT_URL" in
+      *@*) fail "--agent-url must not embed credentials" 2 ;;
+    esac
+  fi
   if [ "$OS_NAME" != "linux" ]; then
     fail "unsupported operating system: $OS_NAME; customer machines require Linux" 1
   fi
   if [ "$ARCH_NAME" != "amd64" ] && [ "$ARCH_NAME" != "arm64" ]; then
     fail "unsupported architecture: $ARCH_NAME; expected amd64 or arm64" 1
   fi
+  # A digest is only meaningful next to the artifact it describes. A version
+  # names one by deriving its URL; --agent-url names one outright, so it
+  # satisfies the same requirement without a version to derive anything from.
   if [ -n "$AGENT_VERSION" ] || [ -n "$AGENT_SHA256" ]; then
-    if [ -z "$AGENT_VERSION" ] || [ -z "$AGENT_SHA256" ]; then
-      fail "--agent-version and --agent-sha256 must be provided together" 2
+    if [ -z "$AGENT_SHA256" ] || { [ -z "$AGENT_VERSION" ] && [ -z "$AGENT_URL" ]; }; then
+      fail "--agent-sha256 needs the artifact it describes: pass --agent-version or --agent-url" 2
     fi
+    # Only checked when a version is what names the artifact; --agent-url
+    # carries no version and needs none.
     case "$AGENT_VERSION" in
-      *[!A-Za-z0-9._-]*|'') fail "--agent-version contains invalid characters" 2 ;;
+      '') [ -n "$AGENT_URL" ] || fail "--agent-version is required" 2 ;;
+      *[!A-Za-z0-9._-]*) fail "--agent-version contains invalid characters" 2 ;;
     esac
     case "$AGENT_SHA256" in
       *[!0-9a-f]*|'') fail "--agent-sha256 must be a lowercase SHA-256 digest" 2 ;;
@@ -622,6 +664,12 @@ install_agent() {
     AGENT_BIN="/usr/local/bin/__AGENT_NAME__"
   else
     AGENT_BIN="${HOME:-/tmp}/__HOME_DIR__/bin/__AGENT_NAME__"
+  fi
+  # A published artifact URL wins: a managed node pulls 47 MB per launch, and
+  # serving that from the control plane makes every scale-up its problem.
+  if [ -n "$AGENT_URL" ]; then
+    install_from_url "$AGENT_URL" "$AGENT_BIN"
+    return
   fi
   artifact_url="$GATEWAY/install/agent/$OS_NAME/$ARCH_NAME"
   if [ -n "$AGENT_VERSION" ]; then
@@ -966,6 +1014,18 @@ class AgentRuntimeReady(ContractModel):
     ready_at: datetime = Field(default_factory=utc_now)
 
 
+class AgentAuthorityRevoked(ContractModel):
+    """Written once when the control plane revokes this machine's authority.
+
+    Its presence is what stops the next start from re-joining. Revocation is the
+    one stream ending that a restart cannot recover from, so it is recorded on
+    disk rather than inferred from the absence of saved state.
+    """
+
+    machine_id: str
+    revoked_at: datetime = Field(default_factory=utc_now)
+
+
 class AgentCapacityInterruptionNotice(ContractModel):
     reason: str = Field(min_length=1, max_length=240)
     observed_at: datetime = Field(default_factory=utc_now)
@@ -1307,16 +1367,11 @@ def agent_state_payload(
         "capacity_notice_at": (
             state.capacity_notice_at.isoformat() if state.capacity_notice_at is not None else None
         ),
-        "bootstrap": {
-            "gateway_public_http_url": bootstrap.gateway_public_http_url,
-            "gateway_grpc_host": bootstrap.gateway_grpc_host,
-            "gateway_grpc_port": bootstrap.gateway_grpc_port,
-            "gateway_grpc_tls": bootstrap.gateway_grpc_tls,
-            "transport": bootstrap.transport,
-            "image_local_cache_enabled": bootstrap.image_local_cache_enabled,
-            "image_registry_store": bootstrap.image_registry_store,
-            "image_clip_version": bootstrap.image_clip_version,
-        },
+        # Dumped whole rather than field by field. The hand-written list omitted
+        # `gateway_runtime_http_url`, so the origin survived in memory and was
+        # lost on the next restart: the worker then fell back to the public
+        # origin, which refuses worker RPC at the edge, and never left pending.
+        "bootstrap": bootstrap.model_dump(mode="json"),
         "updated_at": state.updated_at.isoformat(),
     }
 
@@ -1401,7 +1456,6 @@ def build_agent_worker_config(
         network=WorkerNetworkConfiguration(
             route_transport=_agent_worker_route_transport(bootstrap.transport),
             agent_bridge_network=bool(slot.network_prefix),
-            network_prefix=slot.network_prefix,
         ),
         paths=WorkerPathConfiguration(
             bundle_root=Path(AGENT_CONTAINER_TMP_PATH) / "bundles",
@@ -1439,6 +1493,8 @@ def plan_worker_container(
     platform: str = "",
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
+    peer_resolver_address: str = "",
+    tailnet_dns_suffix: str = "",
 ) -> AgentWorkerContainerPlan:
     selected_network = network or AgentWorkerNetwork()
     dirs = build_agent_worker_dirs(state_dir, slot.worker_id)
@@ -1465,6 +1521,7 @@ def plan_worker_container(
         "CACHE_LOCALITY": slot.pool_name,
         "CACHE_NODE": slot.machine_id,
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
+        "WORKER_NETWORK_PREFIX": slot.network_prefix,
         "WORKER_ROUTE_TARGET": target_host,
         WORKER_REPOSITORY_URL_ENV: normalize_gateway_url(worker_repository_url),
     }
@@ -1472,6 +1529,11 @@ def plan_worker_container(
         assignment = slot.gpu_assignment or "all"
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
         env["WORKER_GPU_DEVICES"] = assignment
+    if peer_resolver_address and tailnet_dns_suffix:
+        # Both or neither: an address without a suffix resolves nothing, and a
+        # suffix without an address names peers the worker cannot look up.
+        env[WORKER_PEER_RESOLVER_ADDRESS_ENV] = peer_resolver_address
+        env[WORKER_TAILNET_DNS_SUFFIX_ENV] = tailnet_dns_suffix
     env.update(agent_gateway_env(bootstrap))
     volumes = [
         f"{dirs.images}:/images",

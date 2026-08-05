@@ -137,6 +137,8 @@ def workspace_compute_provider_resolver(
     *,
     connections: AwsConnectionLoader,
     gateway_origin: str,
+    internal_origin: str,
+    presigned_origin: str = "",
     tailnet_runtime: TailnetRuntimeSettings,
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
@@ -144,6 +146,8 @@ def workspace_compute_provider_resolver(
     validate_provider_network_configuration(
         ProviderNetworkClass.Remote,
         gateway_origin=gateway_origin,
+        internal_origin=internal_origin,
+        presigned_origin=presigned_origin,
         runtime=tailnet_runtime,
         control=tailnet_control,
         backend_route=backend_route,

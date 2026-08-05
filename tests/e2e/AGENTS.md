@@ -1,50 +1,43 @@
 # Opt-In End-to-End Scenarios
 
-Each file proves one production capability through its public SDK, CLI, API, or
-browser path. Scenarios consume an already-prepared environment; they never
-build, deploy, migrate, reset, or inventory the platform.
+Live scenarios, each proving one production capability through its public SDK,
+CLI, API, or browser path. `README.md` covers running them and their
+prerequisites.
 
-- `local/` targets the healthy canonical root Compose stack.
-- `external/` targets an explicitly authorized provider, cluster, Tailnet, or
-  other external system.
-- Know that the stack is running the code under test before trusting a `local/`
-  result. `docker compose up` reuses existing images, and the agent runs workers
-  from `container-worker:local`, so a stack left up from earlier work can be
-  serving stale control-plane, scheduler, and worker images while every service
-  reports healthy. A pass then proves nothing and a failure sends you after the
-  wrong defect. If currency is already established, do not re-check; if it is
-  not, confirm it before running anything — image timestamps against the change
-  under test, and no worker container still running a superseded image.
-- Rebuild every image that embeds the source together, from one source state.
-  Rebuilding only the service you just edited leaves the others built from
-  different source, which the managed runtime rejects as a package digest
-  mismatch rather than as anything resembling the edit. Finish editing, then
-  rebuild once.
-- Ordinary `pytest` and changed-scope validation must not execute this tree.
-  Run Python scenarios as exact modules from the repository root
-  (`uv run python -m tests.e2e...`) and browser scenarios as exact nodes. Do
-  not execute Python files by path or add import-path bootstrap code.
-- Declare exact prerequisites and target guards. Exit `77` when a prerequisite
-  is unavailable, `0` only after terminal production evidence, and nonzero for
-  any mutation, assertion, or cleanup failure.
-- Create uniquely named resources, clean them through their public owner, and
-  verify only their public terminal state. Never delete fixed or pre-existing
-  resources.
-- Keep fixtures beside their one consumer. Shared support is limited to small
-  secret-safe process and live-gate primitives; do not create a workflow,
-  lifecycle, polling, deployment, or cleanup framework.
-- Do not use plan modes, generated command assertions, private PostgreSQL/Redis/
-  object-store/filesystem inspection, fabricated agents or telemetry, local
-  resume manifests, compatibility paths, or mock success.
-- A paid scenario must be unmistakably named; invoking its exact module is the
-  explicit authorization. Do not add redundant live or paid-confirmation
-  environment flags. It cannot directly provision infrastructure or rebuild
-  local services. The production provider owner may lazily create its durable
-  zero-capacity infrastructure as part of the workload lifecycle; the scenario
-  must not bypass that owner. Cleanup and zero-cost proof remain independently
-  callable.
+Scenarios consume an already-prepared environment. They never build, deploy,
+migrate, reset, or inventory the platform: a scenario that provisions what it
+then tests is mostly testing its own setup.
+
+- `local/` targets the healthy canonical root Compose stack. `external/` targets
+  an explicitly authorized provider, cluster, tailnet, or other external system.
+- Establish that the environment is running the code under test before trusting a
+  result. A stack can report every service healthy while serving images built
+  from older source; a pass against stale code proves nothing, and a failure
+  sends you after the wrong defect. Rebuild every image that embeds the source
+  together, from one source state.
+- Ordinary test discovery and changed-scope validation must not execute this
+  tree. Run Python scenarios as exact modules from the repository root and
+  browser scenarios as exact nodes—never by file path, and never with
+  import-path bootstrap code.
+- Declare exact prerequisites and target guards. Exit `77` when a prerequisite is
+  unavailable, `0` only after terminal production evidence, and nonzero for any
+  mutation, assertion, or cleanup failure.
+- Create uniquely named resources, clean them up through their public owner, and
+  verify only their public terminal state. Never delete a fixed or pre-existing
+  resource.
+- Keep fixtures beside their one consumer. Shared support stays limited to small
+  secret-safe process and live-gate primitives; do not grow a workflow,
+  lifecycle, polling, deployment, or cleanup framework here.
+- Do not use plan modes, generated command assertions, private datastore or
+  filesystem inspection, fabricated agents or telemetry, local resume manifests,
+  compatibility paths, or mock success. Each one turns a live scenario back into
+  a unit test with a much longer runtime.
+- A paid scenario is named unmistakably, and invoking its exact module is the
+  authorization—do not add redundant confirmation flags on top. It may not
+  provision infrastructure directly or rebuild local services; it drives the
+  production owner and lets that owner create whatever it lazily creates.
+  Cleanup and zero-cost proof stay independently callable.
 - A connected-account scenario may automate the exact customer authorization
-  action returned by the public product using ambient customer credentials.
-  It must validate the account, provider host, immutable template, operation,
-  and parameters before executing that action; it may not create provider
-  capacity directly.
+  action the public product returns, using ambient customer credentials, after
+  validating the account, provider host, immutable template, operation, and
+  parameters. It may not create provider capacity directly.

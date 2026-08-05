@@ -6,12 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from images.managed_runtime import ManagedRuntimeCatalogManifest
 from tests.managed_runtime_fakes import managed_runtime_catalog_root
 from worker.managed_runtime import (
     MANAGED_RUNTIME_CATALOG_DIGEST_ENV,
     MANAGED_RUNTIME_DIGEST_ENV,
 )
+from worker.managed_runtime_catalog import ManagedRuntimeCatalogManifest
 
 
 def _artifact_digest(catalog: ManagedRuntimeCatalogManifest) -> str:

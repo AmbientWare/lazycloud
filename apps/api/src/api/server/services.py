@@ -12,10 +12,8 @@ from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.billing import managed_billing_client
-from compute.offers import ComputeOffer
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.provider_config import ProviderConfigService
-from compute.providers import ProviderPoolBootstrap
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -64,6 +62,7 @@ from execution.volumes.records import VolumeService
 from gateway.container_transport import HttpContainerServiceTransportFactory
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.pod_proxy import PodProxyHttpClient, RedisPodProxyConnectionRepository
+from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from gateway.route_prewarm import RoutePrewarmService, TailnetPeerStatusProvider
 from gateway.service import GatewayControlService
@@ -166,7 +165,6 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
 )
 from scheduler.workers import SchedulerWorkerAdminService
-from shared.compute_policy import ComputePoolRecord
 from shared.container_requests import StopContainerReason
 from shared.http.endpoints import (
     EndpointForwardRequest,
@@ -210,10 +208,7 @@ from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 from storage.volume_filesystem import (
     VolumeFilesystem,
     WorkspaceVolumeFilesystem,
-    WorkspaceVolumeStore,
-    WorkspaceVolumeStoreResolver,
-    workspace_presign_endpoint,
-    workspace_volume_store,
+    workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -249,7 +244,11 @@ from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
 )
-from api.settings import AgentRouteReconciliationSettings, TcpIngressSettings
+from api.settings import (
+    AgentRouteReconciliationSettings,
+    PublicIngressSettings,
+    TcpIngressSettings,
+)
 from database import DatabaseClient
 
 
@@ -728,7 +727,11 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
         )
         resolved_volume_filesystem = volume_filesystem or WorkspaceVolumeFilesystem(
-            resolve_store=_workspace_volume_store_resolver(control_plane, object_store_config)
+            resolve_store=workspace_volume_store_resolver(
+                lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                default_endpoint_url=object_store_config.endpoint_url,
+                default_presigned_endpoint_url=object_store_config.presigned_endpoint_url,
+            )
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
@@ -775,6 +778,8 @@ class ApiServices(ApiServiceCore):
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
                 gateway_origin=gateway_config.public_http_url,
+                internal_origin=gateway_config.runtime_callback_http_url,
+                presigned_origin=object_store_config.presigned_endpoint_url or "",
                 tailnet_runtime=resolved_tailnet_runtime_settings,
                 tailnet_control=resolved_tailnet_control_settings,
                 backend_route=resolved_backend_route_settings,
@@ -783,48 +788,56 @@ class ApiServices(ApiServiceCore):
             else None
         )
 
-        def pool_bootstrap(
-            pool: ComputePoolRecord,
-            offer: ComputeOffer,
-        ) -> ProviderPoolBootstrap:
-            del offer
+        pool_bootstrap = None
+        if provider_resolver is not None:
             agent_version, agent_sha256 = agent_artifact_config.require_amd64()
-            return ProviderPoolBootstrap(
+            pool_bootstrap = pool_bootstrap_provisioner(
+                context,
+                # A node in a customer VPC holds no tailnet session when it
+                # first reports, so this is the public origin. The runtime
+                # callback origin stays worker-facing and is not interchangeable
+                # here. The scheduler must pass the same one: a disagreement
+                # shows up as launch templates alternating between versions.
                 control_plane_url=gateway_config.public_http_url,
-                enrollment_request_id=pool.id,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=aws_capacity_config.agent_binary_url,
                 worker_image_digest=aws_capacity_config.worker_image_digest,
+                tailnet_control=resolved_tailnet_control_settings,
             )
 
+        scheduler_hooks = SchedulerComputeHooks(
+            RedisComputeStateRepository(redis),
+            worker_repository,
+        )
         compute = ComputeService(
             context,
             provider_registry=configured_compute_provider_registry(
                 provider_service,
                 gateway_origin=gateway_config.public_http_url,
+                internal_origin=gateway_config.runtime_callback_http_url,
+                presigned_origin=object_store_config.presigned_endpoint_url or "",
                 tailnet_runtime=resolved_tailnet_runtime_settings,
                 tailnet_control=resolved_tailnet_control_settings,
                 backend_route=resolved_backend_route_settings,
             ),
             provider_resolver=provider_resolver,
-            pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
+            pool_bootstrap_factory=pool_bootstrap,
             billing=managed_billing_client(managed_billing_config.to_runtime_settings()),
             usage_exporter=usage_exporter,
-            scheduler_hooks=SchedulerComputeHooks(
-                RedisComputeStateRepository(redis),
-                worker_repository,
-            ),
+            scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             capacity_owner_mutations=capacity_reservation_repository,
         )
         compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
+        compute_policies.worker_state = scheduler_hooks
         aws_composition = aws_account_connection_composition_from_settings(
             context=context,
             pool_drainer=compute,
             connection_settings=aws_account_connection_config,
             capacity_settings=aws_capacity_config,
             gateway_origin=gateway_config.public_http_url,
+            internal_origin=gateway_config.runtime_callback_http_url,
             tailnet_runtime=resolved_tailnet_runtime_settings,
             tailnet_control=resolved_tailnet_control_settings,
             backend_route=resolved_backend_route_settings,
@@ -1227,10 +1240,14 @@ def _compose_api_services(
         task_queues=taskqueue_control,
     )
     taskqueue = taskqueue_service or taskqueue_control
+    public_ingress_config = PublicIngressSettings()
     provider_node_enrollment = (
         ProviderNodeEnrollmentService(
             gateway=gateway,
             compute=core.compute,
+            events=core.events,
+            rate_limiter=redis,
+            proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
             identity_verifier=AwsProviderNodeIdentityAdapter(
                 http_client=BoundedProviderNodeIdentityHttpClient(),
                 replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
@@ -1511,24 +1528,6 @@ def _workspace_storage_client(storage: WorkspaceStorageConfig) -> S3ObjectStoreC
             force_path_style=storage.force_path_style,
         )
     )
-
-
-def _workspace_volume_store_resolver(
-    control_plane: ControlPlaneService,
-    object_store: S3ObjectStoreSettings,
-) -> WorkspaceVolumeStoreResolver:
-    def resolve(workspace_id: str) -> WorkspaceVolumeStore:
-        storage = control_plane.get_workspace(workspace_id).storage
-        return workspace_volume_store(
-            storage,
-            presigned_endpoint_url=workspace_presign_endpoint(
-                storage,
-                default_endpoint_url=object_store.endpoint_url,
-                default_presigned_endpoint_url=object_store.presigned_endpoint_url,
-            ),
-        )
-
-    return resolve
 
 
 def _workspace_bucket_client(client: ObjectByteClient) -> WorkspaceBucketClient | None:

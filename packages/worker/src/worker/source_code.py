@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import http.client
 import os
 import shutil
 import tempfile
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
+from networking.internal_http import InternalHttpClient
 from shared.app_identity import SOURCE_CACHE_DIR
 from shared.container_requests import WORKER_USER_CODE_VOLUME, RequestMount
 from shared.contracts import ContractModel
@@ -71,6 +71,7 @@ class SourceCodePackageMaterializer:
     workspace_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()))
     cache_max_bytes: int = DEFAULT_SOURCE_CACHE_MAX_BYTES
     cache_max_entries: int = DEFAULT_SOURCE_CACHE_MAX_ENTRIES
+    http: InternalHttpClient = field(default_factory=InternalHttpClient)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -239,29 +240,22 @@ class SourceCodePackageMaterializer:
             if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
                 msg = "source download URL must be an HTTP(S) URL with a hostname"
                 raise SourceCodeMaterializationError(msg)
-            connection: http.client.HTTPConnection
-            if parsed.scheme == "https":
-                connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=60)
-            else:
-                connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=60)
-            request_target = parsed.path or "/"
-            if parsed.query:
-                request_target = f"{request_target}?{parsed.query}"
             try:
-                connection.request("GET", request_target)
-                response = connection.getresponse()
-                if response.status < 200 or response.status >= 300:
-                    msg = f"source download returned HTTP {response.status}"
+                response = self.http.request(
+                    "GET",
+                    mount.source_download_url,
+                    timeout_seconds=60,
+                )
+                if response.status_code < 200 or response.status_code >= 300:
+                    msg = f"source download returned HTTP {response.status_code}"
                     raise SourceCodeMaterializationError(msg)
-                return response.read()
+                return response.content
             except SourceCodeMaterializationError:
                 raise
             except Exception as exc:
                 raise SourceCodeMaterializationError(
                     f"source download failed: {type(exc).__name__}"
                 ) from None
-            finally:
-                connection.close()
         if mount.local_path:
             path = Path(mount.local_path)
             if path.is_file():

@@ -237,12 +237,12 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
     transport_factory = _RecordingTransportFactory(transport)
     pod_service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler_containers,
         container_clients=SchedulerContainerClientFactory(
             scheduler_containers=scheduler_containers,
             transport_factory=transport_factory,
         ),
-        redis=isolated_services.redis(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=pod_service))
@@ -670,6 +670,7 @@ def test_sandbox_exec_waits_for_worker_address_before_dial(isolated_services: Ap
     )
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler_containers,
         container_clients=SchedulerContainerClientFactory(
             scheduler_containers=scheduler_containers,
@@ -725,6 +726,7 @@ def test_sandbox_connect_requires_supervisor_readiness(isolated_services: ApiSer
     )
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler_containers,
         container_clients=SchedulerContainerClientFactory(
             scheduler_containers=scheduler_containers,
@@ -760,6 +762,7 @@ def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
     )
     service = PodControlService(
         isolated_services,
+        redis=isolated_services.redis(),
         scheduler_containers=scheduler_containers,
         poll_interval_seconds=0,
         container_connect_timeout_seconds=1,

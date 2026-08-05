@@ -10,19 +10,16 @@ from compute.request_placement import (
 from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus,
     CapacityProvisioningReservation,
-    CapacityReservationSource,
     ComputePoolCapacityController,
 )
 from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.state import SchedulerWorkerRequest
 from shared.capacity import (
-    CapacityAcquisitionPlanningRequest,
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
     CapacityOwnerKind,
     CapacityOwnerSource,
-    CapacityPoolSizingState,
-    CapacityPoolSizingStateUpdate,
+    CapacityPoolSizingSnapshot,
     CapacityReleaseRequest,
 )
 from shared.capacity import (
@@ -78,7 +75,6 @@ def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
         capacity_owner_id=_OWNER_ID,
         pool_name="internal-aws-cpu",
         owner_kind=CapacityOwnerKind.PooledProvider,
-        source=CapacityReservationSource.PlacementMiss,
         acquisition_shape=acquisition_shape,
         schedulable_shape=acquisition_shape.model_copy(update={"memory_mib": 15_500}),
         operation_id="33333333-3333-4333-8333-333333333333",
@@ -86,7 +82,7 @@ def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
         created_at=now,
         updated_at=now,
     )
-    planned = controller.plan_acquisition(
+    planned = controller.ensure_capacity(
         reservation,
         owner_reservations=(reservation,),
         now=now,
@@ -119,21 +115,18 @@ class _RecordingCapacity:
 
 @dataclass(slots=True)
 class _RequestedComputeCapacity:
-    plans: list[CapacityAcquisitionPlanningRequest] = field(default_factory=list)
+    plans: list[CapacityAcquisitionRequest] = field(default_factory=list)
 
-    def get_pool_sizing_state(self, capacity_owner_id: str) -> CapacityPoolSizingState:
-        raise AssertionError(f"unexpected sizing state read for {capacity_owner_id}")
+    def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
+        raise AssertionError(f"unexpected sizing snapshot read for {capacity_owner_id}")
 
-    def compare_and_set_pool_sizing_state(
+    def ensure_capacity(
         self,
-        update: CapacityPoolSizingStateUpdate,
-    ) -> CapacityPoolSizingState:
-        raise AssertionError(f"unexpected sizing state mutation for {update.capacity_owner_id}")
-
-    def plan_capacity_acquisition(
-        self,
-        request: CapacityAcquisitionPlanningRequest,
+        request: CapacityAcquisitionRequest,
+        *,
+        minimum_unit: int = 0,
     ) -> CapacityAcquisitionResult:
+        _ = minimum_unit
         self.plans.append(request)
         return CapacityAcquisitionResult(
             status=ComputeCapacityAcquisitionStatus.Requested,
@@ -141,9 +134,6 @@ class _RequestedComputeCapacity:
             reservation_id=request.reservation_id,
             desired_unit=1,
         )
-
-    def acquire_capacity(self, request: CapacityAcquisitionRequest) -> CapacityAcquisitionResult:
-        raise AssertionError(f"unexpected capacity acquisition for {request.operation_id}")
 
     def release_acquired_capacity(
         self,

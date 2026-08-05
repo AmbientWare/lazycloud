@@ -11,6 +11,7 @@ from lazycloud.control import resolve_control_client_config
 from lazycloud.http_transport import request_raw
 from lazycloud.json_contracts import parse_json_value
 from pydantic import BaseModel, JsonValue
+from shared.http.compute import MachineJoinCommandRequest
 
 from lazycloud import (
     App,
@@ -46,8 +47,10 @@ def dockerfile_image(dockerfile: Path, context_dir: Path) -> Image:
     )
 
 
-def private_pool_join_command(pool_name: str = "gpu-pool") -> str:
-    return Client().private_pools.join_command(pool_name, ttl="30m")
+def machine_join_command(ttl: str = "30m", gpu: list[str] | None = None) -> str:
+    """Return the command that attaches this workspace's own hardware."""
+    request = MachineJoinCommandRequest(ttl=ttl, gpu=list(gpu or []))
+    return Client().compute.machine_join_command(request).command
 
 
 @demo.function(

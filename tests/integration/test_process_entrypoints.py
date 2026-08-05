@@ -36,6 +36,7 @@ from shared.container_requests import StopContainerReason
 from shared.containers import ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.scheduling import WorkerUnavailableReason
 from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from tests.real_redis import RealRedisActors
@@ -67,6 +68,7 @@ def _create_scheduler_app_services(
         create_schema=False,
         redis_client=redis,
         gateway_origin=services.gateway_settings.public_http_url,
+        runtime_callback_origin=services.gateway_settings.runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=services.workspace_change_stream_settings,
             usage_metrics=UsageMetricsSettings(),
@@ -223,9 +225,7 @@ def test_container_worker_process_deregisters_on_shutdown_signal(
     monkeypatch.setattr(container_worker.signal, "signal", capture_signal)
 
     result = container_worker.run_container_worker(
-        settings=container_worker.ProductionWorkerSettings.model_validate(
-            {"worker_id": "worker-1"}
-        ),
+        settings=container_worker.WorkerSettings.model_validate({"worker_id": "worker-1"}),
         services=services,
         interval_seconds=0,
         keepalive_interval_seconds=15,
@@ -270,9 +270,7 @@ def test_container_worker_process_deregisters_when_startup_after_registration_fa
 
     with pytest.raises(RuntimeError, match="event loop unavailable"):
         container_worker.run_container_worker(
-            settings=container_worker.ProductionWorkerSettings.model_validate(
-                {"worker_id": "worker-1"}
-            ),
+            settings=container_worker.WorkerSettings.model_validate({"worker_id": "worker-1"}),
             services=services,
         )
 
@@ -303,11 +301,11 @@ def test_container_worker_process_spins_down_idle_nonpersistent_worker(
 
     result = container_worker.run_container_worker(
         services=services,
-        settings=container_worker.ProductionWorkerSettings.model_validate(
+        settings=container_worker.WorkerSettings.model_validate(
             {
                 "worker_id": "worker-1",
-                "persistent": False,
                 "worker_spindown_seconds": 300,
+                "configuration": {"execution": {"persistent": False}},
             }
         ),
     )
@@ -405,6 +403,8 @@ class _ContainerWorkerLifecycle:
         *,
         remove_worker: bool = True,
         stop_reason: StopContainerReason = StopContainerReason.Unknown,
+        unavailable_reason: WorkerUnavailableReason = WorkerUnavailableReason.ShuttingDown,
+        unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         self.calls.append(f"shutdown:{remove_worker}:{stop_reason.value}")
         return WorkerShutdownResult(worker_id="worker-1")

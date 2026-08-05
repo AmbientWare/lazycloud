@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from database.repositories.observability import UsageRepository
 from database.repositories.storage import VolumeMeteringTarget, VolumeRepository
 from pydantic import JsonValue
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 from shared.usage import (
     METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY,
     METERING_OBSERVATION_QUALITY_METADATA_KEY,
@@ -72,7 +72,7 @@ class PersistentVolumeMeteringService:
         now: datetime | None = None,
         limit: int = 100,
     ) -> PersistentVolumeMeteringBatch:
-        observed_at = _utc(now or utc_now())
+        observed_at = to_utc(now or utc_now())
         with self.context.database.session() as session:
             targets = VolumeRepository(session).list_metering_targets(
                 metered_before=observed_at - self.interval,
@@ -103,7 +103,7 @@ class PersistentVolumeMeteringService:
         workspace_id: str,
         now: datetime | None = None,
     ) -> PersistentVolumeMeteringResult | None:
-        observed_at = _utc(now or utc_now())
+        observed_at = to_utc(now or utc_now())
         with self.context.database.session() as session:
             target = VolumeRepository(session).get_metering_target(
                 name,
@@ -153,7 +153,7 @@ class PersistentVolumeMeteringService:
         now: datetime | None,
         deletion_authority: bool,
     ) -> PersistentVolumeMeteringResult | None:
-        requested_observed_at = _utc(now) if now is not None else None
+        requested_observed_at = to_utc(now) if now is not None else None
         with self.context.database.session() as session:
             target = VolumeRepository(session).get_metering_target(
                 name,
@@ -171,7 +171,7 @@ class PersistentVolumeMeteringService:
             return self._record_observation(
                 target,
                 None,
-                requested_observed_at or _utc(utc_now()),
+                requested_observed_at or to_utc(utc_now()),
                 observation_quality=MeteringObservationQuality.CheckpointEstimate,
                 observation_error_type=type(exc).__name__,
                 deletion_authority=deletion_authority,
@@ -179,7 +179,7 @@ class PersistentVolumeMeteringService:
         return self._record_observation(
             target,
             observed_size_bytes,
-            requested_observed_at or _utc(utc_now()),
+            requested_observed_at or to_utc(utc_now()),
             deletion_authority=deletion_authority,
         )
 
@@ -200,7 +200,7 @@ class PersistentVolumeMeteringService:
             checkpoint = volumes.lock_metering_checkpoint(target.id)
             if checkpoint is None:
                 return None
-            window_started_at = _utc(checkpoint.metered_at)
+            window_started_at = to_utc(checkpoint.metered_at)
             if window_started_at >= observed_at:
                 return None
             elapsed_seconds = (observed_at - window_started_at).total_seconds()
@@ -263,12 +263,6 @@ class PersistentVolumeMeteringService:
         return self.filesystem.occupancy_bytes(
             VolumeNamespace(workspace_id=target.workspace_id, volume_id=target.id)
         )
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 __all__ = [

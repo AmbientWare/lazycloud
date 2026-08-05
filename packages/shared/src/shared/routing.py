@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import field_validator
+
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -39,20 +41,28 @@ class RoutePrewarmDecision(StringEnum):
 
 class AgentBackendRoute(ContractModel):
     route_id: str
-    workspace_id: str
-    pool_name: str
-    machine_id: str
+    workspace_id: str = ""
+    pool_name: str = ""
+    machine_id: str = ""
     worker_id: str = ""
     container_id: str = ""
-    kind: BackendRouteKind | str = BackendRouteKind.Container
+    kind: BackendRouteKind = BackendRouteKind.Container
     port: int = 0
-    protocol: BackendRouteProtocol | str = BackendRouteProtocol.Tcp
-    transport: BackendRouteTransport | str = BackendRouteTransport.TsnetRestricted
+    protocol: BackendRouteProtocol = BackendRouteProtocol.Tcp
+    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     local_target: str = ""
     proxy_target: str = ""
-    state: BackendRouteState | str = BackendRouteState.Opening
+    state: BackendRouteState = BackendRouteState.Opening
     error: str = ""
     updated_at: int = 0
+
+    @field_validator("port")
+    @classmethod
+    def route_port_cannot_be_negative(cls, value: int) -> int:
+        if value < 0:
+            msg = "backend route port cannot be negative"
+            raise ValueError(msg)
+        return value
 
 
 def parse_backend_route_address(address: str) -> tuple[str, bool]:

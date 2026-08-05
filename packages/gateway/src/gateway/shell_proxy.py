@@ -13,7 +13,6 @@ from networking.dialer import (
 )
 from networking.routing import build_backend_route_dial_plan
 from shared.routing import AgentBackendRoute, parse_backend_route_address
-from shared.scheduling import SchedulerBackendRoute
 
 
 def connect_shell_backend(
@@ -52,7 +51,7 @@ def connect_shell_backend(
 
 @dataclass(slots=True)
 class _SingleBackendRouteResolver:
-    route: SchedulerBackendRoute | None
+    route: AgentBackendRoute | None
 
     def get_backend_route(self, route_id: str) -> AgentBackendRoute | None:
         if self.route is None or self.route.route_id != route_id:

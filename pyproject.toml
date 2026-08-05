@@ -136,6 +136,13 @@ norecursedirs = [
     "tests/e2e",
 ]
 addopts = "--import-mode=importlib"
+# Pydantic reports a value whose type contradicts its own field annotation as a
+# plain UserWarning, so a record could drift, serialize to correct JSON, and fail
+# only on an identity comparison somewhere else entirely. Failing the suite is
+# what makes that drift visible where it is introduced.
+filterwarnings = [
+    "error::UserWarning",
+]
 
 [tool.ruff]
 line-length = 100

@@ -9,6 +9,7 @@ from shared.aws_connections import AwsAccountConnectionPhase
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
+    MachineServiceState,
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
@@ -23,6 +24,29 @@ class WorkspaceComputePolicyUpdateRequest(HttpModel):
     expected_revision: int = Field(ge=1)
     default_placement: ComputePlacementTarget
     aws: AwsWorkspaceComputePolicy
+
+
+class AwsWorkspaceComputePolicyPatch(HttpModel):
+    """Fields a caller chose to change. Omitted is not the same as zero."""
+
+    default_region: str | None = None
+    default_instance_type: str | None = None
+    initial_cpu_workers: int | None = None
+    min_cpu_workers: int | None = None
+    max_cpu_instances: int | None = None
+    max_gpu_instances: int | None = None
+    min_free_cpu_millicores: int | None = None
+    min_free_memory_mib: int | None = None
+    allowed_regions: tuple[str, ...] | None = None
+    allowed_instance_types: tuple[str, ...] | None = None
+    idle_timeout_seconds: int | None = None
+    root_volume_gib: int | None = None
+
+
+class WorkspaceComputePolicyPatchRequest(HttpModel):
+    expected_revision: int = Field(ge=1)
+    default_placement: ComputePlacementTarget | None = None
+    aws: AwsWorkspaceComputePolicyPatch = Field(default_factory=AwsWorkspaceComputePolicyPatch)
 
 
 class WorkspaceComputePolicyResponse(HttpModel):
@@ -101,9 +125,19 @@ class WorkspaceComputeInstanceResponse(HttpModel):
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
     bootstrap_phase: MachineBootstrapPhase
+    service_state: MachineServiceState
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
+    bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime
     launch_attempt: int = Field(default=1, ge=1)
+    booted_template_version: str = ""
+    """Provider launch-configuration version the node booted with.
+
+    Empty when the provider reports none. A pool rolls its configuration
+    forward without disturbing running nodes, so nodes of the same pool
+    legitimately differ here, and this is what says which release each one
+    is on.
+    """
     created_at: datetime
 
 

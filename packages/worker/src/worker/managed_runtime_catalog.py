@@ -216,3 +216,18 @@ def _file_digest(path: Path) -> str:
     if not path.is_file():
         return ""
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+__all__ = [
+    "MANAGED_RUNTIME_ARCHITECTURES",
+    "MANAGED_RUNTIME_CATALOG_FILE",
+    "MANAGED_RUNTIME_DISTRIBUTIONS",
+    "MANAGED_RUNTIME_LAUNCHER_FILE",
+    "MANAGED_RUNTIME_PYTHON_VERSIONS",
+    "MANAGED_RUNTIME_SCHEMA_VERSION",
+    "ManagedRuntimeCatalog",
+    "ManagedRuntimeCatalogManifest",
+    "ManagedRuntimeManifest",
+    "load_managed_runtime_catalog",
+    "managed_runtime_catalog_digest",
+]

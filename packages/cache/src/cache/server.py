@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import http.client
 import os
 import shutil
 import threading
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from networking.internal_http import InternalHttpClient, InternalHttpError
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
 
@@ -909,6 +909,7 @@ class WorkerCacheHttpClient:
     service_token: str
     connect_timeout_seconds: float = 0.5
     inactivity_timeout_seconds: float = 2.0
+    http: InternalHttpClient = field(default_factory=InternalHttpClient)
 
     def __post_init__(self) -> None:
         if not self.service_token:
@@ -1078,35 +1079,34 @@ class WorkerCacheHttpClient:
                 reason="source file is not present",
             )
         query = urllib.parse.urlencode({"expected_hash": expected_hash, "cache_path": cache_path})
-        connection = self._connection()
         try:
-            connection.putrequest("PUT", f"/content?{query}")
-            connection.putheader("Authorization", f"Bearer {self.service_token}")
-            connection.putheader("Content-Length", str(source.stat().st_size))
-            connection.endheaders()
             with source.open("rb") as handle:
-                while chunk := handle.read(DEFAULT_CONTENT_CHUNK_BYTES):
-                    connection.send(chunk)
-            response = connection.getresponse()
-            self._set_read_timeout(connection)
-            body = response.read()
-            if response.status >= 500:
+                response = self.http.request(
+                    "PUT",
+                    self._url(f"/content?{query}"),
+                    headers={
+                        "Authorization": f"Bearer {self.service_token}",
+                        "Content-Length": str(source.stat().st_size),
+                    },
+                    content=handle,
+                    timeout_seconds=self.inactivity_timeout_seconds,
+                )
+            body = response.content
+            if response.status_code >= 500:
                 return CacheContentStoreResult(
                     status=CacheContentStoreStatus.Unavailable,
                     content_hash=expected_hash,
                     cache_path=cache_path,
-                    reason=f"cache store returned HTTP {response.status}",
+                    reason=f"cache store returned HTTP {response.status_code}",
                 )
             return CacheContentStoreResult.model_validate_json(body)
-        except (OSError, TimeoutError, http.client.HTTPException) as exc:
+        except (OSError, TimeoutError, InternalHttpError) as exc:
             return CacheContentStoreResult(
                 status=CacheContentStoreStatus.Unavailable,
                 content_hash=expected_hash,
                 cache_path=cache_path,
                 reason=str(exc),
             )
-        finally:
-            connection.close()
 
     def _request_bytes(
         self,
@@ -1115,38 +1115,26 @@ class WorkerCacheHttpClient:
         *,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
-        connection = self._connection()
         request_headers = {"Authorization": f"Bearer {self.service_token}"}
         request_headers.update(headers or {})
         try:
-            connection.request(method, path, headers=request_headers)
-            response = connection.getresponse()
-            self._set_read_timeout(connection)
-            body = response.read()
-            response_headers = {key.lower(): value for key, value in response.getheaders()}
-            return response.status, response_headers, body
-        except (OSError, TimeoutError, http.client.HTTPException) as exc:
+            response = self.http.request(
+                method,
+                self._url(path),
+                headers=request_headers,
+                timeout_seconds=self.inactivity_timeout_seconds,
+            )
+        except InternalHttpError as exc:
             raise CacheUnavailableError(str(exc)) from exc
-        finally:
-            connection.close()
+        response_headers = {key.lower(): value for key, value in response.headers.items()}
+        return response.status_code, response_headers, response.content
 
-    def _connection(self) -> http.client.HTTPConnection:
+    def _url(self, path: str) -> str:
         parsed = urllib.parse.urlparse(self.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             msg = "cache endpoint must be an absolute HTTP(S) URL"
             raise ValueError(msg)
-        connection_type = (
-            http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        )
-        return connection_type(
-            parsed.hostname,
-            parsed.port,
-            timeout=self.connect_timeout_seconds,
-        )
-
-    def _set_read_timeout(self, connection: http.client.HTTPConnection) -> None:
-        if connection.sock is not None:
-            connection.sock.settimeout(self.inactivity_timeout_seconds)
+        return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 class _BytesReader:

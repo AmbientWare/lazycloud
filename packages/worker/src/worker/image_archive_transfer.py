@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import http.client
 import os
 import socket
 import time
@@ -10,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
+
+from networking.internal_http import InternalHttpClient, InternalHttpError
 
 IMAGE_ARCHIVE_TRANSFER_CHUNK_SIZE_BYTES = 1024 * 1024
 IMAGE_ARCHIVE_TRANSFER_RETRY_DELAYS_SECONDS = (0.5, 2.0, 5.0)
@@ -44,6 +45,7 @@ def image_archive_file_identity(path: Path) -> tuple[int, str]:
 
 
 def upload_image_archive(
+    http: InternalHttpClient,
     url: str,
     path: Path,
     *,
@@ -76,6 +78,7 @@ def upload_image_archive(
                 archive_sha256=archive_sha256,
             )
             _upload_image_archive_once(
+                http,
                 url,
                 path,
                 headers=upload_headers,
@@ -106,6 +109,7 @@ def upload_image_archive(
 
 
 def download_image_archive(
+    http: InternalHttpClient,
     url: str,
     target: Path,
     *,
@@ -123,6 +127,7 @@ def download_image_archive(
         for attempt in range(attempts):
             try:
                 bytes_written = _download_image_archive_once(
+                    http,
                     url,
                     partial,
                     archive_size_bytes=archive_size_bytes,
@@ -155,25 +160,28 @@ def download_image_archive(
 
 
 def _upload_image_archive_once(
+    http: InternalHttpClient,
     url: str,
     path: Path,
     *,
     headers: Mapping[str, str],
     timeout_seconds: float,
 ) -> None:
-    connection, request_target = _connection(url, timeout_seconds=timeout_seconds)
-    try:
-        with path.open("rb") as source:
-            connection.request("PUT", request_target, body=source, headers=dict(headers))
-            response = connection.getresponse()
-            response.read(4096)
-            if response.status < 200 or response.status >= 300:
-                raise _ImageArchiveHttpError("upload", response.status)
-    finally:
-        connection.close()
+    _require_http_url(url)
+    with path.open("rb") as source:
+        response = http.request(
+            "PUT",
+            url,
+            headers=dict(headers),
+            content=source,
+            timeout_seconds=timeout_seconds,
+        )
+    if response.status_code < 200 or response.status_code >= 300:
+        raise _ImageArchiveHttpError("upload", response.status_code)
 
 
 def _download_image_archive_once(
+    http: InternalHttpClient,
     url: str,
     partial: Path,
     *,
@@ -181,14 +189,11 @@ def _download_image_archive_once(
     archive_sha256: str,
     timeout_seconds: float,
 ) -> int:
-    connection, request_target = _connection(url, timeout_seconds=timeout_seconds)
-    try:
-        connection.request("GET", request_target)
-        response = connection.getresponse()
-        if response.status < 200 or response.status >= 300:
-            response.read(4096)
-            raise _ImageArchiveHttpError("download", response.status)
-        response_length = response.getheader("content-length")
+    _require_http_url(url)
+    with http.stream("GET", url, timeout_seconds=timeout_seconds) as response:
+        if response.status_code < 200 or response.status_code >= 300:
+            raise _ImageArchiveHttpError("download", response.status_code)
+        response_length = response.headers.get("content-length")
         if response_length is not None:
             try:
                 content_length = int(response_length)
@@ -204,7 +209,7 @@ def _download_image_archive_once(
         digest = hashlib.sha256()
         bytes_written = 0
         with partial.open("xb") as output:
-            while chunk := response.read(IMAGE_ARCHIVE_TRANSFER_CHUNK_SIZE_BYTES):
+            for chunk in response.iter_bytes(IMAGE_ARCHIVE_TRANSFER_CHUNK_SIZE_BYTES):
                 bytes_written += len(chunk)
                 if bytes_written > archive_size_bytes:
                     raise ImageArchiveIntegrityError(
@@ -223,28 +228,14 @@ def _download_image_archive_once(
             output.flush()
             os.fsync(output.fileno())
         return bytes_written
-    finally:
-        connection.close()
 
 
-def _connection(
-    url: str,
-    *,
-    timeout_seconds: float,
-) -> tuple[http.client.HTTPConnection, str]:
+def _require_http_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise ImageArchiveTransferError("image archive capability must use HTTP(S)")
     if parsed.hostname is None:
         raise ImageArchiveTransferError("image archive capability hostname is required")
-    connection_type = (
-        http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    )
-    connection = connection_type(parsed.hostname, parsed.port, timeout=timeout_seconds)
-    request_target = parsed.path or "/"
-    if parsed.query:
-        request_target = f"{request_target}?{parsed.query}"
-    return connection, request_target
 
 
 def _validated_upload_headers(
@@ -333,9 +324,11 @@ def _transfer_endpoint(url: str) -> str:
     return parsed.netloc or "an unknown host"
 
 
+# InternalHttpError already wraps the transport failures the retry loop exists
+# for, and carries no capability URL in its message.
 _TRANSIENT_TRANSFER_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     socket.gaierror,
-    http.client.HTTPException,
+    InternalHttpError,
 )

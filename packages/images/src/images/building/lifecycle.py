@@ -531,6 +531,22 @@ def _ensure_trailing_newline(message: str) -> str:
     return message if message.endswith("\n") else f"{message}\n"
 
 
+def image_build_stream_event_key(
+    event: ImageBuildStreamEventPlan,
+) -> tuple[str, str, str, str, str, bool, str]:
+    """Identify one stream event so a replayed build does not emit it twice."""
+
+    return (
+        event.kind.value,
+        event.build_id,
+        event.message,
+        event.status.value,
+        event.phase.value,
+        event.done,
+        event.error,
+    )
+
+
 def _stream_kind_for_status(status: BuildStatus) -> ImageBuildStreamEventKind:
     if status is BuildStatus.Cancelled:
         return ImageBuildStreamEventKind.Cancelled
