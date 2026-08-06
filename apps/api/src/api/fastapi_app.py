@@ -10,7 +10,7 @@ from uuid import uuid4
 import uvicorn
 from compute.aws_connections import AwsAccountConnectionService
 from coordination.redis_client import RedisClient
-from coordination.token_lock import try_acquire_token_lock
+from coordination.token_lock import renew_token_lock, try_acquire_token_lock
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.pods.service import PodControlService
@@ -327,15 +327,26 @@ async def _reconcile_agent_routes(
 
     This scans a shared registry and deletes from it, so running it in every
     control plane would have them racing to delete each other's findings. The
-    lease is held for the cycle rather than released after it, so the winner
-    keeps the work while it is alive and another takes over when it is not.
+    lease is renewed rather than released, so the winner keeps the work while it
+    is alive and another takes over only once its lease expires unrenewed.
     """
     lease_key = redis.key("control-plane", "leases", "agent-routes")
     holder = str(uuid4())
-    lease_seconds = max(int(interval_seconds * 2), 1)
+    lease_seconds = max(int(interval_seconds * 3), 2)
+    holding = False
     while True:
         try:
-            if try_acquire_token_lock(redis, lease_key, holder, ttl_seconds=lease_seconds):
+            # Renewing is not the same call as acquiring. Acquisition is `nx`, so
+            # a holder asking for its own live lease is refused and would hand
+            # the work to nobody every other cycle.
+            holding = holding and renew_token_lock(
+                redis, lease_key, holder, ttl_seconds=lease_seconds
+            )
+            if not holding:
+                holding = try_acquire_token_lock(
+                    redis, lease_key, holder, ttl_seconds=lease_seconds
+                )
+            if holding:
                 result = await asyncio.to_thread(repository.reconcile_orphan_agent_routes)
                 if result.removed:
                     logger.info(
@@ -344,6 +355,7 @@ async def _reconcile_agent_routes(
                         result.removed,
                     )
         except Exception as exc:
+            holding = False
             logger.exception("agent route registry reconciliation failed")
             _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))

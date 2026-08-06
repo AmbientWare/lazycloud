@@ -96,13 +96,33 @@ async def republish_origin(
     runtime: TailnetRuntime,
     configured_origin: str,
 ) -> None:
+    """Keep the published origin alive, and stop the process if it cannot be.
+
+    The published value carries a TTL, so a heartbeat that fails quietly is not a
+    degraded ingress but a countdown: once the key expires every resolve() in the
+    deployment raises, while this process keeps forwarding and reporting healthy.
+    A transient Redis blip should not kill it, so failures are tolerated until
+    they threaten the TTL itself.
+    """
     interval = max(DEFAULT_CONTROL_PLANE_ORIGIN_TTL_SECONDS / 3, 1.0)
+    deadline_failures = max(int(DEFAULT_CONTROL_PLANE_ORIGIN_TTL_SECONDS / interval) - 1, 1)
+    consecutive_failures = 0
     while True:
         await asyncio.sleep(interval)
         try:
             await asyncio.to_thread(publish_origin, origins, runtime, configured_origin)
         except Exception:
-            logger.exception("republishing the control-plane origin failed")
+            consecutive_failures += 1
+            logger.exception(
+                "republishing the control-plane origin failed (%s of %s before the "
+                "published address expires)",
+                consecutive_failures,
+                deadline_failures,
+            )
+            if consecutive_failures >= deadline_failures:
+                raise
+        else:
+            consecutive_failures = 0
 
 
 async def serve(
@@ -133,7 +153,15 @@ async def serve(
     for received in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(received, stopping.set)
     try:
-        await stopping.wait()
+        # Whichever finishes first ends the process: a heartbeat that gave up has
+        # left the deployment without an address, which is not a state to keep
+        # serving in.
+        done, _ = await asyncio.wait(
+            (asyncio.create_task(stopping.wait()), heartbeat),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            task.result()
     finally:
         heartbeat.cancel()
         for server in servers:

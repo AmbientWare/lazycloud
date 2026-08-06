@@ -32,6 +32,7 @@ workspace = [
     "api",
     "agent-app",
     "cache-server-app",
+    "control-plane-ingress-app",
     "cli",
     "container-worker-app",
     "scheduler-app",
@@ -94,6 +95,7 @@ api = { workspace = true }
 agent-app = { workspace = true }
 cache = { workspace = true }
 cache-server-app = { workspace = true }
+control-plane-ingress-app = { workspace = true }
 cli = { workspace = true }
 coordination = { workspace = true }
 compute = { workspace = true }
