@@ -523,15 +523,16 @@ def test_a_named_group_never_spills_into_a_unit_of_another_group(
 ) -> None:
     """Failover stays inside the pool the request named.
 
-    A unit is a candidate because it feeds the requested group, so a healthier
-    unit of some other group is not an alternative however high its priority:
-    spilling there would run tenant work on a fleet the workload did not ask
-    for.
+    Several units feed one pool, and failing over between them is the point. A
+    unit feeding a different pool is not an alternative however healthy or
+    high-priority: spilling there would run tenant work on a fleet the workload
+    did not ask for.
     """
     primary = _Controller(ensure_status=CapacityAcquisitionStatus.AtLimit, priority=1)
     fallback = _Controller(
         capacity_owner_id=OTHER_OWNER_ID,
         unit_name=UnitName("another-group"),
+        pool=MachinePool("another-pool"),
         priority=100,
     )
     service = CapacityReservationService(

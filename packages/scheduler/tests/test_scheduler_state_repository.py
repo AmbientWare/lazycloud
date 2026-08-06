@@ -61,6 +61,7 @@ from scheduler.state import (
     ContainerRequestCancelledError,
     ContainerRequestClaimNotOwnedError,
     NetworkIpMutationAction,
+    RedisOrphanedContainerConfirmationRepository,
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
@@ -2103,7 +2104,10 @@ def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
     scheduler = Scheduler(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=request_service),
-        states=SchedulerStateStores(orphaned_container_networks=network_repo),
+        states=SchedulerStateStores(
+            orphaned_container_networks=network_repo,
+            orphaned_container_confirmations=RedisOrphanedContainerConfirmationRepository(redis),
+        ),
         orphaned_container_reconcile_interval_seconds=0,
         orphaned_container_confirmation_seconds=60,
     )
@@ -2166,6 +2170,9 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
     scheduler = Scheduler(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=request_service),
+        states=SchedulerStateStores(
+            orphaned_container_confirmations=RedisOrphanedContainerConfirmationRepository(redis),
+        ),
         orphaned_container_reconcile_interval_seconds=0,
         orphaned_container_confirmation_seconds=60,
     )
