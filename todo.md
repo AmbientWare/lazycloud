@@ -80,7 +80,10 @@ straight to a pull request. Ordered — networking first, agent artifact last.
       not dead. Nothing needed removing from `.env.example` either: it documented
       25 keys and all 25 were still read.
 
-- [ ] **Give the agent binary directory two names.** `LAZYCLOUD_AGENT_BINARY_DIR`
+- [x] **Give the agent binary directory two names.** Done: the host bind source
+      is `LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`, matching the `LAZYCLOUD_COMPOSE_*`
+      convention for host paths, and `LAZYCLOUD_AGENT_BINARY_DIR` keeps its one
+      meaning as the in-container path. Original entry: `LAZYCLOUD_AGENT_BINARY_DIR`
       is both the host directory the control plane bind-mounts and the
       in-container path it then reads, with a different default for each
       (`compose.yaml`, the `x-agent-binary-env` anchor and the `control-plane`

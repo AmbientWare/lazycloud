@@ -396,7 +396,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - lazycloud-files:/var/lib/lazycloud
-      - "${LAZYCLOUD_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
+      - "${LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
