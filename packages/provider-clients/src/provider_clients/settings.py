@@ -184,11 +184,18 @@ class AwsCapacitySettings(BaseModel):
 
     @property
     def configured(self) -> bool:
+        """Whether managed AWS capacity can launch anything at all.
+
+        GPU AMIs are deliberately absent from this. Requiring them made a
+        CPU-only deployment report unconfigured, which emptied the compute
+        catalog and left the API advertising no AWS regions — a deployment that
+        wanted no GPUs could not use AWS at all. A region without a GPU AMI
+        simply offers no GPU instance types there.
+        """
         return bool(
             self.worker_image_digest
             and self.agent_binary_url
             and self.cpu_ami_ids
-            and self.gpu_ami_ids
             and self.instance_hourly_micros
         )
 
@@ -196,16 +203,15 @@ class AwsCapacitySettings(BaseModel):
     def validate_atomic_configuration(self) -> AwsCapacitySettings:
         """Managed AWS capacity is all five values or none of them.
 
-        Three of the five now arrive from the release manifest, and a release
-        always carries them, so presence alone would make this rule true for
-        every deployment that points at a release and would hide a pool that can
-        never launch. Intent is therefore read from the two values only a
-        deployment can author: authoring either one demands the whole set, and
-        authoring neither leaves managed capacity off no matter what the release
+        The release always carries the artifacts, so their presence would make
+        this rule true for every deployment pointing at one and would hide a pool
+        that can never launch. Intent is therefore read from the one value only a
+        deployment can author — what an instance hour costs. Authoring it demands
+        the rest; leaving it out keeps managed capacity off whatever the release
         published.
         """
 
-        if not (self.gpu_ami_ids or self.instance_hourly_micros):
+        if not self.instance_hourly_micros:
             return self
         missing_from_release = [
             name
@@ -219,7 +225,6 @@ class AwsCapacitySettings(BaseModel):
         missing_from_deployment = [
             name
             for name, value in (
-                (f"regional GPU AMI catalog ({_GPU_AMI_IDS_ENV})", self.gpu_ami_ids),
                 (f"instance price estimates ({_INSTANCE_PRICES_ENV})", self.instance_hourly_micros),
             )
             if not value
