@@ -3,7 +3,6 @@ from __future__ import annotations
 from pydantic import Field, computed_field, field_validator
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
-from shared.workload_keys import endpoint_keep_warm_lock_key
 
 from execution.config import (
     ManagedPythonExecutable,
@@ -51,14 +50,6 @@ class EndpointServePlan(ContractModel):
         return True
 
 
-class EndpointServeCompletionPlan(ContractModel):
-    workspace_name: str
-    stub_id: str
-    container_id: str
-    release_keep_warm_lock_key: str
-    keep_serve_lock: bool = True
-
-
 def serve_deployment(
     deployment: Deployment,
     *,
@@ -85,21 +76,4 @@ def plan_endpoint_serve(request: EndpointServeRequest) -> EndpointServePlan:
         serve_lock_key=endpoint_serve_lock_key(request.workspace_name, request.stub_id),
         serve_lock_ttl_seconds=request.timeout_seconds,
         wait_timeout_seconds=request.timeout_seconds,
-    )
-
-
-def plan_endpoint_serve_completion(
-    request: EndpointServeRequest,
-    *,
-    container_id: str,
-) -> EndpointServeCompletionPlan:
-    return EndpointServeCompletionPlan(
-        workspace_name=request.workspace_name,
-        stub_id=request.stub_id,
-        container_id=container_id,
-        release_keep_warm_lock_key=endpoint_keep_warm_lock_key(
-            request.workspace_name,
-            request.stub_id,
-            container_id,
-        ),
     )

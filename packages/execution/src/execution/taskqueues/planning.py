@@ -56,14 +56,6 @@ class TaskQueueServePlan(ContractModel):
         return True
 
 
-class TaskQueueServeCompletionPlan(ContractModel):
-    workspace_name: str
-    stub_id: str
-    container_id: str
-    release_keep_warm_lock_key: str
-    keep_serve_lock: bool = True
-
-
 class TaskQueuePutStatus(StrEnum):
     Accepted = "accepted"
     TooManyPendingTasks = "too-many-pending-tasks"
@@ -263,23 +255,6 @@ def plan_task_queue_serve(request: TaskQueueServeRequest) -> TaskQueueServePlan:
         serve_lock_key=task_queue_scheduler_serve_lock_key(request.workspace_name, request.stub_id),
         serve_lock_ttl_seconds=request.timeout_seconds,
         wait_timeout_seconds=request.timeout_seconds,
-    )
-
-
-def plan_task_queue_serve_completion(
-    request: TaskQueueServeRequest,
-    *,
-    container_id: str,
-) -> TaskQueueServeCompletionPlan:
-    return TaskQueueServeCompletionPlan(
-        workspace_name=request.workspace_name,
-        stub_id=request.stub_id,
-        container_id=container_id,
-        release_keep_warm_lock_key=task_queue_keep_warm_lock_key(
-            request.workspace_name,
-            request.stub_id,
-            container_id,
-        ),
     )
 
 

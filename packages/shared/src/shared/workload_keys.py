@@ -1,7 +1,3 @@
-def endpoint_keep_warm_lock_key(workspace_name: str, stub_id: str, container_id: str) -> str:
-    return f"endpoint:{workspace_name}:{stub_id}:keep_warm_lock:{container_id}"
-
-
 def pod_keep_warm_lock_key(workspace_name: str, stub_id: str, container_id: str) -> str:
     return f"pod:{workspace_name}:{stub_id}:keep_warm_lock:{container_id}"
 

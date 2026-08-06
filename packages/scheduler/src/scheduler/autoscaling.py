@@ -44,7 +44,6 @@ from shared.worker_events import (
 )
 from shared.workload_config import StubConfig
 from shared.workload_keys import (
-    endpoint_keep_warm_lock_key,
     pod_container_connections_key,
     pod_keep_warm_lock_key,
     pod_total_connections_key,
@@ -687,7 +686,6 @@ class EndpointAutoscalingService:
         for container in _stoppable_endpoint_containers(
             self.dispatches,
             self.redis,
-            workspace_name,
             stub,
             containers,
             keep_warm_seconds=keep_warm_seconds,
@@ -1653,7 +1651,6 @@ def _recent_failed_container_ids(
 def _stoppable_endpoint_containers(
     dispatches: EndpointAutoscalingDispatchReader,
     redis: RedisClient,
-    workspace_name: str,
     stub: StubRecord,
     containers: list[ContainerRecord],
     *,
@@ -1666,7 +1663,6 @@ def _stoppable_endpoint_containers(
         for container in containers
         if container.status is ContainerStatus.Running
         and _scheduler_status(redis, container.id) is not SchedulerContainerStatus.Stopping
-        and not _container_has_endpoint_keep_warm_lock(redis, workspace_name, stub.id, container.id)
         and not _endpoint_container_has_active_dispatch(dispatch_records, container.id)
         and _endpoint_container_keep_warm_elapsed(
             dispatch_records,
@@ -1677,18 +1673,6 @@ def _stoppable_endpoint_containers(
     ]
     candidates.sort(key=lambda container: container.created_at, reverse=True)
     return candidates
-
-
-def _container_has_endpoint_keep_warm_lock(
-    redis: RedisClient,
-    workspace_name: str,
-    stub_id: str,
-    container_id: str,
-) -> bool:
-    return _exists(
-        redis,
-        endpoint_keep_warm_lock_key(workspace_name, stub_id, container_id),
-    )
 
 
 def _endpoint_container_has_active_dispatch(
