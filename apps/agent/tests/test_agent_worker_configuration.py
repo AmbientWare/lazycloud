@@ -64,7 +64,6 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
             gateway_runtime_http_url="http://host.docker.internal:8000",
             transport="tsnet_restricted",
         ),
-        worker_repository_url="http://control-plane:9000",
     )
 
     config_path = tmp_path / "slots" / "worker-one" / "worker.yaml"
@@ -80,7 +79,10 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
     assert "worker-secret" not in contents
     assert config_path.stat().st_mode & 0o777 == 0o600
     assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run
-    assert "WORKER_REPOSITORY_URL=http://control-plane:9000" in docker_run
+    # One origin, not two. These were computed separately and only one honoured
+    # the agent's runtime-URL override, so a worker could hold a reachable
+    # gateway and an unreachable repository and stay pending forever.
+    assert "WORKER_REPOSITORY_URL=http://host.docker.internal:8000" in docker_run
     assert "GATEWAY_HTTP_URL=http://host.docker.internal:8000" in docker_run
     assert "WORKER_ROUTE_TARGET=127.0.0.1" in docker_run
     assert docker_run[docker_run.index("--network") + 1] == "lazycloud_default"
