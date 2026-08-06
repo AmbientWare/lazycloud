@@ -275,9 +275,9 @@ def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
         "00000000-0000-4000-8000-000000000404",
         created_at=current_time - timedelta(seconds=120),
     )
-    workspace_name = "default"
-    redis.set(redis.key(pod_container_connections_key(workspace_name, stub.id, busy.id)), 2)
-    redis.set(redis.key(pod_keep_warm_lock_key(workspace_name, stub.id, locked.id)), "1")
+    workspace_id = stub.workspace_id
+    redis.set(redis.key(pod_container_connections_key(workspace_id, stub.id, busy.id)), 2)
+    redis.set(redis.key(pod_keep_warm_lock_key(workspace_id, stub.id, locked.id)), "1")
 
     result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
@@ -321,11 +321,11 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
         redis=redis,
         pod_proxy_connections=connections,
     )
-    lock_key = redis.key(pod_keep_warm_lock_key("default", stub.id, container.id))
+    lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container.id))
     redis.set(lock_key, "1", ex=1)
-    connections.increment_total_connections("default", stub.id)
+    connections.increment_total_connections(stub.workspace_id, stub.id)
     connections.increment_container_connections(
-        "default",
+        stub.workspace_id,
         stub.id,
         container.id,
         keep_warm_seconds=stub.config.runtime.keep_warm,
@@ -339,7 +339,7 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
 
     service.finish_pod_proxy(
         PodProxySession(
-            workspace_name="default",
+            workspace_id=stub.workspace_id,
             stub_id=stub.id,
             target=PodProxyTarget(container_id=container.id, address="10.0.0.1:8080"),
             keep_warm_seconds=stub.config.runtime.keep_warm,
@@ -375,16 +375,16 @@ def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
     )
     container_id = "00000000-0000-4000-8000-000000000406"
     session = PodProxySession(
-        workspace_name="default",
+        workspace_id=stub.workspace_id,
         stub_id=stub.id,
         target=PodProxyTarget(container_id=container_id, address="10.0.0.1:8080"),
         keep_warm_seconds=stub.config.runtime.keep_warm,
     )
-    connections.increment_total_connections("default", stub.id)
-    lock_key = redis.key(pod_keep_warm_lock_key("default", stub.id, container_id))
+    connections.increment_total_connections(stub.workspace_id, stub.id)
+    lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container_id))
     redis.set(lock_key, "1")
     connections.increment_container_connections(
-        "default",
+        stub.workspace_id,
         stub.id,
         container_id,
         keep_warm_seconds=stub.config.runtime.keep_warm,
@@ -401,8 +401,8 @@ def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
         list(executor.map(service.finish_pod_proxy, [session] * 8))
 
     assert not redis.exists(lock_key)
-    assert connections.container_connections("default", stub.id, container_id) == 0
-    assert not redis.exists(redis.key(pod_total_connections_key("default", stub.id)))
+    assert connections.container_connections(stub.workspace_id, stub.id, container_id) == 0
+    assert not redis.exists(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)))
 
 
 def _assert_pod_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
@@ -421,7 +421,7 @@ def _assert_pod_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
         autoscaler={"max_containers": 3},
         resource_config={"cpu_millicores": 500, "cpu_limit_millicores": 1000},
     )
-    redis.set(redis.key(pod_total_connections_key("default", stub.id)), 4)
+    redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
 
     result = _pod_autoscaler(isolated_services, redis).reconcile()[0]
 
@@ -483,7 +483,7 @@ def _assert_pod_autoscaler_halts_scale_up_after_failed_container_threshold(
         "00000000-0000-4000-8000-000000000503",
         finished_at=current_time - timedelta(seconds=600),
     )
-    redis.set(redis.key(pod_total_connections_key("default", stub.id)), 4)
+    redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
 
     result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
@@ -507,7 +507,7 @@ def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
     redis = RedisClient(FakeRedis(), key_prefix="test")
     stub = _create_pod_stub(isolated_services, keep_warm_seconds=120)
     deployment_id = stub.deployment_id or ""
-    redis.set(redis.key(pod_total_connections_key("default", stub.id)), 4)
+    redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
 
     ManagementService(isolated_services).scale_deployment(
         "default",

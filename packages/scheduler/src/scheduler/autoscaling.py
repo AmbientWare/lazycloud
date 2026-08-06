@@ -273,8 +273,8 @@ class TaskQueueAutoscalingService:
         current = len(_active_containers(containers))
         pending = _pending_container_count(containers)
         queue_length = _queue_length(self.services, stub)
-        workspace_name = _workspace_name(self.services, stub)
-        running_tasks = _running_task_count(self.redis, workspace_name, stub, containers)
+        workspace_id = stub.workspace_id
+        running_tasks = _running_task_count(self.redis, workspace_id, stub, containers)
         config = _task_queue_autoscaler_config(stub.config)
         failed_containers = _recent_failed_task_queue_container_ids(
             containers,
@@ -320,7 +320,7 @@ class TaskQueueAutoscalingService:
             if delta > 0:
                 actions.extend(self._scale_up(stub, delta))
             elif delta < 0:
-                actions.extend(self._scale_down(stub, workspace_name, containers, -delta))
+                actions.extend(self._scale_down(stub, workspace_id, containers, -delta))
         result = TaskQueueAutoscaleResult(
             stub_id=stub.id,
             workspace_id=stub.workspace_id,
@@ -369,14 +369,14 @@ class TaskQueueAutoscalingService:
     def _scale_down(
         self,
         stub: StubRecord,
-        workspace_name: str,
+        workspace_id: str,
         containers: list[ContainerRecord],
         count: int,
     ) -> list[TaskQueueAutoscaleAction]:
         actions: list[TaskQueueAutoscaleAction] = []
         for container in _stoppable_task_queue_containers(
             self.redis,
-            workspace_name,
+            workspace_id,
             stub,
             containers,
         ):
@@ -616,11 +616,11 @@ class EndpointAutoscalingService:
         if delta > 0:
             actions.extend(self._scale_up(stub, delta))
         elif delta < 0:
-            workspace_name = _workspace_name(self.services, stub)
+            workspace_id = stub.workspace_id
             actions.extend(
                 self._scale_down(
                     stub,
-                    workspace_name,
+                    workspace_id,
                     containers,
                     -delta,
                     keep_warm_seconds=(
@@ -675,7 +675,7 @@ class EndpointAutoscalingService:
     def _scale_down(
         self,
         stub: StubRecord,
-        workspace_name: str,
+        workspace_id: str,
         containers: list[ContainerRecord],
         count: int,
         *,
@@ -870,7 +870,7 @@ class PodAutoscalingService:
     ) -> PodAutoscaleResult:
         current_time = now or utc_now()
         active = _deployment_active(self.services, stub)
-        workspace_name = _workspace_name(self.services, stub)
+        workspace_id = stub.workspace_id
         containers = _containers_for_stub(self.services, stub)
         active_containers, stale_containers = _pod_active_containers(
             containers,
@@ -879,7 +879,7 @@ class PodAutoscalingService:
         stale_actions = self._stop_stale_containers(stale_containers)
         current = len(active_containers)
         pending = _pending_container_count(containers)
-        total_connections = _pod_total_connections(self.redis, workspace_name, stub.id)
+        total_connections = _pod_total_connections(self.redis, workspace_id, stub.id)
         config = _pod_autoscaler_config(stub)
         failed_containers = _recent_failed_container_ids(
             containers,
@@ -933,7 +933,7 @@ class PodAutoscalingService:
             actions.extend(
                 self._scale_down(
                     stub,
-                    workspace_name,
+                    workspace_id,
                     active_containers,
                     -delta,
                     keep_warm_seconds=(
@@ -1012,7 +1012,7 @@ class PodAutoscalingService:
     def _scale_down(
         self,
         stub: StubRecord,
-        workspace_name: str,
+        workspace_id: str,
         containers: list[ContainerRecord],
         count: int,
         *,
@@ -1022,7 +1022,7 @@ class PodAutoscalingService:
     ) -> list[PodAutoscaleAction]:
         states = _pod_container_states(
             self.redis,
-            workspace_name,
+            workspace_id,
             stub,
             containers,
         )
@@ -1037,7 +1037,7 @@ class PodAutoscalingService:
         for container_id in stop_plan.stoppable_container_ids[:count]:
             stopped = self.services.containers.stop(container_id)
             self.redis.delete(
-                self.redis.key(pod_keep_warm_lock_key(workspace_name, stub.id, container_id))
+                self.redis.key(pod_keep_warm_lock_key(workspace_id, stub.id, container_id))
             )
             actions.append(
                 PodAutoscaleAction(
@@ -1516,7 +1516,7 @@ def _queue_length(services: SchedulerServices, stub: StubRecord) -> int:
 
 def _running_task_count(
     redis: RedisClient,
-    workspace_name: str,
+    workspace_id: str,
     stub: StubRecord,
     containers: list[ContainerRecord],
 ) -> int:
@@ -1526,13 +1526,13 @@ def _running_task_count(
             continue
         index_key = _redis_key(
             redis,
-            task_queue_running_lock_index_key(workspace_name, stub.id, container.id),
+            task_queue_running_lock_index_key(workspace_id, stub.id, container.id),
         )
         task_ids = [_redis_text(item) for item in redis.set_members(index_key)]
         for task_id in task_ids:
             lock_key = _redis_key(
                 redis,
-                task_queue_running_lock_key(workspace_name, stub.id, container.id, task_id),
+                task_queue_running_lock_key(workspace_id, stub.id, container.id, task_id),
             )
             if int(redis.exists(lock_key) or 0) > 0:
                 count += 1
@@ -1541,7 +1541,7 @@ def _running_task_count(
 
 def _stoppable_task_queue_containers(
     redis: RedisClient,
-    workspace_name: str,
+    workspace_id: str,
     stub: StubRecord,
     containers: list[ContainerRecord],
 ) -> list[ContainerRecord]:
@@ -1550,9 +1550,9 @@ def _stoppable_task_queue_containers(
         for container in containers
         if container.status is ContainerStatus.Running
         and _scheduler_status(redis, container.id) is not SchedulerContainerStatus.Stopping
-        and not _container_has_keep_warm_lock(redis, workspace_name, stub.id, container.id)
-        and not _container_has_processing_lock(redis, workspace_name, stub.id, container.id)
-        and not _container_has_running_task(redis, workspace_name, stub.id, container.id)
+        and not _container_has_keep_warm_lock(redis, workspace_id, stub.id, container.id)
+        and not _container_has_processing_lock(redis, workspace_id, stub.id, container.id)
+        and not _container_has_running_task(redis, workspace_id, stub.id, container.id)
     ]
     candidates.sort(key=lambda container: container.created_at, reverse=True)
     return candidates
@@ -1560,43 +1560,43 @@ def _stoppable_task_queue_containers(
 
 def _container_has_keep_warm_lock(
     redis: RedisClient,
-    workspace_name: str,
+    workspace_id: str,
     stub_id: str,
     container_id: str,
 ) -> bool:
     return _exists(
         redis,
-        task_queue_keep_warm_lock_key(workspace_name, stub_id, container_id),
+        task_queue_keep_warm_lock_key(workspace_id, stub_id, container_id),
     )
 
 
 def _container_has_processing_lock(
     redis: RedisClient,
-    workspace_name: str,
+    workspace_id: str,
     stub_id: str,
     container_id: str,
 ) -> bool:
     return _exists(
         redis,
-        task_queue_processing_lock_key(workspace_name, stub_id, container_id),
+        task_queue_processing_lock_key(workspace_id, stub_id, container_id),
     )
 
 
 def _container_has_running_task(
     redis: RedisClient,
-    workspace_name: str,
+    workspace_id: str,
     stub_id: str,
     container_id: str,
 ) -> bool:
     index_key = _redis_key(
         redis,
-        task_queue_running_lock_index_key(workspace_name, stub_id, container_id),
+        task_queue_running_lock_index_key(workspace_id, stub_id, container_id),
     )
     task_ids = [_redis_text(item) for item in redis.set_members(index_key)]
     for task_id in task_ids:
         if _exists(
             redis,
-            task_queue_running_lock_key(workspace_name, stub_id, container_id, task_id),
+            task_queue_running_lock_key(workspace_id, stub_id, container_id, task_id),
         ):
             return True
         redis.set_remove(index_key, task_id)
@@ -1706,15 +1706,15 @@ def _endpoint_container_keep_warm_elapsed(
     return (now - latest).total_seconds() >= keep_warm_seconds
 
 
-def _pod_total_connections(redis: RedisClient, workspace_name: str, stub_id: str) -> int:
+def _pod_total_connections(redis: RedisClient, workspace_id: str, stub_id: str) -> int:
     return _redis_non_negative_int(
-        redis.get(redis.key(pod_total_connections_key(workspace_name, stub_id)))
+        redis.get(redis.key(pod_total_connections_key(workspace_id, stub_id)))
     )
 
 
 def _pod_container_states(
     redis: RedisClient,
-    workspace_name: str,
+    workspace_id: str,
     stub: StubRecord,
     containers: list[ContainerRecord],
 ) -> list[PodContainerState]:
@@ -1727,13 +1727,13 @@ def _pod_container_states(
                 started_at_seconds=int((container.started_at or container.created_at).timestamp()),
                 keep_warm_lock_present=_exists(
                     redis,
-                    pod_keep_warm_lock_key(workspace_name, stub.id, container.id),
+                    pod_keep_warm_lock_key(workspace_id, stub.id, container.id),
                 ),
                 active_connections=_redis_non_negative_int(
                     redis.get(
                         redis.key(
                             pod_container_connections_key(
-                                workspace_name,
+                                workspace_id,
                                 stub.id,
                                 container.id,
                             )
@@ -1907,10 +1907,6 @@ def _first_configured_non_negative(
         if value is not None:
             return max(value, 0)
     return default
-
-
-def _workspace_name(services: SchedulerServices, stub: StubRecord) -> str:
-    return services.scheduler_workloads.get_workspace(stub.workspace_id).name
 
 
 def _exists(redis: RedisClient, logical_key: str) -> bool:

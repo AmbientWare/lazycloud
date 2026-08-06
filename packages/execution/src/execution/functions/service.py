@@ -821,10 +821,10 @@ class FunctionControlService:
 
     def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:
         task = self.services.tasks.get(request.task_id)
-        workspace = self._task_workspace_name(task)
+        workspace = self._task_workspace_id(task)
         plan = plan_function_monitor(
             planning.FunctionMonitorRequest(
-                workspace_name=workspace,
+                workspace_id=workspace,
                 stub_id=request.stub_id,
                 container_id=request.container_id,
                 task_id=request.task_id,
@@ -871,10 +871,10 @@ class FunctionControlService:
         )
         return FunctionCronResponse(cron_job_id=record.name)
 
-    def _task_workspace_name(self, task: Task) -> str:
+    def _task_workspace_id(self, task: Task) -> str:
         if not task.workspace_id:
             raise InvalidInputError(f"function task {task.id} is missing workspace ownership")
-        return self.control_plane.get_workspace(task.workspace_id).name
+        return task.workspace_id
 
 
 def _function_runtime_env(values: Iterable[str], gateway_http_url: str) -> list[str]:

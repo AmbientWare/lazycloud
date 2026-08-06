@@ -449,10 +449,9 @@ class PodControlService:
             stub = self.control_plane.get_stub(container.stub_id)
             if stub.kind is not StubKind.Pod:
                 continue
-            workspace = self.control_plane.get_workspace(container.workspace_id)
             record = self.services.containers.stop(container.id)
             self._delete_keep_warm_lock(
-                pod_keep_warm_lock_key(workspace.name, stub.id, container.id)
+                pod_keep_warm_lock_key(container.workspace_id, stub.id, container.id)
             )
             stopped.append(record)
             self.services.events.emit(
@@ -653,7 +652,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxExposePortRequest,
     ) -> PodSandboxExposePortResponse:
-        validated_container, _workspace_name, stub = self._sandbox_container(container_id)
+        validated_container, stub = self._sandbox_container(container_id)
         if not validated_container.stub_id:
             raise InvalidInputError("sandbox container has no owning stub")
         response = self._client(container_id).sandbox_expose_port(
@@ -661,7 +660,7 @@ class PodControlService:
             request.port,
         )
         _raise_container_response_error(response)
-        container, _workspace_name, current_stub = self._sandbox_container(container_id)
+        container, current_stub = self._sandbox_container(container_id)
         if current_stub.id != stub.id or current_stub.workspace_id != stub.workspace_id:
             raise ConflictError("sandbox container ownership changed during port exposure")
         url = pod_proxy_url(
@@ -737,7 +736,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxUpdateTTLRequest,
     ) -> PodSandboxUpdateTTLResponse:
-        container, workspace_name, _stub = self._sandbox_container(container_id)
+        container, _stub = self._sandbox_container(container_id)
         container.timeout_seconds = request.ttl
         container.expires_at = (
             utc_now() + timedelta(seconds=request.ttl) if request.ttl > 0 else None
@@ -749,7 +748,7 @@ class PodControlService:
             WorkspaceChangeType.Updated,
         )
         self._set_keep_warm_lock(
-            pod_keep_warm_lock_key(workspace_name, container.stub_id or "", container.id),
+            pod_keep_warm_lock_key(container.workspace_id, container.stub_id or "", container.id),
             ttl_seconds=request.ttl if request.ttl > 0 else None,
         )
         return PodSandboxUpdateTTLResponse(
@@ -758,10 +757,10 @@ class PodControlService:
         )
 
     def sandbox_terminate(self, container_id: str) -> None:
-        container, workspace_name, _stub = self._sandbox_container(container_id)
+        container, _stub = self._sandbox_container(container_id)
         stopped = self.services.containers.stop(container.id)
         self._delete_keep_warm_lock(
-            pod_keep_warm_lock_key(workspace_name, container.stub_id or "", container.id)
+            pod_keep_warm_lock_key(container.workspace_id, container.stub_id or "", container.id)
         )
         self.services.events.emit(
             "sandbox.terminated",
@@ -881,24 +880,24 @@ class PodControlService:
             if container_id is not None:
                 target = self._pinned_sandbox_proxy_target(stub, request)
             else:
-                connections.increment_total_connections(workspace.name, stub_id)
+                connections.increment_total_connections(workspace.id, stub_id)
                 demand_recorded = True
                 target = self._wait_for_pod_proxy_target(stub_id, request)
             if not demand_recorded:
-                connections.increment_total_connections(workspace.name, stub_id)
+                connections.increment_total_connections(workspace.id, stub_id)
                 demand_recorded = True
             connections.increment_container_connections(
-                workspace.name,
+                workspace.id,
                 stub_id,
                 target.container_id,
                 keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
             )
         except Exception:
             if demand_recorded:
-                connections.decrement_total_connections(workspace.name, stub_id)
+                connections.decrement_total_connections(workspace.id, stub_id)
             raise
         return PodProxySession(
-            workspace_name=workspace.name,
+            workspace_id=workspace.id,
             stub_id=stub_id,
             target=target,
             keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
@@ -926,12 +925,12 @@ class PodControlService:
                 return
             connections = self._pod_proxy_connections()
             connections.decrement_container_connections(
-                session.workspace_name,
+                session.workspace_id,
                 session.stub_id,
                 session.target.container_id,
                 keep_warm_seconds=session.keep_warm_seconds,
             )
-            connections.decrement_total_connections(session.workspace_name, session.stub_id)
+            connections.decrement_total_connections(session.workspace_id, session.stub_id)
 
     def _wait_for_pod_proxy_target(
         self,
@@ -958,15 +957,14 @@ class PodControlService:
     def _sandbox_container(
         self,
         container_id: str,
-    ) -> tuple[ContainerRecord, str, StubRecord]:
+    ) -> tuple[ContainerRecord, StubRecord]:
         container = self._container(container_id)
         if not container.stub_id:
             raise InvalidInputError(f"container is not a sandbox: {container_id}")
         stub = self.control_plane.get_stub(container.stub_id, workspace=container.workspace_id)
         if stub.workspace_id != container.workspace_id or stub.kind is not StubKind.Sandbox:
             raise InvalidInputError(f"container is not a sandbox: {container_id}")
-        workspace = self.control_plane.get_workspace(container.workspace_id)
-        return container, workspace.name, stub
+        return container, stub
 
     def _set_keep_warm_lock(self, key: str, *, ttl_seconds: int | None) -> None:
         self.redis.set(

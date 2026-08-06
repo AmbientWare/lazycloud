@@ -193,6 +193,7 @@ class TaskQueueControlService:
             pop_plan = plan_task_queue_pop(
                 planning.TaskQueuePopRequest(
                     workspace_name=workspace.name,
+                    workspace_id=workspace.id,
                     stub_id=request.stub_id,
                     container_id=request.container_id,
                     queue_length=self._queue_depth(queue_name, workspace.id),
@@ -236,7 +237,7 @@ class TaskQueueControlService:
         config = TaskQueueStubConfig.model_validate(stub.config, from_attributes=True)
         active_consumers = len(containers) * config.consumers_per_container
         busy_consumers = min(
-            self._running_task_count(workspace.name, stub.id, containers),
+            self._running_task_count(workspace.id, stub.id, containers),
             active_consumers,
         )
         return TaskQueueStateResponse(
@@ -289,6 +290,7 @@ class TaskQueueControlService:
         monitor = plan_task_queue_monitor(
             planning.TaskQueueMonitorRequest(
                 workspace_name=workspace.name,
+                workspace_id=workspace.id,
                 stub_id=request.stub_id,
                 container_id=request.container_id,
                 task_id=request.task_id,
@@ -307,7 +309,7 @@ class TaskQueueControlService:
                 monitor.running_lock_key,
                 request.container_id,
                 request.task_id,
-                workspace.name,
+                workspace.id,
                 request.stub_id,
             )
         else:
@@ -333,7 +335,7 @@ class TaskQueueControlService:
         stub = self.control_plane.get_stub(stub_id)
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         if not self._owns_task_claim(
-            workspace_name=workspace.name,
+            workspace_id=workspace.id,
             stub_id=stub.id,
             task_id=task.id,
             container_id=container_id,
@@ -352,7 +354,7 @@ class TaskQueueControlService:
             return _task_queue_preempted_result(current, container_id=container_id)
         try:
             if not self._owns_task_claim(
-                workspace_name=workspace.name,
+                workspace_id=workspace.id,
                 stub_id=stub.id,
                 task_id=task.id,
                 container_id=container_id,
@@ -413,14 +415,14 @@ class TaskQueueControlService:
             ):
                 self._clear_running_task(
                     task_queue_running_lock_key(
-                        workspace.name,
+                        workspace.id,
                         stub.id,
                         container_id,
                         task.id,
                     ),
                     container_id,
                     task.id,
-                    workspace.name,
+                    workspace.id,
                     stub.id,
                 )
                 locks_cleared = True
@@ -458,6 +460,7 @@ class TaskQueueControlService:
         complete_plan = plan_task_queue_complete(
             planning.TaskQueueCompleteRequest(
                 workspace_name=workspace.name,
+                workspace_id=workspace.id,
                 stub_id=request.stub_id,
                 container_id=request.container_id,
                 task_id=request.task_id,
@@ -515,6 +518,7 @@ class TaskQueueControlService:
             TaskQueueServeRequest(
                 stub_id=stub.id,
                 workspace_name=workspace.name,
+                workspace_id=workspace.id,
                 timeout_seconds=request.timeout,
                 python_executable=config.image.python_executable,
             )
@@ -640,7 +644,7 @@ class TaskQueueControlService:
             plan.serve_lock_ttl_seconds,
         )
         self._set_keep_warm_lock(
-            workspace.name,
+            workspace.id,
             stub.id,
             container.id,
             config.effective_keep_warm_seconds,
@@ -731,20 +735,20 @@ class TaskQueueControlService:
 
     def _running_task_count(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         containers: list[ContainerRecord],
     ) -> int:
         count = 0
         for container in containers:
             index_key = self._redis_key(
-                task_queue_running_lock_index_key(workspace_name, stub_id, container.id)
+                task_queue_running_lock_index_key(workspace_id, stub_id, container.id)
             )
             for task_id_value in self.redis.set_members(index_key):
                 task_id = redis_text(task_id_value)
                 lock_key = self._redis_key(
                     task_queue_running_lock_key(
-                        workspace_name,
+                        workspace_id,
                         stub_id,
                         container.id,
                         task_id,
@@ -883,43 +887,37 @@ class TaskQueueControlService:
         running_lock_key: str,
         container_id: str,
         task_id: str,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
     ) -> None:
         self.redis.delete(self._redis_key(running_lock_key))
         self.redis.set_remove(
-            self._redis_key(
-                task_queue_running_lock_index_key(workspace_name, stub_id, container_id)
-            ),
+            self._redis_key(task_queue_running_lock_index_key(workspace_id, stub_id, container_id)),
             task_id,
         )
         self.redis.delete(
-            self._redis_key(task_queue_processing_lock_key(workspace_name, stub_id, container_id))
+            self._redis_key(task_queue_processing_lock_key(workspace_id, stub_id, container_id))
         )
         self.redis.delete(
-            self._redis_key(
-                planning.task_queue_task_heartbeat_key(workspace_name, stub_id, task_id)
-            )
+            self._redis_key(planning.task_queue_task_heartbeat_key(workspace_id, stub_id, task_id))
         )
 
     def _owns_task_claim(
         self,
         *,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         task_id: str,
         container_id: str,
     ) -> bool:
         heartbeat = self.redis.get(
-            self._redis_key(
-                planning.task_queue_task_heartbeat_key(workspace_name, stub_id, task_id)
-            )
+            self._redis_key(planning.task_queue_task_heartbeat_key(workspace_id, stub_id, task_id))
         )
         processing = self.redis.get(
-            self._redis_key(task_queue_processing_lock_key(workspace_name, stub_id, container_id))
+            self._redis_key(task_queue_processing_lock_key(workspace_id, stub_id, container_id))
         )
         running_lock = self._redis_key(
-            task_queue_running_lock_key(workspace_name, stub_id, container_id, task_id)
+            task_queue_running_lock_key(workspace_id, stub_id, container_id, task_id)
         )
         return (
             heartbeat is not None
@@ -931,7 +929,7 @@ class TaskQueueControlService:
 
     def _set_keep_warm_lock(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         keep_warm_seconds: int,
@@ -939,7 +937,7 @@ class TaskQueueControlService:
         if keep_warm_seconds <= 0:
             return
         self.redis.set(
-            self._redis_key(task_queue_keep_warm_lock_key(workspace_name, stub_id, container_id)),
+            self._redis_key(task_queue_keep_warm_lock_key(workspace_id, stub_id, container_id)),
             "1",
             ex=keep_warm_seconds,
         )
@@ -980,8 +978,8 @@ def _processing_lock_key_from_running_lock_key(running_lock_key: str) -> str:
     parts = running_lock_key.split(":")
     if len(parts) < 6 or parts[0] != "taskqueue" or parts[3] != "task_running":
         return ""
-    workspace_name, stub_id, container_id = parts[1], parts[2], parts[4]
-    return task_queue_processing_lock_key(workspace_name, stub_id, container_id)
+    workspace_id, stub_id, container_id = parts[1], parts[2], parts[4]
+    return task_queue_processing_lock_key(workspace_id, stub_id, container_id)
 
 
 def _task_queue_preempted_result(

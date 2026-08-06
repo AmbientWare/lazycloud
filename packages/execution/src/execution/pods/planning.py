@@ -31,7 +31,7 @@ class PodContainerEnvVar(StrEnum):
 
 class PodContainerStartRequest(ContractModel):
     workspace_name: str
-    workspace_id: str = ""
+    workspace_id: str
     app_id: str = ""
     stub_id: str
     stub_type: PodStubType = PodStubType.PodDeployment
@@ -120,8 +120,8 @@ class PodTcpSniPlan(ContractModel):
     forward_to_pod: bool = False
 
 
-def pod_instance_lock_key(workspace_name: str, stub_id: str) -> str:
-    return f"pod:{workspace_name}:{stub_id}:instance_lock"
+def pod_instance_lock_key(workspace_id: str, stub_id: str) -> str:
+    return f"pod:{workspace_id}:{stub_id}:instance_lock"
 
 
 def pod_tcp_sni_handler_key(sni: str) -> str:
@@ -161,7 +161,7 @@ def plan_pod_container_start(request: PodContainerStartRequest) -> PodContainerS
         checkpoint_enabled=request.checkpoint_enabled,
         keep_warm_lock_key=(
             pod_keep_warm_lock_key(
-                request.workspace_name,
+                request.workspace_id,
                 request.stub_id,
                 container_id,
             )

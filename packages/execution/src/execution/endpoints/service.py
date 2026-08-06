@@ -122,6 +122,7 @@ class EndpointControlService:
             EndpointServeRequest(
                 stub_id=stub.id,
                 workspace_name=workspace.name,
+                workspace_id=workspace.id,
                 timeout_seconds=timeout_seconds,
                 python_executable=config.image.python_executable,
             )

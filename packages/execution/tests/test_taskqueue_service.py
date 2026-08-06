@@ -138,13 +138,13 @@ def test_task_queue_pop_leases_and_complete_acks_after_result_persisted(
     assert isolated_services.tasks.get(put.task_id).status is TaskStatus.Running
     workspace = ControlPlaneService(isolated_services.context).get_workspace(stub.workspace_id)
     processing_lock_key = service.redis.key(
-        task_queue_processing_lock_key(workspace.name, stub.id, TASK_QUEUE_CONTAINER_ID)
+        task_queue_processing_lock_key(workspace.id, stub.id, TASK_QUEUE_CONTAINER_ID)
     )
     running_lock_index_key = service.redis.key(
-        task_queue_running_lock_index_key(workspace.name, stub.id, TASK_QUEUE_CONTAINER_ID)
+        task_queue_running_lock_index_key(workspace.id, stub.id, TASK_QUEUE_CONTAINER_ID)
     )
     running_lock_key = service.redis.key(
-        task_queue_running_lock_key(workspace.name, stub.id, TASK_QUEUE_CONTAINER_ID, put.task_id)
+        task_queue_running_lock_key(workspace.id, stub.id, TASK_QUEUE_CONTAINER_ID, put.task_id)
     )
     assert service.redis.exists(processing_lock_key)
     assert service.redis.set_members(running_lock_index_key) == {put.task_id}
@@ -171,7 +171,7 @@ def test_task_queue_pop_leases_and_complete_acks_after_result_persisted(
     assert not service.redis.exists(running_lock_key)
     assert put.task_id not in service.redis.set_members(running_lock_index_key)
     keep_warm_lock_key = service.redis.key(
-        task_queue_keep_warm_lock_key(workspace.name, stub.id, TASK_QUEUE_CONTAINER_ID)
+        task_queue_keep_warm_lock_key(workspace.id, stub.id, TASK_QUEUE_CONTAINER_ID)
     )
     assert service.redis.exists(keep_warm_lock_key)
     assert service.redis.ttl(keep_warm_lock_key) == 30
@@ -369,7 +369,7 @@ def test_task_queue_monitor_refresh_preserves_active_container_ownership(
     assert service.task_queue_pop(_pop_request(stub.id)).task_msg
     workspace = ControlPlaneService(isolated_services.context).get_workspace(stub.workspace_id)
     heartbeat_key = service.redis.key(
-        task_queue_task_heartbeat_key(workspace.name, stub.id, put.task_id)
+        task_queue_task_heartbeat_key(workspace.id, stub.id, put.task_id)
     )
 
     before = service.redis.get(heartbeat_key)
@@ -464,7 +464,7 @@ def test_task_queue_preemption_releases_once_for_existing_retry_policy(
     assert task.error == "task queue container was preempted"
     assert message.leased_until is None
     assert message.available_at >= before + timedelta(seconds=5)
-    _assert_task_claim_cleared(service, workspace.name, stub.id, put.task_id)
+    _assert_task_claim_cleared(service, workspace.id, stub.id, put.task_id)
 
 
 def test_task_queue_preemption_acknowledges_non_retryable_attempt_once(
@@ -581,7 +581,7 @@ def test_task_queue_preemption_preserves_and_releases_authoritative_retry(
     assert task.error == "authoritative retry"
     assert task.exit_code == 42
     assert _messages(isolated_services, stub)[0].leased_until is None
-    _assert_task_claim_cleared(service, workspace.name, stub.id, put.task_id)
+    _assert_task_claim_cleared(service, workspace.id, stub.id, put.task_id)
 
 
 def test_task_queue_preemption_rejects_stale_container_attempt(
@@ -712,22 +712,20 @@ def _task_queue_service(services: ApiServices) -> TaskQueueControlService:
 
 def _assert_task_claim_cleared(
     service: TaskQueueControlService,
-    workspace_name: str,
+    workspace_id: str,
     stub_id: str,
     task_id: str,
 ) -> None:
     processing_key = service.redis.key(
-        task_queue_processing_lock_key(workspace_name, stub_id, TASK_QUEUE_CONTAINER_ID)
+        task_queue_processing_lock_key(workspace_id, stub_id, TASK_QUEUE_CONTAINER_ID)
     )
     index_key = service.redis.key(
-        task_queue_running_lock_index_key(workspace_name, stub_id, TASK_QUEUE_CONTAINER_ID)
+        task_queue_running_lock_index_key(workspace_id, stub_id, TASK_QUEUE_CONTAINER_ID)
     )
     running_key = service.redis.key(
-        task_queue_running_lock_key(workspace_name, stub_id, TASK_QUEUE_CONTAINER_ID, task_id)
+        task_queue_running_lock_key(workspace_id, stub_id, TASK_QUEUE_CONTAINER_ID, task_id)
     )
-    heartbeat_key = service.redis.key(
-        task_queue_task_heartbeat_key(workspace_name, stub_id, task_id)
-    )
+    heartbeat_key = service.redis.key(task_queue_task_heartbeat_key(workspace_id, stub_id, task_id))
     assert not service.redis.exists(processing_key)
     assert task_id not in service.redis.set_members(index_key)
     assert not service.redis.exists(running_key)
