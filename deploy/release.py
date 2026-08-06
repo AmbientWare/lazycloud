@@ -239,12 +239,7 @@ def repoint_deployment(manifest_url: str) -> None:
 
 
 def restart_stack() -> None:
-    """Restart, and put the sidecars back in the namespace they lost."""
     _run(["docker", "compose", "up", "-d"])
-    # A recreated control plane takes both sidecars with it, and a plain `up -d`
-    # leaves them attached to a namespace that no longer exists -- healthy, and
-    # serving nothing.
-    _run(["docker", "compose", "up", "-d", "--force-recreate", "tailnet-gateway", "public-ingress"])
 
 
 def process_environment(service: str) -> dict[str, str]:
@@ -571,7 +566,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         restart_stack()
-        print("restarted the stack and restored the sidecars", flush=True)
+        print("restarted the stack", flush=True)
 
         # Both processes must agree before any claim about a node: while they
         # disagree the launch template alternates and every version a node

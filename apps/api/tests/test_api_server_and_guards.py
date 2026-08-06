@@ -41,11 +41,8 @@ class _FailingTailnetRuntime:
     def peers(self) -> list[TailnetPeerView]:
         return []
 
-
-class _FatalTailnetRuntime(_FailingTailnetRuntime):
-    def start(self) -> None:
-        self.started = True
-        raise RuntimeError("tailnet startup failed")
+    def self_dns_name(self) -> str:
+        return ""
 
 
 class _RecordingTelemetry:
@@ -154,9 +151,12 @@ def test_control_plane_health_endpoint_reports_dependency_failure(
     assert health.checks["redis"].error == "unhealthy"
 
 
-def test_control_plane_starts_when_tailnet_sidecar_is_not_ready(
+def test_control_plane_refuses_to_start_without_its_tailnet(
     isolated_services: ApiServices,
 ) -> None:
+    """A control plane reaches every agent over the tailnet, so one that cannot
+    join serves nothing. It used to log a warning and come up reporting healthy,
+    which is how a broken tailnet stayed invisible for hours."""
     tailnet_runtime = _FailingTailnetRuntime()
     services = ApiServices.create(
         isolated_services.database,
@@ -167,10 +167,8 @@ def test_control_plane_starts_when_tailnet_sidecar_is_not_ready(
         tailnet_runtime=tailnet_runtime,
     )
 
-    with TestClient(create_app(services)) as client:
-        response = client.get("/health")
+    with pytest.raises(BaseException) as error, TestClient(create_app(services)):
+        pass
 
-    assert response.status_code == 200
-    assert HealthResponse.model_validate_json(response.content).ok is True
     assert tailnet_runtime.started is True
-    assert tailnet_runtime.closed is True
+    assert "NeedsLogin" in str(error.value) or isinstance(error.value, BaseExceptionGroup)

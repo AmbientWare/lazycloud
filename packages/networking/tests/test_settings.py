@@ -23,12 +23,9 @@ def test_tailnet_control_rejects_partial_cleanup_credentials() -> None:
 
 
 def test_remote_provider_gate_reports_all_missing_security_requirements() -> None:
-    # Sidecar with nothing configured: a managed runtime without an auth key is
-    # rejected at construction and cannot reach this gate.
     runtime = TailnetRuntimeSettings(
-        mode=TailnetRuntimeMode.Sidecar,
+        mode=TailnetRuntimeMode.Managed,
         hostname="",
-        socket_path="",
     )
     control = TailnetControlSettings(
         oauth_client_id="",
@@ -52,16 +49,11 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
 
     message = str(error.value)
     assert "gateway HTTP URL must be an HTTPS origin" in message
-    # A Compose service name resolves on the control-plane host and nowhere
-    # else. Accepting it here produces remote machines that enrol, report
-    # healthy, and then fail every call they make.
-    assert "'control-plane' is unreachable from a remote machine" in message
     # The presigned endpoint is the third origin a remote node dials, and the
     # only one it does not use while enrolling: a local value here produces a
     # machine that joins and reports ready before failing to read its image.
     assert "'object-store' is unreachable from a remote machine" in message
     assert "tailnet hostname is required" in message
-    assert "tailnet sidecar socket path is required" in message
     assert "tailnet agent and control-plane tags must be distinct" in message
     assert "Tailscale OAuth client ID is required" in message
     assert "Tailscale OAuth client secret is required" in message
@@ -72,11 +64,3 @@ def test_remote_provider_gate_reports_all_missing_security_requirements() -> Non
 def test_tailnet_tags_reject_invalid_values() -> None:
     with pytest.raises(ValidationError, match="tag:<name>"):
         TailnetControlSettings(agent_tag="provider_agent")
-
-
-def test_managed_runtime_requires_an_auth_key_when_enabled() -> None:
-    with pytest.raises(ValueError, match="gateway Tailscale auth key"):
-        TailnetRuntimeSettings(
-            mode=TailnetRuntimeMode.Managed,
-            auth_key=SecretStr(""),
-        )

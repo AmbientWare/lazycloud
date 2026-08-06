@@ -10,7 +10,7 @@ import pytest
 from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import TailnetPeerView, agent_machine_worker_id
 from compute.policy import WorkspaceComputePolicyService
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
@@ -139,13 +139,33 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
     )
 
 
+class _StubTailnetRuntime:
+    def start(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def self_dns_name(self) -> str:
+        return ""
+
+    def wait_for_peer(self, host: str, timeout_seconds: float) -> None:
+        _ = host, timeout_seconds
+
+    def resolve_peer_host(self, host: str) -> str:
+        return host
+
+    def peers(self) -> list[TailnetPeerView]:
+        return []
+
+
 def _configured_aws_services(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> ApiServices:
     configuration = _aws_catalog_configuration()
     tailnet_runtime_settings = TailnetRuntimeSettings(
-        mode=TailnetRuntimeMode.Sidecar,
+        mode=TailnetRuntimeMode.Managed,
     )
     tailnet_control_settings = TailnetControlSettings(
         oauth_client_id=str(uuid4()),
@@ -164,6 +184,10 @@ def _configured_aws_services(
         aws_account_connection_settings=configuration.connection,
         aws_capacity_settings=configuration.capacity,
         tailnet_runtime_settings=tailnet_runtime_settings,
+        # Connected AWS is only composed for a deployment whose tailnet is
+        # managed, but this test has no daemon to run: the runtime is the
+        # process boundary here, not the behaviour under test.
+        tailnet_runtime=_StubTailnetRuntime(),
         tailnet_control_settings=tailnet_control_settings,
         backend_route_settings=backend_route_settings,
         volume_filesystem=isolated_services.volume_filesystem,

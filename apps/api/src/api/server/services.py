@@ -86,6 +86,7 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
+from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
@@ -257,6 +258,8 @@ class ApiTailnetRuntime(
     def start(self) -> None: ...
 
     def close(self) -> None: ...
+
+    def self_dns_name(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -1164,7 +1167,7 @@ def _compose_api_services(
     taskqueue_control = TaskQueueControlService(
         core,
         redis=redis,
-        gateway_http_url=core.gateway_settings.runtime_callback_http_url,
+        gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
     )
     endpoint = endpoint_service or EndpointControlService(
         core,
@@ -1175,11 +1178,11 @@ def _compose_api_services(
             tailnet_peer_waiter=tailnet_runtime,
             tailnet_peer_resolver=tailnet_runtime,
         ),
-        gateway_http_url=core.gateway_settings.runtime_callback_http_url,
+        gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
     )
     function = function_service or FunctionControlService(
         core,
-        gateway_http_url=core.gateway_settings.runtime_callback_http_url,
+        gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
     )
     gateway = gateway_service or _gateway_control_service(
         core,
@@ -1407,7 +1410,7 @@ def _gateway_control_service(
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
-        runtime_callback_http_url=core.gateway_settings.runtime_callback_http_url,
+        runtime_origin=RedisControlPlaneOriginRepository(core.redis_client).resolve,
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(
                 SchedulerWorkerPreemptionService(

@@ -5,6 +5,7 @@ description = "Network routing, backend dialing plans, and tailnet runtime helpe
 requires-python = ">=3.12"
 dependencies = [
     "compute",
+    "coordination",
     "lazycloud-shared==0.1.0",
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",

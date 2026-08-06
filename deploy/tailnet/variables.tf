@@ -74,17 +74,3 @@ variable "control_plane_port" {
     error_message = "control_plane_port must be an unprivileged TCP port."
   }
 }
-
-variable "gateway_auth_key_expiry_seconds" {
-  description = "Lifetime of the reusable gateway enrollment key. Rotate the deployed secret before this expires."
-  type        = number
-  default     = 7776000
-
-  validation {
-    condition = (
-      var.gateway_auth_key_expiry_seconds >= 86400 &&
-      var.gateway_auth_key_expiry_seconds <= 7776000
-    )
-    error_message = "gateway_auth_key_expiry_seconds must be between one and 90 days."
-  }
-}

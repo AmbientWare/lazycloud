@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -20,7 +20,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.env import GATEWAY_HTTP_URL_ENV
+from shared.env import GATEWAY_HTTP_URL_ENV, no_gateway_origin
 from shared.errors import ConflictError, DomainError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.function_payloads import (
@@ -74,7 +74,7 @@ FUNCTION_LIKE_STUB_KINDS = {StubKind.Function, StubKind.CronJob}
 @dataclass(slots=True)
 class FunctionControlService:
     services: ExecutionServices
-    gateway_http_url: str = ""
+    gateway_http_url: Callable[[], str] = no_gateway_origin
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -350,7 +350,7 @@ class FunctionControlService:
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
                 image_id=config.effective_image_id,
-                env=_function_runtime_env(config.env_list, self.gateway_http_url),
+                env=_function_runtime_env(config.env_list, self.gateway_http_url()),
                 secret_env=[],
                 lifecycle_hooks=config.lifecycle_hooks,
             )

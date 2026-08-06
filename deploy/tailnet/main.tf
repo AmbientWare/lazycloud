@@ -25,9 +25,10 @@ resource "tailscale_acl" "customer_compute" {
   }
 }
 
-# An OAuth client may only mint auth keys for tags it owns. A node now enrols
-# over the public origin and joins the tailnet with the machine key it is vended
-# afterwards, so the agent tag is the only one this client ever mints for.
+# An OAuth client may only mint auth keys for tags it owns. It mints for both:
+# the agent tag for every node it enrols, and its own tag for the device the
+# control plane registers when it joins the tailnet. `tailscale up` advertises no
+# tag, so for the control plane this client is the only thing that can apply one.
 #
 # Changing `tags` replaces the client: re-export
 # LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID and _SECRET in the same change, or the
@@ -35,19 +36,7 @@ resource "tailscale_acl" "customer_compute" {
 resource "tailscale_oauth_client" "agent_lifecycle" {
   description = "LazyCloud ${var.environment} customer compute"
   scopes      = ["auth_keys", "devices:core"]
-  tags        = [var.agent_tag]
-
-  depends_on = [tailscale_acl.customer_compute]
-}
-
-resource "tailscale_tailnet_key" "gateway" {
-  description         = "LazyCloud ${var.environment} control plane"
-  reusable            = true
-  ephemeral           = true
-  preauthorized       = true
-  expiry              = var.gateway_auth_key_expiry_seconds
-  recreate_if_invalid = "always"
-  tags                = [var.control_plane_tag]
+  tags        = [var.agent_tag, var.control_plane_tag]
 
   depends_on = [tailscale_acl.customer_compute]
 }

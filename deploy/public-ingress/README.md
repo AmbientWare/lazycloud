@@ -1,7 +1,7 @@
 # Public ingress
 
-`cloudflared` runs as a sidecar in the control plane's network namespace and
-reaches the origin on `127.0.0.1:9000`. Nothing listens on a public port, TLS
+`cloudflared` runs as its own service and reaches the origin over the Compose
+network at `control-plane:9000`. Nothing listens on a public port, TLS
 terminates at Cloudflare's edge, and the deployment holds no certificate.
 
 The tunnel is **locally managed**: it is created with `config_src: local`, so

@@ -350,7 +350,7 @@ def _endpoint_autoscaler(
         redis=redis,
         endpoints=EndpointControlService(
             services,
-            gateway_http_url="http://gateway.internal:9000",
+            gateway_http_url=lambda: "http://gateway.internal:9000",
         ),
         dispatches=_EndpointDispatchReader(EndpointDispatchStateRepository(services)),
     )

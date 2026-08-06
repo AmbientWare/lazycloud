@@ -1,151 +1,84 @@
-# Compose tailnet sidecar loses its namespace when the control plane is rebuilt
+# The control plane runs its own tailnet device
 
-## What happens
+Resolved. This is kept as the record of a failure that was expensive to diagnose
+three times, and of why the fix is shaped the way it is.
 
-`tailnet-gateway` runs with `network_mode: service:control-plane` (`compose.yaml`),
-so it does not have its own network namespace — it joins the control plane's.
-The service that changes most often owns the namespace, and the stable sidecar
-borrows it.
+## What used to happen
 
-Docker Compose resolves `depends_on` in one direction only. Recreating
-`tailnet-gateway` starts `control-plane` first, as expected. Recreating
-`control-plane` does **not** recreate its dependents. So an ordinary
+`tailnet-gateway` and `public-ingress` both ran with
+`network_mode: "service:control-plane"`, so neither had a network namespace of
+its own — they borrowed the control plane's. Compose resolves `depends_on` in one
+direction only: recreating a dependent starts its dependency first, but
+recreating a dependency does **not** recreate its dependents. So
 
-```
+```sh
 docker compose up -d --build control-plane
 ```
 
-replaces the control-plane container — and its network namespace — while
-`tailnet-gateway` keeps running, still attached to the namespace of a container
-that no longer exists.
+replaced the control-plane container, and its namespace, while both sidecars kept
+running attached to a namespace that no longer existed.
 
-**Two sidecars share the control plane's namespace, not one.** `tailnet-gateway`
-and `public-ingress` (the Cloudflare tunnel) both use
-`network_mode: service:control-plane`, so a single control-plane rebuild orphans
-both. This is not hypothetical: it cost a connected-AWS acceptance run. Every EC2
-node the run launched failed to install with
+Rebuilding the control plane is the most common action in development, so this
+fired constantly. It was silent at every layer that could have reported it:
 
-```
-curl: (22) The requested URL returned error: 530
-worker bootstrap failed during install; the control plane reclaims this instance
-```
+- Both sidecars stayed `running (healthy)`. The tailnet healthcheck asked
+  `tailscale status` whether its own session was up, which it was — that says
+  nothing about whether anything is listening behind it.
+- A worker container got `WORKER_REPOSITORY_URL` naming a tailnet host that no
+  longer resolved, failed DNS, never registered, and sat at `pending` forever.
+  It wrote no logs, the agent wrote no logs, and the control plane logged healthy
+  agent streams throughout. The visible symptom was a scheduler with a worker
+  record but no available worker, which reads exactly like a scheduling bug.
+- One connected-AWS acceptance run lost every EC2 node to
+  `curl: (22) The requested URL returned error: 530` — Cloudflare reporting no
+  reachable origin, because the tunnel had been pointed at a namespace destroyed
+  hours earlier. `https://lazycloud.dev` served nothing and no node could fetch
+  the agent binary.
 
-530 is Cloudflare reporting no reachable origin. The tunnel had been `running`
-and healthy for hours, pointed at a namespace destroyed by the first rebuild of
-the session, so `https://lazycloud.dev` served nothing and no node could ever
-fetch the agent binary. `docker compose up -d --force-recreate public-ingress`
-restored it, and the same URL immediately returned `HTTP 200`.
+The workaround became institutional: `deploy/release.py` carried a function whose
+docstring read *"Restart, and put the sidecars back in the namespace they lost."*
 
-The lesson worth keeping: a healthy sidecar is not evidence of a working path.
-Both of these report healthy while serving a dead namespace.
+## What replaced it
 
-## How to recognise it
+The control plane runs its own `tailscaled` (`TailnetRuntimeMode.Managed`) rather
+than borrowing a sidecar's namespace. `tailnet-gateway` is deleted,
+`public-ingress` reaches the origin over the ordinary Compose network, and
+`network_mode:` no longer appears in `compose.yaml` at all. There is no shared
+namespace left to orphan, so the failure is structurally impossible rather than
+guarded against.
 
-The sidecar reports `running (healthy)`, which is why this is easy to miss. The
-tell is that its namespace peer is not the live control plane:
+This is not a new mechanism. `Managed` mode is what every agent has always used,
+including every EC2 node in the connected-AWS runs, and the control-plane image
+already shipped both `tailscale` and `tailscaled`. The control plane was the only
+component still on the exceptional path; that path is now deleted.
 
-```
-docker inspect lazycloud-tailnet-gateway-1 --format '{{.HostConfig.NetworkMode}}'
-# container:caa0f9598296…        <- dead container
+Its device identity persists in the `control-plane-tailnet-state` volume, so a
+restart resumes rather than re-registers. Because `tailscale up` advertises no
+tag of its own, the tag can only arrive on the key that redeems it — so the
+control plane mints its own tagged, short-lived key from the OAuth client it
+already uses for agents. No deployment holds a long-lived tailnet auth key, and
+an untagged control-plane device is no longer possible.
 
-docker inspect lazycloud-control-plane-1 --format '{{.Id}}'
-# 9dc71eeb4b96…                  <- live container
-```
+## The second trap, which was independent
 
-Downstream, nothing can resolve the control plane's tailnet peer name. A worker
-container gets `WORKER_REPOSITORY_URL=http://lazycloud-control-plane-1.<tailnet>.ts.net:9000`,
-fails DNS, never registers, and sits at `pending` forever. It writes no logs, the
-agent writes no logs, and the control plane logs show only healthy agent streams.
-The visible symptom is a scheduler that has a worker record but no available
-worker, which looks like a scheduling bug and is not one.
-
-`docker compose logs tailnet-gateway` may also show
-`health(warnable=no-derp-connection)`, but that is a relay warning and appears in
-healthy runs too — it is not the signal.
-
-## Immediate remedy
-
-```
-docker compose up -d --force-recreate tailnet-gateway
-```
-
-Compose rejoins the sidecar to the current control-plane namespace (and, because
-of `depends_on`, starts the control plane first if needed).
-
-## Why it is worth fixing properly
-
-It recurs. Rebuilding the control plane is the single most common action during
-development, and every one of those rebuilds silently breaks tailnet resolution
-until someone notices. The failure is silent at every layer that could report it,
-so the cost is not the fix — it is the hour spent looking for a scheduling or
-enrollment bug that does not exist. It has caught more than one person.
-
-## How to fix it
-
-**1. Give the namespace its own owner (recommended).** Add a minimal
-do-nothing container whose only job is to hold the network namespace, and have
-both `control-plane` and `tailnet-gateway` join it:
-
-```yaml
-  netns:
-    image: alpine:3
-    command: ["sleep", "infinity"]
-    # ports the namespace must expose are published here
-
-  control-plane:
-    network_mode: "service:netns"
-
-  tailnet-gateway:
-    network_mode: "service:netns"
-```
-
-This is the Kubernetes pod model — the `pause` container exists for exactly this
-reason. Either real service can then be rebuilt freely; the namespace outlives
-both. Note that published ports move to the holder, since a container joining
-another's namespace cannot declare its own.
-
-**2. Invert the ownership (smaller, partial).** Make `control-plane` join
-`network_mode: service:tailnet-gateway`. Protects the common case, because the
-app is rebuilt constantly and the sidecar almost never. It only relocates the
-hazard rather than removing it: recreating the sidecar would then strand the
-control plane.
-
-**3. Make it loud (do this regardless).** Give the control plane a healthcheck
-that resolves its own tailnet peer name. This does not prevent the breakage, but
-it turns a silent, hours-long misdiagnosis into a container that goes red at the
-moment it happens. The silence is what makes this expensive.
-
-Recommended: **1 plus 3**.
-
-## A second, independent trap in the same area
-
-Chasing the above turned up a different failure with an identical symptom, so
-both are worth knowing before touching this again.
+Chasing the above turned up a different failure with an identical symptom, worth
+knowing because the fix above does not address it.
 
 `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` in a local `.env` named the control plane's
 tailnet peer as `lazycloud-control-plane-1` — the Compose *container* name, with
-its `-1` replica suffix. The tailnet device is registered under `TS_HOSTNAME`,
-which defaults to `lazycloud-control-plane` (`compose.yaml:430`), with no `-1`.
-The name therefore never resolved, and the worker failed exactly as above:
-pending forever, no logs anywhere.
+its replica suffix. The tailnet device is registered under `TS_HOSTNAME`, which
+has no `-1`. The name never resolved and the worker failed exactly as above:
+pending forever, no logs anywhere. A Compose container name is not a tailnet
+device name, and it is an easy substitution because the container name is what
+`docker ps` shows.
 
-The two names come from different places and nothing checks that they agree. A
-Compose container name is not a tailnet device name, and it is an easy
-substitution to make because the container name is what `docker ps` shows.
+The control plane's healthcheck now resolves the host it advertises to workers,
+so this surfaces as an unhealthy container within seconds instead of an hour of
+looking for a scheduling bug. It checks that the name resolves, not that it
+points at this deployment — a name that resolves to the wrong host still passes.
 
-Worth doing when the fix above lands:
+## The lesson worth keeping
 
-- derive the runtime URL from `TS_HOSTNAME` rather than restating it in `.env`,
-  so the two cannot drift; or
-- validate at control-plane startup that its own advertised runtime host
-  resolves, and fail loudly if not.
-
-The second is the same "make it loud" point as (3) below, and it would have
-caught both failures at the moment they occurred rather than hours later.
-
-## Scope
-
-Contained to `compose.yaml`, plus wherever published ports are declared for the
-control plane. No application code changes. Verify by rebuilding the control
-plane alone and confirming a worker container still resolves the control plane's
-tailnet name and reaches `available`.
+A healthy container is not a working path. Both sidecars reported healthy for
+hours while serving a dead namespace, and the tailnet reported `Online: True`
+throughout. Check the boundary end to end rather than trusting aggregate status.

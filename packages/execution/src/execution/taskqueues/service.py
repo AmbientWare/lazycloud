@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -23,6 +24,7 @@ from shared.env import (
     TASK_QUEUE_RETRY_FOR_ENV,
     TASK_QUEUE_SERVE_LOCK_ENV,
     TASK_QUEUE_WORKERS_ENV,
+    no_gateway_origin,
 )
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -94,7 +96,7 @@ class TaskQueuePreemptedResult:
 class TaskQueueControlService:
     services: ExecutionServices
     redis: RedisClient
-    gateway_http_url: str = ""
+    gateway_http_url: Callable[[], str] = no_gateway_origin
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -535,7 +537,7 @@ class TaskQueueControlService:
             "KEEP_WARM_SECONDS": str(config.effective_keep_warm_seconds),
             TASK_QUEUE_WORKERS_ENV: str(config.consumers_per_container),
         }
-        _add_gateway_http_env(env, self.gateway_http_url)
+        _add_gateway_http_env(env, self.gateway_http_url())
         env_payload: dict[str, JsonValue] = {name: value for name, value in env.items()}
         secret_names = config.secrets
         with self.services.context.database.session() as session:

@@ -69,6 +69,8 @@ x-tailnet-env: &tailnet-env
   LAZYCLOUD_TAILNET_AGENT_TAG: "${LAZYCLOUD_TAILNET_AGENT_TAG:-tag:lazycloud-agent}"
   LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG: "${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane}"
   LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS: "${LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS:-300}"
+  LAZYCLOUD_TAILNET_HOSTNAME: "${LAZYCLOUD_TAILNET_HOSTNAME:-lazycloud-control-plane}"
+  LAZYCLOUD_TAILNET_CONTROL_URL: "${LAZYCLOUD_TAILNET_CONTROL_URL:-}"
   LAZYCLOUD_TAILNET_ACCEPT_DNS: "false"
   LAZYCLOUD_TAILNET_ACCEPT_ROUTES: "false"
 
@@ -350,6 +352,10 @@ services:
           *container-service-credentials,
           *cache-origin-registry,
         ]
+      # The one process that runs a tailnet daemon, and it says so rather than
+      # inheriting it: every other service holding these settings only reads
+      # them.
+      LAZYCLOUD_TAILNET_MODE: "managed"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
@@ -359,24 +365,32 @@ services:
     ports:
       - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
       - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
+    # The control plane runs its own tailscaled rather than borrowing a sidecar's
+    # network namespace. These are the same grants every agent already holds, and
+    # a real TUN device is required: workers reach this process inbound by its
+    # tailnet name, which userspace networking cannot bind.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - "${LAZYCLOUD_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
-      - tailnet-gateway-socket:/var/run/tailscale
+      # Its own volume, not a directory inside the shared one: this holds the
+      # device identity, and losing it registers a new device on every restart.
+      - control-plane-tailnet-state:/var/lib/lazycloud/tailnet
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "from urllib.request import urlopen; urlopen('http://127.0.0.1:9000/health', timeout=3).read()",
-        ]
+      # Reaches this control plane at the address it publishes, not just on
+      # loopback: everything that waits on this health gate depends on that
+      # address working, and it is the half that fails silently.
+      test: ["CMD", "python", "-m", "api.health_probe"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 10s
+      start_period: 30s
 
   cli:
     profiles: ["tools"]
@@ -409,43 +423,6 @@ services:
     volumes:
       - lazycloud-files:/var/lib/lazycloud
 
-  tailnet-gateway:
-    # Not optional and not behind a profile: the control plane always runs its
-    # tailnet runtime, so a stack without this sidecar starts, reports healthy,
-    # and then fails workloads with "tailscale status failed" from far away.
-    image: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
-    restart: unless-stopped
-    depends_on:
-      control-plane:
-        condition: service_started
-    network_mode: "service:control-plane"
-    environment:
-      TS_AUTHKEY: "${LAZYCLOUD_TAILNET_AUTH_KEY:-}"
-      TS_AUTH_ONCE: "true"
-      TS_HOSTNAME: "${LAZYCLOUD_TAILNET_HOSTNAME:-lazycloud-control-plane}"
-      TS_STATE_DIR: "${LAZYCLOUD_COMPOSE_TAILNET_STATE_DIR:-/var/lib/tailscale}"
-      TS_SOCKET: "${LAZYCLOUD_TAILNET_SOCKET_PATH:-/var/run/tailscale/tailscaled.sock}"
-      TS_USERSPACE: "${LAZYCLOUD_TAILNET_USERSPACE_NETWORKING:-false}"
-      TS_EXTRA_ARGS: "--advertise-tags=${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane} --accept-dns=false --accept-routes=false --login-server=${LAZYCLOUD_TAILNET_CONTROL_URL:-https://controlplane.tailscale.com}"
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    volumes:
-      - tailnet-gateway-state:/var/lib/tailscale
-      - tailnet-gateway-socket:/var/run/tailscale
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          tailscale --socket="$${TS_SOCKET}" status --json |
-          grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-
   public-ingress:
     profiles:
       - public-ingress
@@ -453,8 +430,7 @@ services:
     restart: unless-stopped
     depends_on:
       control-plane:
-        condition: service_started
-    network_mode: "service:control-plane"
+        condition: service_healthy
     command:
       - tunnel
       - --config
@@ -1034,8 +1010,7 @@ volumes:
   lazycloud-source-cache-cpu-secondary:
   lazycloud-source-cache-gpu:
   lazycloud-registry:
-  tailnet-gateway-state:
-  tailnet-gateway-socket:
+  control-plane-tailnet-state:
   tcp-ingress-tls:
 
 secrets:

@@ -33,8 +33,7 @@ uv run python deploy/release.py \
 It refuses a dirty tree, because a version label that names a revision the
 artifacts do not contain is worse than no label. It builds every image and the
 agent executable from that one revision, publishes the worker image and the
-release, points `.env` at the published manifest, and puts the sidecars back
-afterwards.
+release, and points `.env` at the published manifest.
 
 `.env` receives one line: `LAZYCLOUD_RELEASE_MANIFEST_URL`. The agent artifact
 version and digest, the URL serving it, the container-worker image, the customer
@@ -90,24 +89,24 @@ live.
 The API answers on host port **8000** (container port 9000). `docker compose port
 control-plane 9000` prints the mapping if it changes.
 
-### The sidecar hazard
-
-`control-plane` shares its network namespace with `tailnet-gateway` and
-`public-ingress`. Recreating the control plane stops both, and Compose does
-**not** bring them back:
+### Recreating the control plane
 
 ```bash
-docker compose up -d --force-recreate control-plane
-docker compose up -d tailnet-gateway public-ingress   # required, every time
+docker compose up -d --build control-plane
 ```
 
-Skip the second command and the control plane is silently off the tailnet and
-off the public origin: nodes join, report nothing, and are reclaimed at their
-bootstrap deadline.
+Nothing else needs recreating. The control plane runs its own `tailscaled` and no
+service shares its network namespace, so a rebuild cannot leave anything attached
+to a namespace that no longer exists.
 
-A restarted gateway can also hold a stale netmap that lists deleted devices as
-online and omits new ones. If a node is on the tailnet but unreachable from the
-control plane, restart `tailnet-gateway` before investigating further.
+It rejoins under the device identity in the `control-plane-tailnet-state` volume,
+minting a fresh tagged key from its OAuth client only when that identity is gone.
+Drop that volume and it registers a new device; the old one lingers in the
+tailnet until it is removed.
+
+A restarted daemon can hold a stale netmap that lists deleted devices as online
+and omits new ones. If a node is on the tailnet but unreachable from the control
+plane, restart `control-plane` before investigating further.
 
 ## Reading a failed node
 
@@ -225,7 +224,7 @@ connectivity fault.
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
-| Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Mint a new client owning the agent tag in the Tailscale admin console, update `.env`, recreate `control-plane` **and** `tailnet-gateway` |
+| Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Mint a new client owning both the agent and control-plane tags in the Tailscale admin console, update `.env`, recreate `control-plane` |
 | Admin scrape token | `.env` | Reissue through the CLI; `/metrics` is admin-gated and must stay so |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
 | Cloudflare API token | `.env`, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read |
@@ -240,8 +239,8 @@ Prefect) should be rotated and the directory deleted.
 Confirm the target belongs to the task before each of these. None can be undone.
 
 - **Deleting a tailnet device.** The control plane's own device name is sticky to
-  the device record: delete it and the sidecar comes back under a `-1` suffix,
-  and every configured origin naming the old name breaks. See `deploy/AGENTS.md`.
+  the device record: delete it and it rejoins under a `-1` suffix, and every
+  configured origin naming the old name breaks. See `deploy/AGENTS.md`.
 - **Deleting a customer connection stack.** Removes the roles the control plane
   assumes; the connection must be re-established from scratch.
 - **Deleting launch-template versions.** The pool cannot roll back to a template

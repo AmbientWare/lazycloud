@@ -25,7 +25,13 @@ from gateway.events import (
 from gateway.service import GatewayControlService
 from identity.auth import AuthError, AuthorizationDeniedError
 from images.control import ImageControlService
-from networking.tailnet import TailnetRuntimeError
+from networking.control_plane_origin import (
+    DEFAULT_CONTROL_PLANE_ORIGIN_TTL_SECONDS as CONTROL_PLANE_ORIGIN_TTL_SECONDS,
+)
+from networking.control_plane_origin import (
+    RedisControlPlaneOriginRepository,
+    runtime_origin_for_host,
+)
 from observability.telemetry import setup_telemetry
 from pydantic import JsonValue
 from shared.app_identity import DISPLAY_NAME
@@ -149,10 +155,27 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                 )
                 recovery_fence.start_serving()
                 if api_services.tailnet_runtime is not None:
-                    try:
-                        api_services.tailnet_runtime.start()
-                    except TailnetRuntimeError as exc:
-                        logger.warning("tailnet runtime startup failed: %s", exc)
+                    # Fatal rather than logged: the control plane reaches every
+                    # agent over the tailnet, so one that comes up without it
+                    # serves nothing and reports healthy while doing it. A
+                    # deployment that wants no tailnet says so with the disabled
+                    # mode, which never reaches here.
+                    api_services.tailnet_runtime.start()
+                # Published before anything is served, and before this process
+                # reports healthy, so nothing that waits on health can observe an
+                # unpublished origin.
+                _publish_runtime_origin(api_services)
+                origin_heartbeat = _create_background_task(
+                    _republish_runtime_origin(
+                        api_services,
+                        event_sink=api_services.events,
+                    )
+                )
+                cleanup.push_async_callback(
+                    _capture_task_cleanup_failure,
+                    cleanup_failures,
+                    origin_heartbeat,
+                )
                 if tcp_ingress is not None:
                     cleanup.push_async_callback(
                         _capture_async_cleanup_failure,
@@ -310,6 +333,47 @@ def _emit_reconciliation_failure(
             level=EventLevel.Error,
             data={"loop": loop_name, "error_type": type(exc).__name__},
         )
+
+
+def _publish_runtime_origin(api_services: ApiServices) -> str:
+    """Record where this control plane is actually reachable.
+
+    The host comes from the tailnet device rather than from configuration,
+    because the device name is granted, not chosen: a collision resolves to a
+    suffixed name that no deployment file predicts.
+    """
+    tailnet_runtime = api_services.tailnet_runtime
+    host = tailnet_runtime.self_dns_name() if tailnet_runtime is not None else ""
+    origin = runtime_origin_for_host(
+        api_services.gateway_settings.runtime_callback_http_url,
+        host,
+    )
+    RedisControlPlaneOriginRepository(api_services.redis_client).publish(
+        origin,
+        ttl_seconds=CONTROL_PLANE_ORIGIN_TTL_SECONDS,
+    )
+    logger.info("published control-plane runtime origin: %s", origin)
+    return origin
+
+
+async def _republish_runtime_origin(
+    api_services: ApiServices,
+    *,
+    event_sink: GatewayEventSink | None = None,
+) -> None:
+    """Keep the published origin fresh, and current if the device is renamed.
+
+    The TTL is what makes a stopped control plane stop advertising an address it
+    no longer answers on, so this has to outpace it rather than run beside it.
+    """
+    interval = max(CONTROL_PLANE_ORIGIN_TTL_SECONDS / 3, 1.0)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_publish_runtime_origin, api_services)
+        except Exception as exc:
+            logger.exception("publishing the control-plane runtime origin failed")
+            _emit_reconciliation_failure(event_sink, "control-plane-origin", exc)
 
 
 async def _reconcile_agent_routes(

@@ -73,7 +73,6 @@ state into the deployment secret manager:
 | --- | --- |
 | `agent_oauth_client_id` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID` |
 | `agent_oauth_client_secret` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET` |
-| `gateway_auth_key` | `LAZYCLOUD_TAILNET_AUTH_KEY` |
 
 `runtime_configuration` carries both tag names, which must match the
 deployment's `LAZYCLOUD_TAILNET_AGENT_TAG` and

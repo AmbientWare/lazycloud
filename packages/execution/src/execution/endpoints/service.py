@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from control.service import ControlPlaneService, StubKind, StubRecord
@@ -27,6 +28,7 @@ from shared.env import (
     LIFECYCLE_HOOKS_ENV,
     STUB_ID_ENV,
     STUB_TYPE_ENV,
+    no_gateway_origin,
 )
 from shared.errors import DomainError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -100,7 +102,7 @@ class EndpointIngressDispatchSession:
 class EndpointControlService:
     services: ExecutionServices
     dispatcher: EndpointRequestDispatcher | None = None
-    gateway_http_url: str = ""
+    gateway_http_url: Callable[[], str] = no_gateway_origin
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -144,8 +146,9 @@ class EndpointControlService:
             HOT_RELOAD_ENV: "true",
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
-        if self.gateway_http_url:
-            env[GATEWAY_HTTP_URL_ENV] = self.gateway_http_url
+        gateway_http_url = self.gateway_http_url()
+        if gateway_http_url:
+            env[GATEWAY_HTTP_URL_ENV] = gateway_http_url
         with self.services.context.database.session() as session:
             container = self.services.containers.reserve_pending(
                 session,
