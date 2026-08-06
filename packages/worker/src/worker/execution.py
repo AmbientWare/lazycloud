@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import posixpath
 import shlex
+from collections.abc import Sequence
 from enum import StrEnum
 from urllib.parse import urlparse
 
@@ -56,6 +57,15 @@ DEFAULT_CONTAINER_LIBRARY_PATHS = (
     "/usr/local/nvidia/lib64",
 )
 NVIDIA_DRIVER_CAPABILITIES = "compute,utility,graphics,ngx,video"
+# Present on every driver install and needed by every GPU container regardless of
+# which cards it was assigned: the control node, the unified-memory nodes, and the
+# modeset node. Per-GPU nodes are added for the assigned indices.
+NVIDIA_CONTROL_DEVICE_PATHS = (
+    "/dev/nvidiactl",
+    "/dev/nvidia-uvm",
+    "/dev/nvidia-uvm-tools",
+    "/dev/nvidia-modeset",
+)
 NETWORK_INTERFACE_NAME_MAX_LENGTH = 15
 DEFAULT_CONTAINER_SUBNET = "192.168.0.0/20"
 DEFAULT_CONTAINER_IPV6_SUBNET = "fd00:abcd::/64"
@@ -285,6 +295,50 @@ class ContainerNetworkSelection(ContractModel):
 class ContainerNetworkAddressMap(ContractModel):
     identity: ContainerNetworkIdentity
     addresses: dict[int, str]
+
+
+class DeviceNode(ContractModel):
+    """A character device as it exists on the host, read rather than assumed."""
+
+    path: str
+    major: int
+    minor: int
+    file_mode: int
+
+
+class OciDevice(ContractModel):
+    path: str
+    device_type: str = "c"
+    major: int
+    minor: int
+    file_mode: int
+    uid: int = 0
+    gid: int = 0
+
+    def as_oci_dict(self) -> dict[str, JsonValue]:
+        return {
+            "path": self.path,
+            "type": self.device_type,
+            "major": self.major,
+            "minor": self.minor,
+            "fileMode": self.file_mode,
+            "uid": self.uid,
+            "gid": self.gid,
+        }
+
+    def as_cgroup_allow(self) -> dict[str, JsonValue]:
+        """The cgroup rule that lets the container actually open the node.
+
+        Adding the device without this leaves it visible and unopenable, which
+        reads exactly like a driver fault from inside the workload.
+        """
+        return {
+            "allow": True,
+            "type": self.device_type,
+            "major": self.major,
+            "minor": self.minor,
+            "access": "rw",
+        }
 
 
 class OciMount(ContractModel):
@@ -733,6 +787,36 @@ def plan_nvidia_mounts(
         )
         for path in candidates
         if path in existing_host_paths
+    ]
+
+
+def nvidia_device_paths(assigned_devices: Sequence[int]) -> list[str]:
+    """Every device node a container needs to reach the GPUs it was assigned."""
+    return [
+        *NVIDIA_CONTROL_DEVICE_PATHS,
+        *(f"/dev/nvidia{index}" for index in sorted(set(assigned_devices))),
+    ]
+
+
+def plan_nvidia_devices(device_nodes: Sequence[DeviceNode]) -> list[OciDevice]:
+    """Turn probed host device nodes into the spec entries a container needs.
+
+    The numbers are read from the host rather than assumed: `nvidia` is a fixed
+    major but `nvidia-uvm` is allocated dynamically at module load, so a hardcoded
+    pair works on one machine and opens the wrong device on the next.
+
+    Without these a GPU container gets the environment and the libraries and no
+    device to open, which fails inside the workload as an unhelpful CUDA error
+    rather than as a scheduling failure.
+    """
+    return [
+        OciDevice(
+            path=node.path,
+            major=node.major,
+            minor=node.minor,
+            file_mode=node.file_mode,
+        )
+        for node in device_nodes
     ]
 
 
