@@ -347,8 +347,10 @@ def _publish_service_origin(api_services: ApiServices) -> str:
     if tailnet_runtime is None:
         raise RuntimeError("a control plane without a tailnet runtime has no address to offer")
     settings = api_services.tcp_ingress_settings
-    ports = (CONTROL_PLANE_SERVED_PORT, settings.port) if settings.enabled else (
-        CONTROL_PLANE_SERVED_PORT,
+    ports = (
+        (CONTROL_PLANE_SERVED_PORT, settings.port)
+        if settings.enabled
+        else (CONTROL_PLANE_SERVED_PORT,)
     )
     host = tailnet_runtime.advertise_service(CONTROL_PLANE_TAILNET_HOSTNAME, ports)
     origin = runtime_origin_for_host(
