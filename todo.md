@@ -60,15 +60,33 @@ straight to a pull request. Ordered — networking first, agent artifact last.
 
 ## Configuration
 
-- [ ] **Reconcile `.env.example` with `.env`.** 24 keys are set locally and
-      documented nowhere, including `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` — the
-      exact key behind the trap above, which a new developer copying
-      `.env.example` never sees. Secrets (`LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET`,
-      `LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY`) go in as empty placeholders, never with
-      values. `LAZYCLOUD_TAILNET_AUTH_KEY` is no longer read by anything and
-      should come out of `.env` rather than into `.env.example`. Decide separately whether
-      the `LAZYCLOUD_E2E_*` and `AWS_PROFILE` entries belong there at all or are
-      local-only.
+- [x] **Reconcile `.env.example` with what the code reads.** Rewritten from the
+      Compose interpolations and the Pydantic settings classes rather than from
+      `.env`, and every value it sets is now proven equal to Compose's own
+      default by rendering the file as an env-file. The `LAZYCLOUD_E2E_*` and
+      `LAZYCLOUD_AWS_CONTROL_STACK_NAME` entries stayed out: they are outputs of
+      `deploy/connected-aws/bootstrap.py` for opt-in live scenarios, documented
+      at `deploy/README.md` and `tests/e2e/README.md`, and nothing in the stack
+      reads them. Bare `AWS_PROFILE` stayed out too — Compose never interpolates
+      it, so it looks like it selects the containers' profile and does not;
+      `LAZYCLOUD_COMPOSE_AWS_PROFILE` is documented in its place.
+
+      Two premises in the original entry were wrong.
+      `LAZYCLOUD_TAILNET_AUTH_KEY` is still read: it is a field on
+      `TailnetRuntimeOptions`, and `TailnetRuntime._resolve_auth_key` prefers a
+      configured key over the one it would mint. What is true is that Compose
+      hands it to no service, and `tests/deployment/test_customer_compute_configuration.py`
+      keeps it that way — so it does not belong in an env-file, but the field is
+      not dead. Nothing needed removing from `.env.example` either: it documented
+      25 keys and all 25 were still read.
+
+- [ ] **Give the agent binary directory two names.** `LAZYCLOUD_AGENT_BINARY_DIR`
+      is both the host directory the control plane bind-mounts and the
+      in-container path it then reads, with a different default for each
+      (`compose.yaml`, the `x-agent-binary-env` anchor and the `control-plane`
+      volume). Any single value satisfies at most one of them, so the variable
+      only works while it is unset — the reason `.env.example` documents it as
+      absent rather than as an override.
 
 - [ ] **GPU AMI location — decision needed, not obviously work.** Flagged
       earlier as "should move to the release manifest", but
