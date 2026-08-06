@@ -1670,7 +1670,7 @@ def _offer() -> ComputeOffer:
         hourly_cost_micros=340_000,
         available=10,
         capacity_mode=ComputeCapacityMode.Pooled,
-        capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
+        capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
         supports_scale_to_zero=True,
     )
 

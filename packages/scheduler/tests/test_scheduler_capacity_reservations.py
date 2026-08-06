@@ -83,7 +83,7 @@ def _shape() -> CapacityRequestShape:
     return CapacityRequestShape(
         cpu_millicores=4_000,
         memory_mib=8_192,
-        runtime_classes=("runc",),
+        runtime_classes=("runsc",),
     )
 
 
@@ -156,7 +156,7 @@ class _Controller:
             worker_memory_mib=8_192,
             worker_gpu_type="",
             worker_gpu_count=0,
-            worker_runtimes=("runc",),
+            worker_runtimes=("runsc",),
             worker_preemptible=False,
         )
 
@@ -901,7 +901,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
         memory_mib=4_000,
         gpu_type="h100" if is_gpu_case else "",
         gpu_count=2 if is_gpu_case else 0,
-        runtime_classes=("runc",),
+        runtime_classes=("runsc",),
     )
     first_request = _request("dimension-a").model_copy(update=first_updates)
     second_request = _request("dimension-b").model_copy(update=second_updates)
@@ -1027,8 +1027,8 @@ def _worker(capacity_owner_id: str, *, created_at: datetime) -> SchedulerWorkerR
         capacity_owner_id=capacity_owner_id,
         machine_id="machine-1",
         status=SchedulerWorkerStatus.Available,
-        runtime_class="runc",
-        runtime_classes=["runc"],
+        runtime_class="runsc",
+        runtime_classes=["runsc"],
         free_cpu_millicores=4_000,
         free_memory_mib=8_192,
         total_cpu_millicores=4_000,

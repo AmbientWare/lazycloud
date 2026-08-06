@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 
 
@@ -25,7 +26,7 @@ class ComputeOffer(ContractModel):
     memory_mb: int = 0
     storage_mb: int = 0
     architecture: str = "amd64"
-    runtime: str = "runsc"
+    runtime: str = OciRuntimeName.Runsc.value
     gpu: str | None = None
     gpu_count: int = 0
     node_count: int = 0
@@ -49,7 +50,7 @@ class ComputeOffer(ContractModel):
 # chose.
 DEFAULT_POOLED_NODE_STORAGE_MB = 200 * 1024
 DEFAULT_POOLED_NODE_ARCHITECTURE = "amd64"
-DEFAULT_POOLED_NODE_RUNTIME = "runsc"
+DEFAULT_POOLED_NODE_RUNTIME = OciRuntimeName.Runsc.value
 DEFAULT_POOLED_NODE_AVAILABILITY = 100
 
 

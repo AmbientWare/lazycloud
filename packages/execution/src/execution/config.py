@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from shared.container_requests import OciRuntimeName
 from shared.deployment_records import DEFAULT_DISK
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
@@ -155,7 +156,7 @@ class ContainerResourceConfig(BaseModel):
     gpu_count: int = Field(default=0, ge=0)
     image_id: str | None = None
     pool_selector: str | None = None
-    runtime: str = "runsc"
+    runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str | None = None
     docker_enabled: bool = False
     preemptible: bool = False

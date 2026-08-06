@@ -278,7 +278,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 visibility=ComputeUnitVisibility.Internal,
                 region="us-east-1",
                 offer_id="us-east-1:i4i.xlarge",
-                capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
+                capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
                 max_machines=3,
             )
         )
@@ -607,7 +607,7 @@ class _RecordingPooledCapacity:
             visibility=ComputeUnitVisibility.Internal,
             region=region,
             offer_id="us-east-1:i4i.xlarge",
-            capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
+            capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
             desired_machines=desired_machines,
             max_machines=workspace_machine_limit,
         )

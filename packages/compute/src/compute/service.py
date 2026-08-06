@@ -61,6 +61,7 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
+from shared.container_requests import OciRuntimeName
 from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import (
@@ -913,7 +914,7 @@ class ComputeService:
         worker_memory_mib: int = 0,
         worker_gpu_type: str = "",
         worker_gpu_count: int = 0,
-        worker_runtimes: tuple[str, ...] = ("runc",),
+        worker_runtimes: tuple[str, ...] = (OciRuntimeName.Runsc.value,),
         worker_preemptible: bool = False,
         idle_drain_timeout_seconds: int = 300,
         scale_up_cooldown_seconds: int = 5,

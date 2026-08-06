@@ -152,7 +152,7 @@ def _scalable_pool(
         visibility=ComputeUnitVisibility.Internal,
         region="us-east-1",
         offer_id="us-east-1:test.instance",
-        capability_key="aws:us-east-1:test.instance:amd64:runc",
+        capability_key="aws:us-east-1:test.instance:amd64:runsc",
         desired_machines=1,
         min_machines=0,
         max_machines=2,

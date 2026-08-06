@@ -6,6 +6,7 @@ from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator,
 
 from shared.callbacks import normalize_callback_url
 from shared.compute_policy import MachinePool
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
@@ -61,7 +62,7 @@ class StubRuntimeConfig(ContractModel):
     checkpoint_readiness_timeout_seconds: int = Field(default=600, ge=1)
     checkpoint_readiness_interval_seconds: float = Field(default=1.0, gt=0)
     pool_selector: str | None = None
-    runtime: str = "runsc"
+    runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str | None = None
     docker_enabled: bool = False
     block_network: bool = False

@@ -216,7 +216,10 @@ def normalize_oci_runtime(value: OciRuntimeName | RuntimeEngine | str) -> OciRun
     if normalized in {RuntimeEngine.Oci.value, ""}:
         return OciRuntimeName.Runsc
     if normalized == OciRuntimeName.Runc.value:
-        return OciRuntimeName.Runc
+        # A bundle or spec written before the move to gVisor names runc. Honour
+        # the container, not the obsolete runtime: recovering an in-flight
+        # workload must not be the one path that escapes the sandbox.
+        return OciRuntimeName.Runsc
     if normalized in {
         OciRuntimeName.Runsc.value,
         RuntimeEngine.SandboxedOci.value,

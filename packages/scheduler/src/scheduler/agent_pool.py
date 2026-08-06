@@ -15,6 +15,7 @@ from shared.compute_policy import (
     ComputeUnitRecord,
     MachinePool,
 )
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -255,8 +256,8 @@ def agent_machine_worker_record(
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",
-        runtime_class="runsc",
-        runtime_classes=["runsc"],
+        runtime_class=OciRuntimeName.Runsc.value,
+        runtime_classes=[OciRuntimeName.Runsc.value],
         private_worker=True,
         requires_pool_selector=True,
         free_cpu_millicores=cpu_millicores,

@@ -7,6 +7,7 @@ from datetime import datetime
 from pydantic import Field, JsonValue, model_validator
 
 from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind, MachinePool, UnitName
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
@@ -46,7 +47,7 @@ class ComputeResourceRequirements(ContractModel):
     gpu: str | None = Field(default=None, max_length=160)
     gpu_count: int = Field(default=0, ge=0)
     architecture: str = Field(default="", max_length=64)
-    runtime: str = Field(default="runsc", min_length=1, max_length=64)
+    runtime: str = Field(default=OciRuntimeName.Runsc.value, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def validate_gpu(self) -> ComputeResourceRequirements:
@@ -179,7 +180,7 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     worker_memory_mib: int = Field(default=0, ge=0)
     worker_gpu_type: str = Field(default="", max_length=160)
     worker_gpu_count: int = Field(default=0, ge=0)
-    worker_runtimes: tuple[str, ...] = ("runsc",)
+    worker_runtimes: tuple[str, ...] = (OciRuntimeName.Runsc.value,)
     worker_preemptible: bool = False
     idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
     scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)

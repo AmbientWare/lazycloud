@@ -53,7 +53,7 @@ def test_compute_pool_capacity_policy_rejects_ambiguous_ownership_and_shape() ->
         _unit("invalid-gpu", worker_gpu_type="L4")
 
     with pytest.raises(ValidationError, match="non-empty and unique"):
-        _unit("duplicate-runtime", worker_runtimes=("runc", "runc"))
+        _unit("duplicate-runtime", worker_runtimes=("runsc", "runsc"))
 
     with pytest.raises(ValidationError, match="minimum free capacity requires scaling"):
         _unit("headroom-without-scaling", min_free_cpu_millicores=1)
