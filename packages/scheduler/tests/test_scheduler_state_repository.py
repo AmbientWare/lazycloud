@@ -83,7 +83,7 @@ from scheduler.state import (
 )
 from scheduler.workers import SchedulerWorkerAdminService
 from shared.compute_policy import MachinePool
-from shared.container_requests import StopContainerReason
+from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord
@@ -1303,8 +1303,8 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
             pool=MachinePool("gpu-pool"),
             status=SchedulerWorkerStatus.Available,
             gpu_type="T4",
-            runtime_class="runsc",
-            runtime_classes=["runc", "runsc"],
+            runtime_class=OciRuntimeName.Runsc.value,
+            runtime_classes=[OciRuntimeName.Runsc.value],
             free_cpu_millicores=1000,
             free_memory_mib=1000,
             free_gpu_count=1,
