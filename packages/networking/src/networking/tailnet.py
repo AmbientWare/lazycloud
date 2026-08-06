@@ -82,8 +82,6 @@ class TailnetRuntimeOptions(ContractModel):
     # replaceable: it holds no address that was handed out, so leaving a record
     # behind on every restart buys nothing and accumulates dead peers.
     ephemeral_device: bool = False
-    accept_dns: bool = False
-    accept_routes: bool = False
     userspace_networking: bool = False
     login_timeout_seconds: float = Field(default=DEFAULT_TAILNET_LOGIN_TIMEOUT_SECONDS, gt=0)
     status_timeout_seconds: float = Field(default=DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS, gt=0)
@@ -755,12 +753,22 @@ class TailnetRuntime:
         hostname: str,
         control_url: str,
     ) -> list[str]:
+        # Fixed, not configurable. Every node here addresses its peers by tailnet
+        # name, and MagicDNS is the only thing that resolves one, so a deployment
+        # that declined it would be one where the peer is reachable by address
+        # and unreachable by the name actually dialled — work placed nowhere
+        # while both ends report healthy. Declining it has also left a VPC
+        # resolver answering `*.ts.net` from public records that point at
+        # Tailscale's infrastructure instead of the peer, so every lookup
+        # succeeded and every connection timed out. Non-tailnet queries are
+        # forwarded upstream unchanged. Nothing here is a subnet router, so
+        # accepting routes would only import someone else's.
         args = self._tailscale_args(
             "up",
             f"--auth-key=file:{auth_key_path}",
             f"--hostname={hostname.strip()}",
-            f"--accept-dns={_bool_flag(self.options.accept_dns)}",
-            f"--accept-routes={_bool_flag(self.options.accept_routes)}",
+            "--accept-dns=true",
+            "--accept-routes=false",
             "--reset",
         )
         if control_url.strip():
@@ -872,10 +880,6 @@ def _merged_env(env: Mapping[str, str] | None) -> dict[str, str] | None:
     merged = dict(os.environ)
     merged.update(env)
     return merged
-
-
-def _bool_flag(value: bool) -> str:
-    return "true" if value else "false"
 
 
 def _required_service_name(service: str) -> str:

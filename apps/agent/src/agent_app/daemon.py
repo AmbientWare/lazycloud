@@ -1587,14 +1587,6 @@ def _tailnet_runtime_options(
         socket_path=options.tailnet_socket_path,
         tailscale_binary=options.tailnet_tailscale_binary,
         tailscaled_binary=options.tailnet_tailscaled_binary,
-        # The node reaches the control plane and the cache as tailnet peers, so
-        # it has to resolve tailnet names. Declining the tailnet's DNS left the
-        # VPC resolver answering `*.ts.net` from public records that point at
-        # Tailscale's own infrastructure rather than the peer, so every lookup
-        # succeeded and every connection to it timed out. Non-tailnet queries
-        # are forwarded upstream unchanged.
-        accept_dns=True,
-        accept_routes=False,
         userspace_networking=options.tailnet_userspace_networking,
     )
 
