@@ -663,6 +663,12 @@ services:
 
   scheduler:
     image: scheduler:local
+    # Two, like the control plane. The work that spends money already
+    # serialises on a Redis key per capacity owner; what needed fixing was the
+    # orphan confirmation window and pod expiry, both of which decided from
+    # process-local state.
+    deploy:
+      replicas: 2
     restart: unless-stopped
     build:
       context: .

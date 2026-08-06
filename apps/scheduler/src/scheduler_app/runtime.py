@@ -49,6 +49,7 @@ from scheduler.service import (
 )
 from scheduler.services import SchedulerServices
 from scheduler.state import (
+    RedisOrphanedContainerConfirmationRepository,
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
@@ -245,6 +246,9 @@ class SchedulerRuntime:
                     compute_states,
                 ),
                 orphaned_container_networks=RedisWorkerNetworkIpRepository(redis_client),
+                orphaned_container_confirmations=(
+                    RedisOrphanedContainerConfirmationRepository(redis_client)
+                ),
                 cron_job_locks=redis_client,
             ),
             capacity=SchedulerCapacityControls(
