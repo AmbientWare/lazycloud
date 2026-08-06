@@ -463,7 +463,7 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputeUnitRecord:
         visibility=ComputeUnitVisibility.Internal,
         region=_REGION,
         offer_id=_OFFER_ID,
-        capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
+        capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
         desired_machines=1,
         min_machines=0,
         max_machines=10,
@@ -488,7 +488,7 @@ def _request(
         hostname="ip-10-0-0-10",
         os="linux",
         arch="amd64",
-        executor="runc",
+        executor="runsc",
         capacity=ProviderNodeCapacity(
             cpu_count=4,
             cpu_millicores=4_000,
@@ -538,7 +538,7 @@ def _offer() -> ComputeOffer:
         hourly_cost_micros=340_000,
         available=10,
         capacity_mode=ComputeCapacityMode.Pooled,
-        capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
+        capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
         supports_scale_to_zero=True,
     )
 

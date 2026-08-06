@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import Field, JsonValue
 from shared.app_identity import CHECKPOINT_SIGNAL_ROOT
 from shared.compute_policy import MachinePool
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 
 from worker import execution
@@ -275,7 +276,7 @@ class CheckpointRequest(ContractModel):
     container_id: str
     checkpoint_id: str
     checkpoint_root: str
-    runtime_name: str = "runc"
+    runtime_name: str = OciRuntimeName.Runsc.value
     mode: CheckpointMode = CheckpointMode.Nvidia
     config_path: str = ""
     gpu_count: int = 0

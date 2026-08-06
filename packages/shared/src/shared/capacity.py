@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from pydantic import Field, field_validator, model_validator
 
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -111,7 +112,7 @@ class CapacityAcquisitionShape(ContractModel):
     memory_mib: int = Field(gt=0)
     gpu_type: str = Field(default="", max_length=160)
     gpu_count: int = Field(default=0, ge=0)
-    runtime: str = Field(default="runsc", min_length=1, max_length=80)
+    runtime: str = Field(default=OciRuntimeName.Runsc.value, min_length=1, max_length=80)
     preemptible: bool = False
 
     @model_validator(mode="after")

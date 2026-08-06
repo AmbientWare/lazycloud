@@ -7,6 +7,7 @@ from pydantic import Field, JsonValue, field_validator
 
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_policy import MachinePool
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import AgentBackendRoute
@@ -75,7 +76,7 @@ class SchedulerWorkerRequest(ContractModel):
     would pin the request to one candidate and suppress failover.
     """
     architecture: str = "amd64"
-    provider_runtime: str = "runsc"
+    provider_runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str = ""
     docker_enabled: bool = False
     preemptible: bool = False

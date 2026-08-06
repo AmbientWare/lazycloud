@@ -30,25 +30,6 @@ RUN apt-get update \
     && /usr/local/bin/runsc --version \
     && rm -rf /var/lib/apt/lists/* /tmp/runsc.sha512
 
-FROM debian:bookworm-slim AS runc
-ARG TARGETARCH
-ARG RUNC_VERSION=1.5.0
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && case "${TARGETARCH}" in \
-        amd64) RUNC_SHA256="0363e69bebd3a027d1239364ab9b4f4873f6bc4e7a7878e94b4ea59f08551297" ;; \
-        arm64) RUNC_SHA256="1f6d8c553add066a6aaf838d3172d4c5ed3c6b065b6f7eed2f4a4aa4af261e59" ;; \
-        *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && curl -fsSL \
-        "https://github.com/opencontainers/runc/releases/download/v${RUNC_VERSION}/runc.${TARGETARCH}" \
-        -o /usr/local/sbin/runc \
-    && echo "${RUNC_SHA256}  /usr/local/sbin/runc" | sha256sum -c - \
-    && chmod 0755 /usr/local/sbin/runc \
-    && /usr/local/sbin/runc --version \
-    && rm -rf /var/lib/apt/lists/*
-
 FROM debian:bookworm-slim AS qemu-binfmt
 ARG TARGETARCH
 
@@ -301,7 +282,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LAZYCLOUD_HOME=/var/lib/lazycloud \
     PATH="/app/.venv/bin:${PATH}" \
     DEBIAN_FRONTEND=noninteractive \
-    BUILDAH_RUNTIME=/usr/local/sbin/runc \
     BUILDAH_ISOLATION=chroot \
     BUILDAH_LAYERS=true \
     _BUILDAH_STARTED_IN_USERNS="" \
@@ -342,7 +322,6 @@ RUN apt-get update \
         nvidia-container-toolkit \
         procps \
         psmisc \
-        runc \
         skopeo \
         slirp4netns \
         tini \
@@ -364,7 +343,6 @@ RUN mkdir -p /etc/containers /etc/containers/registries.conf.d /etc/criu \
 FROM container-worker-system AS container-worker
 COPY --from=container-worker-install /app/.venv /app/.venv
 COPY --from=runsc /usr/local/bin/runsc /usr/local/bin/runsc
-COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=qemu-binfmt /out/opt/lazycloud/binfmt/ /opt/lazycloud/binfmt/
 COPY --from=criu /out/usr/ /usr/
 COPY --from=sandbox-supervisor /out/lazycloud-sandbox-supervisor /usr/local/bin/lazycloud-sandbox-supervisor
@@ -376,6 +354,6 @@ RUN criu --version | grep -Fx 'Version: 4.2'
 
 VOLUME ["/var/lib/lazycloud"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD python -c "import shutil; from pathlib import Path; import container_worker_app.main; required=('tini','runc','buildah','skopeo','docker','ip','iptables','geesefs','mount-s3','lazycloud-sandbox-supervisor'); missing=[name for name in required if shutil.which(name) is None]; missing.extend(path for path in ('/usr/lib/podman/netavark','/usr/lib/podman/aardvark-dns') if not Path(path).exists()); raise SystemExit(1 if missing else 0)"
+    CMD python -c "import shutil; from pathlib import Path; import container_worker_app.main; required=('tini','runsc','buildah','skopeo','docker','ip','iptables','geesefs','mount-s3','lazycloud-sandbox-supervisor'); missing=[name for name in required if shutil.which(name) is None]; missing.extend(path for path in ('/usr/lib/podman/netavark','/usr/lib/podman/aardvark-dns') if not Path(path).exists()); raise SystemExit(1 if missing else 0)"
 ENTRYPOINT ["tini", "--"]
 CMD ["lazycloud-container-worker"]

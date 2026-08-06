@@ -25,6 +25,7 @@ from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.scheduling import (
@@ -96,7 +97,7 @@ class CapacityRequestShape(ContractModel):
     gpu_type: str = ""
     gpu_count: int = Field(default=0, ge=0)
     runtime_class: str = ""
-    runtime_classes: tuple[str, ...] = ("runsc",)
+    runtime_classes: tuple[str, ...] = (OciRuntimeName.Runsc.value,)
     docker_enabled: bool = False
     preemptible: bool = False
 

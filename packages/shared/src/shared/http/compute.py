@@ -17,7 +17,7 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import ComputeUnitPhase, MachinePool
-from shared.container_requests import StopContainerReason
+from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
 from shared.http.base import HttpModel
@@ -47,7 +47,7 @@ class UnitPolicy(HttpModel):
     worker_memory_mib: int = Field(default=0, ge=0)
     worker_gpu_type: str = Field(default="", max_length=160)
     worker_gpu_count: int = Field(default=0, ge=0)
-    worker_runtimes: tuple[str, ...] = ("runsc",)
+    worker_runtimes: tuple[str, ...] = (OciRuntimeName.Runsc.value,)
     worker_preemptible: bool = False
     idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
     scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)

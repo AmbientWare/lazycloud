@@ -20,6 +20,7 @@ from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
 from pydantic import JsonValue
 from shared.compute_policy import MachinePool
+from shared.container_requests import OciRuntimeName
 from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
     ContainerResponse,
@@ -366,7 +367,7 @@ def unit_create(
             worker_memory_mib=worker_memory_mib,
             worker_gpu_type=worker_gpu_type,
             worker_gpu_count=worker_gpu_count,
-            worker_runtimes=tuple(worker_runtime or ("runc",)),
+            worker_runtimes=tuple(worker_runtime or (OciRuntimeName.Runsc.value,)),
             worker_preemptible=worker_preemptible,
             idle_drain_timeout_seconds=idle_drain_timeout_seconds,
             registration_timeout_seconds=registration_timeout_seconds,

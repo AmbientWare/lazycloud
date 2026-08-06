@@ -90,7 +90,7 @@ def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
             capacity_owner_id=OWNER_ID,
             machine_id="machine-1",
             status=SchedulerWorkerStatus.Available,
-            runtime_classes=["runc"],
+            runtime_classes=["runsc"],
             free_cpu_millicores=4_000,
             free_memory_mib=8_192,
             total_cpu_millicores=4_000,

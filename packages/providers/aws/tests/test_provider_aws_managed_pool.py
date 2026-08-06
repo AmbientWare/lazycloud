@@ -404,7 +404,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
             hourly_cost_micros=340_000,
             available=100,
             capacity_mode=ComputeCapacityMode.Pooled,
-            capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
+            capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
             supports_scale_to_zero=True,
         ),
         desired_machines=0,

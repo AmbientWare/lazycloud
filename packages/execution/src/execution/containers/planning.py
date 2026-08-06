@@ -76,8 +76,12 @@ def resolve_oci_runtime(
     docker_enabled: bool,
 ) -> tuple[OciRuntimeName, str]:
     del docker_enabled
-    requested_class = runtime_class.strip()
-    runtime_name = _normalize_oci_runtime(requested_class or runtime)
+    runtime_name = _normalize_oci_runtime(runtime_class.strip() or runtime)
+    # The class travels to the scheduler and is matched against what a worker
+    # advertises, so it has to name the runtime that was actually resolved. A
+    # stub still asking for the runc class would otherwise resolve to a sandbox
+    # and then match no worker, sitting pending with nothing naming the cause.
+    requested_class = runtime_name.value if runtime_class.strip() else ""
     return runtime_name, requested_class
 
 
@@ -144,15 +148,12 @@ def _normalize_oci_runtime(value: OciRuntimeName | str) -> OciRuntimeName:
     if normalized in {OciRuntimeName.Runsc.value, "gvisor", ""}:
         return OciRuntimeName.Runsc
     if normalized == OciRuntimeName.Runc.value:
-        # Every workload is sandboxed, so this refuses rather than obliges. No
-        # worker advertises runc any more, so honouring it would produce a
-        # request that provisions capacity and never places on it — a retry limit
-        # naming neither the runtime nor the reason.
-        msg = (
-            "runc is not available: every workload runs under gVisor, "
-            "and no worker offers an unsandboxed runtime"
-        )
-        raise ValueError(msg)
+        # Sandboxed, not refused. Every stub deployed before workloads moved to
+        # gVisor carries runc in its persisted config, and rejecting those would
+        # strand already-deployed applications until each was redeployed. Asking
+        # for less isolation than the platform gives is not an error; it is a
+        # request the platform declines to honour downwards.
+        return OciRuntimeName.Runsc
     msg = f"unsupported OCI runtime: {value}"
     raise ValueError(msg)
 
