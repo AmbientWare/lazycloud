@@ -9,6 +9,8 @@ from uuid import uuid4
 
 import uvicorn
 from compute.aws_connections import AwsAccountConnectionService
+from coordination.redis_client import RedisClient
+from coordination.token_lock import try_acquire_token_lock
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.pods.service import PodControlService
@@ -25,13 +27,6 @@ from gateway.events import (
 from gateway.service import GatewayControlService
 from identity.auth import AuthError, AuthorizationDeniedError
 from images.control import ImageControlService
-from networking.control_plane_origin import (
-    DEFAULT_CONTROL_PLANE_ORIGIN_TTL_SECONDS as CONTROL_PLANE_ORIGIN_TTL_SECONDS,
-)
-from networking.control_plane_origin import (
-    RedisControlPlaneOriginRepository,
-    runtime_origin_for_host,
-)
 from observability.telemetry import setup_telemetry
 from pydantic import JsonValue
 from shared.app_identity import DISPLAY_NAME
@@ -161,21 +156,6 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                     # deployment that wants no tailnet says so with the disabled
                     # mode, which never reaches here.
                     api_services.tailnet_runtime.start()
-                # Published before anything is served, and before this process
-                # reports healthy, so nothing that waits on health can observe an
-                # unpublished origin.
-                _publish_runtime_origin(api_services)
-                origin_heartbeat = _create_background_task(
-                    _republish_runtime_origin(
-                        api_services,
-                        event_sink=api_services.events,
-                    )
-                )
-                cleanup.push_async_callback(
-                    _capture_task_cleanup_failure,
-                    cleanup_failures,
-                    origin_heartbeat,
-                )
                 if tcp_ingress is not None:
                     cleanup.push_async_callback(
                         _capture_async_cleanup_failure,
@@ -186,6 +166,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                 route_reconciliation = _create_background_task(
                     _reconcile_agent_routes(
                         route_repository,
+                        api_services.redis_client,
                         interval_seconds=(
                             api_services.agent_route_reconciliation_settings.interval_seconds
                         ),
@@ -335,62 +316,33 @@ def _emit_reconciliation_failure(
         )
 
 
-def _publish_runtime_origin(api_services: ApiServices) -> str:
-    """Record where this control plane is actually reachable.
-
-    The host comes from the tailnet device rather than from configuration,
-    because the device name is granted, not chosen: a collision resolves to a
-    suffixed name that no deployment file predicts.
-    """
-    tailnet_runtime = api_services.tailnet_runtime
-    host = tailnet_runtime.self_dns_name() if tailnet_runtime is not None else ""
-    origin = runtime_origin_for_host(
-        api_services.gateway_settings.runtime_callback_http_url,
-        host,
-    )
-    RedisControlPlaneOriginRepository(api_services.redis_client).publish(
-        origin,
-        ttl_seconds=CONTROL_PLANE_ORIGIN_TTL_SECONDS,
-    )
-    logger.info("published control-plane runtime origin: %s", origin)
-    return origin
-
-
-async def _republish_runtime_origin(
-    api_services: ApiServices,
-    *,
-    event_sink: GatewayEventSink | None = None,
-) -> None:
-    """Keep the published origin fresh, and current if the device is renamed.
-
-    The TTL is what makes a stopped control plane stop advertising an address it
-    no longer answers on, so this has to outpace it rather than run beside it.
-    """
-    interval = max(CONTROL_PLANE_ORIGIN_TTL_SECONDS / 3, 1.0)
-    while True:
-        await asyncio.sleep(interval)
-        try:
-            await asyncio.to_thread(_publish_runtime_origin, api_services)
-        except Exception as exc:
-            logger.exception("publishing the control-plane runtime origin failed")
-            _emit_reconciliation_failure(event_sink, "control-plane-origin", exc)
-
-
 async def _reconcile_agent_routes(
     repository: WorkerRepositoryService,
+    redis: RedisClient,
     *,
     interval_seconds: float,
     event_sink: GatewayEventSink | None = None,
 ) -> None:
+    """Remove routes whose backend is gone, from one control plane at a time.
+
+    This scans a shared registry and deletes from it, so running it in every
+    control plane would have them racing to delete each other's findings. The
+    lease is held for the cycle rather than released after it, so the winner
+    keeps the work while it is alive and another takes over when it is not.
+    """
+    lease_key = redis.key("control-plane", "leases", "agent-routes")
+    holder = str(uuid4())
+    lease_seconds = max(int(interval_seconds * 2), 1)
     while True:
         try:
-            result = await asyncio.to_thread(repository.reconcile_orphan_agent_routes)
-            if result.removed:
-                logger.info(
-                    "reconciled agent route registry: scanned=%s removed=%s",
-                    result.scanned,
-                    result.removed,
-                )
+            if try_acquire_token_lock(redis, lease_key, holder, ttl_seconds=lease_seconds):
+                result = await asyncio.to_thread(repository.reconcile_orphan_agent_routes)
+                if result.removed:
+                    logger.info(
+                        "reconciled agent route registry: scanned=%s removed=%s",
+                        result.scanned,
+                        result.removed,
+                    )
         except Exception as exc:
             logger.exception("agent route registry reconciliation failed")
             _emit_reconciliation_failure(event_sink, "agent-routes", exc)

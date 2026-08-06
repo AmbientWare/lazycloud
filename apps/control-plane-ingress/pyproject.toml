@@ -1,0 +1,22 @@
+[project]
+name = "control-plane-ingress-app"
+version = "0.1.0"
+description = "The address the deployment answers on, in front of the control plane."
+requires-python = ">=3.12"
+dependencies = [
+    "coordination",
+    "lazycloud-shared==0.1.0",
+    "networking",
+    "gateway",
+    "pydantic-settings>=2.4,<3",
+]
+
+[project.scripts]
+lazycloud-control-plane-ingress = "control_plane_ingress_app.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

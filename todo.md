@@ -18,27 +18,45 @@ straight to a pull request. Ordered — networking first, agent artifact last.
       forever with no logs. A tailnet startup failure is also fatal now rather
       than a logged warning.
 
-- [ ] **Decide how the control plane scales.** Still open, but one of the four
-      blockers is gone: the tailnet gateway is no longer pinned 1:1, and each
-      replica would now get its own tailnet egress. What remains, all confirmed
-      by reading rather than assumed:
+- [x] **Decide how the control plane scales.** Decided: **one front door, replicas
+      behind it.** A tailnet-facing ingress owns the stable name; each replica
+      keeps its own tailnet device for egress to agents.
 
-      1. **One stable inbound name.** N replicas means N tailnet devices, and
-         workers need a single address — a tailnet-facing ingress (Caddy or
-         similar) holding `lazycloud-control-plane` and fanning out.
-      2. **TCP ingress** binds `:1995` inside the API process
-         (`apps/api/src/api/fastapi_app.py`, `tcp_ingress.start()`) with certs
-         from the one-shot `tcp-certificate` service. It has to move out.
-      3. **`_reconcile_agent_routes`** runs unleased in every API process; every
-         other background loop is already replica-safe, and
-         `AwsAccountConnectionService.reconcile_due` shows the pattern
-         (`claim_due(now, lease_until, limit)`).
+      The deciding constraint is who holds the address and for how long. Our own
+      processes can re-resolve per use, so a registry of live replicas would
+      serve them. A container cannot: it is handed `GATEWAY_HTTP_URL` once at
+      start and holds it for its whole life, so a long-lived pod given one
+      replica's address is stranded when that replica dies. A front door is the
+      only shape where nothing downstream holds a replica-specific address.
 
-      Not blockers, confirmed: the agent channel is stateless polling, not a
-      persistent stream (`apps/agent/src/agent_app/daemon.py` sleeps
-      `stream_interval_seconds` around a plain POST); backend routes are durable
-      in Postgres; the recovery fence takes `pg_advisory_lock_shared`, which is
-      shared by design.
+      It also costs no consumer change. The registry stays single-valued and
+      every caller keeps reading one published origin, which is the property
+      worth protecting — the same call everywhere, no divergence.
+
+      What it implies, when replicas are actually wanted:
+
+      1. **The publisher moves, the readers do not.** Today the control plane is
+         its own front door and publishes the device it registered. With an
+         ingress, the ingress becomes the front door and publishes instead.
+         `resolve()` and every consumer are untouched.
+      2. **Replicas still each need a tailnet device.** Egress to agents — shell
+         tunnels, route dialing — is per replica and no proxy substitutes for
+         it. Naming them individually is free now that nothing hardcodes a name.
+      3. **TCP ingress does not have to move.** Routes resolve by SNI
+         (`{stub_id}-{port}.{external_host}`) out of Redis, so any replica can
+         already serve any TCP route. It needs an L4 entry point in front of N
+         listeners on `:1995`, which the same front door can be.
+      4. **`_reconcile_agent_routes` needs a lease**
+         (`apps/api/src/api/fastapi_app.py`). It runs unguarded in every API
+         process and would double-run;
+         `AwsAccountConnectionService.reconcile_due` shows the pattern with
+         `claim_due(now, lease_until, limit)`. Harmless at one instance, so not
+         built yet.
+
+      Confirmed replica-safe already, by reading rather than assumption: the
+      agent channel is stateless polling, backend routes are durable in
+      Postgres, AWS reconciliation leases its work, the recovery fence takes
+      `pg_advisory_lock_shared`, and TCP route state is in Redis.
 
 ## Configuration
 

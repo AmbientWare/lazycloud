@@ -80,6 +80,7 @@ members = [
     "apps/api",
     "apps/agent",
     "apps/cache-server",
+    "apps/control-plane-ingress",
     "apps/cli",
     "apps/container-worker",
     "apps/scheduler",

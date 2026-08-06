@@ -74,7 +74,6 @@ x-tailnet-env: &tailnet-env
   LAZYCLOUD_TAILNET_AGENT_TAG: "${LAZYCLOUD_TAILNET_AGENT_TAG:-tag:lazycloud-agent}"
   LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG: "${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane}"
   LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS: "${LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS:-300}"
-  LAZYCLOUD_TAILNET_HOSTNAME: "${LAZYCLOUD_TAILNET_HOSTNAME:-lazycloud-control-plane}"
   LAZYCLOUD_TAILNET_CONTROL_URL: "${LAZYCLOUD_TAILNET_CONTROL_URL:-}"
   LAZYCLOUD_TAILNET_ACCEPT_DNS: "false"
   LAZYCLOUD_TAILNET_ACCEPT_ROUTES: "false"
@@ -129,7 +128,7 @@ x-lazycloud-depends: &lazycloud-depends
     condition: service_completed_successfully
 
 x-lazycloud-role-depends: &lazycloud-role-depends
-  control-plane:
+  control-plane-ingress:
     condition: service_healthy
 
 x-container-worker-healthcheck: &container-worker-healthcheck
@@ -363,9 +362,6 @@ services:
         condition: service_completed_successfully
       tcp-certificate:
         condition: service_completed_successfully
-    ports:
-      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
-      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
     # The control plane runs its own tailscaled rather than borrowing a sidecar's
     # network namespace. These are the same grants every agent already holds, and
     # a real TUN device is required: workers reach this process inbound by its
@@ -384,10 +380,61 @@ services:
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
-      # Reaches this control plane at the address it publishes, not just on
-      # loopback: everything that waits on this health gate depends on that
-      # address working, and it is the half that fails silently.
-      test: ["CMD", "python", "-m", "api.health_probe"]
+      # Only that this replica serves. Whether the deployment is reachable at
+      # the address it advertises is the ingress's assertion to make, and a
+      # replica that waited on it could never become healthy in the first place.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:9000/health', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  control-plane-ingress:
+    # The address the deployment answers on. It holds the tailnet identity and
+    # publishes the origin every agent, worker, and container is given, so those
+    # callers never learn a replica's address and a replica can be replaced or
+    # scaled without stranding anything that was handed one.
+    image: control-plane-ingress:local
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: control-plane-ingress
+      args: *lazycloud-build-args
+    environment:
+      <<:
+        [
+          *process-env,
+          *redis-env,
+          *gateway-env,
+          *tailnet-env,
+          *tailnet-control-credentials,
+        ]
+    depends_on:
+      redis:
+        condition: service_healthy
+      # Started, not healthy: a replica proves itself by serving, and it cannot
+      # serve through an ingress that is waiting for it.
+      control-plane:
+        condition: service_started
+    ports:
+      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
+      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - control-plane-ingress-tailnet-state:/var/lib/lazycloud/tailnet
+    healthcheck:
+      test: ["CMD", "python", "-m", "control_plane_ingress_app.health_probe"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -419,7 +466,7 @@ services:
           *container-service-credentials,
         ]
     depends_on:
-      control-plane:
+      control-plane-ingress:
         condition: service_healthy
     volumes:
       - lazycloud-files:/var/lib/lazycloud
@@ -430,7 +477,7 @@ services:
     image: "${LAZYCLOUD_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.7.3}"
     restart: unless-stopped
     depends_on:
-      control-plane:
+      control-plane-ingress:
         condition: service_healthy
     command:
       - tunnel
@@ -507,7 +554,7 @@ services:
       GATEWAY_HTTP_URL: "http://control-plane:9000"
       WORKSPACE_ID: "default"
     depends_on:
-      control-plane:
+      control-plane-ingress:
         condition: service_healthy
     volumes:
       - "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}:${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}"
@@ -838,7 +885,7 @@ services:
       WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
       LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "${LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE:-/var/lib/lazycloud/cache-token/cache-service-token}"
     depends_on:
-      control-plane:
+      control-plane-ingress:
         condition: service_healthy
       worker-token:
         condition: service_completed_successfully
@@ -1012,6 +1059,7 @@ volumes:
   lazycloud-source-cache-gpu:
   lazycloud-registry:
   control-plane-tailnet-state:
+  control-plane-ingress-tailnet-state:
   tcp-ingress-tls:
 
 secrets:

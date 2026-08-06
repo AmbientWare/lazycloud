@@ -19,12 +19,12 @@ ingress:
     path: ^/worker-repository(/|$)
     service: http_status:404
   - hostname: lazycloud.dev
-    service: http://control-plane:9000
+    service: http://control-plane-ingress:9000
 
   # Generated invoke hosts (<stub>.lazycloud.dev). Every path forwards: the
   # control plane's host-routing middleware rewrites them to the stub's handler
   # path, so a path filter here would break user applications.
   - hostname: "*.lazycloud.dev"
-    service: http://control-plane:9000
+    service: http://control-plane-ingress:9000
 
   - service: http_status:404
