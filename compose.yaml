@@ -195,6 +195,7 @@ x-container-worker-settings: &container-worker-settings
 services:
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: "lazycloud"
       POSTGRES_USER: "lazycloud"
@@ -251,6 +252,7 @@ services:
 
   redis:
     image: redis:8-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${LAZYCLOUD_COMPOSE_REDIS_PORT:-6379}:6379"
@@ -264,6 +266,7 @@ services:
 
   object-store:
     image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
     command: ["/garage", "server", "--single-node", "--default-bucket"]
     environment:
       GARAGE_DEFAULT_BUCKET: "lazycloud-objects"
@@ -320,6 +323,7 @@ services:
 
   control-plane:
     image: api:local
+    restart: unless-stopped
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -556,10 +560,23 @@ services:
         export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
         temporary="$${token_path}.tmp"
         rm -f "$$temporary"
-        lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" --ttl 15m \
+        # Retried, because health is a lagging signal: the ingress reports what
+        # was true at its last probe, and a replica recreated since then refuses
+        # until it is listening. One attempt turns that window into a stack with
+        # no join credential and an agent that never arrives.
+        attempt=1
+        until lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" --ttl 15m \
           | python -c \
               'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.load(sys.stdin)["token"], encoding="utf-8")' \
               "$$temporary"
+        do
+          if [ "$$attempt" -ge 30 ]; then
+            echo "no control plane issued a join credential after $$attempt attempts" >&2
+            exit 1
+          fi
+          attempt=$$((attempt + 1))
+          sleep 2
+        done
         chmod 0600 "$$temporary"
         mv "$$temporary" "$$token_path"
         echo "compose agent one-use join credential initialized"
@@ -932,6 +949,7 @@ services:
 
   cache-server:
     image: cache-server:local
+    restart: unless-stopped
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
