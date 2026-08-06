@@ -368,8 +368,8 @@ select json_build_object(
           where i.pool_id = p.id and i.status not in ('deleted', 'failed')
         ), '[]'::json)
       ) as pool
-      from compute_pools p
-      where p.capacity_mode = 'pooled' and p.phase <> 'deleted'
+      from compute_units p
+      where p.phase <> 'deleted'
     ) pools
   ), '[]'::json)
 );
@@ -487,7 +487,7 @@ def report_release_reach(*, since: datetime) -> int:
         reading = read_reach()
         print(f"release reach, cycle {cycle}:", flush=True)
         if not reading.pools:
-            print("  no pooled pool exists, so this release has no managed node to reach")
+            print("  no provisioning unit holds machines, so this release has none to reach")
             return 0
         _print_reach(reading, since=since)
         if _reach_settled(reading, since=since) or time.monotonic() >= deadline:

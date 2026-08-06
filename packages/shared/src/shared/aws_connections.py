@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field, field_validator, model_validator
 
+from shared.capacity import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -159,6 +160,12 @@ class AwsAccountConnection(ContractModel):
         pattern=r"^[A-Za-z0-9+=,.@:_/-]+$",
         repr=False,
     )
+    pool: MachinePool = Field(default=MachinePool("aws"), min_length=1, max_length=240)
+    """Pool every unit provisioned on this connection stamps.
+
+    The customer's override point: units are created on demand per capability
+    key, so the pool they belong to cannot live on any one of them.
+    """
     phase: AwsAccountConnectionPhase
     active_authorization: AwsAccountAuthorizationGeneration | None = None
     pending_authorization: AwsAccountAuthorizationGeneration | None = None
@@ -280,7 +287,12 @@ class AwsAccountConnection(ContractModel):
         return authorization.managed_authorization if authorization is not None else None
 
     @property
-    def accepts_placement(self) -> bool:
+    def hosts_workloads(self) -> bool:
+        """Whether this connection is ready to run workloads.
+
+        A readiness fact about the account, not a statement about where any
+        workload is scheduled: what a workload runs on is the pool it names.
+        """
         accepts = self.phase in {
             AwsAccountConnectionPhase.Ready,
             AwsAccountConnectionPhase.ReconnectPending,

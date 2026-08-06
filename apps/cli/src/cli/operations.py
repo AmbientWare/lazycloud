@@ -15,16 +15,14 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.json_contracts import JsonValue, parse_json_value
 from shared.autoscaler_state import AutoscalerTargetKind
-from shared.http.operations import ImageBuildRequest, ProviderSetRequest
+from shared.http.operations import ImageBuildRequest
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
 from shared.image_building.context import fingerprint_build_context
 from shared.image_building.requirements import load_requirements_file
-from shared.provider_config import ProviderKind
 
 from cli.api_client import admin_api_client
 from cli.parameters import parse_key_values
 
-provider_app = typer.Typer(help="Manage provider configs.")
 image_app = typer.Typer(help="Manage image build records.")
 cron_app = typer.Typer(help="Manage cron jobs.")
 scheduler_app = typer.Typer(help="Run and inspect scheduler passes.")
@@ -44,72 +42,6 @@ def _validate_uv_project(path: Path) -> None:
         raise typer.BadParameter("--uv-project must contain pyproject.toml")
     if not (path / "uv.lock").is_file():
         raise typer.BadParameter("--uv-project must contain uv.lock")
-
-
-@provider_app.command("set")
-def provider_set(
-    ctx: typer.Context,
-    name: str,
-    kind: Annotated[ProviderKind, typer.Option("--kind")] = ProviderKind.Aws,
-    enabled: Annotated[bool, typer.Option("--enabled/--disabled")] = True,
-    priority: Annotated[int, typer.Option("--priority")] = 100,
-    config_values: Annotated[
-        list[str] | None,
-        typer.Option("--config", help="Provider config as KEY=VALUE."),
-    ] = None,
-    labels: Annotated[
-        list[str] | None,
-        typer.Option("--label", help="Provider label as KEY=VALUE."),
-    ] = None,
-) -> None:
-    config = {
-        key: _parse_json(value) for key, value in parse_key_values(config_values or []).items()
-    }
-    record = admin_api_client().set_provider(
-        ProviderSetRequest(
-            name=name,
-            kind=kind,
-            enabled=enabled,
-            priority=priority,
-            config=config,
-            labels=parse_key_values(labels or []),
-        )
-    )
-    print_payload(ctx, record.model_dump(mode="json"))
-
-
-@provider_app.command("list")
-def provider_list(
-    ctx: typer.Context,
-    enabled_only: Annotated[bool, typer.Option("--enabled/--all")] = True,
-) -> None:
-    records = admin_api_client().list_providers().providers
-    if enabled_only:
-        records = [item for item in records if item.enabled]
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in records])
-    else:
-        rows = [
-            [item.name, item.kind.value, str(item.enabled), str(item.priority)] for item in records
-        ]
-        console.print(table("Providers", ["name", "kind", "enabled", "priority"], rows))
-
-
-@provider_app.command("show")
-def provider_show(ctx: typer.Context, name: str) -> None:
-    record = next(
-        (item for item in admin_api_client().list_providers().providers if item.name == name),
-        None,
-    )
-    if record is None:
-        raise typer.BadParameter(f"provider not found: {name}")
-    print_payload(ctx, record.model_dump(mode="json"))
-
-
-@provider_app.command("delete")
-def provider_delete(name: str) -> None:
-    admin_api_client().delete_provider(name)
-    console.print(f"deleted provider {name}")
 
 
 @image_app.command("build")

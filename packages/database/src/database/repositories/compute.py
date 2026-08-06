@@ -14,18 +14,13 @@ from database.tables.compute import (
     AwsAccountConnectionTable,
     AwsAuthorizationCleanupTombstoneTable,
     ComputeCapacityOperationTable,
-    ComputeCapacityRequestTable,
     ComputeJoinCredentialTable,
-    ComputeLedgerTable,
     ComputeMachineEnrollmentTable,
-    ComputePoolTable,
     ComputeProviderInstanceTable,
-    ComputeSolverDecisionTable,
-    ComputeSolverRunTable,
+    ComputeUnitTable,
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
-from database.tables.orchestration import PoolTable
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 from shared.aws_connections import (
     AwsAccountConnection,
@@ -44,10 +39,11 @@ from shared.compute_enrollment import (
     TailnetEnrollmentPhase,
 )
 from shared.compute_policy import (
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
-    ComputePoolVisibility,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
+    MachinePool,
     WorkspaceComputePolicy,
 )
 from shared.contracts import ContractModel
@@ -68,19 +64,6 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 def _model_json(model: BaseModel) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
-
-
-class ComputeCapacityRequestRecord(ContractModel):
-    id: str
-    workspace_id: str
-    pool_id: str | None = None
-    stub_id: str | None = None
-    source: str
-    max_spend_micros: int = 0
-    ttl_seconds: int = 0
-    status: str = "active"
-    expires_at: datetime | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ComputeCapacityOperationRecord(ContractModel):
@@ -113,7 +96,6 @@ class ComputeProviderInstanceRecord(ContractModel):
     status: str
     source: str
     pool_id: str | None = None
-    capacity_request_id: str | None = None
     instance_type: str | None = None
     instance_id: str | None = None
     machine_id: str | None = None
@@ -135,45 +117,18 @@ class ComputeProviderInstanceRecord(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
-class ComputeSolverRunRecord(ContractModel):
-    id: str
-    workspace_id: str | None = None
-    pool_id: str | None = None
-    feasible: bool = False
-    reason: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class ComputeSolverDecisionRecord(ContractModel):
-    id: str
-    solver_run_id: str | None = None
-    action: str
-    provider: str | None = None
-    offer_id: str | None = None
-    reservation_id: str | None = None
-    count: int = 0
-    cost_micros: int = 0
-    reason: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class ComputeLedgerRecord(ContractModel):
-    id: str
-    source: str
-    amount_micros: int
-    started_at: datetime
-    ended_at: datetime
-    workspace_id: str | None = None
-    pool_id: str | None = None
-    reservation_id: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class ComputeJoinCredentialRecord(ContractModel):
     id: str
     token_hash: str
     workspace_id: str
-    pool_name: str
+    capacity_owner_id: str
+    """Provisioning unit that issued this credential.
+
+    A machine joining with it is bought by that unit, which is what keeps an
+    auto-scaling drain from selecting a machine some other unit owns.
+    """
+    pool: MachinePool
+    """Pool the joining machine lands in, not the issuing unit's name."""
     machine_id: str = ""
     created_by_token_id: str | None = None
     status: ComputeCredentialStatus = ComputeCredentialStatus.Active
@@ -189,7 +144,8 @@ class ComputeJoinCredentialRecord(ContractModel):
             id=self.id,
             token_hash=self.token_hash,
             workspace_id=self.workspace_id,
-            pool_name=self.pool_name,
+            capacity_owner_id=self.capacity_owner_id,
+            pool=self.pool,
             machine_id=self.machine_id,
             created_by_token_id=self.created_by_token_id,
             status=ComputeCredentialStatus.Revoked,
@@ -206,7 +162,8 @@ class ComputeJoinCredentialRecord(ContractModel):
             id=self.id,
             token_hash=self.token_hash,
             workspace_id=self.workspace_id,
-            pool_name=self.pool_name,
+            capacity_owner_id=self.capacity_owner_id,
+            pool=self.pool,
             machine_id=self.machine_id,
             created_by_token_id=self.created_by_token_id,
             status=self.status,
@@ -222,7 +179,8 @@ class ComputeJoinCredentialRecord(ContractModel):
 class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
     workspace_id: str
-    pool_name: str
+    capacity_owner_id: str
+    pool: MachinePool
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -269,7 +227,8 @@ class ComputeMachineEnrollmentRecord(ContractModel):
 
 class ComputeMachineEnrollmentCreate(ContractModel):
     workspace_id: str
-    pool_name: str
+    capacity_owner_id: str
+    pool: MachinePool
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -320,7 +279,8 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         return ComputeMachineEnrollmentRecord(
             id=existing.id,
             workspace_id=self.workspace_id,
-            pool_name=self.pool_name,
+            capacity_owner_id=self.capacity_owner_id,
+            pool=self.pool,
             machine_id=self.machine_id,
             machine_fingerprint_hash=self.machine_fingerprint_hash,
             join_credential_id=self.join_credential_id,
@@ -367,24 +327,28 @@ class ComputeMachineEnrollmentCreate(ContractModel):
 
 
 @dataclass(slots=True)
-class ComputePoolRepository:
+class ComputeUnitRepository:
     session: Session
 
     @property
-    def records(self) -> WorkspaceTableRepository[ComputePoolRecord]:
+    def records(self) -> WorkspaceTableRepository[ComputeUnitRecord]:
         return WorkspaceTableRepository(
             self.session,
-            TableRepositoryConfig(ComputePoolTable, ComputePoolRecord),
+            TableRepositoryConfig(ComputeUnitTable, ComputeUnitRecord),
         )
 
-    def upsert(self, record: ComputePoolRecord) -> ComputePoolRecord:
+    def upsert(self, record: ComputeUnitRecord) -> ComputeUnitRecord:
         # The immutability comparison below is by identity, and it runs before the
         # store's own validation, so the record has to be typed by the time it
         # gets there or an unchanged owner reads as a changed one. `dict(record)`
         # rather than `model_dump`: dumping serializes, and a drifted record would
         # raise the serializer warning here instead of where it was introduced.
-        record = ComputePoolRecord.model_validate(dict(record))
+        record = ComputeUnitRecord.model_validate(dict(record))
         current = self.get(record.id, for_update=True)
+        if current is not None:
+            # The row owns its creation time; a caller rebuilding the record
+            # from scratch must not be able to move it.
+            record = record.model_copy(update={"created_at": current.created_at})
         if current is not None and (
             current.capacity_owner_id != record.capacity_owner_id
             or current.capacity_owner_kind is not record.capacity_owner_kind
@@ -406,50 +370,64 @@ class ComputePoolRepository:
         name: str,
         *,
         for_update: bool = False,
-    ) -> ComputePoolRecord | None:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.workspace_id == workspace_id,
-            ComputePoolTable.name == name,
+    ) -> ComputeUnitRecord | None:
+        """Resolve a unit by name, which only a create path may do.
+
+        A name is this table's creation-time natural key and nothing else.
+        Runtime callers address a unit by `id`/`capacity_owner_id`, because a
+        pool label and a unit name are both free-form strings and keying on the
+        name lets one be passed where the other was meant.
+        """
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.workspace_id == workspace_id,
+            ComputeUnitTable.name == name,
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def get_by_capacity_owner_id(
         self,
         capacity_owner_id: str,
         *,
         for_update: bool = False,
-    ) -> ComputePoolRecord | None:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.capacity_owner_id == capacity_owner_id
+    ) -> ComputeUnitRecord | None:
+        """Resolve one unit by its owner.
+
+        Unscoped because the owner id is globally unique
+        (`uq_compute_units_capacity_owner_id`) and the scheduler plane resolves
+        units without a workspace in hand. Tenant-scoped callers check
+        `workspace_id` on the row they get back.
+        """
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.capacity_owner_id == capacity_owner_id
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def delete_for_workspace_deletion(self, pool_id: str, *, workspace_id: str) -> bool:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
         if workspace.status is not WorkspaceStatus.Deleting:
             raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
         result = self.session.execute(
-            delete(ComputePoolTable).where(
-                ComputePoolTable.id == pool_id,
-                ComputePoolTable.workspace_id == workspace_id,
+            delete(ComputeUnitTable).where(
+                ComputeUnitTable.id == pool_id,
+                ComputeUnitTable.workspace_id == workspace_id,
             )
         )
         self.session.flush()
         return isinstance(result, CursorResult) and result.rowcount > 0
 
-    def get(self, pool_id: str, *, for_update: bool = False) -> ComputePoolRecord | None:
+    def get(self, pool_id: str, *, for_update: bool = False) -> ComputeUnitRecord | None:
         """System lookup by pool id for placement/capacity reconciliation."""
-        statement = select(ComputePoolTable).where(ComputePoolTable.id == pool_id)
+        statement = select(ComputeUnitTable).where(ComputeUnitTable.id == pool_id)
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
     def get_by_identity(
         self,
@@ -458,46 +436,93 @@ class ComputePoolRepository:
         provider_ref: str,
         region: str,
         capability_key: str,
+        root_volume_gib: int,
         for_update: bool = False,
-    ) -> ComputePoolRecord | None:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.workspace_id == workspace_id,
-            ComputePoolTable.provider_ref == provider_ref,
-            ComputePoolTable.region == region,
-            ComputePoolTable.capability_key == capability_key,
-            ComputePoolTable.visibility == ComputePoolVisibility.Internal.value,
+    ) -> ComputeUnitRecord | None:
+        """Look up a provisioning unit by everything AWS pins to one ASG.
+
+        `root_volume_gib` belongs to the identity because it feeds the launch
+        template: two callers disagreeing on it for one capability key would
+        alternate the template version on every reconcile and no node would
+        ever settle.
+        """
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.workspace_id == workspace_id,
+            ComputeUnitTable.provider_ref == provider_ref,
+            ComputeUnitTable.region == region,
+            ComputeUnitTable.capability_key == capability_key,
+            ComputeUnitTable.root_volume_gib == root_volume_gib,
+            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
         )
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputePoolRecord.model_validate(row.payload) if row is not None else None
+        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
 
-    def list_internal(self, *, workspace_id: str) -> list[ComputePoolRecord]:
+    def list_for_machine_pool(
+        self,
+        workspace_id: str,
+        pool: MachinePool,
+    ) -> list[ComputeUnitRecord]:
+        """Every unit feeding one scheduling group, best candidate first."""
+        statement = (
+            select(ComputeUnitTable)
+            .where(
+                ComputeUnitTable.workspace_id == workspace_id,
+                ComputeUnitTable.pool == pool,
+            )
+            .order_by(ComputeUnitTable.priority.desc(), ComputeUnitTable.id)
+        )
+        return [
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
+        statement = (
+            select(ComputeUnitTable)
+            .where(ComputeUnitTable.workspace_id == workspace_id)
+            .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
+        )
+        return [
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    def list_across_workspaces(self) -> list[ComputeUnitRecord]:
+        """System listing every unit, for scheduler controller construction."""
+        statement = select(ComputeUnitTable).order_by(
+            ComputeUnitTable.workspace_id,
+            ComputeUnitTable.id,
+        )
+        return [
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
         return self._list_internal(workspace_id=workspace_id)
 
-    def list_internal_across_workspaces(self) -> list[ComputePoolRecord]:
+    def list_internal_across_workspaces(self) -> list[ComputeUnitRecord]:
         """System listing over every workspace's internal placement pools."""
         return self._list_internal(workspace_id=None)
 
-    def _list_internal(self, *, workspace_id: str | None) -> list[ComputePoolRecord]:
-        statement = select(ComputePoolTable).where(
-            ComputePoolTable.visibility == ComputePoolVisibility.Internal.value
+    def _list_internal(self, *, workspace_id: str | None) -> list[ComputeUnitRecord]:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value
         )
         if workspace_id is not None:
-            statement = statement.where(ComputePoolTable.workspace_id == workspace_id)
-        statement = statement.order_by(ComputePoolTable.updated_at, ComputePoolTable.id)
+            statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
+        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
-    def list_for_provider_connection(self, connection_id: str) -> list[ComputePoolRecord]:
+    def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
-            select(ComputePoolTable)
-            .where(ComputePoolTable.provider_connection_id == connection_id)
-            .order_by(ComputePoolTable.created_at, ComputePoolTable.id)
+            select(ComputeUnitTable)
+            .where(ComputeUnitTable.provider_connection_id == connection_id)
+            .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         return [
-            ComputePoolRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
     def update_capacity(
@@ -508,9 +533,9 @@ class ComputePoolRepository:
         desired_machines: int,
         max_machines: int,
         observed_machines: int,
-        phase: ComputePoolPhase,
-        provider_state: ComputePoolProviderState,
-    ) -> ComputePoolRecord | None:
+        phase: ComputeUnitPhase,
+        provider_state: ComputeUnitProviderState,
+    ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != expected_generation:
             return None
@@ -533,9 +558,9 @@ class ComputePoolRepository:
         *,
         generation: int,
         observed_machines: int,
-        phase: ComputePoolPhase,
-        provider_state: ComputePoolProviderState,
-    ) -> ComputePoolRecord | None:
+        phase: ComputeUnitPhase,
+        provider_state: ComputeUnitProviderState,
+    ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != generation:
             return None
@@ -549,9 +574,9 @@ class ComputePoolRepository:
         )
         return self.upsert(updated)
 
-    def _write_columns(self, record: ComputePoolRecord) -> None:
+    def _write_columns(self, record: ComputeUnitRecord) -> None:
         row = self.session.scalars(
-            select(ComputePoolTable).where(ComputePoolTable.id == record.id).with_for_update()
+            select(ComputeUnitTable).where(ComputeUnitTable.id == record.id).with_for_update()
         ).one()
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
@@ -563,7 +588,10 @@ class ComputePoolRepository:
         row.region = record.region
         row.offer_id = record.offer_id
         row.capability_key = record.capability_key
+        row.pool = record.pool
+        row.provider = record.provider
         row.desired_machines = record.desired_machines
+        row.initial_machines = record.initial_machines
         row.min_machines = record.min_machines
         row.max_machines = record.max_machines
         row.observed_machines = record.observed_machines
@@ -571,6 +599,27 @@ class ComputePoolRepository:
         row.phase = record.phase.value
         row.provider_state = _model_json(record.provider_state)
         flag_modified(row, "provider_state")
+        row.scaling_enabled = record.scaling_enabled
+        row.default_eligible = record.default_eligible
+        row.priority = record.priority
+        row.min_free_cpu_millicores = record.min_free_cpu_millicores
+        row.min_free_memory_mib = record.min_free_memory_mib
+        row.min_free_gpu_count = record.min_free_gpu_count
+        row.worker_cpu_millicores = record.worker_cpu_millicores
+        row.worker_memory_mib = record.worker_memory_mib
+        row.worker_gpu_type = record.worker_gpu_type
+        row.worker_gpu_count = record.worker_gpu_count
+        row.worker_runtimes = list(record.worker_runtimes)
+        flag_modified(row, "worker_runtimes")
+        row.worker_preemptible = record.worker_preemptible
+        row.idle_drain_timeout_seconds = record.idle_drain_timeout_seconds
+        row.scale_up_cooldown_seconds = record.scale_up_cooldown_seconds
+        row.scale_down_cooldown_seconds = record.scale_down_cooldown_seconds
+        row.registration_timeout_seconds = record.registration_timeout_seconds
+        row.workspace_machine_limit = record.workspace_machine_limit
+        row.root_volume_gib = record.root_volume_gib
+        row.transport = record.transport.value
+        row.fallback = record.fallback.value
         self.session.flush()
 
 
@@ -596,7 +645,7 @@ class WorkspaceComputePolicyRepository:
             "id": policy.id,
             "workspace_id": policy.workspace_id,
             "revision": policy.revision,
-            "default_placement": policy.default_placement.value,
+            "default_pool": policy.default_pool,
             "payload": _model_json(policy),
             "created_at": policy.created_at,
             "updated_at": policy.updated_at,
@@ -646,7 +695,7 @@ class WorkspaceComputePolicyRepository:
             .with_for_update()
         ).one()
         row.revision = policy.revision
-        row.default_placement = policy.default_placement.value
+        row.default_pool = policy.default_pool
         self.session.flush()
         return saved
 
@@ -770,42 +819,6 @@ class ComputeCapacityOperationRepository:
         row.target_machine_id = saved.target_machine_id
         self.session.flush()
         return saved
-
-
-@dataclass(slots=True)
-class ComputeCapacityRequestRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeCapacityRequestRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeCapacityRequestTable, ComputeCapacityRequestRecord),
-        )
-
-    def upsert(self, record: ComputeCapacityRequestRecord) -> ComputeCapacityRequestRecord:
-        return self.records.upsert(record, workspace_id=record.workspace_id, status=record.status)
-
-    def list_for_pool(self, pool_id: str) -> list[ComputeCapacityRequestRecord]:
-        """System listing keyed by an already-authorized pool id."""
-        return [item for item in self.records.list_across_workspaces() if item.pool_id == pool_id]
-
-    def active_for_pool(
-        self,
-        pool_id: str,
-        *,
-        for_update: bool = False,
-    ) -> ComputeCapacityRequestRecord | None:
-        statement = select(ComputeCapacityRequestTable).where(
-            ComputeCapacityRequestTable.pool_id == pool_id,
-            ComputeCapacityRequestTable.status == "active",
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        rows = list(self.session.scalars(statement))
-        if len(rows) > 1:
-            raise RuntimeError(f"pool {pool_id} has multiple active capacity requests")
-        return ComputeCapacityRequestRecord.model_validate(rows[0].payload) if rows else None
 
 
 @dataclass(slots=True)
@@ -937,89 +950,6 @@ class ComputeProviderInstanceRepository:
 
 
 @dataclass(slots=True)
-class ComputeSolverRunRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeSolverRunRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeSolverRunTable, ComputeSolverRunRecord),
-        )
-
-    def upsert(self, record: ComputeSolverRunRecord) -> ComputeSolverRunRecord:
-        """System-authority write; cluster-wide solver runs carry no workspace."""
-        return self.records.upsert_across_workspaces(record, workspace_id=record.workspace_id)
-
-
-@dataclass(slots=True)
-class ComputeSolverDecisionRepository:
-    session: Session
-
-    @property
-    def records(self) -> GlobalTableRepository[ComputeSolverDecisionRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeSolverDecisionTable, ComputeSolverDecisionRecord),
-        )
-
-    def upsert(self, record: ComputeSolverDecisionRecord) -> ComputeSolverDecisionRecord:
-        return self.records.upsert(record, status=record.action)
-
-
-@dataclass(slots=True)
-class ComputeLedgerRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeLedgerRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeLedgerTable, ComputeLedgerRecord),
-        )
-
-    def append(self, record: ComputeLedgerRecord) -> ComputeLedgerRecord:
-        """System-authority write; platform-level ledger rows carry no workspace."""
-        return self.records.upsert_across_workspaces(
-            record,
-            workspace_id=record.workspace_id,
-            status=record.source,
-        )
-
-    def append_for_workspace_deletion(
-        self,
-        record: ComputeLedgerRecord,
-    ) -> ComputeLedgerRecord:
-        if record.workspace_id is None:
-            raise ValueError("workspace deletion ledger row requires workspace ownership")
-        workspace = WorkspaceRepository(self.session).lock_for_deletion(record.workspace_id)
-        if workspace.status is not WorkspaceStatus.Deleting:
-            raise ConflictError(f"workspace cleanup requires deleting state: {record.workspace_id}")
-        row = self.session.get(ComputeLedgerTable, record.id)
-        if row is None:
-            row = ComputeLedgerTable(id=record.id)
-            self.session.add(row)
-        row.workspace_id = record.workspace_id
-        row.pool_id = record.pool_id or None
-        row.reservation_id = record.reservation_id or None
-        row.source = record.source
-        row.amount_micros = record.amount_micros
-        row.started_at = record.started_at
-        row.ended_at = record.ended_at
-        row.payload = _model_json(record)
-        flag_modified(row, "payload")
-        self.session.flush()
-        return record
-
-    def list_for_workspace(self, workspace_id: str) -> list[ComputeLedgerRecord]:
-        return [
-            item
-            for item in self.records.list(workspace_id=workspace_id)
-            if item.workspace_id == workspace_id
-        ]
-
-
-@dataclass(slots=True)
 class ComputeJoinCredentialRepository:
     session: Session
 
@@ -1039,7 +969,8 @@ class ComputeJoinCredentialRepository:
         *,
         token_hash: str,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
+        pool: MachinePool,
         machine_id: str = "",
         created_by_token_id: str | None,
         max_uses: int,
@@ -1049,7 +980,8 @@ class ComputeJoinCredentialRepository:
             {
                 "token_hash": token_hash,
                 "workspace_id": workspace_id,
-                "pool_name": pool_name,
+                "capacity_owner_id": capacity_owner_id,
+                "pool": pool,
                 "machine_id": machine_id,
                 "created_by_token_id": created_by_token_id,
                 "status": ComputeCredentialStatus.Active,
@@ -1061,10 +993,14 @@ class ComputeJoinCredentialRepository:
             status=ComputeCredentialStatus.Active.value,
         )
 
-    def lock_pool(self, workspace_id: str, pool_name: str) -> bool:
+    def lock_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
+        """Fence the unit a credential is minted against for the mint's duration."""
         statement = (
-            select(PoolTable.id)
-            .where(PoolTable.workspace_id == workspace_id, PoolTable.name == pool_name)
+            select(ComputeUnitTable.id)
+            .where(
+                ComputeUnitTable.workspace_id == workspace_id,
+                ComputeUnitTable.capacity_owner_id == capacity_owner_id,
+            )
             .with_for_update()
         )
         return self.session.scalar(statement) is not None
@@ -1097,16 +1033,21 @@ class ComputeJoinCredentialRepository:
         row = self.session.scalars(statement).first()
         return ComputeJoinCredentialRecord.model_validate(row.payload) if row is not None else None
 
-    def list_for_pool(
+    def list_for_unit(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
         *,
         for_update: bool = False,
     ) -> list[ComputeJoinCredentialRecord]:
+        """Credentials one unit issued.
+
+        Keyed by unit rather than by group: revoking a group's credentials would
+        revoke every sibling unit's tokens along with them.
+        """
         statement = select(ComputeJoinCredentialTable).where(
             ComputeJoinCredentialTable.workspace_id == workspace_id,
-            ComputeJoinCredentialTable.pool_name == pool_name,
+            ComputeJoinCredentialTable.capacity_owner_id == capacity_owner_id,
         )
         if for_update:
             statement = statement.with_for_update()
@@ -1149,19 +1090,19 @@ class ComputeJoinCredentialRepository:
         self.session.flush()
         return record
 
-    def delete_for_pool(self, workspace_id: str, pool_name: str) -> int:
+    def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
             self.session.scalars(
                 select(ComputeJoinCredentialTable.id).where(
                     ComputeJoinCredentialTable.workspace_id == workspace_id,
-                    ComputeJoinCredentialTable.pool_name == pool_name,
+                    ComputeJoinCredentialTable.capacity_owner_id == capacity_owner_id,
                 )
             )
         )
         self.session.execute(
             delete(ComputeJoinCredentialTable).where(
                 ComputeJoinCredentialTable.workspace_id == workspace_id,
-                ComputeJoinCredentialTable.pool_name == pool_name,
+                ComputeJoinCredentialTable.capacity_owner_id == capacity_owner_id,
             )
         )
         self.session.flush()
@@ -1249,15 +1190,19 @@ class ComputeMachineEnrollmentRepository:
     def by_fingerprint(
         self,
         workspace_id: str,
-        pool_name: str,
         machine_fingerprint_hash: str,
         *,
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
+        """The one enrollment a physical host holds in this workspace.
+
+        The group is not part of the key: a host that re-joins naming a
+        different group is the same machine, and admitting it twice would
+        double-count its capacity.
+        """
         return self._one(
             select(ComputeMachineEnrollmentTable).where(
                 ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                ComputeMachineEnrollmentTable.pool_name == pool_name,
                 ComputeMachineEnrollmentTable.machine_fingerprint_hash == machine_fingerprint_hash,
             ),
             for_update=for_update,
@@ -1268,27 +1213,27 @@ class ComputeMachineEnrollmentRepository:
         workspace_id: str,
         machine_id: str,
         *,
-        pool_name: str = "",
+        pool: MachinePool = MachinePool(""),
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
         statement = select(ComputeMachineEnrollmentTable).where(
             ComputeMachineEnrollmentTable.workspace_id == workspace_id,
             ComputeMachineEnrollmentTable.machine_id == machine_id,
         )
-        if pool_name:
-            statement = statement.where(ComputeMachineEnrollmentTable.pool_name == pool_name)
+        if pool:
+            statement = statement.where(ComputeMachineEnrollmentTable.pool == pool)
         return self._one(statement, for_update=for_update)
 
-    def list_for_pool(
+    def list_for_unit(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
     ) -> list[ComputeMachineEnrollmentRecord]:
         statement = (
             select(ComputeMachineEnrollmentTable)
             .where(
                 ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                ComputeMachineEnrollmentTable.pool_name == pool_name,
+                ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
             )
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
         )
@@ -1297,19 +1242,19 @@ class ComputeMachineEnrollmentRepository:
             for row in self.session.scalars(statement)
         ]
 
-    def delete_for_pool(self, workspace_id: str, pool_name: str) -> int:
+    def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
             self.session.scalars(
                 select(ComputeMachineEnrollmentTable.id).where(
                     ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                    ComputeMachineEnrollmentTable.pool_name == pool_name,
+                    ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
                 )
             )
         )
         self.session.execute(
             delete(ComputeMachineEnrollmentTable).where(
                 ComputeMachineEnrollmentTable.workspace_id == workspace_id,
-                ComputeMachineEnrollmentTable.pool_name == pool_name,
+                ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
             )
         )
         self.session.flush()
@@ -1337,7 +1282,7 @@ class TailnetCleanupTombstoneRepository:
         self,
         *,
         workspace_id: str,
-        pool_name: str,
+        pool: MachinePool,
         machine_id: str,
         generations: list[int],
         auth_key_ids: list[str],
@@ -1348,7 +1293,7 @@ class TailnetCleanupTombstoneRepository:
         candidate = TailnetCleanupTombstone(
             id=str(uuid4()),
             workspace_id=workspace_id,
-            pool_name=pool_name,
+            pool=pool,
             machine_id=machine_id,
             generations=_unique_positive_integers(generations),
             auth_key_ids=_unique_nonempty_strings(auth_key_ids),
@@ -1371,7 +1316,7 @@ class TailnetCleanupTombstoneRepository:
         tombstone = current.model_copy(
             update={
                 "workspace_id": workspace_id,
-                "pool_name": pool_name,
+                "pool": pool,
                 "generations": _unique_positive_integers(
                     [*current.generations, *candidate.generations]
                 ),
@@ -1577,6 +1522,7 @@ class AwsAccountConnectionRepository:
             workspace_id=connection.workspace_id,
             account_id=connection.account_id,
             external_id=connection.external_id,
+            pool=connection.pool,
             phase=connection.phase.value,
             revision=connection.revision,
             next_reconcile_at=connection.next_reconcile_at,
@@ -1752,6 +1698,7 @@ class AwsAccountConnectionRepository:
         row.workspace_id = connection.workspace_id
         row.account_id = connection.account_id
         row.external_id = connection.external_id
+        row.pool = connection.pool
         row.phase = connection.phase.value
         row.revision = connection.revision
         row.next_reconcile_at = connection.next_reconcile_at
@@ -1769,10 +1716,10 @@ class AwsAccountConnectionRepository:
         return int(
             self.session.scalar(
                 select(func.count())
-                .select_from(ComputePoolTable)
+                .select_from(ComputeUnitTable)
                 .where(
-                    ComputePoolTable.provider_connection_id == connection_id,
-                    ComputePoolTable.phase != ComputePoolPhase.Deleted.value,
+                    ComputeUnitTable.provider_connection_id == connection_id,
+                    ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
                 )
             )
             or 0

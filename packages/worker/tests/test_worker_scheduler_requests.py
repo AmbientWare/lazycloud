@@ -14,6 +14,7 @@ from scheduler.state import (
     WorkerCapacityChange,
     WorkerCapacityPlan,
 )
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason, WorkerStartupKind
 from worker.container_execution import (
     ContainerExecutionContext,
@@ -347,7 +348,7 @@ class _WorkerRepository:
         return WorkerCapacityPlan(
             worker=SchedulerWorkerRecord(
                 worker_id=worker_id,
-                pool_name="test",
+                pool=MachinePool("test"),
                 capacity_owner_id=_CAPACITY_OWNER_ID,
             ),
             change=change,

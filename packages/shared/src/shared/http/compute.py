@@ -9,7 +9,6 @@ from shared.capacity import (
     CapacityOwnerIdentity,
     CapacityOwnerKind,
     CapacityOwnerSource,
-    CapacityPoolPolicy,
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -17,7 +16,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import ComputePoolPhase
+from shared.compute_policy import ComputeUnitPhase, MachinePool
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
@@ -27,23 +26,54 @@ from shared.http.stubs import StubResponse
 from shared.tasks import TaskStatus
 
 
-class PoolCreateRequest(HttpModel, CapacityPoolPolicy):
+class UnitPolicy(HttpModel):
+    """The worker shape and scaling policy a provisioning unit publishes.
+
+    Stated here rather than inherited from the durable record: the wire
+    vocabulary is the contract, and a unit column that stops being published
+    must not silently disappear from the payload with it.
+    """
+
+    initial_machines: int = Field(default=0, ge=0)
+    min_machines: int = Field(default=0, ge=0)
+    max_machines: int = Field(default=1, ge=0)
+    scaling_enabled: bool = False
+    default_eligible: bool = False
+    priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
+    min_free_cpu_millicores: int = Field(default=0, ge=0)
+    min_free_memory_mib: int = Field(default=0, ge=0)
+    min_free_gpu_count: int = Field(default=0, ge=0)
+    worker_cpu_millicores: int = Field(default=0, ge=0)
+    worker_memory_mib: int = Field(default=0, ge=0)
+    worker_gpu_type: str = Field(default="", max_length=160)
+    worker_gpu_count: int = Field(default=0, ge=0)
+    worker_runtimes: tuple[str, ...] = ("runc",)
+    worker_preemptible: bool = False
+    idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
+    scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)
+    scale_down_cooldown_seconds: int = Field(default=60, ge=0, le=86_400)
+    registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
+
+
+class UnitCreateRequest(UnitPolicy):
     name: str
+    pool: MachinePool = MachinePool("")
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-class PoolResponse(HttpModel, CapacityPoolPolicy):
+class UnitResponse(UnitPolicy):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
     name: str
+    pool: MachinePool
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
 
     @model_validator(mode="after")
-    def validate_capacity_owner(self) -> PoolResponse:
+    def validate_capacity_owner(self) -> UnitResponse:
         CapacityOwnerIdentity.model_validate(
             {
                 "capacity_owner_id": self.capacity_owner_id,
@@ -54,26 +84,25 @@ class PoolResponse(HttpModel, CapacityPoolPolicy):
         return self
 
 
-class PoolListResponse(HttpModel):
-    pools: list[PoolResponse] = Field(default_factory=list)
+class UnitListResponse(HttpModel):
+    pools: list[UnitResponse] = Field(default_factory=list)
 
 
-class PoolScaleRequest(HttpModel):
+class UnitScaleRequest(HttpModel):
     desired_machines: int = Field(ge=0)
 
 
-class PoolScaleResponse(HttpModel):
+class UnitScaleResponse(HttpModel):
     name: str
     desired_machines: int = Field(ge=0)
     max_machines: int = Field(ge=0)
     observed_machines: int = Field(ge=0)
-    phase: ComputePoolPhase
+    phase: ComputeUnitPhase
     status: str
     degraded_reason: str | None = None
 
 
 class MachineCreateRequest(HttpModel):
-    pool: str = "default"
     provider: str = "local"
     cpu: float | None = None
     memory: str | None = None
@@ -82,21 +111,9 @@ class MachineCreateRequest(HttpModel):
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-class MachineRegisterRequest(HttpModel):
-    token: str = ""
-    machine_id: str
-    hostname: str = ""
-    provider_name: str = "local"
-    pool_name: str = "default"
-    cpu: str = ""
-    memory: str = ""
-    gpu_count: str = "0"
-    private_ip: str = ""
-
-
 class MachineResponse(HttpModel):
     id: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None
@@ -112,17 +129,16 @@ class MachineListResponse(HttpModel):
     machines: list[MachineResponse] = Field(default_factory=list)
 
 
-class MachineGpuCountsResponse(HttpModel):
-    gpus: dict[str, int] = Field(default_factory=dict)
-
-
 class MachineJoinCommandRequest(HttpModel):
-    """Request the join command for the workspace's implicit self-hosted fleet.
+    """Request the join command for a workspace's self-hosted fleet.
 
-    The server resolves or creates the fleet; callers never name a pool.
+    Naming a pool creates it: a caller may join machines into any group they
+    choose, including one an auto-scaling unit already feeds. Left empty, the
+    workspace's implicit self-hosted fleet answers.
     """
 
     ttl: str = ""
+    pool: MachinePool = MachinePool(Field(default="", max_length=240))
     gpu: list[str] = Field(default_factory=list)
 
 
@@ -131,20 +147,15 @@ class MachineJoinCommandResponse(HttpModel):
     expires_at: datetime
 
 
-class MachineRemoteConfigResponse(HttpModel):
-    endpoint: str = "local"
-    state_home: str
-    pools: list[str] = Field(default_factory=list)
-    providers: list[str] = Field(default_factory=list)
+class MachineJoinTokenResponse(HttpModel):
+    """The same credential the join command embeds, for a machine-readable caller.
 
+    A process that has to write the token to a file should not have to parse it
+    back out of a shell string.
+    """
 
-class MachineRegisterResponse(HttpModel):
-    machine: MachineResponse
-    config: MachineRemoteConfigResponse
-
-
-class MachineConfigResponse(HttpModel):
-    config: MachineRemoteConfigResponse
+    token: str
+    expires_at: datetime
 
 
 class WorkerContainerResponse(HttpModel):
@@ -159,7 +170,7 @@ class WorkerContainerResponse(HttpModel):
 class WorkerResponse(HttpModel):
     id: str
     status: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -181,98 +192,25 @@ class WorkerListResponse(HttpModel):
     workers: list[WorkerResponse] = Field(default_factory=list)
 
 
-class PoolOfferQuery(HttpModel):
-    provider: list[str] = Field(default_factory=list)
-    region: list[str] = Field(default_factory=list)
-    gpu: list[str] = Field(default_factory=list)
-    node_count: int = Field(default=1, ge=1)
-    ttl: str = ""
-    max_spend: float = Field(default=0.0, ge=0.0)
-    min_reliability: float = Field(default=0.0, ge=0.0, le=1.0)
-    offer_id: str = ""
-
-
-class PoolOfferResponse(HttpModel):
-    id: str
-    provider: str
-    instance_type: str
-    region: str
-    gpu: str = ""
-    gpu_count: int = 0
-    cpu_millicores: int = 0
-    memory_mb: int = 0
-    hourly_cost_micros: int = 0
-    reliability: float = 1.0
-    available: int = 0
-    storage_mb: int = 0
-    cloud: str = ""
-    node_count: int = 1
-    display_name: str = ""
-    category: str = ""
-    region_display_name: str = ""
-    latitude: float = 0.0
-    longitude: float = 0.0
-
-
-class PoolOfferListResponse(HttpModel):
-    data: list[PoolOfferResponse] = Field(default_factory=list)
-    next: str = ""
-
-
-class PoolCapacityLaunchRequest(PoolOfferQuery):
-    pass
-
-
-class PoolCapacityExtendRequest(HttpModel):
-    ttl: str
-    max_spend: float = Field(gt=0.0)
-
-
-class PoolProviderInstanceResponse(HttpModel):
-    id: str
-    provider: str = ""
-    offer_id: str = ""
-    status: str = ""
-    gpu_count: int = 0
-    hourly_cost_micros: int = 0
-    created_at: datetime | None = None
-    expires_at: datetime | None = None
-    machine_id: str = ""
-    region: str = ""
-    node_count: int = 0
-    instance_type: str = ""
-
-
-class PoolCapacityResponse(HttpModel):
-    name: str
-    selector: str = ""
-    reservations: list[PoolProviderInstanceResponse] = Field(default_factory=list)
-    committed_spend_micros: int = 0
-    max_spend_micros: int = 0
-    status: str = "active"
-    expires_at: datetime | None = None
-    reserved_nodes: int = 0
-
-
-class PoolJoinTokenRequest(HttpModel):
+class UnitJoinTokenRequest(HttpModel):
     ttl: str = ""
 
 
-class PoolJoinTokenResponse(HttpModel):
+class UnitJoinTokenResponse(HttpModel):
     token: str
     expires_at: datetime
 
 
-class PoolJoinCommandRequest(HttpModel):
+class UnitJoinCommandRequest(HttpModel):
     ttl: str = ""
 
 
-class PoolJoinCommandResponse(HttpModel):
+class UnitJoinCommandResponse(HttpModel):
     command: str
     expires_at: datetime
 
 
-class PoolMachineMetricsResponse(HttpModel):
+class UnitMachineMetricsResponse(HttpModel):
     total_cpu_available: int = 0
     total_memory_available: int = 0
     cpu_utilization_pct: float = 0.0
@@ -291,14 +229,14 @@ class PoolMachineMetricsResponse(HttpModel):
     disk_usage_pct: float = 0.0
 
 
-class PoolMachineResponse(HttpModel):
+class UnitMachineResponse(HttpModel):
     id: str
     cpu: int = 0
     memory: int = 0
     gpu: str = ""
     gpu_count: int = 0
     status: str = ""
-    pool_name: str
+    pool: MachinePool
     provider_name: str = "agent"
     readiness_phase: MachineReadinessPhase = MachineReadinessPhase.Joining
     readiness_message: str = "Waiting for the agent to connect"
@@ -312,11 +250,11 @@ class PoolMachineResponse(HttpModel):
     last_seen_at: datetime | None = None
     created_at: datetime | None = None
     agent_version: str = ""
-    machine_metrics: PoolMachineMetricsResponse = Field(default_factory=PoolMachineMetricsResponse)
+    machine_metrics: UnitMachineMetricsResponse = Field(default_factory=UnitMachineMetricsResponse)
 
 
-class PoolMachineListResponse(HttpModel):
-    data: list[PoolMachineResponse] = Field(default_factory=list)
+class UnitMachineListResponse(HttpModel):
+    data: list[UnitMachineResponse] = Field(default_factory=list)
     next: str = ""
 
 
@@ -401,35 +339,24 @@ __all__ = [
     "ContainerStopAllResponse",
     "ContainerWithAppPageResponse",
     "ContainerWithAppResponse",
-    "MachineConfigResponse",
     "MachineCreateRequest",
-    "MachineGpuCountsResponse",
     "MachineJoinCommandRequest",
     "MachineJoinCommandResponse",
     "MachineListResponse",
-    "MachineRegisterRequest",
-    "MachineRegisterResponse",
-    "MachineRemoteConfigResponse",
     "MachineResponse",
-    "PoolCapacityExtendRequest",
-    "PoolCapacityLaunchRequest",
-    "PoolCapacityResponse",
-    "PoolCreateRequest",
-    "PoolJoinCommandRequest",
-    "PoolJoinCommandResponse",
-    "PoolJoinTokenRequest",
-    "PoolJoinTokenResponse",
-    "PoolListResponse",
-    "PoolMachineListResponse",
-    "PoolMachineMetricsResponse",
-    "PoolMachineResponse",
-    "PoolOfferListResponse",
-    "PoolOfferQuery",
-    "PoolOfferResponse",
-    "PoolProviderInstanceResponse",
-    "PoolResponse",
-    "PoolScaleRequest",
-    "PoolScaleResponse",
+    "UnitCreateRequest",
+    "UnitJoinCommandRequest",
+    "UnitJoinCommandResponse",
+    "UnitJoinTokenRequest",
+    "UnitJoinTokenResponse",
+    "UnitListResponse",
+    "UnitMachineListResponse",
+    "UnitMachineMetricsResponse",
+    "UnitMachineResponse",
+    "UnitPolicy",
+    "UnitResponse",
+    "UnitScaleRequest",
+    "UnitScaleResponse",
     "WorkerContainerResponse",
     "WorkerDrainResponse",
     "WorkerListResponse",

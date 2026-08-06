@@ -1,6 +1,6 @@
 # Compute Package
 
-Provider-neutral capacity: offers, pools, machines, private-agent state, managed
+Provider-neutral capacity: offers, units, machines, private-agent state, managed
 capacity lifecycle, billing hooks, and the protocols providers implement.
 
 Provider adapters, scheduler and worker loops, the gateway, apps, and the SDK

@@ -1,13 +1,29 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import datetime
+from typing import NewType
 from uuid import uuid4
 
 from pydantic import Field, field_validator, model_validator
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+
+UnitName = NewType("UnitName", str)
+"""Name of one provisioning unit, unique per workspace.
+
+A unit is one capacity owner: one Auto Scaling group, or the workspace's agent
+or local fleet. This names exactly one durable row.
+"""
+
+MachinePool = NewType("MachinePool", str)
+"""Scheduling pool a workload names, stamped on every machine serving it.
+
+Several units may feed one pool, so this names no single row. It is a routing
+label and must never be used to look a unit up — that is what made a pool label
+reaching a unit lookup silently return the wrong row while the two names
+happened to coincide.
+"""
 
 TERMINAL_REASON_MAX_LENGTH = 500
 
@@ -66,14 +82,19 @@ CAPACITY_OWNER_ID_PATTERN = (
 
 
 class CapacityOwnerKind(StringEnum):
+    """How a unit comes by its machines.
+
+    A `WorkspaceAgent` unit waits for machines to join it; a `PooledProvider`
+    unit buys them from a connected account. There is no third answer, and a
+    unit's kind follows from its provider rather than being chosen.
+    """
+
     WorkspaceAgent = "workspace_agent"
-    ManagedPool = "managed_pool"
     PooledProvider = "pooled_provider"
 
 
 class CapacityOwnerSource(StringEnum):
     Agent = "agent"
-    Managed = "managed"
     Provider = "provider"
 
 
@@ -134,7 +155,6 @@ class CapacityAcquisitionResult(ContractModel):
 
 _OWNER_SOURCES: dict[CapacityOwnerKind, CapacityOwnerSource] = {
     CapacityOwnerKind.WorkspaceAgent: CapacityOwnerSource.Agent,
-    CapacityOwnerKind.ManagedPool: CapacityOwnerSource.Managed,
     CapacityOwnerKind.PooledProvider: CapacityOwnerSource.Provider,
 }
 
@@ -169,58 +189,6 @@ class CapacityOwnerIdentity(ContractModel):
         return self
 
 
-class CapacityPoolPolicy(ContractModel):
-    initial_workers: int = Field(default=0, ge=0)
-    min_workers: int = Field(default=0, ge=0)
-    max_workers: int = Field(default=1, ge=0)
-    scaling_enabled: bool = False
-    default_eligible: bool = False
-    priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
-    min_free_cpu_millicores: int = Field(default=0, ge=0)
-    min_free_memory_mib: int = Field(default=0, ge=0)
-    min_free_gpu_count: int = Field(default=0, ge=0)
-    worker_cpu_millicores: int = Field(default=0, ge=0)
-    worker_memory_mib: int = Field(default=0, ge=0)
-    worker_gpu_type: str = Field(default="", max_length=160)
-    worker_gpu_count: int = Field(default=0, ge=0)
-    worker_runtimes: tuple[str, ...] = ("runc",)
-    worker_preemptible: bool = False
-    idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
-    scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)
-    scale_down_cooldown_seconds: int = Field(default=60, ge=0, le=86_400)
-    registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
-
-    @model_validator(mode="after")
-    def validate_policy(self) -> CapacityPoolPolicy:
-        if not self.min_workers <= self.initial_workers <= self.max_workers:
-            raise ValueError("capacity policy must satisfy min <= initial <= max")
-        if (self.worker_gpu_type == "") != (self.worker_gpu_count == 0):
-            raise ValueError("worker GPU type and count must be configured together")
-        if not self.worker_runtimes:
-            raise ValueError("capacity policy requires at least one worker runtime")
-        normalized_runtimes = _unique_nonempty(self.worker_runtimes)
-        if len(normalized_runtimes) != len(self.worker_runtimes):
-            raise ValueError("worker runtimes must be non-empty and unique")
-        if self.scaling_enabled and (
-            self.max_workers == 0 or self.worker_cpu_millicores == 0 or self.worker_memory_mib == 0
-        ):
-            raise ValueError(
-                "enabled capacity scaling requires a positive maximum, worker CPU, and memory"
-            )
-        has_free_capacity_target = any(
-            (
-                self.min_free_cpu_millicores,
-                self.min_free_memory_mib,
-                self.min_free_gpu_count,
-            )
-        )
-        if has_free_capacity_target and not self.scaling_enabled:
-            raise ValueError("minimum free capacity requires scaling to be enabled")
-        if self.min_free_gpu_count > 0 and (not self.worker_gpu_type or self.worker_gpu_count == 0):
-            raise ValueError("minimum free GPU capacity requires a GPU worker shape")
-        return self
-
-
 class CapacityPoolSizingSnapshot(ContractModel):
     """What a pool's size is and has been, read from the two owners of that fact.
 
@@ -247,14 +215,7 @@ def capacity_owner_for_provider(provider: str) -> tuple[CapacityOwnerKind, Capac
     normalized = provider.strip().lower()
     if normalized in {"", "agent", "local"}:
         return CapacityOwnerKind.WorkspaceAgent, CapacityOwnerSource.Agent
-    if normalized == CapacityOwnerSource.Managed.value:
-        return CapacityOwnerKind.ManagedPool, CapacityOwnerSource.Managed
     return CapacityOwnerKind.PooledProvider, CapacityOwnerSource.Provider
-
-
-def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
-    normalized = tuple(value.strip() for value in values)
-    return tuple(dict.fromkeys(value for value in normalized if value))
 
 
 __all__ = [
@@ -266,9 +227,10 @@ __all__ = [
     "CapacityOwnerIdentity",
     "CapacityOwnerKind",
     "CapacityOwnerSource",
-    "CapacityPoolPolicy",
     "CapacityPoolSizingSnapshot",
     "CapacityReleaseRequest",
+    "MachinePool",
+    "UnitName",
     "capacity_owner_for_provider",
     "new_capacity_owner_id",
 ]

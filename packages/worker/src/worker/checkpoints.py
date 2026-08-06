@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import Field, JsonValue
 from shared.app_identity import CHECKPOINT_SIGNAL_ROOT
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 
 from worker import execution
@@ -99,7 +100,7 @@ class CheckpointAvailabilityRequest(ContractModel):
     runtime_checkpoint_restore: bool = True
     manager_initialized: bool = True
     manager_available: bool = True
-    pool_name: str = ""
+    pool: MachinePool = MachinePool("")
     pool_criu_enabled: bool = False
 
 
@@ -332,7 +333,7 @@ def plan_checkpoint_availability(
             supports_checkpoint=False,
             reason="CRIU manager is not available",
         )
-    if not request.pool_name:
+    if not request.pool:
         return CheckpointAvailabilityDecision(
             runtime_supported=True,
             criu_available=False,
@@ -344,7 +345,7 @@ def plan_checkpoint_availability(
             runtime_supported=True,
             criu_available=False,
             supports_checkpoint=False,
-            reason=f"worker pool {request.pool_name!r} does not enable checkpointing",
+            reason=f"worker pool {request.pool!r} does not enable checkpointing",
         )
     return CheckpointAvailabilityDecision(
         runtime_supported=True,

@@ -8,12 +8,15 @@ from compute.providers import (
     PooledCapacityProvider,
     ProviderCapacityPhase,
     ProviderMachineStatus,
-    ProviderPoolInstance,
-    ProviderPoolRequest,
-    ProviderPoolSnapshot,
+    ProviderUnitInstance,
+    ProviderUnitRequest,
+    ProviderUnitSnapshot,
 )
 from pydantic import ValidationError
-from shared.compute_policy import ComputeCapacityMode, ComputePoolProviderState
+from shared.compute_policy import (
+    ComputeCapacityMode,
+    ComputeUnitProviderState,
+)
 
 from .account_connection import AwsAccountConnectionTarget
 from .instance_catalog import (
@@ -100,7 +103,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                 )
         return offers
 
-    def ensure_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+    def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         snapshot = provisioner.ensure(
             self._spec(request),
@@ -108,7 +111,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
         return self._snapshot(provisioner, snapshot)
 
-    def describe_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+    def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         snapshot = provisioner.describe(
             self._spec(request),
@@ -116,13 +119,13 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
         return self._snapshot(provisioner, snapshot)
 
-    def set_pool_capacity(
+    def set_unit_capacity(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         capacity_request = request.model_copy(
             update={
@@ -145,15 +148,15 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
 
     def release_machine(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         spec = self._spec(request)
         provisioner.release_instance(spec, provider_instance_id, decrement_desired=True)
         return self._snapshot(provisioner, provisioner.describe(spec, self._resource_ids(request)))
 
-    def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
+    def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         return self._snapshot(
             provisioner,
@@ -165,7 +168,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
 
     def machine_storage_destroyed(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
         storage_volume_ids: tuple[str, ...],
     ) -> bool:
@@ -179,7 +182,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     def _snapshot(
         provisioner: AwsManagedPoolProvisioner,
         snapshot: AwsManagedPoolSnapshot,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         volume_ids = provisioner.storage_volume_ids(
             tuple(instance.instance_id for instance in snapshot.instances)
         )
@@ -189,7 +192,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         target = self.connection.model_copy(update={"region": region})
         return AwsManagedPoolProvisioner.assume(target, client_provider=self.client_provider)
 
-    def _spec(self, request: ProviderPoolRequest) -> AwsManagedPoolSpec:
+    def _spec(self, request: ProviderUnitRequest) -> AwsManagedPoolSpec:
         artifacts = self.binaries_by_region.get(request.offer.region)
         if artifacts is None:
             raise ValueError(
@@ -207,7 +210,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             )
         return AwsManagedPoolSpec(
             workspace_id=request.workspace_id,
-            pool_name=request.pool_name,
+            unit_name=request.unit_name,
             region=request.offer.region,
             instance_type=request.offer.instance_type,
             ami_id=ami_id,
@@ -230,7 +233,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
 
     @staticmethod
-    def _resource_ids(request: ProviderPoolRequest) -> AwsManagedPoolResourceIds:
+    def _resource_ids(request: ProviderUnitRequest) -> AwsManagedPoolResourceIds:
         if not request.provider_state.attributes:
             return AwsManagedPoolResourceIds()
         try:
@@ -246,9 +249,9 @@ def _snapshot(
     snapshot: AwsManagedPoolSnapshot,
     *,
     volume_ids: Mapping[str, tuple[str, ...]],
-) -> ProviderPoolSnapshot:
+) -> ProviderUnitSnapshot:
     instances = [
-        ProviderPoolInstance(
+        ProviderUnitInstance(
             provider_instance_id=instance.instance_id,
             status=(
                 ProviderMachineStatus.Active
@@ -261,14 +264,14 @@ def _snapshot(
         )
         for instance in snapshot.instances
     ]
-    return ProviderPoolSnapshot(
+    return ProviderUnitSnapshot(
         phase=_PHASES[snapshot.phase],
         resource_id=snapshot.resource_ids.autoscaling_group_name or "",
         desired_machines=snapshot.desired_nodes,
         max_machines=snapshot.max_nodes,
         observed_machines=len(instances),
         instances=instances,
-        provider_state=ComputePoolProviderState(
+        provider_state=ComputeUnitProviderState(
             resource_id=snapshot.resource_ids.autoscaling_group_name or "",
             attributes=snapshot.resource_ids.model_dump(mode="json"),
         ),

@@ -20,8 +20,7 @@ from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
-from shared.compute_fleet import Pool
-from shared.compute_policy import ComputePlacementSource
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.scheduling import (
@@ -156,7 +155,7 @@ class CapacityProvisioningReservation(ContractModel):
     id: str
     resource_version: int = Field(default=0, ge=0)
     capacity_owner_id: str
-    pool_name: str
+    pool: MachinePool
     owner_kind: CapacityOwnerKind
     status: CapacityReservationStatus = CapacityReservationStatus.Pending
     acquisition_shape: CapacityRequestShape
@@ -190,7 +189,8 @@ class CapacityProvisioningReservation(ContractModel):
 
 class CapacityAcquisitionResult(ContractModel):
     status: CapacityAcquisitionStatus
-    capacity_owner_id: str
+    capacity_owner_id: str = ""
+    """Unit that served the request, empty when none accepted it."""
     reservation_id: str
     operation_id: str
     desired_unit: int = Field(default=0, ge=0)
@@ -233,7 +233,10 @@ class CapacityAcquisitionController(Protocol):
     def owner_kind(self) -> CapacityOwnerKind: ...
 
     @property
-    def pool_name(self) -> str: ...
+    def unit_name(self) -> UnitName: ...
+
+    @property
+    def pool(self) -> MachinePool: ...
 
     @property
     def registration_timeout(self) -> timedelta: ...
@@ -309,31 +312,35 @@ class ComputeCapacityService(Protocol):
 
 
 @dataclass(slots=True)
-class ComputePoolCapacityController:
+class ComputeUnitCapacityController:
     workspace_id: str
-    pool: Pool
+    unit: ComputeUnitRecord
     compute: ComputeCapacityService
     workers: CapacityWorkerRepository
 
     @property
     def capacity_owner_id(self) -> str:
-        return self.pool.capacity_owner_id
+        return self.unit.capacity_owner_id
 
     @property
     def owner_kind(self) -> CapacityOwnerKind:
-        return self.pool.capacity_owner_kind
+        return self.unit.capacity_owner_kind
 
     @property
-    def pool_name(self) -> str:
-        return self.pool.name
+    def unit_name(self) -> UnitName:
+        return self.unit.name
+
+    @property
+    def pool(self) -> MachinePool:
+        return self.unit.pool
 
     @property
     def registration_timeout(self) -> timedelta:
-        return timedelta(seconds=self.pool.registration_timeout_seconds)
+        return timedelta(seconds=self.unit.registration_timeout_seconds)
 
     @property
     def priority(self) -> int:
-        return self.pool.priority
+        return self.unit.priority
 
     def operational_health(
         self,
@@ -348,37 +355,35 @@ class ComputePoolCapacityController:
         )
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
-        if not self.pool.scaling_enabled:
+        """Whether this unit is a candidate for the request.
+
+        A named group admits every unit feeding it, which is what gives the
+        acquisition loop more than one candidate to fail over between. A request
+        that names no group falls back to the units marked default-eligible.
+        """
+        if not self.unit.scaling_enabled:
             return False
-        if self.owner_kind not in {
-            CapacityOwnerKind.ManagedPool,
-            CapacityOwnerKind.PooledProvider,
-        }:
+        if self.owner_kind is not CapacityOwnerKind.PooledProvider:
             return False
         if request.workspace_id != self.workspace_id:
             return False
-        if request.capacity_owner_id and request.capacity_owner_id != self.capacity_owner_id:
-            return False
-        if request.capacity_owner_id:
-            if request.pool_selector and request.pool_selector != self.pool.name:
+        if request.pool_selector:
+            if request.pool_selector != self.unit.pool:
                 return False
-        elif _request_has_strict_pool(request):
-            if request.pool_selector != self.pool.name:
-                return False
-        elif not self.pool.default_eligible:
+        elif not self.unit.default_eligible:
             return False
         return self.reservation_shape(request).can_host(request)
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(
-            cpu_millicores=self.pool.worker_cpu_millicores,
-            memory_mib=self.pool.worker_memory_mib,
-            gpu_type=self.pool.worker_gpu_type,
-            gpu_count=self.pool.worker_gpu_count,
-            runtime_class=request.runtime_class or self.pool.worker_runtimes[0],
-            runtime_classes=self.pool.worker_runtimes,
+            cpu_millicores=self.unit.worker_cpu_millicores,
+            memory_mib=self.unit.worker_memory_mib,
+            gpu_type=self.unit.worker_gpu_type,
+            gpu_count=self.unit.worker_gpu_count,
+            runtime_class=request.runtime_class or self.unit.worker_runtimes[0],
+            runtime_classes=self.unit.worker_runtimes,
             docker_enabled=request.docker_enabled,
-            preemptible=self.pool.worker_preemptible,
+            preemptible=self.unit.worker_preemptible,
         )
 
     def reconcile_sizing(
@@ -390,7 +395,7 @@ class ComputePoolCapacityController:
     ) -> WorkerPoolSizingPlan:
         workers = self.workers.list_workers()
         headroom = effective_pool_headroom(
-            self.pool,
+            self.unit,
             workers,
             reservations=reservations,
             allocations=allocations,
@@ -404,14 +409,14 @@ class ComputePoolCapacityController:
             *(reservation.desired_unit for reservation in reservations),
         )
         plan = plan_worker_pool_sizing(
-            self.pool,
+            self.unit,
             headroom=headroom,
             registered_units=registered_units,
             authoritative_units=authoritative_units,
             state=state,
             now=now,
         )
-        retry_at = scale_up_retry_at(self.pool, state)
+        retry_at = scale_up_retry_at(self.unit, state)
         if retry_at is not None and retry_at > now:
             return plan
         if state.pending_operation_id:
@@ -439,12 +444,12 @@ class ComputePoolCapacityController:
         plan: WorkerPoolSizingPlan,
     ) -> WorkerPoolSizingPlan:
         shape = ComputeCapacityShape(
-            cpu_millicores=self.pool.worker_cpu_millicores,
-            memory_mib=self.pool.worker_memory_mib,
-            gpu_type=self.pool.worker_gpu_type,
-            gpu_count=self.pool.worker_gpu_count,
-            runtime=self.pool.worker_runtimes[0],
-            preemptible=self.pool.worker_preemptible,
+            cpu_millicores=self.unit.worker_cpu_millicores,
+            memory_mib=self.unit.worker_memory_mib,
+            gpu_type=self.unit.worker_gpu_type,
+            gpu_count=self.unit.worker_gpu_count,
+            runtime=self.unit.worker_runtimes[0],
+            preemptible=self.unit.worker_preemptible,
         )
         try:
             result = self.compute.ensure_capacity(
@@ -457,7 +462,7 @@ class ComputePoolCapacityController:
                 minimum_unit=minimum_unit,
             )
         except Exception:
-            LOGGER.exception("compute pool sizing failed for %s", self.pool.name)
+            LOGGER.exception("compute pool sizing failed for %s", self.unit.name)
             return plan.model_copy(
                 update={
                     "action": WorkerPoolSizingAction.Wait,
@@ -700,7 +705,7 @@ class RedisCapacityReservationRepository:
         self,
         *,
         capacity_owner_id: str,
-        pool_name: str,
+        pool: MachinePool,
         owner_kind: CapacityOwnerKind,
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
@@ -728,7 +733,7 @@ class RedisCapacityReservationRepository:
             reservation = CapacityProvisioningReservation(
                 id=reservation_id,
                 capacity_owner_id=capacity_owner_id,
-                pool_name=pool_name,
+                pool=pool,
                 owner_kind=owner_kind,
                 acquisition_shape=shape,
                 operation_id=reservation_id,
@@ -997,24 +1002,6 @@ class CapacityReservationService:
     def can_acquire(self, request: SchedulerWorkerRequest) -> bool:
         return self._controller_for_request(request) is not None
 
-    def resolve_request(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
-        controller = self._controller_for_request(request)
-        if controller is None:
-            return request
-        if request.capacity_owner_id and request.capacity_owner_id != controller.capacity_owner_id:
-            raise ValueError("request capacity owner does not match its selected pool")
-        if (
-            request.capacity_owner_id == controller.capacity_owner_id
-            and request.pool_selector == controller.pool_name
-        ):
-            return request
-        return request.model_copy(
-            update={
-                "pool_selector": controller.pool_name,
-                "capacity_owner_id": controller.capacity_owner_id,
-            }
-        )
-
     def acquire(
         self,
         request: SchedulerWorkerRequest,
@@ -1025,27 +1012,50 @@ class CapacityReservationService:
         if not controllers:
             return _unsupported_result(request, "no capacity owner accepts the request")
         current_time = now or utc_now()
-        strict = bool(request.capacity_owner_id) or _request_has_strict_pool(request)
         last_result: CapacityAcquisitionResult | None = None
-        for controller in controllers:
+        contention: CapacityReservationConflictError | None = None
+        for index, controller in enumerate(controllers):
+            remaining = controllers[index + 1 :]
             try:
                 result = self._acquire_from_controller(
                     request,
                     controller,
                     now=current_time,
                 )
+            except CapacityReservationConflictError as exc:
+                # Another scheduler holds this unit's mutation lease. Trying the
+                # next unit is worth doing, but the contention has to survive the
+                # loop: if no unit serves the request, the caller requeues on
+                # this signal rather than being told no capacity exists.
+                contention = contention or exc
+                continue
             except Exception:
-                if strict:
-                    raise
+                # One broken owner must not sink a request other owners can
+                # serve, but a unit that fails every attempt would otherwise be
+                # indistinguishable from one that never accepted the request.
+                LOGGER.exception(
+                    "capacity owner %s failed to serve container %s; trying the next candidate",
+                    controller.capacity_owner_id,
+                    request.container_id,
+                )
                 continue
             last_result = result
-            if strict or result.status in {
+            if result.status in {
                 CapacityAcquisitionStatus.ExistingPending,
                 CapacityAcquisitionStatus.Requested,
             }:
                 return result
-            self._release_failed_failover_allocation(result, request, now=current_time)
-        return last_result or _unsupported_result(
+            if remaining:
+                # Only what we are abandoning. With no candidate left the claim
+                # is the answer: releasing it here would mint a fresh one on the
+                # next attempt and churn reservations for as long as the pool
+                # stays full, instead of holding one and waiting for it to drain.
+                self._release_failed_failover_allocation(result, request, now=current_time)
+        if last_result is not None:
+            return last_result
+        if contention is not None:
+            raise contention
+        return _unsupported_result(
             request,
             "all compatible capacity owners are unavailable",
         )
@@ -1079,7 +1089,7 @@ class CapacityReservationService:
                 )
             decision = self.reservations.reserve(
                 capacity_owner_id=controller.capacity_owner_id,
-                pool_name=controller.pool_name,
+                pool=controller.pool,
                 owner_kind=controller.owner_kind,
                 request=request,
                 shape=controller.reservation_shape(request),
@@ -1563,9 +1573,6 @@ class CapacityReservationService:
         ]
         if not candidates:
             return []
-        if request.capacity_owner_id or _request_has_strict_pool(request):
-            candidates.sort(key=lambda controller: controller.capacity_owner_id)
-            return candidates
         current_time = utc_now()
         candidates.sort(
             key=lambda controller: capacity_pool_selection_key(
@@ -1617,13 +1624,6 @@ def reservation_shape_for_request(
         runtime_classes=tuple(dict.fromkeys(runtime for runtime in worker_runtimes if runtime)),
         docker_enabled=request.docker_enabled,
         preemptible=worker_preemptible,
-    )
-
-
-def _request_has_strict_pool(request: SchedulerWorkerRequest) -> bool:
-    return (
-        bool(request.pool_selector)
-        and request.placement_source is ComputePlacementSource.AttachedPool
     )
 
 
@@ -1817,7 +1817,7 @@ __all__ = [
     "CapacityReservationVersionConflictError",
     "CapacityTerminalReason",
     "CapacityWorkerRepository",
-    "ComputePoolCapacityController",
+    "ComputeUnitCapacityController",
     "RedisCapacityReservationRepository",
     "reservation_matches_worker",
     "reservation_shape_for_request",

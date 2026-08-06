@@ -13,6 +13,7 @@ from database.repositories.usage_billing import (
     UsageBillingEvidenceRow,
     UsageMetadataScalar,
 )
+from pydantic import Field
 from shared.billing import (
     COMPUTE_PRICE_METRICS,
     BillableMetric,
@@ -20,6 +21,7 @@ from shared.billing import (
     BillingCoverageStatus,
     UsagePriceConfig,
 )
+from shared.contracts import ContractModel
 from shared.usage import (
     UsageBillingOwner,
     UsageMetric,
@@ -322,6 +324,22 @@ def configured_usage_price_catalog(
 
 
 _DERIVED_METRICS = COMPUTE_PRICE_METRICS
+
+
+class CustomerCloudManagementFeeRates(ContractModel):
+    """What LazyCloud charges to run a workload on the customer's own account.
+
+    The metrics these rates price — `CustomerCloudManagementSeconds` and
+    `CustomerCloudManagementCostCents` — are aggregated here but have no writer
+    anywhere in the repository. Charging for connected-cloud management is a
+    pricing decision that has not been made; the vocabulary is kept so that
+    making it is a change to one owner rather than a new subsystem.
+    """
+
+    vcpu_hourly_micros: int = Field(ge=0)
+    memory_gib_hourly_micros: int = Field(ge=0)
+
+
 _LINE_ORDER = {
     BillableMetric.CpuSeconds: 0,
     BillableMetric.MemoryGibSeconds: 1,

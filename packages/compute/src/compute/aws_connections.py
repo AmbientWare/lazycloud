@@ -9,7 +9,7 @@ from uuid import uuid4
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
-    ComputePoolRepository,
+    ComputeUnitRepository,
 )
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -25,7 +25,7 @@ from shared.aws_connections import (
     AwsAuthorizationCleanupStatus,
     AwsAuthorizationCleanupTombstone,
 )
-from shared.compute_policy import ComputePoolPhase
+from shared.compute_policy import ComputeUnitPhase
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -138,6 +138,10 @@ class AwsAccountConnectionReconcileBatch:
     failure_count: int = 0
 
 
+class AwsConnectionCapacityBaseline(Protocol):
+    def reconcile_workspace_baseline(self, workspace_id: str) -> None: ...
+
+
 @dataclass(slots=True)
 class AwsAccountConnectionService:
     context: ComputeContext
@@ -146,6 +150,7 @@ class AwsAccountConnectionService:
     authorization_lifecycle: AwsAccountAuthorizationLifecycle
     pool_drainer: AwsAccountPoolDrainer
     bucket_access_reconciler: AwsConnectionBucketAccessReconciler | None = None
+    capacity_baseline: AwsConnectionCapacityBaseline | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
     external_id_bytes: int = 48
     validation_lease_seconds: float = 300
@@ -601,6 +606,14 @@ class AwsAccountConnectionService:
             AwsAccountConnectionPhase.VerifyingRevocation,
         }:
             return self._reconcile_cleanup(claimed, now)
+        if claimed.phase is AwsAccountConnectionPhase.Ready and self.capacity_baseline is not None:
+            # The workspace policy is what decides how much warm capacity a
+            # workspace holds, and it is applied when the policy is written or
+            # at control-plane startup. A connection reaching Ready is the third
+            # moment that capacity can first become buildable, so without this
+            # a workspace that connects an account waits for its next policy
+            # write to get the baseline it already asked for.
+            self.capacity_baseline.reconcile_workspace_baseline(claimed.workspace_id)
         return self._release_unchanged_claim(claimed, now)
 
     def _reconcile_validation(self, claimed: AwsAccountConnection, now: datetime) -> bool:
@@ -878,9 +891,9 @@ class AwsAccountConnectionService:
     def _complete_connection_cleanup(self, claimed: AwsAccountConnection) -> bool:
         with self.context.database.session() as session:
             connections = AwsAccountConnectionRepository(session)
-            pools = ComputePoolRepository(session)
+            pools = ComputeUnitRepository(session)
             dependent = pools.list_for_provider_connection(claimed.id)
-            if any(pool.phase is not ComputePoolPhase.Deleted for pool in dependent):
+            if any(pool.phase is not ComputeUnitPhase.Deleted for pool in dependent):
                 raise ConflictError("AWS account connection still has active compute pools")
             for pool in dependent:
                 pools.records.delete(pool.id, workspace_id=pool.workspace_id)

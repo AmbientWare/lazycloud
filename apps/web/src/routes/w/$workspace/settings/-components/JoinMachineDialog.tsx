@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { PoolMachine } from "@/lib/api/schemas";
+import type { UnitMachine } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/compute";
 import { cn } from "@/lib/utils";
@@ -130,7 +130,7 @@ function JoinProgress({
 }: {
   command: string;
   expiresAt: string;
-  machine: PoolMachine | undefined;
+  machine: UnitMachine | undefined;
 }) {
   const ready = machine?.readiness_phase === "ready";
   const blocked = machine?.readiness_phase === "blocked";
@@ -249,10 +249,10 @@ function ProgressRow({
 }
 
 function findJoinedMachine(
-  machines: PoolMachine[],
+  machines: UnitMachine[],
   baselineMachineIds: ReadonlySet<string>,
   generatedAt: number | null,
-): PoolMachine | undefined {
+): UnitMachine | undefined {
   if (generatedAt === null) return undefined;
   return machines
     .filter((machine) => {

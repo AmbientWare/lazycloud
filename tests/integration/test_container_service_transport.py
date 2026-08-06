@@ -17,6 +17,7 @@ from scheduler.state import (
     SchedulerContainerState,
 )
 from shared.bytes_transport import encode_bytes
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from worker.container_client.control import (
@@ -88,7 +89,7 @@ class _ReadyRouteResolver:
         return AgentBackendRoute(
             route_id=route_id,
             workspace_id="workspace-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             machine_id="machine-1",
             worker_id="worker-1",
             proxy_target="worker.internal:8910",

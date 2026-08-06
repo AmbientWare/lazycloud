@@ -10,8 +10,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
-    Text,
     UniqueConstraint,
     text,
 )
@@ -21,28 +21,48 @@ from sqlalchemy.sql.schema import SchemaItem
 from database.tables.base import DatabaseBase, IdPayloadTable, json_type, uuid_type
 
 
-class ComputePoolTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_pools"
+class ComputeUnitTable(IdPayloadTable, DatabaseBase):
+    __tablename__ = "compute_units"
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("workspace_id", "name", name="uq_compute_pools_workspace_name"),
-        UniqueConstraint("capacity_owner_id", name="uq_compute_pools_capacity_owner_id"),
-        Index("ix_compute_pools_workspace_name", "workspace_id", "name"),
+        UniqueConstraint("workspace_id", "name", name="uq_compute_units_workspace_name"),
+        UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
+        Index("ix_compute_units_workspace_pool", "workspace_id", "pool"),
         Index(
-            "uq_compute_pools_internal_placement",
+            "uq_compute_units_internal_placement",
             "workspace_id",
             "provider_ref",
             "region",
             "capability_key",
+            "root_volume_gib",
             unique=True,
             postgresql_where=text("visibility = 'internal' AND provider_ref <> ''"),
             sqlite_where=text("visibility = 'internal' AND provider_ref <> ''"),
         ),
         CheckConstraint(
             "min_machines >= 0 AND desired_machines >= min_machines "
-            "AND max_machines >= desired_machines AND observed_machines >= 0",
-            name="ck_compute_pools_machine_capacity",
+            "AND max_machines >= desired_machines AND observed_machines >= 0 "
+            "AND initial_machines >= min_machines AND max_machines >= initial_machines",
+            name="ck_compute_units_machine_capacity",
         ),
-        CheckConstraint("generation > 0", name="ck_compute_pools_generation"),
+        CheckConstraint("generation > 0", name="ck_compute_units_generation"),
+        CheckConstraint(
+            "min_free_cpu_millicores >= 0 AND min_free_memory_mib >= 0 "
+            "AND min_free_gpu_count >= 0 AND worker_cpu_millicores >= 0 "
+            "AND worker_memory_mib >= 0 AND worker_gpu_count >= 0",
+            name="ck_compute_units_worker_shape",
+        ),
+        CheckConstraint(
+            "(worker_gpu_type = '' AND worker_gpu_count = 0) "
+            "OR (worker_gpu_type <> '' AND worker_gpu_count > 0)",
+            name="ck_compute_units_worker_gpu",
+        ),
+        CheckConstraint(
+            "idle_drain_timeout_seconds BETWEEN 60 AND 86400 "
+            "AND scale_up_cooldown_seconds BETWEEN 0 AND 86400 "
+            "AND scale_down_cooldown_seconds BETWEEN 0 AND 86400 "
+            "AND registration_timeout_seconds BETWEEN 30 AND 3600",
+            name="ck_compute_units_lifecycle_timeouts",
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -54,6 +74,8 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
     capacity_owner_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     capacity_owner_source: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(240), nullable=False)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     selector: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(80), nullable=False, default="active")
     source: Mapped[str] = mapped_column(String(80), nullable=False, default="autosolver")
@@ -70,6 +92,7 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
     offer_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     capability_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     desired_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    initial_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     min_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     max_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     observed_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -80,6 +103,26 @@ class ComputePoolTable(IdPayloadTable, DatabaseBase):
         nullable=False,
         default=dict,
     )
+    scaling_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    default_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_free_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_free_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_free_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_gpu_type: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    worker_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_runtimes: Mapped[list[str]] = mapped_column(json_type, nullable=False)
+    worker_preemptible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    idle_drain_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    scale_up_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    scale_down_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    registration_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    workspace_machine_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    root_volume_gib: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
+    transport: Mapped[str] = mapped_column(String(32), nullable=False, default="tsnet_restricted")
+    fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
 
 
 class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
@@ -98,39 +141,11 @@ class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
         nullable=False,
     )
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-    default_placement: Mapped[str] = mapped_column(
-        String(32),
+    default_pool: Mapped[str] = mapped_column(
+        String(240),
         nullable=False,
-        default="managed",
+        default="lazycloud",
     )
-
-
-class ComputeCapacityRequestTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_capacity_requests"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_capacity_requests_workspace_status", "workspace_id", "status"),
-    )
-
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    pool_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    stub_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("stubs.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    source: Mapped[str] = mapped_column(String(80), nullable=False)
-    max_spend_micros: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    ttl_seconds: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    status: Mapped[str] = mapped_column(String(80), nullable=False, default="active")
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
@@ -153,7 +168,7 @@ class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
     )
     pool_id: Mapped[str] = mapped_column(
         uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
+        ForeignKey("compute_units.id", ondelete="CASCADE"),
         nullable=False,
     )
     capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
@@ -188,12 +203,7 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
 
     pool_id: Mapped[str | None] = mapped_column(
         uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    capacity_request_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_capacity_requests.id", ondelete="SET NULL"),
+        ForeignKey("compute_units.id", ondelete="CASCADE"),
         nullable=True,
     )
     provider: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -220,77 +230,6 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
     )
 
 
-class ComputeSolverRunTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_solver_runs"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_solver_runs_workspace_created", "workspace_id", "created_at"),
-    )
-
-    workspace_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    pool_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    feasible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ComputeSolverDecisionTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_solver_decisions"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_solver_decisions_run", "solver_run_id"),
-    )
-
-    solver_run_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_solver_runs.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    action: Mapped[str] = mapped_column(String(80), nullable=False)
-    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    offer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    reservation_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_provider_instances.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    cost_micros: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ComputeLedgerTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "compute_ledger"
-    __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_compute_ledger_workspace_created", "workspace_id", "created_at"),
-    )
-
-    workspace_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    pool_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_pools.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    reservation_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_provider_instances.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    source: Mapped[str] = mapped_column(String(80), nullable=False)
-    amount_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "compute_join_credentials"
     __table_args__: tuple[SchemaItem, ...] = (
@@ -300,9 +239,9 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_join_credentials_use_count",
         ),
         Index(
-            "ix_compute_join_credentials_workspace_pool_status",
+            "ix_compute_join_credentials_workspace_owner_status",
             "workspace_id",
-            "pool_name",
+            "capacity_owner_id",
             "status",
         ),
     )
@@ -312,7 +251,8 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
     )
-    pool_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by_token_id: Mapped[str | None] = mapped_column(
         uuid_type,
@@ -331,13 +271,11 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
             "workspace_id",
-            "pool_name",
             "machine_id",
             name="uq_compute_machine_enrollments_machine",
         ),
         UniqueConstraint(
             "workspace_id",
-            "pool_name",
             "machine_fingerprint_hash",
             name="uq_compute_machine_enrollments_fingerprint",
         ),
@@ -354,9 +292,9 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_machine_enrollments_capacity_state",
         ),
         Index(
-            "ix_compute_machine_enrollments_workspace_pool_status",
+            "ix_compute_machine_enrollments_workspace_owner_status",
             "workspace_id",
-            "pool_name",
+            "capacity_owner_id",
             "status",
         ),
     )
@@ -366,7 +304,8 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
     )
-    pool_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False)
     machine_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("machines.id", ondelete="CASCADE"),
@@ -439,6 +378,7 @@ class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
     )
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
     external_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False, default="aws")
     phase: Mapped[str] = mapped_column(String(32), nullable=False)
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     next_reconcile_at: Mapped[datetime | None] = mapped_column(

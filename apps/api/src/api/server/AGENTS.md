@@ -12,9 +12,14 @@ Workspace scope comes from bearer authentication, and the override is available
 only to callers authorized to use it. Authorization belongs in the dependency
 that every route shares, not in the routes that remembered to ask.
 
-Compute pools are internal capacity rather than a customer concept, so every
-`/api/v1/pools` route requires `admin_access` and takes its workspace from the
-request instead of the caller's token. Customers reach their own hardware
+Provisioning units are internal capacity rather than a customer concept, so
+every `/api/v1/units` route requires `admin_access` and takes its workspace from
+the request instead of the caller's token. Customers reach their own hardware
 through compute policy, compute instances, and machine join. An operator route
 that read workspace from the bearer token would let a customer-triggered delete
 strand provider capacity nothing durable can name.
+
+Units are addressed by id, never by name. `pool` names the scheduling pool a
+workload asks for, and several units feed one pool; a route keyed on a name
+could resolve a unit through a value that meant a pool, which is how the two
+were confused before they were separated.

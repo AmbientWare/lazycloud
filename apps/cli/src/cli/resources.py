@@ -19,25 +19,27 @@ from lazycloud.cli.resources import container_attach, container_checkpoint
 from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
 from pydantic import JsonValue
+from shared.compute_policy import MachinePool
 from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
     MachineCreateRequest,
-    PoolCreateRequest,
-    PoolJoinCommandRequest,
+    MachineJoinCommandRequest,
+    UnitCreateRequest,
+    UnitJoinCommandRequest,
+    UnitJoinTokenRequest,
 )
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
 from cli.api_client import admin_api_client
 from cli.components.terminal import print_stream_message
-from cli.parameters import parse_key_values
 
 queue_app = typer.Typer(help="Manage queues.")
 map_app = typer.Typer(help="Manage durable maps.")
 worker_app = typer.Typer(help="Manage worker records.")
 container_app = typer.Typer(help="Manage containers.")
-pool_app = typer.Typer(help="Manage workspace compute pools and capacity.")
+unit_app = typer.Typer(help="Manage workspace provisioning units and capacity.")
 
 
 def _queue_client() -> SimpleQueueControlClient:
@@ -319,13 +321,14 @@ def container_stop(
         console.print(f"stopped container {item.id}")
 
 
-def pool_create(
+def unit_create(
     ctx: typer.Context,
     name: str,
+    pool: Annotated[str, typer.Option("--pool")] = "",
     provider: Annotated[str, typer.Option("--provider")] = "agent",
-    initial_workers: Annotated[int, typer.Option("--initial-workers", min=0)] = 0,
-    min_workers: Annotated[int, typer.Option("--min-workers", min=0)] = 0,
-    max_workers: Annotated[int, typer.Option("--max-workers", min=0)] = 1,
+    initial_machines: Annotated[int, typer.Option("--initial-machines", min=0)] = 0,
+    min_machines: Annotated[int, typer.Option("--min-machines", min=0)] = 0,
+    max_machines: Annotated[int, typer.Option("--max-machines", min=0)] = 1,
     scaling_enabled: Annotated[bool, typer.Option("--scaling-enabled")] = False,
     default_eligible: Annotated[bool, typer.Option("--default-eligible")] = False,
     worker_cpu_millicores: Annotated[
@@ -348,15 +351,15 @@ def pool_create(
         int,
         typer.Option("--registration-timeout", min=30, max=3_600),
     ] = 600,
-    labels: Annotated[list[str] | None, typer.Option("--label")] = None,
 ) -> None:
-    response = admin_api_client().create_pool(
-        PoolCreateRequest(
+    response = admin_api_client().create_unit(
+        UnitCreateRequest(
             name=name,
+            pool=MachinePool(pool),
             provider=provider,
-            initial_workers=initial_workers,
-            min_workers=min_workers,
-            max_workers=max_workers,
+            initial_machines=initial_machines,
+            min_machines=min_machines,
+            max_machines=max_machines,
             scaling_enabled=scaling_enabled,
             default_eligible=default_eligible,
             worker_cpu_millicores=worker_cpu_millicores,
@@ -367,29 +370,29 @@ def pool_create(
             worker_preemptible=worker_preemptible,
             idle_drain_timeout_seconds=idle_drain_timeout_seconds,
             registration_timeout_seconds=registration_timeout_seconds,
-            labels=parse_key_values(labels or []),
         )
     )
     print_payload(ctx, response.model_dump(mode="json"))
 
 
-def pool_list(ctx: typer.Context) -> None:
-    records = admin_api_client().list_pools().pools
+def unit_list(ctx: typer.Context) -> None:
+    records = admin_api_client().list_units().pools
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
         return
     console.print(
         table(
             "Pools",
-            ["name", "provider", "owner", "initial", "min", "max", "scaling"],
+            ["name", "pool", "provider", "owner", "initial", "min", "max", "scaling"],
             [
                 [
                     item.name,
+                    item.pool,
                     item.provider,
                     item.capacity_owner_id,
-                    str(item.initial_workers),
-                    str(item.min_workers),
-                    str(item.max_workers),
+                    str(item.initial_machines),
+                    str(item.min_machines),
+                    str(item.max_machines),
                     str(item.scaling_enabled),
                 ]
                 for item in records
@@ -398,17 +401,17 @@ def pool_list(ctx: typer.Context) -> None:
     )
 
 
-def pool_delete(name: str) -> None:
-    admin_api_client().delete_pool(name)
-    console.print(f"deleted pool {name}")
+def unit_delete(unit_id: str) -> None:
+    admin_api_client().delete_unit(unit_id)
+    console.print(f"deleted unit {unit_id}")
 
 
-def pool_clear_degraded(
+def unit_clear_degraded(
     ctx: typer.Context,
-    name: str,
+    unit_id: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = admin_api_client(workspace).clear_pool_degradation(name)
+    response = admin_api_client(workspace).clear_unit_degradation(unit_id)
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
@@ -419,16 +422,42 @@ def pool_clear_degraded(
     )
 
 
+def pool_join_token(
+    ctx: typer.Context,
+    pool: Annotated[str, typer.Option("--pool")] = "",
+    ttl: Annotated[str, typer.Option("--ttl")] = "",
+) -> None:
+    """Mint a single-use join credential for a pool, creating its unit if new.
+
+    Names a pool, not a unit: the capacity owner is found or created server-side,
+    so nothing has to exist before the first host joins.
+    """
+    response = admin_api_client().create_pool_join_token(
+        MachineJoinCommandRequest(pool=MachinePool(pool), ttl=ttl)
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
+def unit_join_token(
+    ctx: typer.Context,
+    unit_id: str,
+    ttl: Annotated[str, typer.Option("--ttl")] = "",
+) -> None:
+    """Mint a single-use join credential for the unit's pool."""
+    response = admin_api_client().create_unit_join_token(unit_id, UnitJoinTokenRequest(ttl=ttl))
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
 def pool_join(
     ctx: typer.Context,
-    name: str,
+    unit_id: str,
     ttl: Annotated[str, typer.Option("--ttl")] = "",
     agent_bin: Annotated[str, typer.Option("--agent-bin")] = "",
     executor: Annotated[str, typer.Option("--executor")] = "",
     worker_image: Annotated[str, typer.Option("--worker-image")] = "",
     print_only: Annotated[bool, typer.Option("--print-only")] = False,
 ) -> None:
-    response = admin_api_client().pool_join_command(name, PoolJoinCommandRequest(ttl=ttl))
+    response = admin_api_client().unit_join_command(unit_id, UnitJoinCommandRequest(ttl=ttl))
     command = build_pool_join_command(
         response.command,
         agent_bin=agent_bin,
@@ -456,7 +485,6 @@ def pool_join(
 
 def machine_create(
     ctx: typer.Context,
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
     provider: Annotated[str, typer.Option("--provider")] = "local",
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
@@ -464,7 +492,6 @@ def machine_create(
 ) -> None:
     response = admin_api_client().create_machine(
         MachineCreateRequest(
-            pool=pool_name,
             provider=provider,
             cpu=cpu,
             memory=memory,
@@ -522,7 +549,7 @@ def worker_list(ctx: typer.Context) -> None:
             [
                 [
                     item.id,
-                    item.pool_name,
+                    item.pool,
                     item.machine_id,
                     item.status,
                     str(item.free_cpu),
@@ -570,17 +597,19 @@ container_app.command("attach")(container_attach)
 container_app.command("checkpoint")(container_checkpoint)
 
 
-pool_app.command("create")(pool_create)
-pool_app.command("list")(pool_list)
-pool_app.command("delete")(pool_delete)
-pool_app.command("join")(pool_join)
-pool_app.command(
+unit_app.command("create")(unit_create)
+unit_app.command("list")(unit_list)
+unit_app.command("delete")(unit_delete)
+unit_app.command("join")(pool_join)
+unit_app.command("join-token")(unit_join_token)
+unit_app.command(
     "clear-degraded",
     help="Let a pool that exhausted its relaunch attempts buy machines again.",
-)(pool_clear_degraded)
+)(unit_clear_degraded)
 
 
 def register_machine_extensions(group: typer.Typer) -> None:
+    group.command("join-token")(pool_join_token)
     group.command("create")(machine_create)
     group.command("delete")(machine_delete)
     group.command("cordon")(machine_cordon)
@@ -591,8 +620,8 @@ def register_machine_extensions(group: typer.Typer) -> None:
 __all__ = [
     "container_app",
     "map_app",
-    "pool_app",
     "queue_app",
     "register_machine_extensions",
+    "unit_app",
     "worker_app",
 ]

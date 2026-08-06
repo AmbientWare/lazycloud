@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import secrets
 
-from shared.compute_policy import ComputePlacementTarget
-
 from lazycloud import App, Image
 
 REQUESTED_CORES = 0.125
@@ -100,5 +98,4 @@ bounded_workload = app.function(
     memory=REQUESTED_MEMORY,
     disk=REQUESTED_DISK,
     timeout_seconds=600,
-    placement=ComputePlacementTarget.Aws,
 )

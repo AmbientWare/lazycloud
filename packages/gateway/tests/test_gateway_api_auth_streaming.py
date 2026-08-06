@@ -23,6 +23,10 @@ from scheduler.state import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
 )
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.contracts import ContractModel
 from shared.events import EventLevel
 from shared.identity import AuthScope, TokenKind
@@ -182,12 +186,12 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
     admin_token = _offline_admin_token(isolated_services, "compute-projection")
     workspace = ControlPlaneService(isolated_services.context).upsert_workspace("compute-team")
 
-    isolated_services.compute.create_pool("default-pool")
-    isolated_services.compute.create_pool("team-pool", workspace=workspace.id)
-    isolated_services.compute.create_machine(pool="team-pool", workspace=workspace.id)
+    isolated_services.compute.create_unit(UnitName("default-pool"))
+    isolated_services.compute.create_unit(UnitName("team-pool"), workspace=workspace.id)
+    isolated_services.compute.create_machine(pool=MachinePool("team-pool"), workspace=workspace.id)
 
     pools = client.get(
-        f"/api/v1/pools?workspace={workspace.id}",
+        f"/api/v1/units?workspace={workspace.id}",
         headers=_auth(admin_token),
     )
     machines = client.get(
@@ -209,7 +213,7 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
         kind=TokenKind.Workspace,
     )
     denied = client.get(
-        f"/api/v1/pools?workspace={workspace.id}",
+        f"/api/v1/units?workspace={workspace.id}",
         headers=_auth(workspace_token),
     )
     assert denied.status_code == 403

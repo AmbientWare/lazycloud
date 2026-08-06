@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from shared.compute_enrollment import TailnetCleanupTombstone
+from shared.compute_policy import MachinePool
 
 from networking.tailnet_control import (
     TailnetControlError,
@@ -23,7 +24,7 @@ class TailnetCleanupStore(Protocol):
         self,
         *,
         workspace_id: str,
-        pool_name: str,
+        pool: MachinePool,
         machine_id: str,
         generations: list[int],
         auth_key_ids: list[str],
@@ -100,7 +101,7 @@ class TailnetCleanupCoordinator:
         self,
         *,
         workspace_id: str,
-        pool_name: str,
+        pool: MachinePool,
         machine_id: str,
         generations: tuple[int, ...],
         auth_key_ids: tuple[str, ...],
@@ -115,7 +116,7 @@ class TailnetCleanupCoordinator:
         not_before = max(current, key_expiry) + timedelta(seconds=max(self.settle_seconds, 1))
         self.store.schedule(
             workspace_id=workspace_id,
-            pool_name=pool_name,
+            pool=pool,
             machine_id=machine_id,
             generations=list(generations),
             auth_key_ids=list(auth_key_ids),

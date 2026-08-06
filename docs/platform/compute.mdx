@@ -1,6 +1,6 @@
 ---
-title: "Compute and placement"
-description: "Managed compute, your connected AWS account, self-hosted machines, and workload placement."
+title: "Compute and pools"
+description: "LazyCloud compute, your connected AWS account, self-hosted machines, and pools."
 ---
 
 Workspaces schedule workloads onto three kinds of compute:
@@ -11,23 +11,29 @@ Workspaces schedule workloads onto three kinds of compute:
 3. **Self-hosted machines** — servers you own, joined to the workspace with
    an agent.
 
-## Placement
+## Pools
 
-Every workload accepts `placement="managed"` or `placement="aws"`; the CLI
-equivalents are `--placement managed|aws` on `deploy`, `run`, `serve`,
-`shell`, and `dev`. Omit it to use the workspace's default placement.
+A workload names the pool it runs in with `pool="..."`; the CLI equivalent is
+`--pool` on `deploy`, `run`, `serve`, `shell`, and `dev`. Omit it to use the
+workspace's default pool. `lazycloud` is the platform's own fleet, and `aws`
+is the default pool for a connected account.
+
+Naming a pool creates it. A pool may be fed by several sources at once — an
+auto-scaling group in each of two regions and machines you joined yourself —
+and the control plane arbitrates between them, failing over when one is full
+or unhealthy.
 
 ```python
-@app.function(gpu="a10g", gpu_count=1, placement="aws")
+@app.function(gpu="a10g", gpu_count=1, pool="aws")
 def train(step: int) -> float: ...
 ```
 
 Inspect what the workspace is doing:
 
 ```bash
-lazycloud compute status       # placement summary and capacity
+lazycloud compute status       # default pool and capacity
 lazycloud compute instances    # running instances
-lazycloud compute workloads    # workloads and where they are placed
+lazycloud compute workloads    # workloads and the pool each runs in
 ```
 
 ## Connected cloud (AWS)
@@ -67,12 +73,12 @@ Connection lifecycle commands:
 
 ## Compute policy
 
-Workspace guardrails cap what connected-cloud placement may launch:
+Workspace guardrails cap what connected-cloud capacity may launch:
 
 ```bash
 lazycloud compute policy show
 lazycloud compute policy update \
-  --default-placement aws \
+  --default-pool aws \
   --default-region us-east-1 \
   --max-cpu 64 --max-gpu 8 \
   --allowed-region us-east-1 --allowed-region us-west-2 \

@@ -7,7 +7,7 @@ import pytest
 from shared.http.gateway import DeployStubResponse
 from tests.fakes import FakeDeploymentClient
 
-from lazycloud import App, ComputePlacementTarget
+from lazycloud import App
 
 
 def test_app_deploy_forwards_source_root_to_function_deployment(
@@ -46,8 +46,8 @@ def test_app_deploy_forwards_source_root_to_function_deployment(
     assert source_roots == [tmp_path]
 
 
-def test_app_deploy_applies_placement_to_every_deployable_resource() -> None:
-    app = App("placement_deploy")
+def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
+    app = App("pool_deploy")
     deployments = FakeDeploymentClient(stub_id_from_type=True)
 
     function = app.function(lambda: "function", name="function")
@@ -72,7 +72,7 @@ def test_app_deploy_applies_placement_to_every_deployable_resource() -> None:
 
     result = app.deploy(
         workspace="production",
-        placement=ComputePlacementTarget.Aws,
+        pool="aws",
     )
 
     assert len(result.resources) == 5
@@ -84,28 +84,27 @@ def test_app_deploy_applies_placement_to_every_deployable_resource() -> None:
         "asgi",
     }
     assert all(
-        request.workspace == "production" and request.placement is ComputePlacementTarget.Aws
+        request.workspace == "production" and request.pool == "aws"
         for request in deployments.stub_requests
     )
 
 
-def test_app_deploy_placement_only_changes_the_selected_resource() -> None:
-    app = App("selected_placement")
+def test_app_deploy_pool_only_changes_the_selected_resource() -> None:
+    app = App("selected_pool")
     deployments = FakeDeploymentClient(stub_id_from_type=True)
     function = app.function(
         lambda: "function",
         name="function",
-        placement=ComputePlacementTarget.Managed,
     )
-    pod = app.pod(name="pod", placement=ComputePlacementTarget.Managed)
+    pod = app.pod(name="pod", pool="lazycloud")
     function.deployment_client = deployments
 
     app.deploy(
         resource="function:function",
-        placement=ComputePlacementTarget.Aws,
+        pool="aws",
     )
 
-    assert function.placement is ComputePlacementTarget.Aws
-    assert pod.placement is ComputePlacementTarget.Managed
+    assert function.pool == "aws"
+    assert pod.pool == "lazycloud"
     assert len(deployments.stub_requests) == 1
-    assert deployments.stub_requests[0].placement is ComputePlacementTarget.Aws
+    assert deployments.stub_requests[0].pool == "aws"

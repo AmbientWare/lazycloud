@@ -35,7 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { AwsConnection, CustomerComputeInstance, PoolMachine } from "@/lib/api/schemas";
+import type { AwsConnection, CustomerComputeInstance, UnitMachine } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 import {
   awsConnectionQueryOptions,
@@ -651,7 +651,7 @@ function SelfHostedPanel({
   error,
   onJoin,
 }: {
-  machines: PoolMachine[];
+  machines: UnitMachine[];
   loading: boolean;
   error: Error | null;
   onJoin: () => void;

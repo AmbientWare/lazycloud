@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 import typer
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_policy import ComputePlacementTarget
+from shared.compute_policy import MachinePool
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.compute import (
     ContainerResponse,
@@ -39,7 +39,7 @@ machine_app = typer.Typer(help="Manage self-hosted machines.")
 cloud_app = typer.Typer(help="Connect and manage the workspace's cloud connection.")
 cloud_connect_app = typer.Typer(help="Connect a cloud provider account.")
 cloud_app.add_typer(cloud_connect_app, name="connect")
-compute_app = typer.Typer(help="Inspect workspace compute placement and capacity.")
+compute_app = typer.Typer(help="Inspect workspace compute pools and capacity.")
 compute_policy_app = typer.Typer(help="Inspect and update workspace compute guardrails.")
 compute_app.add_typer(compute_policy_app, name="policy")
 
@@ -55,7 +55,7 @@ def compute_status(
         return
     connection = response.connection
     rows: list[list[Any]] = [
-        ["default placement", response.policy.default_placement.value],
+        ["default pool", response.policy.default_pool],
         ["AWS account", connection.account_id if connection is not None else "not connected"],
         ["instances", str(response.instances.total)],
         ["ready", str(response.instances.ready)],
@@ -100,6 +100,29 @@ def compute_instances(
     )
 
 
+@compute_app.command("pools")
+def compute_units(
+    ctx: typer.Context,
+    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
+) -> None:
+    """List the machine pools this workspace can run workloads in."""
+    response = compute_client(workspace=workspace).pools()
+    if json_output_enabled(ctx):
+        print_payload(ctx, response.model_dump(mode="json"))
+        return
+    rows = [
+        [
+            item.name,
+            "yes" if item.is_default else "",
+            ", ".join(item.providers),
+            str(item.unit_count),
+            ", ".join(item.gpu_types),
+        ]
+        for item in response.data
+    ]
+    console.print(table("Compute pools", ["name", "default", "providers", "units", "gpus"], rows))
+
+
 @compute_app.command("workloads")
 def compute_workloads(
     ctx: typer.Context,
@@ -109,11 +132,8 @@ def compute_workloads(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    rows = [
-        [item.name, item.kind.value, item.placement.target.value, item.placement.region]
-        for item in response.data
-    ]
-    console.print(table("Compute workloads", ["name", "kind", "placement", "region"], rows))
+    rows = [[item.name, item.kind.value, str(item.pool)] for item in response.data]
+    console.print(table("Compute workloads", ["name", "kind", "pool"], rows))
 
 
 @compute_policy_app.command("show")
@@ -128,10 +148,7 @@ def compute_policy_show(
 @compute_policy_app.command("update")
 def compute_policy_update(
     ctx: typer.Context,
-    default_placement: Annotated[
-        ComputePlacementTarget | None,
-        typer.Option("--default-placement"),
-    ] = None,
+    default_pool: Annotated[str, typer.Option("--default-pool")] = "",
     default_region: Annotated[str | None, typer.Option("--default-region")] = None,
     default_instance_type: Annotated[
         str | None,
@@ -174,7 +191,7 @@ def compute_policy_update(
     current = client.policy()
     request = WorkspaceComputePolicyPatchRequest(
         expected_revision=current.revision,
-        default_placement=default_placement,
+        default_pool=default_pool,
         aws=AwsWorkspaceComputePolicyPatch(
             default_region=default_region,
             default_instance_type=default_instance_type,
@@ -656,6 +673,10 @@ def machine_list(
 def machine_join(
     ctx: typer.Context,
     ttl: Annotated[str, typer.Option("--ttl", help="Join token lifetime.")] = "",
+    pool: Annotated[
+        str,
+        typer.Option("--pool", help="Machine pool to join, created if new."),
+    ] = "",
     gpu: Annotated[
         list[str] | None,
         typer.Option("--gpu", help="GPU type this machine contributes."),
@@ -701,13 +722,14 @@ def machine_join(
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    """Join this machine to the workspace's self-hosted compute."""
+    """Join this machine to a machine pool in the workspace."""
     if gpu_ids and max_gpus:
         raise typer.BadParameter("--gpu-ids and --max-gpus cannot both be set")
 
     response = compute_client(workspace=workspace).machine_join_command(
         MachineJoinCommandRequest(
             ttl=ttl,
+            pool=MachinePool(pool),
             gpu=list(gpu or []),
         )
     )

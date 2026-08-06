@@ -5,7 +5,6 @@ from pathlib import Path
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
-from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityPoolPolicy
 
 
 class TcpIngressSettings(BaseSettings):
@@ -76,47 +75,7 @@ class AgentRouteReconciliationSettings(BaseSettings):
     )
 
 
-class CapacityBootstrapPool(CapacityPoolPolicy):
-    """One durable pool reconciled before the production API starts serving."""
-
-    name: str = Field(min_length=1, max_length=160)
-    workspace: str = Field(default="default", min_length=1, max_length=160)
-    provider: str = Field(default="local", min_length=1, max_length=160)
-    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    labels: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("name", "workspace", "provider")
-    @classmethod
-    def normalize_identity(cls, value: str) -> str:
-        return value.strip()
-
-
-class CapacityBootstrapSettings(BaseSettings):
-    pools: tuple[CapacityBootstrapPool, ...] = ()
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_CAPACITY_BOOTSTRAP_",
-        extra="ignore",
-    )
-
-    @field_validator("pools")
-    @classmethod
-    def require_unique_pool_owners(
-        cls,
-        pools: tuple[CapacityBootstrapPool, ...],
-    ) -> tuple[CapacityBootstrapPool, ...]:
-        identities = [(pool.workspace, pool.name) for pool in pools]
-        if len(identities) != len(set(identities)):
-            raise ValueError("capacity bootstrap pools must have unique workspace/name pairs")
-        owner_ids = [pool.capacity_owner_id for pool in pools]
-        if len(owner_ids) != len(set(owner_ids)):
-            raise ValueError("capacity bootstrap pools must have unique capacity owner ids")
-        return pools
-
-
 __all__ = [
     "AgentRouteReconciliationSettings",
-    "CapacityBootstrapPool",
-    "CapacityBootstrapSettings",
     "TcpIngressSettings",
 ]

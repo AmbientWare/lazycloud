@@ -9,7 +9,7 @@ from threading import Event, Thread
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
-from compute.projection import PrivatePoolState
+from compute.projection import PrivateUnitState
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
@@ -908,7 +908,7 @@ class Scheduler:
         self,
         *,
         now: datetime | None,
-    ) -> list[PrivatePoolState]:
+    ) -> list[PrivateUnitState]:
         if self.services is None:
             return []
         current_time = now or utc_now()
@@ -920,7 +920,8 @@ class Scheduler:
             return []
         self.last_managed_compute_reconcile_at = current_time
         try:
-            return self.runtime_services.compute.reconcile_provider_capacity(now=current_time)
+            self.runtime_services.compute.reconcile_pooled_capacity(now=current_time)
+            return []
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []
@@ -1159,7 +1160,7 @@ class SchedulerRunResult(ContractModel):
     pool_states: dict[str, WorkerPoolStateSnapshot] = Field(default_factory=dict)
     capacity_reservations: list[CapacityProvisioningReservation] = Field(default_factory=list)
     capacity_interruptions: list[WorkerPreemptionResult] = Field(default_factory=list)
-    managed_compute_reconciliations: list[PrivatePoolState] = Field(default_factory=list)
+    managed_compute_reconciliations: list[PrivateUnitState] = Field(default_factory=list)
     tailnet_cleanup_processed_count: int = 0
     tailnet_cleanup_completed_count: int = 0
     tailnet_cleanup_failure_count: int = 0
@@ -1208,11 +1209,11 @@ def _record_worker_pool_drain_observability(
         if (
             result.action is not WorkerPoolDrainAction.None_
             or result.drained_worker_ids
-            or event_signatures.get(result.pool_name) != signature
+            or event_signatures.get(result.pool) != signature
         ):
             data: dict[str, JsonValue] = {
                 "source": WORKER_POOL_DRAIN_SOURCE,
-                "pool_name": result.pool_name,
+                "pool": result.pool,
                 "action": result.action.value,
                 "machine_id": result.machine_id,
                 "desired_replicas": result.desired_replicas,
@@ -1225,13 +1226,13 @@ def _record_worker_pool_drain_observability(
             services.events.emit(
                 WORKER_POOL_DRAIN_DECISION_ACTION,
                 resource_type="worker_pool",
-                resource_id=result.pool_name,
+                resource_id=result.pool,
                 message="worker-pool drain selected desired capacity",
                 level=EventLevel.Warning if result.error else EventLevel.Info,
                 data=data,
             )
-        event_signatures[result.pool_name] = signature
-        labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool_name": result.pool_name}
+        event_signatures[str(result.pool)] = signature
+        labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool": str(result.pool)}
         services.metrics.increment(
             "worker_pool_drain_decisions_total",
             labels={

@@ -206,8 +206,6 @@ def _apply_common_overrides(target: Workload, overrides: DeploymentOverrides) ->
         target.gpu_count = overrides.gpu_count
     if overrides.pool is not None:
         target.pool = overrides.pool
-    if overrides.placement is not None:
-        target.placement = overrides.placement
     if overrides.dockerfile:
         target.image = Image.from_dockerfile(
             overrides.dockerfile,

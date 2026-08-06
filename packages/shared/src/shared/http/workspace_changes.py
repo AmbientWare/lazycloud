@@ -14,7 +14,7 @@ class WorkspaceChangeTopic(StringEnum):
     Workloads = "workloads"
     Tasks = "tasks"
     Containers = "containers"
-    ComputePools = "compute.pools"
+    ComputeUnits = "compute.units"
     ComputeMachines = "compute.machines"
     ComputeWorkers = "compute.workers"
     ComputeAgents = "compute.agents"

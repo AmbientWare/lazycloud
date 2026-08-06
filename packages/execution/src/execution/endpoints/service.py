@@ -207,7 +207,6 @@ class EndpointControlService:
                 gpu_type=config.runtime.requested_gpu_type,
                 gpu_count=config.runtime.gpu_count,
                 pool_selector=config.effective_pool_selector,
-                requested_placement=stub.config.placement,
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",
                 docker_enabled=config.runtime.docker_enabled,

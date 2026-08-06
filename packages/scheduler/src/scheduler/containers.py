@@ -230,8 +230,6 @@ class SchedulerCapacityReservations(Protocol):
         capacity_owner_id: str,
     ) -> AbstractContextManager[None]: ...
 
-    def resolve_request(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest: ...
-
     def can_acquire(self, request: SchedulerWorkerRequest) -> bool: ...
 
     def acquire(
@@ -448,7 +446,7 @@ class SchedulerContainerRequestService:
             try:
                 placed_claims.append(
                     SchedulerContainerRequestClaim(
-                        request=self._resolve_capacity_owner(self.placement.place(request)),
+                        request=self.placement.place(request),
                         token=claim.token,
                     )
                 )
@@ -580,14 +578,6 @@ class SchedulerContainerRequestService:
             )
         return results
 
-    def _resolve_capacity_owner(
-        self,
-        request: SchedulerWorkerRequest,
-    ) -> SchedulerWorkerRequest:
-        if self.capacity_reservations is None:
-            return request
-        return self.capacity_reservations.resolve_request(request)
-
     def _dispatch_registered_reservations(
         self,
         claims: list[SchedulerContainerRequestClaim],
@@ -621,7 +611,6 @@ class SchedulerContainerRequestService:
         except CapacityReservationConflictError as exc:
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.ExistingPending,
-                capacity_owner_id=request.capacity_owner_id,
                 reservation_id=request.container_id,
                 operation_id=request.container_id,
                 retry_delay_seconds=self.requeue_delay_seconds,
@@ -633,13 +622,12 @@ class SchedulerContainerRequestService:
             # what the acquisition rejected. Keep the caller's contract and put
             # the exception where it can be read.
             LOGGER.exception(
-                "capacity acquisition failed for container %s on capacity owner %s",
+                "capacity acquisition failed for container %s in pool %s",
                 request.container_id,
-                request.capacity_owner_id,
+                request.pool_selector,
             )
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.TemporarilyUnavailable,
-                capacity_owner_id=request.capacity_owner_id,
                 reservation_id=request.container_id,
                 operation_id=request.container_id,
                 retry_delay_seconds=DEFAULT_PROVISIONING_HANDOFF.total_seconds(),
@@ -767,10 +755,6 @@ class SchedulerContainerRequestService:
                     current_worker is None
                     or current_worker.status is not SchedulerWorkerStatus.Available
                     or current_worker.capacity_owner_id != capacity_owner_id
-                    or (
-                        claim.request.capacity_owner_id
-                        and claim.request.capacity_owner_id != capacity_owner_id
-                    )
                 ):
                     dispatch_result = self._requeue_capacity_owner_dispatch(
                         claim,
@@ -1103,7 +1087,6 @@ def _scheduling_request(
     )
     return SchedulingRequest(
         id=request.container_id,
-        capacity_owner_id=request.capacity_owner_id,
         queue=request.stub_id or "containers",
         payload=request.payload,
         cpu=cpu,
@@ -1136,7 +1119,7 @@ def _placement_failure_detail(
         return f"{reason}: no schedulable workers (pool selector {selector})"
     scheduling = _scheduling_request(request, provisionable=False)
     rejections = [
-        f"{worker.worker_id[:8]} in {worker.pool_name!r}: {detail}"
+        f"{worker.worker_id[:8]} in {worker.pool!r}: {detail}"
         for worker in workers[:3]
         if (detail := _worker_capacity(worker).fit_rejection(scheduling))
     ]
@@ -1153,7 +1136,7 @@ def _worker_capacity(
     reserved = reserved_capacity or WorkerReservedCapacity()
     return WorkerCapacity(
         worker_id=worker.worker_id,
-        pool=worker.pool_name,
+        pool=worker.pool,
         capacity_owner_id=worker.capacity_owner_id,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,

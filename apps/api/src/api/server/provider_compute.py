@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from compute.aws_connections import AwsAccountConnectionService, AwsAccountPoolDrainer
+from compute.aws_connections import (
+    AwsAccountConnectionService,
+    AwsAccountPoolDrainer,
+    AwsConnectionCapacityBaseline,
+)
 from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.context import ComputeContext
 from coordination.redis_client import RedisClient
@@ -140,17 +144,12 @@ def aws_account_connection_composition_from_settings(
     tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
     workspace_changes: WorkspaceChangePublisher,
+    capacity_baseline: AwsConnectionCapacityBaseline,
 ) -> AwsAccountConnectionComposition | None:
     # Connected AWS is an optional deployment shape, but a half-configured one is not:
     # the settings validator already rejected that, so absence here is genuine absence.
     if not connection_settings.configured:
         return None
-    # Credentials are a fact of the deployment, not of the settings, so the check
-    # belongs here rather than inside composition: a stack that mounts no AWS
-    # configuration must fail at startup instead of reporting healthy and failing
-    # every connection later, and composition must stay resolvable without an
-    # environment to read.
-    require_resolvable_aws_credentials()
     components = configured_aws_account_connection_components(
         connection_settings,
         capacity=capacity_settings,
@@ -171,6 +170,7 @@ def aws_account_connection_composition_from_settings(
         authorization_lifecycle=components.authorization_lifecycle,
         pool_drainer=pool_drainer,
         bucket_access_reconciler=bucket_access,
+        capacity_baseline=capacity_baseline,
         workspace_changes=workspace_changes,
         external_id_bytes=connection_settings.external_id_bytes,
         draft_ttl_seconds=connection_settings.draft_ttl_seconds,
@@ -183,9 +183,26 @@ def aws_account_connection_composition_from_settings(
     )
 
 
+def require_connected_aws_deployment_credentials(
+    connection_settings: AwsAccountConnectionSettings,
+) -> None:
+    """Refuse to start a connected-AWS deployment that mounts no credentials.
+
+    A startup precondition, not a step of composition: credentials resolve from
+    the ambient environment rather than from settings, and the service graph must
+    build from what it is handed. Checking here keeps that read at the process
+    entrypoint and still fails a stack that mounts nothing, instead of letting it
+    report healthy and fail every connection later.
+    """
+    if not connection_settings.configured:
+        return
+    require_resolvable_aws_credentials()
+
+
 __all__ = [
     "AwsAccountConnectionComposition",
     "BoundedProviderNodeIdentityHttpClient",
     "RedisProviderNodeIdentityReplayGuard",
     "aws_account_connection_composition_from_settings",
+    "require_connected_aws_deployment_credentials",
 ]

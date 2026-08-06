@@ -11,10 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from compute.offers import ComputeOffer
-from compute.providers import ProviderPoolBootstrap
+from compute.providers import ProviderUnitBootstrap
 from database.context import ServiceContext
 from networking.settings import TailnetControlSettings
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputeUnitRecord
 
 # A launch template version already in service keeps working for this long after
 # a refresh replaces it, so an instance that started from the previous version
@@ -41,11 +41,11 @@ class PoolBootstrapProvisioner:
 
     def bootstrap(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-    ) -> ProviderPoolBootstrap:
+    ) -> ProviderUnitBootstrap:
         del offer
-        return ProviderPoolBootstrap(
+        return ProviderUnitBootstrap(
             control_plane_url=self.control_plane_url,
             enrollment_request_id=pool.id,
             agent_version=self.agent_version,

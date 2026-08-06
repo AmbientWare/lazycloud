@@ -12,14 +12,16 @@ from shared.app_identity import MACHINE_ID_LABEL
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolProviderState,
-    ComputePoolRecord,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
+    MachinePool,
+    UnitName,
 )
 from shared.contracts import ContractModel
 from shared.urls import normalize_http_origin
 
 from compute.offers import ComputeOffer
-from compute.projection import PrivatePoolState
+from compute.projection import PrivateUnitState
 
 
 class ProviderMachineStatus:
@@ -55,7 +57,7 @@ class ProviderCapacityPhase(StrEnum):
     Deleted = "deleted"
 
 
-class ProviderPoolBootstrap(ContractModel):
+class ProviderUnitBootstrap(ContractModel):
     control_plane_url: str
     enrollment_request_id: str
     agent_version: str
@@ -69,10 +71,10 @@ class ProviderPoolBootstrap(ContractModel):
         return normalize_http_origin(value, field_name="control-plane URL")
 
 
-class ProviderPoolRequest(ContractModel):
+class ProviderUnitRequest(ContractModel):
     workspace_id: str
-    pool_id: str
-    pool_name: str
+    unit_id: str
+    unit_name: UnitName
     provider_ref: str
     provider_connection_id: str
     generation: int
@@ -80,11 +82,11 @@ class ProviderPoolRequest(ContractModel):
     desired_machines: int
     max_machines: int
     root_volume_gib: int = 200
-    bootstrap: ProviderPoolBootstrap
-    provider_state: ComputePoolProviderState = Field(default_factory=ComputePoolProviderState)
+    bootstrap: ProviderUnitBootstrap
+    provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
 
     @model_validator(mode="after")
-    def validate_pooled_capacity(self) -> ProviderPoolRequest:
+    def validate_pooled_capacity(self) -> ProviderUnitRequest:
         if self.offer.capacity_mode is not ComputeCapacityMode.Pooled:
             raise ValueError("pooled capacity requires a pooled provider offer")
         if self.desired_machines < 0:
@@ -96,7 +98,7 @@ class ProviderPoolRequest(ContractModel):
         return self
 
 
-class ProviderPoolInstance(ContractModel):
+class ProviderUnitInstance(ContractModel):
     provider_instance_id: str
     status: str = ProviderMachineStatus.Unknown
     address: str = ""
@@ -109,19 +111,19 @@ class ProviderPoolInstance(ContractModel):
     booted_template_version: str = ""
 
 
-class ProviderPoolSnapshot(ContractModel):
+class ProviderUnitSnapshot(ContractModel):
     phase: ProviderCapacityPhase
     resource_id: str = ""
     desired_machines: int = 0
     max_machines: int = 0
     observed_machines: int = 0
-    instances: list[ProviderPoolInstance] = Field(default_factory=list)
-    provider_state: ComputePoolProviderState = Field(default_factory=ComputePoolProviderState)
+    instances: list[ProviderUnitInstance] = Field(default_factory=list)
+    provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
 
 
 class DirectMachineLaunchRequest(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     registration_token: str
     machine_id: str
     operation_id: str
@@ -139,7 +141,7 @@ class DirectMachineProvider(Protocol):
 
     def reconcile_machines(
         self,
-        pool_name: str,
+        pool: MachinePool,
         expected_machine_ids: set[str],
         *,
         terminate_stale: bool = False,
@@ -169,29 +171,29 @@ class DirectMachineProviderRegistry(Protocol):
 class PooledCapacityProvider(Protocol):
     def list_offers(self) -> Iterable[ComputeOffer]: ...
 
-    def ensure_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot: ...
+    def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot: ...
 
-    def describe_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot: ...
+    def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot: ...
 
-    def set_pool_capacity(
+    def set_unit_capacity(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderPoolSnapshot: ...
+    ) -> ProviderUnitSnapshot: ...
 
     def release_machine(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
-    ) -> ProviderPoolSnapshot: ...
+    ) -> ProviderUnitSnapshot: ...
 
-    def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot: ...
+    def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot: ...
 
     def machine_storage_destroyed(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
         storage_volume_ids: tuple[str, ...],
     ) -> bool: ...
@@ -228,18 +230,59 @@ class ComputeProviderResolver(Protocol):
     def resolve(self, workspace_id: str, provider_ref: str) -> ResolvedComputeProvider: ...
 
 
-def internal_pool_identity(
+def internal_unit_identity(
     *,
     workspace_id: str,
     provider_ref: str,
     region: str,
     capability_key: str,
-) -> tuple[str, str]:
+    root_volume_gib: int,
+) -> tuple[str, UnitName]:
+    """Derive the durable id and name of one provisioning unit.
+
+    The seed is everything AWS pins to a single Auto Scaling group, root volume
+    included: the volume size feeds the launch template, so two units differing
+    only in it must not collide on one template.
+
+    The derived name reaches the ASG and launch-template names, so changing this
+    seed orphans the AWS resources of any unit created under the old one.
+    """
     identity = uuid5(
         NAMESPACE_URL,
-        "\0".join(("compute-pool", workspace_id, provider_ref, region, capability_key)),
+        "\0".join(
+            (
+                "compute-pool",
+                workspace_id,
+                provider_ref,
+                region,
+                capability_key,
+                str(root_volume_gib),
+            )
+        ),
     )
-    return str(identity), f"managed-{identity.hex[:24]}"
+    return str(identity), UnitName(f"managed-{identity.hex[:24]}")
+
+
+def joined_unit_identity(
+    *,
+    workspace_id: str,
+    pool: MachinePool,
+    provider: str,
+) -> tuple[str, UnitName]:
+    """Derive the durable id and name of one joined-capacity unit.
+
+    Machines reach this unit by joining rather than being bought, so the seed is
+    only what decides which fleet a host lands in: the workspace, the pool it
+    serves, and the kind of agent running it. Deriving rather than naming keeps
+    find-or-create idempotent across restarts, and keeps the name out of the
+    shape a pool label has — a unit called `lazycloud` sitting in pool
+    `lazycloud` is the ambiguity this whole vocabulary exists to prevent.
+    """
+    identity = uuid5(
+        NAMESPACE_URL,
+        "\0".join(("compute-joined", workspace_id, pool, provider)),
+    )
+    return str(identity), UnitName(f"joined-{identity.hex[:24]}")
 
 
 class MachineReferenceLike(Protocol):
@@ -247,11 +290,11 @@ class MachineReferenceLike(Protocol):
 
 
 class ComputeSchedulerHooks(Protocol):
-    def register_pool(self, state: PrivatePoolState) -> None: ...
+    def register_pool(self, state: PrivateUnitState) -> None: ...
 
     def register_machine(self, machine: Machine) -> None: ...
 
-    def register_internal_pool(self, pool: ComputePoolRecord, offer: ComputeOffer) -> None: ...
+    def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None: ...
 
     def disable_machine(self, machine_id: str, reason: str) -> None: ...
 
@@ -260,12 +303,11 @@ class ComputeSchedulerHooks(Protocol):
     def retire_machine(
         self,
         workspace_id: str,
-        pool_name: str,
         machine_id: str,
         reason: str,
     ) -> None: ...
 
-    def revoke_pool_join_token(self, token_hash: str) -> None: ...
+    def revoke_unit_join_token(self, token_hash: str) -> None: ...
 
 
 def provider_machine_status[StatusT: StrEnum](

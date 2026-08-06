@@ -22,6 +22,7 @@ from compute.telemetry import (
     validate_agent_telemetry_token,
 )
 from shared.app_identity import PRIVATE_RESOURCE_PREFIX
+from shared.compute_policy import MachinePool
 
 
 def test_scoped_telemetry_credentials_are_append_only_and_workspace_scoped() -> None:
@@ -126,7 +127,7 @@ def test_agent_liveness_and_disconnect_decisions_match_heartbeat_rules() -> None
     now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
     fresh = AgentTelemetryState(
         workspace_id="workspace",
-        pool_name="pool",
+        pool=MachinePool("pool"),
         machine_id="machine",
         last_heartbeat_at=now - timedelta(seconds=10),
     )

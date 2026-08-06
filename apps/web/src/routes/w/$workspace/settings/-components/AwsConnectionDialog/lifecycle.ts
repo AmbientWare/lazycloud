@@ -125,7 +125,7 @@ export function awsConnectionDialogActionPlan(
 }
 
 export function awsConnectionIsUsable(connection: AwsConnection): boolean {
-  return connection.accepts_placement || connection.can_manage_existing_capacity;
+  return connection.hosts_workloads || connection.can_manage_existing_capacity;
 }
 
 export function awsConnectionIsRemoving(connection: AwsConnection): boolean {

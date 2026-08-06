@@ -14,8 +14,8 @@ from coordination.redis_client import RedisClient
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeJoinCredentialRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
 )
 from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
@@ -27,9 +27,10 @@ from shared.aws_connections import (
 from shared.compute_enrollment import MachineBootstrapPhase
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolRecord,
-    ComputePoolVisibility,
+    ComputeUnitPhase,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
+    MachinePool,
 )
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -51,11 +52,11 @@ from gateway.service import GatewayControlService
 # refusal is itself recorded as another bootstrap failure, so the pool can never
 # recover without an operator, and the reports that would explain the original
 # failure are discarded exactly when they matter most.
-_ENROLLABLE_POOL_PHASES = {
-    ComputePoolPhase.Provisioning,
-    ComputePoolPhase.Ready,
-    ComputePoolPhase.Updating,
-    ComputePoolPhase.Degraded,
+_ENROLLABLE_UNIT_PHASES = {
+    ComputeUnitPhase.Provisioning,
+    ComputeUnitPhase.Ready,
+    ComputeUnitPhase.Updating,
+    ComputeUnitPhase.Degraded,
 }
 
 
@@ -87,7 +88,12 @@ class ProviderNodeEnrollmentService:
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
         )
-        join_token = self._issue_join_token(pool.id, pool.workspace_id, pool.name)
+        join_token = self._issue_join_token(
+            pool.id,
+            pool.workspace_id,
+            pool.pool,
+            pool.capacity_owner_id,
+        )
         joined = self.gateway.join_agent(
             JoinAgentRequest(
                 join_token=join_token.get_secret_value(),
@@ -107,7 +113,7 @@ class ProviderNodeEnrollmentService:
             )
         )
         try:
-            if joined.workspace_id != pool.workspace_id or joined.pool_name != pool.name:
+            if joined.workspace_id != pool.workspace_id or joined.pool != pool.pool:
                 raise ConflictError("provider node joined a different compute pool")
             with self.gateway.services.context.database.session() as session:
                 bound = ComputeProviderInstanceRepository(session).bind_machine(
@@ -244,7 +250,7 @@ class ProviderNodeEnrollmentService:
     def _verify_active_node(
         self,
         *,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         connection: AwsAccountConnection,
         provider: ProviderKind,
         region: str,
@@ -301,7 +307,7 @@ class ProviderNodeEnrollmentService:
             with suppress(Exception):
                 release_slot(redis, key, token)
 
-    def _known_instance_ids(self, pool: ComputePoolRecord) -> tuple[str, ...]:
+    def _known_instance_ids(self, pool: ComputeUnitRecord) -> tuple[str, ...]:
         """Instances this pool owns, from durable inventory.
 
         Read, never a provider call: this runs before the caller has proved who
@@ -311,7 +317,7 @@ class ProviderNodeEnrollmentService:
             records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         return tuple(record.instance_id for record in records if record.instance_id)
 
-    def _request_inventory_refresh(self, pool: ComputePoolRecord) -> bool:
+    def _request_inventory_refresh(self, pool: ComputeUnitRecord) -> bool:
         redis = self.rate_limiter
         if redis is None:
             return False
@@ -323,7 +329,7 @@ class ProviderNodeEnrollmentService:
         ):
             return False
         with suppress(Exception):
-            self.compute.describe_internal_pool(pool.workspace_id, pool.name)
+            self.compute.describe_internal_unit(pool.workspace_id, pool.name)
         return True
 
     def _enrollment_target(
@@ -333,17 +339,17 @@ class ProviderNodeEnrollmentService:
             | ProviderNodeBootstrapFailureRequest
             | ProviderNodeBootstrapPhaseRequest
         ),
-    ) -> tuple[ComputePoolRecord, AwsAccountConnection]:
+    ) -> tuple[ComputeUnitRecord, AwsAccountConnection]:
         if request.provider is not ProviderKind.Aws:
             raise InvalidInputError(f"unsupported provider node: {request.provider.value}")
         with self.gateway.services.context.database.session() as session:
-            pool = ComputePoolRepository(session).get(request.enrollment_request_id)
+            pool = ComputeUnitRepository(session).get(request.enrollment_request_id)
             if pool is None:
                 raise InvalidInputError("provider node enrollment request was not found")
             if (
-                pool.visibility is not ComputePoolVisibility.Internal
+                pool.visibility is not ComputeUnitVisibility.Internal
                 or pool.capacity_mode is not ComputeCapacityMode.Pooled
-                or pool.phase not in _ENROLLABLE_POOL_PHASES
+                or pool.phase not in _ENROLLABLE_UNIT_PHASES
                 or not pool.provider_ref.startswith("aws:")
                 or pool.provider_connection_id is None
                 or pool.region != request.region
@@ -354,7 +360,7 @@ class ProviderNodeEnrollmentService:
             connection is None
             or connection.id != pool.provider_ref.removeprefix("aws:")
             or connection.workspace_id != pool.workspace_id
-            or not connection.accepts_placement
+            or not connection.hosts_workloads
             or connection.active_authorization is None
             or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
         ):
@@ -363,33 +369,37 @@ class ProviderNodeEnrollmentService:
 
     def _issue_join_token(
         self,
-        pool_id: str,
+        unit_id: str,
         workspace_id: str,
-        pool_name: str,
+        pool: MachinePool,
+        capacity_owner_id: str,
     ) -> SecretStr:
         plan = plan_join_token_creation(
             ComputePrincipal(
                 workspace_id=workspace_id,
-                owner_token_id=pool_id,
+                owner_token_id=unit_id,
             ),
-            pool_name,
+            pool,
+            capacity_owner_id=capacity_owner_id,
             ttl="2m",
             max_uses=1,
         )
         with self.gateway.services.context.database.session() as session:
-            pool = ComputePoolRepository(session).get(pool_id, for_update=True)
+            unit = ComputeUnitRepository(session).get(unit_id, for_update=True)
             if (
-                pool is None
-                or pool.workspace_id != workspace_id
-                or pool.name != pool_name
-                or pool.phase not in _ENROLLABLE_POOL_PHASES
+                unit is None
+                or unit.workspace_id != workspace_id
+                or unit.capacity_owner_id != capacity_owner_id
+                or unit.pool != pool
+                or unit.phase not in _ENROLLABLE_UNIT_PHASES
             ):
                 raise ConflictError("provider node enrollment request changed")
             credentials = ComputeJoinCredentialRepository(session)
             durable = credentials.create(
                 token_hash=plan.token_hash,
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                capacity_owner_id=unit.capacity_owner_id,
+                pool=unit.pool,
                 created_by_token_id=None,
                 max_uses=1,
                 expires_at=plan.expires_at,
@@ -397,6 +407,7 @@ class ProviderNodeEnrollmentService:
         state = plan.state.model_copy(
             update={
                 "credential_id": durable.id,
+                "capacity_owner_id": unit.capacity_owner_id,
                 "created_by_token_id": "provider-node",
             }
         )

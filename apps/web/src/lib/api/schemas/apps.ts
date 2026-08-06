@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { resolvedComputePlacementSchema } from "./compute_placement";
 import { stubSchema } from "./stubs";
 
 export const appSchema = z.object({
@@ -50,14 +49,14 @@ export const deploymentSchema = z.object({
       cron: z.string().nullish(),
       command: z.array(z.string()).default([]),
       ports: z.record(z.number()).default({}),
-      placement: resolvedComputePlacementSchema.nullable(),
+      pool: z.string().default(""),
     })
     .default({
       resources: { gpu_count: 0, concurrency: 1 },
       methods: [],
       command: [],
       ports: {},
-      placement: null,
+      pool: "",
     }),
   active: z.boolean(),
   deleted_at: z.string().nullish(),

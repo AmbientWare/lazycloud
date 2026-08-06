@@ -64,10 +64,6 @@ x-aws-compute-env: &aws-compute-env
 x-scheduler-env: &scheduler-env
   LAZYCLOUD_COMPUTE_RECLAIM_REGISTRATION_DEADLINE_SECONDS: "3600"
 
-x-capacity-bootstrap-env: &capacity-bootstrap-env
-  LAZYCLOUD_CAPACITY_BOOTSTRAP_POOLS: >-
-    [{"name":"default","workspace":"default","provider":"agent","capacity_owner_id":"${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CAPACITY_OWNER_ID:-839fc92e-c26d-4e31-84c1-a827c2768607}","initial_workers":0,"min_workers":0,"max_workers":1,"scaling_enabled":true,"default_eligible":true,"priority":100,"min_free_cpu_millicores":1000,"min_free_memory_mib":1024,"min_free_gpu_count":0,"scale_up_cooldown_seconds":5,"scale_down_cooldown_seconds":60,"worker_cpu_millicores":${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CPU_MILLICORES:-4000},"worker_memory_mib":${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192},"worker_runtimes":["runc","runsc"]},{"name":"gpu","workspace":"default","provider":"local","capacity_owner_id":"${LAZYCLOUD_COMPOSE_GPU_WORKER_CAPACITY_OWNER_ID:-f82b1a1d-070e-4fa8-8bad-f2af464c0fb9}","initial_workers":0,"min_workers":0,"max_workers":1,"scaling_enabled":true,"default_eligible":false,"priority":50,"min_free_cpu_millicores":0,"min_free_memory_mib":0,"min_free_gpu_count":0,"scale_up_cooldown_seconds":5,"scale_down_cooldown_seconds":60,"worker_cpu_millicores":${LAZYCLOUD_COMPOSE_GPU_WORKER_CPU_MILLICORES:-8000},"worker_memory_mib":${LAZYCLOUD_COMPOSE_GPU_WORKER_MEMORY_MIB:-16384},"worker_gpu_type":"${LAZYCLOUD_COMPOSE_GPU_TYPE:-nvidia}","worker_gpu_count":${LAZYCLOUD_COMPOSE_GPU_COUNT:-1},"worker_runtimes":["runc","runsc"]}]
-
 x-tailnet-env: &tailnet-env
   LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID: "${LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID:-}"
   LAZYCLOUD_TAILNET_AGENT_TAG: "${LAZYCLOUD_TAILNET_AGENT_TAG:-tag:lazycloud-agent}"
@@ -78,7 +74,6 @@ x-tailnet-env: &tailnet-env
 
 x-usage-credentials: &usage-credentials
   LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY: "${LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY:-}"
-  LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN: "${LAZYCLOUD_MANAGED_BILLING_AUTH_TOKEN:-}"
 
 x-platform-aws-credentials: &platform-aws-credentials
   AWS_REGION: "${AWS_REGION:-us-east-1}"
@@ -347,7 +342,6 @@ services:
           *release-env,
           *agent-binary-env,
           *aws-compute-env,
-          *capacity-bootstrap-env,
           *usage-credentials,
           *tailnet-env,
           *platform-aws-credentials,
@@ -525,7 +519,7 @@ services:
         export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
         temporary="$${token_path}.tmp"
         rm -f "$$temporary"
-        lazycloud-admin --json pool join-token default --ttl 15m \
+        lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" --ttl 15m \
           | python -c \
               'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.load(sys.stdin)["token"], encoding="utf-8")' \
               "$$temporary"
@@ -688,7 +682,7 @@ services:
         "--machine-id",
         "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}",
         "--pool",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-default}",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}",
         "--pod-address",
         "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}",
         "--container-service-port",
@@ -712,8 +706,7 @@ services:
       REGISTRY_AUTH_FILE: "${REGISTRY_AUTH_FILE:-/var/lib/lazycloud/registry/auth.json}"
       WORKER_ID: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}"
       WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
-      WORKER_POOL: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-default}"
-      WORKER_CAPACITY_OWNER_ID: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CAPACITY_OWNER_ID:-839fc92e-c26d-4e31-84c1-a827c2768607}"
+      WORKER_POOL: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}"
       WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
       WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}"
       WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
@@ -765,7 +758,7 @@ services:
         "--machine-id",
         "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_MACHINE:-compose-machine-secondary}",
         "--pool",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-default}",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}",
         "--pod-address",
         "container-worker-secondary",
         "--container-service-port",
@@ -824,7 +817,7 @@ services:
         "--machine-id",
         "${LAZYCLOUD_COMPOSE_GPU_WORKER_MACHINE:-compose-gpu-machine}",
         "--pool",
-        "${LAZYCLOUD_COMPOSE_GPU_WORKER_POOL:-gpu}",
+        "${LAZYCLOUD_COMPOSE_GPU_WORKER_POOL:-lazycloud}",
         "--pod-address",
         "${LAZYCLOUD_COMPOSE_GPU_WORKER_POD_ADDRESS:-container-worker-gpu}",
         "--container-service-port",
@@ -852,8 +845,7 @@ services:
       REGISTRY_AUTH_FILE: "${REGISTRY_AUTH_FILE:-/var/lib/lazycloud/registry/auth.json}"
       WORKER_ID: "${LAZYCLOUD_COMPOSE_GPU_WORKER_ID:-compose-gpu-container-worker}"
       WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_GPU_WORKER_MACHINE:-compose-gpu-machine}"
-      WORKER_POOL: "${LAZYCLOUD_COMPOSE_GPU_WORKER_POOL:-gpu}"
-      WORKER_CAPACITY_OWNER_ID: "${LAZYCLOUD_COMPOSE_GPU_WORKER_CAPACITY_OWNER_ID:-f82b1a1d-070e-4fa8-8bad-f2af464c0fb9}"
+      WORKER_POOL: "${LAZYCLOUD_COMPOSE_GPU_WORKER_POOL:-lazycloud}"
       WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_GPU_WORKER_MACHINE:-compose-gpu-machine}"
       WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_GPU_WORKER_POD_ADDRESS:-container-worker-gpu}"
       WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_GPU_WORKER_SERVICE_PORT:-8910}"

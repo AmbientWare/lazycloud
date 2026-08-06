@@ -20,7 +20,7 @@ def _policy() -> WorkspaceComputePolicyResponse:
     return WorkspaceComputePolicyResponse.model_validate(
         {
             "revision": 4,
-            "default_placement": "managed",
+            "default_pool": "lazycloud",
             "aws": {
                 "default_region": "us-east-1",
                 "max_cpu_instances": 10,
@@ -68,7 +68,7 @@ class _ComputeClient:
         return _policy().model_copy(
             update={
                 "revision": request.expected_revision + 1,
-                "default_placement": request.default_placement,
+                "default_pool": request.default_pool,
                 "aws": request.aws,
             }
         )
@@ -83,7 +83,7 @@ class _ComputeClient:
         return base.model_copy(
             update={
                 "revision": request.expected_revision + 1,
-                "default_placement": request.default_placement or base.default_placement,
+                "default_pool": request.default_pool or base.default_pool,
                 "aws": base.aws.model_copy(update=changed),
             }
         )
@@ -131,7 +131,7 @@ def test_compute_policy_update_sends_revisioned_guardrails(
             "compute",
             "policy",
             "update",
-            "--default-placement",
+            "--default-pool",
             "aws",
             "--default-region",
             "us-west-2",
@@ -164,8 +164,7 @@ def test_compute_policy_update_sends_revisioned_guardrails(
     assert len(client.patches) == 1
     request = client.patches[0]
     assert request.expected_revision == 4
-    assert request.default_placement is not None
-    assert request.default_placement.value == "aws"
+    assert request.default_pool == "aws"
     assert request.aws.default_region == "us-west-2"
     assert request.aws.default_instance_type == "g6.xlarge"
     assert request.aws.initial_cpu_workers == 2

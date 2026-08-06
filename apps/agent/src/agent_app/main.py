@@ -39,6 +39,7 @@ from networking.tailnet import TailnetRuntimeMode
 from provider_clients import ProviderNodeIdentityEvidenceProvider
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
+from shared.compute_policy import MachinePool
 from shared.http.errors import HttpApiError
 from shared.provider_config import ProviderKind
 from worker.source_cache_cleanup import (
@@ -809,7 +810,7 @@ def _status_payload(
         state_path=str(state_path),
         active_worker_count=active_worker_count,
         workspace_id=state.workspace_id if state else "",
-        pool_name=state.pool_name if state else "",
+        pool=MachinePool(state.pool if state else ""),
         machine_id=state.machine_id if state else "",
         gateway_url=state.sanitized_gateway_url if state else "",
         service=service,

@@ -14,6 +14,7 @@ from gateway.route_prewarm import RoutePrewarmService, ThreadRoutePrewarmRunner
 from networking.dialer import BackendRouteDialer, BackendRouteDialerConfig
 from networking.routing import BackendRouteAuthenticator, backend_route_preface
 from pydantic import JsonValue, SecretStr
+from shared.compute_policy import MachinePool
 from shared.events import Event
 from shared.routing import (
     AgentBackendRoute,
@@ -186,9 +187,10 @@ def test_thread_route_prewarm_runner_quiesces_before_close() -> None:
 
 def _agent() -> ComputeAgentTokenState:
     return ComputeAgentTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash="hash",
         workspace_id="workspace-one",
-        pool_name="pool-one",
+        pool=MachinePool("pool-one"),
         machine_id="machine-one",
     )
 
@@ -200,7 +202,7 @@ def _route(
     return AgentBackendRoute(
         route_id="route-one",
         workspace_id="workspace-one",
-        pool_name="pool-one",
+        pool=MachinePool("pool-one"),
         machine_id="machine-one",
         worker_id="worker-one",
         container_id="container-one",

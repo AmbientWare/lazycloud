@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from shared.app_identity import AGENT_NAME, STATE_DIR
+from shared.compute_policy import MachinePool
 from shared.http.operations import AgentLeaseRequest, AgentRegisterRequest
 
 from cli.api_client import admin_api_client
@@ -18,7 +19,7 @@ agent_app = typer.Typer(help="Manage agents and leases.")
 def agent_install(
     ctx: typer.Context,
     name: Annotated[str, typer.Option("--name")] = "agent",
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
+    pool: Annotated[str, typer.Option("--pool")] = "default",
     endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:9000",
     version: Annotated[str, typer.Option("--version")] = "local",
     join_token: Annotated[str, typer.Option("--join-token")] = "",
@@ -45,7 +46,7 @@ def agent_install(
         result = install_agent_service(
             AgentInstallRequest(
                 name=name,
-                pool=pool_name,
+                pool=MachinePool(pool),
                 endpoint=endpoint,
                 version=version,
                 join_token=join_token,
@@ -68,7 +69,7 @@ def agent_install(
 def agent_join(
     ctx: typer.Context,
     name: Annotated[str, typer.Option("--name")] = "agent",
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
+    pool: Annotated[str, typer.Option("--pool")] = "default",
     endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:9000",
     version: Annotated[str, typer.Option("--version")] = "local",
     token_secret: Annotated[str | None, typer.Option("--token-secret")] = None,
@@ -81,7 +82,7 @@ def agent_join(
 
     request = AgentJoinRequest(
         name=name,
-        pool=pool_name,
+        pool=MachinePool(pool),
         endpoint=endpoint,
         version=version,
         token_secret=token_secret,
@@ -90,7 +91,7 @@ def agent_join(
     record = admin_api_client().register_agent(
         AgentRegisterRequest(
             name=name,
-            pool=pool_name,
+            pool=MachinePool(pool),
             version=version,
             labels=request.labels,
         )
@@ -130,11 +131,11 @@ def agent_status(ctx: typer.Context) -> None:
 def agent_register(
     ctx: typer.Context,
     name: str,
-    pool_name: Annotated[str, typer.Option("--pool")] = "default",
+    pool: Annotated[str, typer.Option("--pool")] = "default",
     version: Annotated[str, typer.Option("--version")] = "local",
 ) -> None:
     record = admin_api_client().register_agent(
-        AgentRegisterRequest(name=name, pool=pool_name, version=version)
+        AgentRegisterRequest(name=name, pool=MachinePool(pool), version=version)
     )
     print_payload(ctx, record.model_dump(mode="json"))
 
@@ -151,7 +152,7 @@ def agent_list(ctx: typer.Context) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.id, item.name, item.pool, item.status.value] for item in records]
+        rows = [[item.id, item.name, str(item.pool), item.status.value] for item in records]
         console.print(table("Agents", ["id", "name", "pool", "status"], rows))
 
 

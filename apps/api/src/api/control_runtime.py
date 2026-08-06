@@ -30,7 +30,6 @@ from networking.settings import (
 )
 from networking.tailnet import TailnetRuntime
 from observability.settings import (
-    ManagedBillingClientSettings,
     TelemetrySettings,
     UsageMetricsSettings,
     UsagePricingSettings,
@@ -47,6 +46,7 @@ from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.settings import ContainerServiceSettings
 
+from api.server.provider_compute import require_connected_aws_deployment_credentials
 from api.server.services import (
     ApiOwnedResource,
     ApiServices,
@@ -57,7 +57,6 @@ from api.server.services import (
 from api.server.worker_repository_service import WorkerRepositoryService
 from api.settings import (
     AgentRouteReconciliationSettings,
-    CapacityBootstrapSettings,
     TcpIngressSettings,
 )
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -210,7 +209,6 @@ class ControlPlaneRuntime:
 def _production_api_services() -> ApiServices:
     tcp_ingress_settings = TcpIngressSettings()
     agent_route_reconciliation_settings = AgentRouteReconciliationSettings()
-    capacity_bootstrap_settings = CapacityBootstrapSettings()
     gateway_settings = GatewaySettings()
     workspace_change_stream_settings = WorkspaceChangeStreamSettings()
     # The install routes serve exactly the agent artifact this names, so the
@@ -222,6 +220,8 @@ def _production_api_services() -> ApiServices:
     agent_binary_settings = release.agent_binaries
     aws_account_connection_settings = release.aws_connections
     aws_capacity_settings = release.aws_capacity
+    # Ahead of the ExitStack so this fails before anything is opened.
+    require_connected_aws_deployment_credentials(aws_account_connection_settings)
     aws_capacity_reconciliation_settings = AwsCapacityReconciliationSettings()
     redis_settings = RedisSettings()
     object_store_settings = S3ObjectStoreSettings()
@@ -233,7 +233,6 @@ def _production_api_services() -> ApiServices:
     retention_settings = RetentionSettings()
     usage_metrics_settings = UsageMetricsSettings()
     usage_pricing_settings = UsagePricingSettings()
-    managed_billing_settings = ManagedBillingClientSettings()
     volume_metering_settings = VolumeMeteringSettings()
     tailnet_runtime_settings = TailnetRuntimeSettings()
     tailnet_control_settings = TailnetControlSettings()
@@ -290,7 +289,6 @@ def _production_api_services() -> ApiServices:
             retention_settings=retention_settings,
             usage_metrics_settings=usage_metrics_settings,
             usage_pricing_settings=usage_pricing_settings,
-            managed_billing_settings=managed_billing_settings,
             volume_metering_settings=volume_metering_settings,
             redis_client=redis_client,
             binary_redis_client=binary_redis_client,
@@ -301,50 +299,5 @@ def _production_api_services() -> ApiServices:
             tailnet_runtime=tailnet_runtime,
             owned_resources=tuple(owned_resources),
         )
-        try:
-            _reconcile_bootstrap_capacity(services, capacity_bootstrap_settings)
-        except BaseException as startup_error:
-            rollback.pop_all()
-            try:
-                services.close()
-            except BaseException as cleanup_error:
-                raise BaseExceptionGroup(
-                    "capacity bootstrap and service cleanup both failed",
-                    [startup_error, cleanup_error],
-                ) from None
-            raise
         rollback.pop_all()
         return services
-
-
-def _reconcile_bootstrap_capacity(
-    services: ApiServices,
-    settings: CapacityBootstrapSettings,
-) -> None:
-    for pool in settings.pools:
-        services.compute.create_pool(
-            pool.name,
-            workspace=pool.workspace,
-            provider=pool.provider,
-            capacity_owner_id=pool.capacity_owner_id,
-            initial_workers=pool.initial_workers,
-            min_workers=pool.min_workers,
-            max_workers=pool.max_workers,
-            scaling_enabled=pool.scaling_enabled,
-            default_eligible=pool.default_eligible,
-            priority=pool.priority,
-            min_free_cpu_millicores=pool.min_free_cpu_millicores,
-            min_free_memory_mib=pool.min_free_memory_mib,
-            min_free_gpu_count=pool.min_free_gpu_count,
-            worker_cpu_millicores=pool.worker_cpu_millicores,
-            worker_memory_mib=pool.worker_memory_mib,
-            worker_gpu_type=pool.worker_gpu_type,
-            worker_gpu_count=pool.worker_gpu_count,
-            worker_runtimes=pool.worker_runtimes,
-            worker_preemptible=pool.worker_preemptible,
-            idle_drain_timeout_seconds=pool.idle_drain_timeout_seconds,
-            scale_up_cooldown_seconds=pool.scale_up_cooldown_seconds,
-            scale_down_cooldown_seconds=pool.scale_down_cooldown_seconds,
-            registration_timeout_seconds=pool.registration_timeout_seconds,
-            labels=pool.labels,
-        )

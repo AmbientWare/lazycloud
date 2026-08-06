@@ -10,8 +10,8 @@ from compute.offers import ComputeOffer
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
-    ProviderPoolBootstrap,
-    ProviderPoolRequest,
+    ProviderUnitBootstrap,
+    ProviderUnitRequest,
 )
 from provider_aws import (
     AwsAccountConnectionTarget,
@@ -28,7 +28,11 @@ from provider_aws import (
     AwsProviderControlErrorCode,
 )
 from pydantic import SecretStr, TypeAdapter
-from shared.compute_policy import ComputeCapacityMode, ComputePoolProviderState
+from shared.compute_policy import (
+    ComputeCapacityMode,
+    ComputeUnitProviderState,
+    UnitName,
+)
 
 _VPC_ID = "vpc-00000000000000001"
 _SUBNET_IDS = ("subnet-00000000000000001", "subnet-00000000000000002")
@@ -262,7 +266,7 @@ class _ClientProvider:
 def _spec() -> AwsManagedPoolSpec:
     return AwsManagedPoolSpec(
         workspace_id="12345678-1234-4123-8123-123456789abc",
-        pool_name="acceptance",
+        unit_name=UnitName("acceptance"),
         region="us-east-1",
         instance_type="i4i.xlarge",
         ami_id="ami-0123456789abcdef0",
@@ -380,11 +384,11 @@ def test_managed_pool_storage_destruction_requires_exact_volume_absence() -> Non
     }
 
 
-def _pool_request(provider_ref: str) -> ProviderPoolRequest:
-    return ProviderPoolRequest(
+def _pool_request(provider_ref: str) -> ProviderUnitRequest:
+    return ProviderUnitRequest(
         workspace_id="12345678-1234-4123-8123-123456789abc",
-        pool_id="22345678-1234-4123-8123-123456789abc",
-        pool_name="managed-capacity",
+        unit_id="22345678-1234-4123-8123-123456789abc",
+        unit_name=UnitName("managed-capacity"),
         provider_ref=provider_ref,
         provider_connection_id="12345678-1234-4123-8123-123456789abc",
         generation=1,
@@ -405,7 +409,7 @@ def _pool_request(provider_ref: str) -> ProviderPoolRequest:
         ),
         desired_machines=0,
         max_machines=3,
-        bootstrap=ProviderPoolBootstrap(
+        bootstrap=ProviderUnitBootstrap(
             control_plane_url="https://compute.example.com",
             enrollment_request_id="22345678-1234-4123-8123-123456789abc",
             agent_version="0.1.0",
@@ -416,7 +420,7 @@ def _pool_request(provider_ref: str) -> ProviderPoolRequest:
             ),
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         ),
-        provider_state=ComputePoolProviderState(),
+        provider_state=ComputeUnitProviderState(),
     )
 
 
@@ -440,8 +444,8 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     )
     request = _pool_request(provider.provider_ref)
 
-    created = provider.set_pool_capacity(request, desired_machines=1, max_machines=3)
-    updated = provider.set_pool_capacity(
+    created = provider.set_unit_capacity(request, desired_machines=1, max_machines=3)
+    updated = provider.set_unit_capacity(
         request.model_copy(update={"provider_state": created.provider_state}),
         desired_machines=2,
         max_machines=3,
@@ -476,7 +480,7 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "provider_state": updated.provider_state,
         }
     )
-    ready = provider.describe_pool(observed_request)
+    ready = provider.describe_unit(observed_request)
     assert ready.phase is ProviderCapacityPhase.Ready
     assert {instance.status for instance in ready.instances} == {ProviderMachineStatus.Active}
 
@@ -494,7 +498,7 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "AvailabilityZone": "us-east-1b",
         },
     ]
-    degraded = provider.describe_pool(observed_request)
+    degraded = provider.describe_unit(observed_request)
     statuses = {instance.provider_instance_id: instance.status for instance in degraded.instances}
     assert degraded.phase is not ProviderCapacityPhase.Ready
     assert statuses[first_instance] is ProviderMachineStatus.Active
@@ -514,7 +518,7 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "AvailabilityZone": "us-east-1b",
         },
     ]
-    launching = provider.describe_pool(observed_request)
+    launching = provider.describe_unit(observed_request)
     launching_statuses = {
         instance.provider_instance_id: instance.status for instance in launching.instances
     }
@@ -542,7 +546,7 @@ def test_pooled_provider_requires_the_stack_provisioned_network() -> None:
     )
 
     with pytest.raises(ValueError, match="no stack-provisioned network"):
-        provider.set_pool_capacity(
+        provider.set_unit_capacity(
             _pool_request(provider.provider_ref),
             desired_machines=1,
             max_machines=3,

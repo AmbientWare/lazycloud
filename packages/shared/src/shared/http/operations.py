@@ -6,12 +6,12 @@ from pydantic import Field, JsonValue
 
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.compute_fleet import LeaseStatus, ResourceStatus
+from shared.compute_policy import MachinePool
 from shared.events import Event
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildPhase
-from shared.provider_config import ProviderKind
 
 
 class CronJobResponse(HttpModel):
@@ -137,32 +137,9 @@ class ImageBuildListResponse(HttpModel):
     builds: list[ImageBuildResponse] = Field(default_factory=list)
 
 
-class ProviderSetRequest(HttpModel):
-    name: str = "aws"
-    kind: ProviderKind = ProviderKind.Aws
-    enabled: bool = True
-    priority: int = 100
-    config: dict[str, JsonValue] = Field(default_factory=dict)
-    labels: dict[str, str] = Field(default_factory=dict)
-
-
-class ProviderResponse(HttpModel):
-    name: str
-    kind: ProviderKind = ProviderKind.Aws
-    enabled: bool = True
-    priority: int = 100
-    labels: dict[str, str] = Field(default_factory=dict)
-    created_at: datetime
-    updated_at: datetime
-
-
-class ProviderListResponse(HttpModel):
-    providers: list[ProviderResponse] = Field(default_factory=list)
-
-
 class AgentRegisterRequest(HttpModel):
     name: str = "agent"
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -171,7 +148,7 @@ class AgentRegisterRequest(HttpModel):
 class AgentResponse(HttpModel):
     id: str
     name: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     status: ResourceStatus = ResourceStatus.Created
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)
@@ -227,9 +204,6 @@ __all__ = [
     "ImageBuildListResponse",
     "ImageBuildRequest",
     "ImageBuildResponse",
-    "ProviderListResponse",
-    "ProviderResponse",
-    "ProviderSetRequest",
     "SchedulerContainerDispatchListResponse",
     "SchedulerContainerDispatchResponse",
 ]

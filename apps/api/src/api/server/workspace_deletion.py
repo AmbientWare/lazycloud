@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
-    ComputePoolRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
@@ -15,7 +15,7 @@ from gateway.service import GatewayControlService
 from identity.workspaces import WorkspaceDeletionIdentityService
 from observability.stream_state import RedisEventStreamRepository
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
-from shared.compute_policy import ComputePoolPhase
+from shared.compute_policy import ComputeUnitPhase
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.volumes import DeleteVolumeRequest
 from shared.identity import AuthTokenRecord, WorkspaceRecord, WorkspaceStatus
@@ -101,10 +101,10 @@ class WorkspaceDeletionService:
     @staticmethod
     def _assert_compute_disconnected(session: DatabaseSession, workspace_id: str) -> None:
         connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-        pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+        pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         if connection is not None:
             raise ConflictError("disconnect AWS compute before deleting this workspace")
-        live = sorted(pool.name for pool in pools if pool.phase is not ComputePoolPhase.Deleted)
+        live = sorted(pool.name for pool in pools if pool.phase is not ComputeUnitPhase.Deleted)
         if live:
             # Deletion drains drained pools; it never terminates running capacity
             # on the tenant's behalf, so name the pools the operator must release.

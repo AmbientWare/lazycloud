@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends
-from identity.authz import admin_requirement, machine_requirement
+from identity.authz import admin_requirement
 from shared.identity import AuthScope, AuthTokenRecord
 
 from api.server.dependencies import (
@@ -38,14 +38,9 @@ type admin_access = Annotated[
     None,
     Depends(require_app_requirement(admin_requirement())),
 ]
-type machine_access = Annotated[
-    None,
-    Depends(require_app_requirement(machine_requirement())),
-]
 
 __all__ = [
     "admin_access",
-    "machine_access",
     "read_access",
     "read_app_token",
     "read_token",

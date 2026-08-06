@@ -17,6 +17,7 @@ from scheduler.state import (
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
 )
+from shared.compute_policy import MachinePool
 from tests.redis_fakes import FakeRedis
 
 
@@ -50,7 +51,7 @@ def _available_worker(worker_id: str, *, now: datetime) -> SchedulerWorkerRecord
     return SchedulerWorkerRecord(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         worker_id=worker_id,
-        pool_name="default",
+        pool=MachinePool("default"),
         status=SchedulerWorkerStatus.Available,
         free_cpu_millicores=10_000,
         free_memory_mib=10_000,

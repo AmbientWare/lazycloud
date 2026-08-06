@@ -101,7 +101,7 @@ describe("compute policy controller", () => {
     expect(requests[0]?.body).toBe(
       JSON.stringify({
         expected_revision: 4,
-        default_placement: "managed",
+        default_pool: "lazycloud",
         aws: {
           ...authoritative.aws,
           max_cpu_instances: 44,
@@ -278,7 +278,7 @@ function policy(
 ): WorkspaceComputePolicy {
   return {
     revision,
-    default_placement: "managed",
+    default_pool: "lazycloud",
     aws: {
       default_region: "us-east-1",
       default_instance_type: "i4i.xlarge",

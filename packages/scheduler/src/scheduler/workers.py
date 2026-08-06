@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 from pydantic import Field
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
 from shared.routing import AgentBackendRoute
@@ -68,7 +69,7 @@ class SchedulerWorkerContainerView(ContractModel):
 class SchedulerWorkerView(ContractModel):
     id: str
     status: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -97,12 +98,12 @@ class SchedulerWorkerAdminService:
     containers: SchedulerWorkerContainerRepository
     stop_container: Callable[[str], None] | SchedulerWorkerContainerStopper | None = None
 
-    def list_workers(self, *, pool_name: str | None = None) -> list[SchedulerWorkerView]:
+    def list_workers(self, *, pool: str | None = None) -> list[SchedulerWorkerView]:
         workers = self.workers.list_workers()
-        if pool_name:
-            workers = [worker for worker in workers if worker.pool_name == pool_name]
+        if pool:
+            workers = [worker for worker in workers if worker.pool == pool]
         views = [self._worker_view(worker) for worker in workers]
-        views.sort(key=lambda item: (item.pool_name, item.status, item.machine_id, item.id))
+        views.sort(key=lambda item: (item.pool, item.status, item.machine_id, item.id))
         return views
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerView:
@@ -152,7 +153,7 @@ class SchedulerWorkerAdminService:
         return SchedulerWorkerView(
             id=worker.worker_id,
             status=worker.status.value,
-            pool_name=worker.pool_name,
+            pool=worker.pool,
             machine_id=worker.machine_id,
             gpu=worker.gpu_type,
             runtime=worker.runtime_class,

@@ -30,9 +30,6 @@ from database.repositories.execution import (
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
-    MachineRepository,
-    PoolRepository,
-    ProviderRepository,
 )
 from database.repositories.storage import ObjectRepository
 from execution.containers.planning import validate_checkpoint_activation
@@ -40,7 +37,6 @@ from execution.containers.service import ContainerService
 from execution.tasks import TaskService
 from observability.events import EventService
 from pydantic import Field
-from shared.compute_fleet import Machine, ResourceStatus
 from shared.container_requests import ContainerShutdownTarget, WorkerStartupKind
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -227,13 +223,6 @@ class ContainerView(ContainerRecord):
     run_status: TaskStatus | None = None
     expires_at: datetime | None = None
     actions: ContainerActionCapabilities = Field(default_factory=ContainerActionCapabilities)
-
-
-class MachineRemoteConfig(ContractModel):
-    endpoint: str = "local"
-    state_home: str
-    pools: tuple[str, ...] = ()
-    providers: tuple[str, ...] = ()
 
 
 def _parse_cursor(cursor: str | None) -> int:
@@ -1393,88 +1382,6 @@ class ManagementService:
         except NotFoundError:
             return None
         return run if run.workspace_id == workspace_record.id else None
-
-    def register_machine(
-        self,
-        *,
-        machine_id: str,
-        provider_name: str = "local",
-        pool_name: str = "default",
-        hostname: str = "",
-        cpu: str = "",
-        memory: str = "",
-        gpu_count: str = "0",
-        private_ip: str = "",
-        token: str = "",
-    ) -> Machine:
-        machine = Machine(
-            id=machine_id,
-            provider=provider_name or "local",
-            pool=pool_name or "default",
-            status=ResourceStatus.Running,
-            cpu=float(cpu) if cpu else None,
-            memory=memory or None,
-            gpu=gpu_count if gpu_count and gpu_count != "0" else None,
-            address=private_ip or None,
-            labels={
-                "hostname": hostname,
-                "token_prefix": token[:10],
-                "gpu_count": gpu_count or "0",
-            },
-        )
-
-        with self.services.context.database.session() as session:
-            repository = MachineRepository(session)
-            existing = repository.get_across_workspaces(machine.id)
-            if existing is not None:
-                machine.created_at = existing.created_at
-            return repository.upsert(machine)
-
-    def machine_config(self) -> MachineRemoteConfig:
-        with self.services.context.database.session() as session:
-            pools = tuple(
-                sorted(pool.name for pool in PoolRepository(session).list_across_workspaces())
-            )
-            providers = tuple(
-                sorted(
-                    provider.name
-                    for provider in ProviderRepository(session).list_across_workspaces()
-                )
-            )
-        return MachineRemoteConfig(
-            state_home=str(self.services.context.paths.root),
-            pools=pools,
-            providers=providers,
-        )
-
-    def list_ready_machines(
-        self,
-        *,
-        provider_name: str | None = None,
-        pool_name: str | None = None,
-    ) -> tuple[Machine, ...]:
-        with self.services.context.database.session() as session:
-            machines = MachineRepository(session).records.list_across_workspaces()
-        if provider_name:
-            machines = [item for item in machines if item.provider == provider_name]
-        if pool_name:
-            machines = [item for item in machines if item.pool == pool_name]
-        machines = [
-            item
-            for item in machines
-            if item.status in {ResourceStatus.Created, ResourceStatus.Running}
-        ]
-        machines.sort(key=lambda item: item.created_at, reverse=True)
-        return tuple(machines)
-
-    def gpu_counts(self, workspace: str) -> dict[str, int]:
-        self.control_plane.get_workspace(workspace)
-        counts: dict[str, int] = {}
-        for machine in self.list_ready_machines():
-            gpu_name = machine.gpu or "none"
-            raw_count = machine.labels.get("gpu_count", "0")
-            counts[gpu_name] = counts.get(gpu_name, 0) + int(raw_count or "0")
-        return counts
 
     def logs(
         self,

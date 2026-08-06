@@ -6,8 +6,12 @@ from enum import StrEnum
 
 from pydantic import Field, field_validator
 from shared.capacity import CapacityOwnerIdentity
+from shared.compute_policy import (
+    MachinePool,
+    UnitName,
+)
 from shared.contracts import ContractModel
-from shared.routing import BackendRouteTransport
+from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
 from compute.telemetry import (
     AgentTelemetryState,
@@ -19,17 +23,11 @@ DEFAULT_PRIVATE_FALLBACK = "internal"
 DEFAULT_PRIVATE_PRIORITY = 1000
 
 
-class ComputePoolMode(StrEnum):
+class ComputeUnitMode(StrEnum):
     Private = "private"
 
 
-class PrivatePoolFallback(StrEnum):
-    Internal = "internal"
-    Wait = "wait"
-    Fail = "fail"
-
-
-class ComputePoolSource(StrEnum):
+class ComputeUnitSource(StrEnum):
     Attached = "attached"
     Managed = "managed"
 
@@ -37,9 +35,9 @@ class ComputePoolSource(StrEnum):
 class PoolConfig(ContractModel):
     name: str
     selector: str = ""
-    mode: ComputePoolMode | str = ComputePoolMode.Private
+    mode: ComputeUnitMode | str = ComputeUnitMode.Private
     transport: BackendRouteTransport | str = ""
-    fallback: PrivatePoolFallback | str = ""
+    fallback: PrivateUnitFallback | str = ""
     priority: int = 0
     gpu: list[str] = Field(default_factory=list)
     providers: list[str] = Field(default_factory=list)
@@ -59,12 +57,12 @@ class PoolConfig(ContractModel):
         return value
 
 
-class NormalizedPoolConfig(ContractModel):
+class NormalizedUnitConfig(ContractModel):
     name: str
     selector: str = ""
-    mode: ComputePoolMode = ComputePoolMode.Private
+    mode: ComputeUnitMode = ComputeUnitMode.Private
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
-    fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
+    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     priority: int = DEFAULT_PRIVATE_PRIORITY
     gpu: list[str] = Field(default_factory=list)
     providers: list[str] = Field(default_factory=list)
@@ -81,7 +79,7 @@ class NormalizedPoolConfig(ContractModel):
         return PoolConfig.nodes_cannot_be_negative(value)
 
 
-class ComputePoolPlan(ContractModel):
+class ComputeUnitPlan(ContractModel):
     name: str
     selector: str
     gpu: list[str] = Field(default_factory=list)
@@ -96,7 +94,7 @@ class ComputePoolPlan(ContractModel):
 
 class ProviderReservation(ContractModel):
     id: str
-    pool_name: str = ""
+    pool: MachinePool = MachinePool("")
     selector: str = ""
     provider: str = ""
     cloud: str = ""
@@ -108,7 +106,7 @@ class ProviderReservation(ContractModel):
     gpu_count: int = 0
     hourly_cost_micros: int = 0
     committed_micros: int = 0
-    source: ComputePoolSource | str = ComputePoolSource.Attached
+    source: ComputeUnitSource | str = ComputeUnitSource.Attached
     created_at: datetime | None = None
     expires_at: datetime | None = None
     billing_renewal_at: datetime | None = None
@@ -131,7 +129,7 @@ class ProviderReservation(ContractModel):
 
 class ProviderInstanceProjection(ContractModel):
     id: str
-    pool_name: str = ""
+    pool: MachinePool = MachinePool("")
     provider: str = ""
     cloud: str = ""
     region: str = ""
@@ -153,15 +151,18 @@ class ProviderInstanceProjection(ContractModel):
     storage_mb: int = 0
 
 
-class PrivatePoolState(CapacityOwnerIdentity):
+class PrivateUnitState(CapacityOwnerIdentity):
     workspace_id: str = ""
-    name: str
+    name: UnitName
+    pool: MachinePool = MachinePool("")
+    """Pool this unit's machines serve, so the agent bootstrap never has to
+    substitute the unit's name for the label it must advertise."""
     selector: str = ""
     config: PoolConfig | None = None
     reservations: list[ProviderReservation] = Field(default_factory=list)
     committed_spend_micros: int = 0
     status: str = ""
-    source: ComputePoolSource | str = ComputePoolSource.Attached
+    source: ComputeUnitSource | str = ComputeUnitSource.Attached
     created_by_token_id: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -169,10 +170,10 @@ class PrivatePoolState(CapacityOwnerIdentity):
     reserved_nodes: int = 0
 
 
-class PrivatePoolProjection(ContractModel):
+class PrivateUnitProjection(ContractModel):
     name: str
     selector: str
-    config: NormalizedPoolConfig | None = None
+    config: NormalizedUnitConfig | None = None
     reservations: list[ProviderInstanceProjection] = Field(default_factory=list)
     committed_spend_micros: int = 0
     status: str = ""
@@ -191,18 +192,18 @@ def normalize_backend_route_transport(value: str) -> BackendRouteTransport:
     return BackendRouteTransport(normalized)
 
 
-def normalize_pool_config(config: PoolConfig | None) -> NormalizedPoolConfig | None:
+def normalize_unit_config(config: PoolConfig | None) -> NormalizedUnitConfig | None:
     if config is None:
         return None
-    if str(config.mode or ComputePoolMode.Private.value) != ComputePoolMode.Private.value:
-        msg = f"private pool mode must be {ComputePoolMode.Private.value!r}"
+    if str(config.mode or ComputeUnitMode.Private.value) != ComputeUnitMode.Private.value:
+        msg = f"private pool mode must be {ComputeUnitMode.Private.value!r}"
         raise ValueError(msg)
-    return NormalizedPoolConfig(
+    return NormalizedUnitConfig(
         name=config.name,
         selector=config.selector or config.name,
-        mode=ComputePoolMode.Private,
+        mode=ComputeUnitMode.Private,
         transport=normalize_backend_route_transport(str(config.transport)),
-        fallback=PrivatePoolFallback(str(config.fallback or DEFAULT_PRIVATE_FALLBACK)),
+        fallback=PrivateUnitFallback(str(config.fallback or DEFAULT_PRIVATE_FALLBACK)),
         priority=config.priority or DEFAULT_PRIVATE_PRIORITY,
         gpu=config.gpu,
         providers=config.providers,
@@ -215,23 +216,23 @@ def normalize_pool_config(config: PoolConfig | None) -> NormalizedPoolConfig | N
     )
 
 
-def compute_pool_from_config(
+def compute_unit_from_config(
     config: PoolConfig | None,
     *,
     node_count: int = 0,
     require_reservation: bool = False,
-) -> ComputePoolPlan:
+) -> ComputeUnitPlan:
     if config is None:
         msg = "pool config is required"
         raise ValueError(msg)
-    normalized = normalize_pool_config(config)
+    normalized = normalize_unit_config(config)
     if normalized is None:
         msg = "pool config is required"
         raise ValueError(msg)
     if normalized.transport is not BackendRouteTransport.TsnetRestricted:
         msg = f"unsupported agent transport {normalized.transport.value!r}"
         raise ValueError(msg)
-    if normalized.fallback not in set(PrivatePoolFallback):
+    if normalized.fallback not in set(PrivateUnitFallback):
         msg = f"unsupported private pool fallback {normalized.fallback!s}"
         raise ValueError(msg)
     ttl_seconds = parse_ttl_seconds(normalized.ttl)
@@ -253,7 +254,7 @@ def compute_pool_from_config(
     if require_reservation and nodes > 0 and max_spend_micros <= 0:
         msg = "pool reservations require max_spend"
         raise ValueError(msg)
-    return ComputePoolPlan(
+    return ComputeUnitPlan(
         name=normalized.name,
         selector=normalized.selector,
         gpu=gpu_types,
@@ -268,8 +269,8 @@ def compute_pool_from_config(
 
 
 def validate_pool_resource_compatibility(
-    existing: PrivatePoolState | None,
-    request: ComputePoolPlan,
+    existing: PrivateUnitState | None,
+    request: ComputeUnitPlan,
 ) -> None:
     if existing is None:
         return
@@ -308,7 +309,7 @@ def project_provider_instance(
 ) -> ProviderInstanceProjection:
     return ProviderInstanceProjection(
         id=reservation.id,
-        pool_name=reservation.pool_name,
+        pool=reservation.pool,
         provider=reservation.provider,
         cloud=reservation.cloud,
         region=reservation.region,
@@ -318,7 +319,7 @@ def project_provider_instance(
         hourly_cost_micros=int(reservation.hourly_cost_micros * cost_multiplier),
         source=(
             reservation.source.value
-            if isinstance(reservation.source, ComputePoolSource)
+            if isinstance(reservation.source, ComputeUnitSource)
             else str(reservation.source)
         ),
         created_at=format_compute_time(reservation.created_at),
@@ -336,23 +337,23 @@ def project_provider_instance(
 
 
 def project_private_pool(
-    state: PrivatePoolState | None,
+    state: PrivateUnitState | None,
     *,
     machines: list[AgentTelemetryState] | None = None,
     now: datetime | None = None,
     billable_margin_pct: float = 0.10,
-) -> PrivatePoolProjection | None:
+) -> PrivateUnitProjection | None:
     if state is None:
         return None
     machine_states = machines or []
     cost_multiplier = 1.0 + billable_margin_pct
     source = (
-        state.source.value if isinstance(state.source, ComputePoolSource) else str(state.source)
+        state.source.value if isinstance(state.source, ComputeUnitSource) else str(state.source)
     )
-    return PrivatePoolProjection(
+    return PrivateUnitProjection(
         name=state.name,
         selector=state.selector,
-        config=normalize_pool_config(state.config),
+        config=normalize_unit_config(state.config),
         reservations=[
             project_provider_instance(reservation, cost_multiplier=cost_multiplier)
             for reservation in state.reservations
@@ -398,7 +399,7 @@ def format_compute_time(value: datetime | None) -> str:
 _TTL_PATTERN = re.compile(r"(?P<amount>[1-9][0-9]*)(?P<unit>[smhd])")
 
 
-def _pool_gpu_types(state: PrivatePoolState) -> list[str]:
+def _pool_gpu_types(state: PrivateUnitState) -> list[str]:
     configured = sorted({gpu for gpu in (state.config.gpu if state.config else []) if gpu})
     if configured:
         return configured

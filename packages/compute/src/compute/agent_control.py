@@ -20,6 +20,9 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
 )
+from shared.compute_policy import (
+    MachinePool,
+)
 
 if TYPE_CHECKING:
     from database.repositories.compute import ComputeMachineEnrollmentRecord
@@ -35,10 +38,10 @@ from shared.timestamps import to_utc, utc_now
 
 from compute.projection import (
     PoolConfig,
-    PrivatePoolFallback,
-    PrivatePoolState,
+    PrivateUnitFallback,
+    PrivateUnitState,
     normalize_backend_route_transport,
-    normalize_pool_config,
+    normalize_unit_config,
     parse_ttl_seconds,
 )
 from compute.state import (
@@ -215,17 +218,16 @@ class AgentBootstrapConfig(ContractModel):
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     executor: str = DEFAULT_PRIVATE_EXECUTOR
-    fallback: PrivatePoolFallback = PrivatePoolFallback.Internal
+    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     image_registry_store: str = ""
     image_clip_version: int = 2
     image_local_cache_enabled: bool = True
 
 
 class AgentStreamTimingPlan(ContractModel):
-    route_revision_key: str
     refresh_seconds: float = AGENT_STREAM_REFRESH_SECONDS
     heartbeat_seconds: float = AGENT_STREAM_HEARTBEAT_SECONDS
     event_coalesce_seconds: float = AGENT_STREAM_EVENT_COALESCE_SECONDS
@@ -298,7 +300,7 @@ class AgentStreamSnapshotPlan(ContractModel):
 class WorkerRecord(ContractModel):
     id: str
     machine_id: str
-    pool_name: str
+    pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     status: WorkerStatus = WorkerStatus.Pending
     total_cpu: int = 0
@@ -356,16 +358,14 @@ def hash_machine_fingerprint(fingerprint: str) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
-def agent_machine_id(workspace_id: str, pool_name: str, fingerprint: str, *, seed: str = "") -> str:
+def agent_machine_id(workspace_id: str, pool: str, fingerprint: str, *, seed: str = "") -> str:
     id_seed = fingerprint or seed or str(int(utc_now().timestamp() * 1_000_000_000))
-    return str(uuid5(NAMESPACE_URL, f"agent-machine\x00{workspace_id}\x00{pool_name}\x00{id_seed}"))
+    return str(uuid5(NAMESPACE_URL, f"agent-machine\x00{workspace_id}\x00{pool}\x00{id_seed}"))
 
 
-def managed_machine_id(workspace_id: str, pool_name: str, seed: str) -> str:
+def managed_machine_id(workspace_id: str, pool: str, seed: str) -> str:
     id_seed = seed or str(int(utc_now().timestamp() * 1_000_000_000))
-    return str(
-        uuid5(NAMESPACE_URL, f"managed-machine\x00{workspace_id}\x00{pool_name}\x00{id_seed}")
-    )
+    return str(uuid5(NAMESPACE_URL, f"managed-machine\x00{workspace_id}\x00{pool}\x00{id_seed}"))
 
 
 def agent_machine_worker_id(machine_id: str) -> str:
@@ -418,17 +418,21 @@ def join_token_ttl_seconds(value: str) -> int:
 
 def plan_join_token_creation(
     principal: ComputePrincipal,
-    pool_name: str,
+    pool: MachinePool,
     *,
+    capacity_owner_id: str,
     ttl: str = "",
     token: str = "",
     machine_id: str = "",
     max_uses: int = 1,
     now: datetime | None = None,
 ) -> JoinTokenCreationPlan:
-    normalized_pool = pool_name.strip()
+    normalized_pool = pool.strip()
     if normalized_pool == "":
         msg = "pool name is required"
+        raise ValueError(msg)
+    if capacity_owner_id.strip() == "":
+        msg = "join token requires the issuing capacity owner"
         raise ValueError(msg)
     if principal.workspace_id == "" or principal.owner_token_id == "":
         msg = "missing workspace auth"
@@ -443,7 +447,8 @@ def plan_join_token_creation(
     state = ComputeJoinTokenState(
         token_hash=hash_compute_token(raw_token),
         workspace_id=principal.workspace_id,
-        pool_name=normalized_pool,
+        capacity_owner_id=capacity_owner_id,
+        pool=MachinePool(normalized_pool),
         machine_id=machine_id.strip(),
         created_by_token_id=principal.owner_token_id,
         max_uses=max_uses,
@@ -460,7 +465,7 @@ def plan_join_token_creation(
 
 
 def pool_created_by_principal(
-    pool: PrivatePoolState | None,
+    pool: PrivateUnitState | None,
     principal: ComputePrincipal | None,
 ) -> bool:
     if pool is None or principal is None or pool.created_by_token_id == "":
@@ -514,7 +519,7 @@ def plan_join_token_binding(
 
 def plan_agent_join(
     token_state: ComputeJoinTokenState | None,
-    pool_state: PrivatePoolState | None,
+    pool_state: PrivateUnitState | None,
     request: AgentJoinRequest,
     *,
     agent_token: str = "",
@@ -553,10 +558,13 @@ def plan_agent_join(
             err_msg="pool not found",
             binding=binding,
         )
+    # Compared by capacity owner, not by name: the credential carries the pool
+    # its machine will join, and a pool is fed by several units, so its name
+    # matches no single unit's.
     if (
         active_token is None
         or pool_state.workspace_id != active_token.workspace_id
-        or pool_state.name != active_token.pool_name
+        or pool_state.capacity_owner_id != active_token.capacity_owner_id
     ):
         return AgentJoinPlan(
             decision=JoinTokenDecision.OwnerMismatch,
@@ -571,7 +579,7 @@ def plan_agent_join(
         else active_token.machine_id.strip()
         or agent_machine_id(
             active_token.workspace_id,
-            active_token.pool_name,
+            active_token.pool,
             request.machine_fingerprint,
         )
     )
@@ -590,7 +598,7 @@ def plan_agent_join(
             gpu=gpu_plan,
             machine_id=machine_id,
         )
-    normalized_pool_config = normalize_pool_config(
+    normalized_pool_config = normalize_unit_config(
         pool_state.config or PoolConfig(name=pool_state.name)
     )
     if normalized_pool_config is None:
@@ -611,7 +619,8 @@ def plan_agent_join(
     agent_state = ComputeAgentTokenState(
         token_hash=hash_compute_token(raw_agent_token),
         workspace_id=active_token.workspace_id,
-        pool_name=active_token.pool_name,
+        capacity_owner_id=active_token.capacity_owner_id,
+        pool=active_token.pool,
         machine_id=machine_id,
         credential_id=credential_id,
         credential_generation=(
@@ -671,7 +680,7 @@ def plan_agent_join(
 
 
 def plan_pool_gpu_enforcement(
-    pool_state: PrivatePoolState,
+    pool_state: PrivateUnitState,
     machine_gpus: list[str],
     machine_gpu_count: int,
     *,
@@ -929,7 +938,7 @@ def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
 def _reject_unroutable_runtime_url(
     url: str,
     *,
-    pool_name: str,
+    pool: MachinePool,
     transport: BackendRouteTransport,
 ) -> None:
     """Refuse a runtime callback a remote machine could never resolve.
@@ -947,7 +956,7 @@ def _reject_unroutable_runtime_url(
         raise ValueError("remote-machine runtime callback URL has no host")
     if host in _LOCAL_RUNTIME_HOSTS or host_is_unreachable_from_a_remote_machine(host):
         raise ValueError(
-            f"pool {pool_name!r} serves remote machines and cannot use runtime callback host "
+            f"pool {pool!r} serves remote machines and cannot use runtime callback host "
             f"{host!r}: a remote machine cannot resolve it. Set "
             "LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to a publicly reachable origin."
         )
@@ -955,7 +964,7 @@ def _reject_unroutable_runtime_url(
 
 def build_agent_bootstrap_config(
     workspace_id: str,
-    pool_state: PrivatePoolState,
+    pool_state: PrivateUnitState,
     gateway: GatewayEndpointConfig,
     image: AgentImageConfig,
     *,
@@ -963,7 +972,7 @@ def build_agent_bootstrap_config(
     tailnet: TailnetConfig,
     executor: str = DEFAULT_PRIVATE_EXECUTOR,
 ) -> AgentBootstrapConfig:
-    normalized = normalize_pool_config(pool_state.config or PoolConfig(name=pool_state.name))
+    normalized = normalize_unit_config(pool_state.config or PoolConfig(name=pool_state.name))
     if normalized is None:
         msg = "pool config is required"
         raise ValueError(msg)
@@ -972,7 +981,7 @@ def build_agent_bootstrap_config(
         raise ValueError(transport_plan.err_msg)
     _reject_unroutable_runtime_url(
         gateway_runtime_http_url,
-        pool_name=pool_state.name,
+        pool=pool_state.pool,
         transport=normalized.transport,
     )
     return AgentBootstrapConfig(
@@ -982,7 +991,7 @@ def build_agent_bootstrap_config(
         gateway_grpc_port=gateway.grpc_port,
         gateway_grpc_tls=gateway.grpc_tls,
         workspace_id=workspace_id,
-        pool_name=pool_state.name,
+        pool=pool_state.pool,
         transport=normalized.transport,
         executor=executor,
         fallback=normalized.fallback,
@@ -992,16 +1001,8 @@ def build_agent_bootstrap_config(
     )
 
 
-def agent_stream_timing(agent_state: ComputeAgentTokenState) -> AgentStreamTimingPlan:
-    return AgentStreamTimingPlan(
-        route_revision_key=agent_route_revision_key(
-            agent_state.workspace_id, agent_state.pool_name, agent_state.machine_id
-        )
-    )
-
-
-def agent_route_revision_key(workspace_id: str, pool_name: str, machine_id: str) -> str:
-    return f"scheduler:route:machine:{{{workspace_id}}}:{pool_name}:{machine_id}:rev"
+def agent_stream_timing() -> AgentStreamTimingPlan:
+    return AgentStreamTimingPlan()
 
 
 def validate_current_agent_state(
@@ -1068,7 +1069,7 @@ def plan_agent_stream_snapshot(
         current=state_plan,
         routes=agent_routes_for_stream(routes),
         slots=slots,
-        timing=agent_stream_timing(state_plan.state),
+        timing=agent_stream_timing(),
     )
 
 
@@ -1087,7 +1088,7 @@ def plan_route_status_update(
         return AgentRouteStatusPlan(accepted=False, err_msg="route not found")
     if (
         route.workspace_id != agent_state.workspace_id
-        or route.pool_name != agent_state.pool_name
+        or route.pool != agent_state.pool
         or route.machine_id != agent_state.machine_id
     ):
         return AgentRouteStatusPlan(accepted=False, err_msg="route does not belong to this agent")
@@ -1319,7 +1320,7 @@ def plan_agent_worker_slot(
     if (
         worker is None
         or worker.machine_id != agent_state.machine_id
-        or worker.pool_name != agent_state.pool_name
+        or worker.pool != agent_state.pool
         or worker.status is WorkerStatus.Disabled
     ):
         return AgentWorkerSlotControlPlan(
@@ -1377,7 +1378,7 @@ def agent_worker_slot_state(
         worker_token_id=token_id,
         worker_token_hash=token_hash,
         workspace_id=agent_state.workspace_id,
-        pool_name=agent_state.pool_name,
+        pool=agent_state.pool,
         capacity_owner_id=worker.capacity_owner_id,
         machine_id=agent_state.machine_id,
         cpu=worker.total_cpu,
@@ -1409,7 +1410,7 @@ def _join_token_error(token_state: ComputeJoinTokenState | None, now: datetime) 
     return ""
 
 
-def _pool_config_with_gpu(pool_state: PrivatePoolState, gpu: str) -> PoolConfig:
+def _pool_config_with_gpu(pool_state: PrivateUnitState, gpu: str) -> PoolConfig:
     base = pool_state.config or PoolConfig(name=pool_state.name, selector=pool_state.selector)
     return base.model_copy(update={"gpu": [gpu]})
 

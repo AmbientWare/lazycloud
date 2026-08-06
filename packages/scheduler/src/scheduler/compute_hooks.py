@@ -6,22 +6,21 @@ from typing import Protocol
 
 from compute.agent_control import agent_machine_worker_id
 from compute.offers import ComputeOffer
-from compute.projection import PrivatePoolState
-from compute.state import ComputePoolState, ComputePoolStatus
+from compute.projection import PrivateUnitState
+from compute.state import ComputeUnitState, ComputeUnitStatus
 from shared.compute_fleet import Machine
-from shared.compute_policy import ComputePoolPhase, ComputePoolRecord
+from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
 
 OPEN_RESERVATION_STATUSES = {"", "active", "pending"}
 
 
-class ComputePoolStateRepository(Protocol):
-    def save_pool_state(self, state: ComputePoolState) -> ComputePoolState: ...
+class ComputeUnitStateRepository(Protocol):
+    def save_unit_state(self, state: ComputeUnitState) -> ComputeUnitState: ...
 
-    def delete_agent_machine_state(
+    def delete_agent_machine_state_for_machine(
         self,
         workspace_id: str,
-        pool_name: str,
         machine_id: str,
     ) -> bool: ...
 
@@ -46,14 +45,14 @@ class SchedulerHookWorkerRepository(Protocol):
 
 @dataclass(slots=True)
 class SchedulerComputeHooks:
-    compute_states: ComputePoolStateRepository
+    compute_states: ComputeUnitStateRepository
     workers: SchedulerHookWorkerRepository
 
-    def register_pool(self, state: PrivatePoolState) -> None:
-        self.compute_states.save_pool_state(_compute_pool_state(state))
+    def register_pool(self, state: PrivateUnitState) -> None:
+        self.compute_states.save_unit_state(_compute_pool_state(state))
 
-    def register_internal_pool(self, pool: ComputePoolRecord, offer: ComputeOffer) -> None:
-        self.compute_states.save_pool_state(_internal_compute_pool_state(pool, offer))
+    def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None:
+        self.compute_states.save_unit_state(_internal_compute_unit_state(unit, offer))
 
     def register_machine(self, machine: Machine) -> None:
         _ = machine
@@ -71,14 +70,13 @@ class SchedulerComputeHooks:
     def retire_machine(
         self,
         workspace_id: str,
-        pool_name: str,
         machine_id: str,
         reason: str,
     ) -> None:
         self.disable_machine(machine_id, reason)
-        self.compute_states.delete_agent_machine_state(workspace_id, pool_name, machine_id)
+        self.compute_states.delete_agent_machine_state_for_machine(workspace_id, machine_id)
 
-    def revoke_pool_join_token(self, token_hash: str) -> None:
+    def revoke_unit_join_token(self, token_hash: str) -> None:
         self.compute_states.revoke_join_token_state(token_hash)
 
     def machine_worker_available(self, machine_id: str) -> bool:
@@ -100,16 +98,17 @@ class SchedulerComputeHooks:
         return [worker]
 
 
-def _compute_pool_state(state: PrivatePoolState) -> ComputePoolState:
+def _compute_pool_state(state: PrivateUnitState) -> ComputeUnitState:
     active_machines = sum(
         max(reservation.node_count, 1)
         for reservation in state.reservations
         if _reservation_open(reservation.status)
     )
     desired_machines = max(state.reserved_nodes, active_machines)
-    return ComputePoolState(
+    return ComputeUnitState(
         workspace_id=state.workspace_id,
         name=state.name,
+        pool=state.pool,
         capacity_owner_id=state.capacity_owner_id,
         provider=_pool_provider(state),
         status=_pool_status(state.status),
@@ -131,13 +130,14 @@ def _compute_pool_state(state: PrivatePoolState) -> ComputePoolState:
     )
 
 
-def _internal_compute_pool_state(
-    pool: ComputePoolRecord,
+def _internal_compute_unit_state(
+    pool: ComputeUnitRecord,
     offer: ComputeOffer,
-) -> ComputePoolState:
-    return ComputePoolState(
+) -> ComputeUnitState:
+    return ComputeUnitState(
         workspace_id=pool.workspace_id,
         name=pool.name,
+        pool=pool.pool,
         capacity_owner_id=pool.capacity_owner_id,
         provider=pool.provider_ref,
         status=_internal_pool_status(pool.phase),
@@ -180,17 +180,17 @@ def _internal_compute_pool_state(
     )
 
 
-def _internal_pool_status(phase: ComputePoolPhase) -> ComputePoolStatus:
-    if phase is ComputePoolPhase.Deleted:
-        return ComputePoolStatus.Deleted
-    if phase is ComputePoolPhase.Deleting:
-        return ComputePoolStatus.Draining
-    if phase in {ComputePoolPhase.Provisioning, ComputePoolPhase.Degraded}:
-        return ComputePoolStatus.Pending
-    return ComputePoolStatus.Active
+def _internal_pool_status(phase: ComputeUnitPhase) -> ComputeUnitStatus:
+    if phase is ComputeUnitPhase.Deleted:
+        return ComputeUnitStatus.Deleted
+    if phase is ComputeUnitPhase.Deleting:
+        return ComputeUnitStatus.Draining
+    if phase in {ComputeUnitPhase.Provisioning, ComputeUnitPhase.Degraded}:
+        return ComputeUnitStatus.Pending
+    return ComputeUnitStatus.Active
 
 
-def _pool_provider(state: PrivatePoolState) -> str:
+def _pool_provider(state: PrivateUnitState) -> str:
     if state.config is not None and state.config.providers:
         return state.config.providers[0]
     for reservation in state.reservations:
@@ -199,15 +199,15 @@ def _pool_provider(state: PrivatePoolState) -> str:
     return "agent"
 
 
-def _pool_status(status: str) -> ComputePoolStatus:
+def _pool_status(status: str) -> ComputeUnitStatus:
     normalized = status.strip().lower()
-    if normalized == ComputePoolStatus.Deleted.value:
-        return ComputePoolStatus.Deleted
-    if normalized == ComputePoolStatus.Draining.value:
-        return ComputePoolStatus.Draining
-    if normalized == ComputePoolStatus.Pending.value:
-        return ComputePoolStatus.Pending
-    return ComputePoolStatus.Active
+    if normalized == ComputeUnitStatus.Deleted.value:
+        return ComputeUnitStatus.Deleted
+    if normalized == ComputeUnitStatus.Draining.value:
+        return ComputeUnitStatus.Draining
+    if normalized == ComputeUnitStatus.Pending.value:
+        return ComputeUnitStatus.Pending
+    return ComputeUnitStatus.Active
 
 
 def _reservation_open(status: str) -> bool:

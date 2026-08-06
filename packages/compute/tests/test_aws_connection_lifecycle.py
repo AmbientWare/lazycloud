@@ -257,16 +257,16 @@ def test_cancel_reconnect_preserves_ready_generation_and_placement(
     service = _service(isolated_services)
     service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default")
     ready = service.validate(workspace="default")
-    assert ready.accepts_placement is True
+    assert ready.hosts_workloads is True
 
     reconnecting = service.reconnect(AwsConnectionReconnectRequest(), workspace="default")
-    assert reconnecting.connection.accepts_placement is True
+    assert reconnecting.connection.hosts_workloads is True
     assert reconnecting.connection.pending_authorization is not None
 
     canceled = service.cancel_reconnect(workspace="default")
 
     assert canceled.phase is AwsAccountConnectionPhase.Ready
-    assert canceled.accepts_placement is True
+    assert canceled.hosts_workloads is True
     assert canceled.active_authorization is not None
     assert canceled.active_authorization.generation == 1
     assert canceled.pending_authorization is None
@@ -288,7 +288,7 @@ def test_initial_assume_role_miss_remains_authorization_required(
     failed = service.validate(workspace="default")
 
     assert failed.phase is AwsAccountConnectionPhase.AwaitingAuthorization
-    assert failed.accepts_placement is False
+    assert failed.hosts_workloads is False
     assert failed.pending_authorization is not None
     assert failed.pending_authorization.authorization_url == created.authorization_url
     assert failed.pending_authorization.error_code is AwsAccountConnectionErrorCode.AssumeRoleDenied
@@ -311,7 +311,7 @@ def test_active_removal_reuses_provider_operation_across_restart_safe_observatio
     removing = service.remove(workspace="default")
     assert removing is not None
     assert removing.phase is AwsAccountConnectionPhase.DisconnectDraining
-    assert removing.accepts_placement is False
+    assert removing.hosts_workloads is False
     assert service.reconcile_due().processed_count == 1
 
     for _ in range(3):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import field_validator
 
+from shared.capacity import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -12,6 +13,14 @@ class BackendRouteTransport(StringEnum):
     Direct = "direct"
     TsnetRestricted = "tsnet_restricted"
     LocalDirect = "local_direct"
+
+
+class PrivateUnitFallback(StringEnum):
+    """What a workload does when the unit it named has no capacity to give it."""
+
+    Internal = "internal"
+    Wait = "wait"
+    Fail = "fail"
 
 
 class BackendRouteState(StringEnum):
@@ -42,7 +51,8 @@ class RoutePrewarmDecision(StringEnum):
 class AgentBackendRoute(ContractModel):
     route_id: str
     workspace_id: str = ""
-    pool_name: str = ""
+    pool: MachinePool = MachinePool("")
+    capacity_owner_id: str = ""
     machine_id: str = ""
     worker_id: str = ""
     container_id: str = ""
@@ -80,6 +90,7 @@ __all__ = [
     "BackendRouteProtocol",
     "BackendRouteState",
     "BackendRouteTransport",
+    "PrivateUnitFallback",
     "RoutePrewarmDecision",
     "parse_backend_route_address",
 ]

@@ -1,6 +1,6 @@
 ---
 title: "cloud, compute, and machine"
-description: "Connect a cloud account, inspect placement and capacity, and manage self-hosted machines."
+description: "Connect a cloud account, inspect pools and capacity, and manage self-hosted machines."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
@@ -25,13 +25,14 @@ Connection phases for `--until`: `awaiting_authorization`, `validating`,
 
 | Command | Description |
 | --- | --- |
-| `lazycloud compute status` | Placement summary and capacity for the workspace. |
+| `lazycloud compute status` | Default pool and capacity for the workspace. |
 | `lazycloud compute instances` | Running compute instances. |
-| `lazycloud compute workloads` | Workloads and their placement. |
+| `lazycloud compute pools` | Pools this workspace can run workloads in. |
+| `lazycloud compute workloads` | Workloads and the pool each runs in. |
 | `lazycloud compute policy show` | Current compute guardrails. |
 | `lazycloud compute policy update [options]` | Update guardrails. |
 
-`compute policy update` options: `--default-placement managed|aws`,
+`compute policy update` options: `--default-pool <pool>`,
 `--default-region`, `--max-cpu` (0–100), `--max-gpu` (0–100),
 `--allowed-region` (repeatable), `--allowed-instance-type` (repeatable),
 `--idle-timeout` (60–86400 seconds), `--root-volume-gib` (50–2048).
@@ -56,7 +57,7 @@ Connection phases for `--until`: `awaiting_authorization`, `validating`,
 | `--service-manager` / `--service-name` / `--state-dir` | Background service installation details. |
 | `--print-only` | Print the generated join command instead of running it (for another host). |
 
-See [Compute and placement](/platform/compute) for the concepts behind these
+See [Compute and pools](/platform/compute) for the concepts behind these
 commands.
 
 <WorkspaceFlag />

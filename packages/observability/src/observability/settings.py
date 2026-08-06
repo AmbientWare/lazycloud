@@ -9,7 +9,6 @@ from shared.billing import UsagePriceConfig
 from shared.usage import UsageCollectorKind, UsageMetricsSinkSettings
 
 from observability.billing import UsagePriceCatalog, configured_usage_price_catalog
-from observability.managed_billing import ManagedBillingMode, ManagedBillingSettings
 from observability.telemetry import (
     DEFAULT_EXPORT_TIMEOUT_SECONDS,
     DEFAULT_METER_INTERVAL_SECONDS,
@@ -126,37 +125,6 @@ class UsagePricingSettings(BaseSettings):
         )
 
 
-class ManagedBillingClientSettings(BaseSettings):
-    mode: ManagedBillingMode = ManagedBillingMode.Noop
-    endpoint: str = ""
-    auth_token: SecretStr = SecretStr("")
-    timeout_seconds: float = Field(default=10.0, gt=0)
-    minimum_credit_cents: int = Field(default=0, ge=0)
-    required: bool = False
-    headers: dict[str, SecretStr] = Field(default_factory=dict)
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_MANAGED_BILLING_",
-        extra="ignore",
-    )
-
-    @model_validator(mode="after")
-    def validate_runtime_settings(self) -> ManagedBillingClientSettings:
-        self.to_runtime_settings()
-        return self
-
-    def to_runtime_settings(self) -> ManagedBillingSettings:
-        return ManagedBillingSettings(
-            mode=self.mode,
-            endpoint=self.endpoint,
-            auth_token=self.auth_token.get_secret_value(),
-            timeout_seconds=self.timeout_seconds,
-            minimum_credit_cents=self.minimum_credit_cents,
-            required=self.required,
-            headers={name: value.get_secret_value() for name, value in self.headers.items()},
-        )
-
-
 class VolumeMeteringSettings(BaseSettings):
     interval_seconds: float = Field(default=60.0, gt=0)
 
@@ -176,7 +144,6 @@ class WorkspaceChangeStreamSettings(BaseSettings):
 
 
 __all__ = [
-    "ManagedBillingClientSettings",
     "TelemetrySettings",
     "UsageMetricsSettings",
     "UsagePricingSettings",
