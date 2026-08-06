@@ -180,7 +180,7 @@ class ContainerService:
         gpu_request: Iterable[str] | None = None,
         gpu_count: int = 0,
         pool_selector: str = "",
-        runtime: OciRuntimeName | str = OciRuntimeName.Runc,
+        runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
         runtime_class: str = "",
         docker_enabled: bool = False,
         block_network: bool = False,

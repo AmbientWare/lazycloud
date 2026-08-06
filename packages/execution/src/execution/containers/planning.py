@@ -51,7 +51,7 @@ class ContainerSchedulingOptions(ContractModel):
     gpu_request: list[str] | None = None
     gpu_count: int = 0
     pool_selector: str = ""
-    runtime: OciRuntimeName | str = OciRuntimeName.Runc
+    runtime: OciRuntimeName | str = OciRuntimeName.Runsc
     runtime_class: str = ""
     docker_enabled: bool = False
     block_network: bool = False
@@ -75,11 +75,9 @@ def resolve_oci_runtime(
     runtime_class: str,
     docker_enabled: bool,
 ) -> tuple[OciRuntimeName, str]:
+    del docker_enabled
     requested_class = runtime_class.strip()
     runtime_name = _normalize_oci_runtime(requested_class or runtime)
-    if docker_enabled and not requested_class:
-        runtime_name = OciRuntimeName.Runsc
-        requested_class = runtime_name.value
     return runtime_name, requested_class
 
 
@@ -106,8 +104,6 @@ def validate_checkpoint_request(
         raise InvalidInputError(
             f"checkpointing is not supported for {startup_kind.value or 'unknown'} workloads"
         )
-    if runtime is not OciRuntimeName.Runc:
-        raise InvalidInputError("checkpointing requires the runc runtime")
     if gpu_count > 1:
         raise InvalidInputError("checkpointing does not support more than one GPU")
     if (
@@ -145,10 +141,18 @@ def _normalize_oci_runtime(value: OciRuntimeName | str) -> OciRuntimeName:
     if isinstance(value, OciRuntimeName):
         return value
     normalized = value.strip().lower()
-    if normalized in {OciRuntimeName.Runsc.value, "gvisor"}:
+    if normalized in {OciRuntimeName.Runsc.value, "gvisor", ""}:
         return OciRuntimeName.Runsc
-    if normalized in {OciRuntimeName.Runc.value, ""}:
-        return OciRuntimeName.Runc
+    if normalized == OciRuntimeName.Runc.value:
+        # Every workload is sandboxed, so this refuses rather than obliges. No
+        # worker advertises runc any more, so honouring it would produce a
+        # request that provisions capacity and never places on it — a retry limit
+        # naming neither the runtime nor the reason.
+        msg = (
+            "runc is not available: every workload runs under gVisor, "
+            "and no worker offers an unsandboxed runtime"
+        )
+        raise ValueError(msg)
     msg = f"unsupported OCI runtime: {value}"
     raise ValueError(msg)
 

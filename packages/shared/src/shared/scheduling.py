@@ -75,7 +75,7 @@ class SchedulerWorkerRequest(ContractModel):
     would pin the request to one candidate and suppress failover.
     """
     architecture: str = "amd64"
-    provider_runtime: str = "runc"
+    provider_runtime: str = "runsc"
     runtime_class: str = ""
     docker_enabled: bool = False
     preemptible: bool = False

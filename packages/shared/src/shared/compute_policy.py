@@ -46,7 +46,7 @@ class ComputeResourceRequirements(ContractModel):
     gpu: str | None = Field(default=None, max_length=160)
     gpu_count: int = Field(default=0, ge=0)
     architecture: str = Field(default="", max_length=64)
-    runtime: str = Field(default="runc", min_length=1, max_length=64)
+    runtime: str = Field(default="runsc", min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def validate_gpu(self) -> ComputeResourceRequirements:
@@ -179,7 +179,7 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     worker_memory_mib: int = Field(default=0, ge=0)
     worker_gpu_type: str = Field(default="", max_length=160)
     worker_gpu_count: int = Field(default=0, ge=0)
-    worker_runtimes: tuple[str, ...] = ("runc",)
+    worker_runtimes: tuple[str, ...] = ("runsc",)
     worker_preemptible: bool = False
     idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
     scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)

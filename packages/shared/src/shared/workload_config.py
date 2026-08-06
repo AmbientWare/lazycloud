@@ -61,7 +61,7 @@ class StubRuntimeConfig(ContractModel):
     checkpoint_readiness_timeout_seconds: int = Field(default=600, ge=1)
     checkpoint_readiness_interval_seconds: float = Field(default=1.0, gt=0)
     pool_selector: str | None = None
-    runtime: str = "runc"
+    runtime: str = "runsc"
     runtime_class: str | None = None
     docker_enabled: bool = False
     block_network: bool = False

@@ -63,7 +63,7 @@ def _worker(
         capacity_owner_id=OWNER_ID,
         pool=MachinePool("cpu"),
         status=status,
-        runtime_classes=["runc"],
+        runtime_classes=["runsc"],
         free_cpu_millicores=free_cpu,
         free_memory_mib=free_memory,
         total_cpu_millicores=4_000,

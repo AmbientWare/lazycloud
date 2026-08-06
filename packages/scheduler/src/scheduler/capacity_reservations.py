@@ -96,7 +96,7 @@ class CapacityRequestShape(ContractModel):
     gpu_type: str = ""
     gpu_count: int = Field(default=0, ge=0)
     runtime_class: str = ""
-    runtime_classes: tuple[str, ...] = ("runc",)
+    runtime_classes: tuple[str, ...] = ("runsc",)
     docker_enabled: bool = False
     preemptible: bool = False
 
