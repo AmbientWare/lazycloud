@@ -32,7 +32,12 @@ from worker.oci_runtime import (
     OciRuntimeCommandTimeouts,
     OciRuntimeSpecBuilder,
 )
-from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig, build_base_oci_config
+from worker.runtime_config import (
+    OciRuntimeName,
+    RuntimeBinaryConfig,
+    build_base_oci_config,
+    prepare_oci_spec_for_runtime,
+)
 
 type JsonObject = dict[str, JsonValue]
 
@@ -41,7 +46,13 @@ _JSON_OBJECT_LIST: TypeAdapter[list[JsonObject]] = TypeAdapter(list[JsonObject])
 _STRING_LIST: TypeAdapter[list[str]] = TypeAdapter(list[str])
 
 
-def test_oci_runtime_selects_persisted_container_runtime_after_process_restart() -> None:
+def test_oci_runtime_reaches_a_container_persisted_before_the_move_to_gvisor() -> None:
+    """A container recorded as runc still has to be reachable.
+
+    The worker advertises only runsc, so looking the persisted name up verbatim
+    raised "worker did not advertise this runtime capability" and left a running
+    container with no route to stop or inspect it.
+    """
     runner = _Runner()
     runtime_by_container = {
         "ctr-runc": OciRuntimeName.Runc,
@@ -50,10 +61,6 @@ def test_oci_runtime_selects_persisted_container_runtime_after_process_restart()
     controller = OciRuntimeCommandController(
         run_command=runner.run,
         runtime_configs={
-            OciRuntimeName.Runc: RuntimeBinaryConfig(
-                runtime=OciRuntimeName.Runc,
-                runc_path="/usr/bin/runc",
-            ),
             OciRuntimeName.Runsc: RuntimeBinaryConfig(
                 runtime=OciRuntimeName.Runsc,
                 runsc_path="/usr/bin/runsc",
@@ -65,7 +72,7 @@ def test_oci_runtime_selects_persisted_container_runtime_after_process_restart()
     assert controller.status("ctr-runsc") == "running"
     assert runner.commands[-1][0] == "/usr/bin/runsc"
     assert controller.status("ctr-runc") == "running"
-    assert runner.commands[-1][0] == "/usr/bin/runc"
+    assert runner.commands[-1][0] == "/usr/bin/runsc"
 
 
 def test_oci_runtime_treats_runsc_missing_state_as_stopped() -> None:
@@ -293,9 +300,9 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
         bundle_root=tmp_path / "bundles",
         image_mount_root=tmp_path / "images",
         runtime_configs={
-            OciRuntimeName.Runc: RuntimeBinaryConfig(
-                runtime=OciRuntimeName.Runc,
-                runc_path="/usr/bin/runc",
+            OciRuntimeName.Runsc: RuntimeBinaryConfig(
+                runtime=OciRuntimeName.Runsc,
+                runsc_path="/usr/bin/runsc",
             )
         },
         resolv_conf_source=_resolv_conf(tmp_path),
@@ -451,11 +458,13 @@ def test_container_tmpfs_mounts_are_bounded_by_the_memory_request() -> None:
 def test_a_gpu_container_receives_device_nodes_and_permission_to_open_them() -> None:
     """Annotations describe an assignment; devices are what make it real.
 
-    `/dev` is built as a fresh tmpfs with no devices, `runc` ignores the CDI
-    annotation that containerd would honour, and no OCI hook is injected. So
-    without this the container gets the CUDA environment, the libraries, and
-    nothing to open — which surfaces inside the workload as a CUDA
-    initialisation error naming neither GPUs nor permissions.
+    `/dev` is a fresh tmpfs with no devices and no OCI hook is injected, so the
+    device nodes are the only thing that gives the container a GPU to open. They
+    are also how gVisor decides a GPU was wanted at all: it looks for
+    /dev/nvidiactl among them, or for an nvidia hook carrying
+    NVIDIA_VISIBLE_DEVICES. The assertion runs on the prepared spec because
+    preparation once cleared these devices after they were added, leaving
+    --nvproxy enabled over a container gVisor had concluded wanted no GPU.
     """
     builder = OciRuntimeSpecBuilder()
     spec: dict[str, JsonValue] = build_base_oci_config()
@@ -471,8 +480,10 @@ def test_a_gpu_container_receives_device_nodes_and_permission_to_open_them() -> 
     )
 
     builder._apply_gpu(spec, assignment)  # pyright: ignore[reportPrivateUsage]
+    prepared = prepare_oci_spec_for_runtime(spec, OciRuntimeName.Runsc)
+    assert prepared.nvproxy_enabled
 
-    linux = spec["linux"]
+    linux = prepared.spec["linux"]
     assert isinstance(linux, dict)
     devices = linux["devices"]
     assert isinstance(devices, list)

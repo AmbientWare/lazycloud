@@ -81,14 +81,13 @@ class RuntimeCapabilities(ContractModel):
 
 class RuntimeBinaryConfig(ContractModel):
     runtime: OciRuntimeName = OciRuntimeName.Runsc
-    runc_path: str = "/usr/local/sbin/runc"
     runsc_path: str = "runsc"
     runsc_platform: str = ""
     runsc_root: str = DEFAULT_RUNSC_ROOT
     runsc_extra_args: list[str] = Field(default_factory=list)
     debug: bool = False
 
-    @field_validator("runc_path", "runsc_path", "runsc_root")
+    @field_validator("runsc_path", "runsc_root")
     @classmethod
     def not_blank(cls, value: str) -> str:
         stripped = value.strip()
@@ -99,9 +98,7 @@ class RuntimeBinaryConfig(ContractModel):
 
     @property
     def binary_path(self) -> str:
-        if self.runtime is OciRuntimeName.Runsc:
-            return self.runsc_path
-        return self.runc_path
+        return self.runsc_path
 
 
 class RuntimeAvailability(ContractModel):
@@ -231,19 +228,13 @@ def normalize_oci_runtime(value: OciRuntimeName | RuntimeEngine | str) -> OciRun
 
 
 def runtime_capabilities(runtime: OciRuntimeName | RuntimeEngine | str) -> RuntimeCapabilities:
-    selected = normalize_oci_runtime(runtime)
-    if selected is OciRuntimeName.Runsc:
-        return RuntimeCapabilities(
-            checkpoint_restore=True,
-            gpu=True,
-            oom_events=False,
-            join_existing_netns=True,
-            cdi=True,
-        )
+    normalize_oci_runtime(runtime)
+    # gVisor reports OOM kills through its own sentry rather than the host cgroup
+    # event file the worker watches, so oom_events stays false.
     return RuntimeCapabilities(
         checkpoint_restore=True,
         gpu=True,
-        oom_events=True,
+        oom_events=False,
         join_existing_netns=True,
         cdi=True,
     )
@@ -349,15 +340,6 @@ def build_base_oci_config(
                 ["ro", "rbind", "rprivate", "nosuid", "nodev"],
             )
         )
-    if selected is OciRuntimeName.Runc:
-        mounts.append(
-            _mount(
-                "/sys/fs/cgroup",
-                "cgroup",
-                "cgroup",
-                ["nosuid", "noexec", "nodev", "relatime"],
-            )
-        )
     user: JsonObject = {"uid": 0, "gid": 0}
     rlimits: JsonArray = []
     process: JsonObject = {
@@ -396,9 +378,7 @@ def plan_runtime_command(
     config: RuntimeBinaryConfig,
     request: RuntimeCommandRequest,
 ) -> RuntimeCommandPlan:
-    if config.runtime is OciRuntimeName.Runsc:
-        return _plan_runsc_command(config, request)
-    return _plan_runc_command(config, request)
+    return _plan_runsc_command(config, request)
 
 
 def prepare_oci_spec_for_runtime(
@@ -416,17 +396,22 @@ def prepare_oci_spec_for_runtime(
     if selected is OciRuntimeName.Runsc:
         linux = _ensure_dict(prepared, "linux")
         linux.pop("seccomp", None)
-        if gpu_detected:
-            linux["devices"] = []
-            if cuda_checkpoint_path:
-                mount = _mount(
-                    "/usr/local/bin/cuda-checkpoint",
-                    "bind",
-                    cuda_checkpoint_path,
-                    ["bind", "ro"],
-                )
-                _ensure_list(prepared, "mounts").append(mount)
-                added_mounts.append(mount)
+        # The nvidia device nodes must survive. Clearing them for a sandbox looks
+        # right and is not: gVisor decides a container wants a GPU by finding
+        # /dev/nvidiactl among linux.devices, or by an nvidia hook it can read
+        # NVIDIA_VISIBLE_DEVICES from, and hooks are stripped here. Emptying the
+        # list left --nvproxy set over a sandbox gVisor had concluded needed no
+        # GPU. It removes the frontend nodes itself and serves them from the
+        # sentry, so passing them through does not expose the host devices.
+        if gpu_detected and cuda_checkpoint_path:
+            mount = _mount(
+                "/usr/local/bin/cuda-checkpoint",
+                "bind",
+                cuda_checkpoint_path,
+                ["bind", "ro"],
+            )
+            _ensure_list(prepared, "mounts").append(mount)
+            added_mounts.append(mount)
         if docker_enabled:
             added_capabilities = add_docker_in_docker_capabilities(prepared)
     return OciSpecPreparation(
@@ -616,67 +601,6 @@ def _plan_runsc_command(
         uses_process_group=operation in {RuntimeOperation.Run, RuntimeOperation.Restore},
         cleanup_argv=cleanup_argv,
     )
-
-
-def _plan_runc_command(
-    config: RuntimeBinaryConfig,
-    request: RuntimeCommandRequest,
-) -> RuntimeCommandPlan:
-    argv = [config.runc_path]
-    operation = request.operation
-    if operation is RuntimeOperation.Run:
-        _require(request.container_id, "container_id")
-        _require(request.bundle_path, "bundle_path")
-        argv.extend(["run", "--bundle", str(request.bundle_path), str(request.container_id)])
-    elif operation is RuntimeOperation.Exec:
-        _require(request.container_id, "container_id")
-        _require(request.process_spec_path, "process_spec_path")
-        argv.extend(
-            ["exec", "--process", str(request.process_spec_path), str(request.container_id)]
-        )
-    elif operation is RuntimeOperation.Kill:
-        _require(request.container_id, "container_id")
-        argv.append("kill")
-        if request.all_processes:
-            argv.append("--all")
-        argv.extend([str(request.container_id), str(request.signal)])
-    elif operation is RuntimeOperation.Delete:
-        _require(request.container_id, "container_id")
-        argv.append("delete")
-        if request.force:
-            argv.append("--force")
-        argv.append(str(request.container_id))
-    elif operation is RuntimeOperation.State:
-        _require(request.container_id, "container_id")
-        argv.extend(["state", str(request.container_id)])
-    elif operation is RuntimeOperation.List:
-        argv.extend(["list", "--format", "json"])
-    elif operation is RuntimeOperation.Checkpoint:
-        _require(request.container_id, "container_id")
-        argv.append("checkpoint")
-        _append_path_arg(argv, "--image-path", request.image_path)
-        _append_path_arg(argv, "--work-path", request.work_dir)
-        if request.leave_running:
-            argv.append("--leave-running")
-        if request.allow_open_tcp:
-            argv.append("--tcp-established")
-        if request.skip_in_flight:
-            argv.append("--tcp-skip-in-flight")
-        if request.link_remap:
-            argv.append("--link-remap")
-        argv.extend(["--manage-cgroups-mode", "soft"])
-        argv.append(str(request.container_id))
-    elif operation is RuntimeOperation.Restore:
-        _require(request.container_id, "container_id")
-        argv.append("restore")
-        _append_path_arg(argv, "--image-path", request.image_path)
-        _append_path_arg(argv, "--work-path", request.work_dir)
-        _append_path_arg(argv, "--bundle", request.bundle_path)
-        if not request.tcp_close:
-            argv.append("--tcp-established")
-        argv.extend(["--manage-cgroups-mode", "soft"])
-        argv.append(str(request.container_id))
-    return RuntimeCommandPlan(runtime=OciRuntimeName.Runc, operation=operation, argv=argv)
 
 
 def _runsc_base_args(
