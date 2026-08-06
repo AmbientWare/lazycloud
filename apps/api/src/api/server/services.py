@@ -35,6 +35,7 @@ from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
 from execution.containers.preemption import PreemptedContainerService
+from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.endpoints.dispatch import (
@@ -831,10 +832,12 @@ class ApiServices(ApiServiceCore):
         placement_resources = (
             aws_composition.deployment_bucket_access if aws_composition is not None else None
         )
+        container_runtime_state = RedisContainerRuntimeStateRepository(redis)
         scheduling_persistence = ContainerSchedulingPersistenceService(
             context,
             events,
             workspace_changes,
+            runtime_state=container_runtime_state,
         )
         container_scheduler = SchedulerContainerRequestService(
             worker_repository,
@@ -861,6 +864,7 @@ class ApiServices(ApiServiceCore):
             scheduler_cancellation=container_scheduler,
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
+            runtime_state=container_runtime_state,
         )
         container_shutdowns = ContainerShutdownService(
             container_repository,
@@ -1463,6 +1467,7 @@ def _worker_repository_service(
     return WorkerRepositoryService(
         workers=scheduler_workers,
         containers=scheduler_containers,
+        runtime_state=RedisContainerRuntimeStateRepository(redis),
         network=RedisWorkerNetworkIpRepository(redis),
         events=RedisEventBus(redis),
         container_credentials=WorkerCredentialService(
