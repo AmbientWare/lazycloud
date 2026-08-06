@@ -1030,6 +1030,14 @@ class CapacityReservationService:
                 contention = contention or exc
                 continue
             except Exception:
+                # One broken owner must not sink a request other owners can
+                # serve, but a unit that fails every attempt would otherwise be
+                # indistinguishable from one that never accepted the request.
+                LOGGER.exception(
+                    "capacity owner %s failed to serve container %s; trying the next candidate",
+                    controller.capacity_owner_id,
+                    request.container_id,
+                )
                 continue
             last_result = result
             if result.status in {
