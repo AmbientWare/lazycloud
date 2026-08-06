@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -19,7 +20,10 @@ from shared.scheduling import SchedulerWorkerRequest
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
 
+from execution.containers.runtime_state import ContainerRuntimeStateRepository
 from execution.context import ExecutionContext
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -27,6 +31,7 @@ class ContainerSchedulingPersistenceService:
     context: ExecutionContext
     events: EventService
     workspace_changes: WorkspaceChangePublisher
+    runtime_state: ContainerRuntimeStateRepository | None = None
 
     def assign_runtime(
         self,
@@ -107,6 +112,24 @@ class ContainerSchedulingPersistenceService:
             )
         self._publish_container_change(container)
 
+    def _release_runtime_state(self, container: ContainerRecord) -> None:
+        """Best effort, for the same reason as the container service: a failed
+        cache write must not stop a container being recorded as failed."""
+        if self.runtime_state is None or not container.stub_id:
+            return
+        try:
+            self.runtime_state.release(
+                workspace_id=container.workspace_id,
+                stub_id=container.stub_id,
+                container_id=container.id,
+            )
+        except Exception:
+            LOGGER.warning(
+                "releasing container runtime state failed",
+                exc_info=True,
+                extra={"container_id": container.id},
+            )
+
     def mark_scheduling_failed(
         self,
         request: SchedulerWorkerRequest,
@@ -123,6 +146,7 @@ class ContainerSchedulingPersistenceService:
             container.status = ContainerStatus.Failed
             container.exit_code = 1
             container.finished_at = container.finished_at or current_time
+            self._release_runtime_state(container)
             ContainerRepository(session).records.upsert(
                 container,
                 workspace_id=container.workspace_id,

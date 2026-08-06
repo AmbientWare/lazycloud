@@ -49,14 +49,14 @@ class RedisMapService:
 
     def map_set(
         self,
-        workspace_name: str,
+        workspace_id: str,
         name: str,
         key: str,
         value: bytes,
         *,
         ttl_seconds: int = 0,
     ) -> None:
-        plan = plan_map_set(workspace_name, name, key, value, ttl_seconds=ttl_seconds)
+        plan = plan_map_set(workspace_id, name, key, value, ttl_seconds=ttl_seconds)
         if plan.status is not MapSetStatus.Accepted:
             raise InvalidInputError(plan.error_message)
 
@@ -66,22 +66,22 @@ class RedisMapService:
             pipeline = self.redis.pipeline(transaction=True)
             pipeline.set(entry_key, value, ex=ttl_seconds or None)
             pipeline.set_add(index_key, key)
-            pipeline.set_add(self._key(map_registry_key(workspace_name)), name)
+            pipeline.set_add(self._key(map_registry_key(workspace_id)), name)
             pipeline.execute()
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def map_get(self, workspace_name: str, name: str, key: str) -> bytes:
+    def map_get(self, workspace_id: str, name: str, key: str) -> bytes:
         try:
-            value = self.redis.get(self._key(map_entry_key(workspace_name, name, key)))
+            value = self.redis.get(self._key(map_entry_key(workspace_id, name, key)))
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
         if value is None:
             raise NotFoundError(f"map key not found: {key}")
         return _to_bytes(value)
 
-    def map_delete(self, workspace_name: str, name: str, key: str) -> None:
-        plan = plan_map_delete(workspace_name, name, key)
+    def map_delete(self, workspace_id: str, name: str, key: str) -> None:
+        plan = plan_map_delete(workspace_id, name, key)
         try:
             pipeline = self.redis.pipeline(transaction=True)
             pipeline.delete(self._key(plan.entry_key))
@@ -90,8 +90,8 @@ class RedisMapService:
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def map_keys(self, workspace_name: str, name: str) -> tuple[str, ...]:
-        index_key = self._key(map_index_key(workspace_name, name))
+    def map_keys(self, workspace_id: str, name: str) -> tuple[str, ...]:
+        index_key = self._key(map_index_key(workspace_id, name))
         try:
             indexed_keys = {_to_text(item) for item in self.redis.set_members(index_key)}
         except Exception as exc:
@@ -101,11 +101,11 @@ class RedisMapService:
 
         live_keys: set[str] = set()
         for key in indexed_keys:
-            if self.redis.exists(self._key(map_entry_key(workspace_name, name, key))):
+            if self.redis.exists(self._key(map_entry_key(workspace_id, name, key))):
                 live_keys.add(key)
 
         plan = plan_map_live_keys(
-            workspace_name,
+            workspace_id,
             name,
             indexed_keys=indexed_keys,
             existing_keys=live_keys,
@@ -114,11 +114,11 @@ class RedisMapService:
             self.redis.set_remove(index_key, *plan.stale_keys)
         return plan.live_keys
 
-    def map_count(self, workspace_name: str, name: str) -> int:
-        return len(self.map_keys(workspace_name, name))
+    def map_count(self, workspace_id: str, name: str) -> int:
+        return len(self.map_keys(workspace_id, name))
 
-    def map_stats(self, workspace_name: str, name: str) -> MapCollectionStats:
-        keys = self.map_keys(workspace_name, name)
+    def map_stats(self, workspace_id: str, name: str) -> MapCollectionStats:
+        keys = self.map_keys(workspace_id, name)
         if not keys:
             return MapCollectionStats(
                 name=name,
@@ -127,7 +127,7 @@ class RedisMapService:
                 expiring_keys=0,
                 nearest_expiry_seconds=None,
             )
-        metrics = self._entry_metrics(workspace_name, name, keys)
+        metrics = self._entry_metrics(workspace_id, name, keys)
         expiries = [ttl for _size, ttl in metrics if ttl >= 0]
         return MapCollectionStats(
             name=name,
@@ -137,8 +137,8 @@ class RedisMapService:
             nearest_expiry_seconds=min(expiries) if expiries else None,
         )
 
-    def map_names(self, workspace_name: str) -> tuple[str, ...]:
-        registry_key = self._key(map_registry_key(workspace_name))
+    def map_names(self, workspace_id: str) -> tuple[str, ...]:
+        registry_key = self._key(map_registry_key(workspace_id))
         try:
             names = sorted(_to_text(item) for item in self.redis.set_members(registry_key))
         except Exception as exc:
@@ -146,28 +146,28 @@ class RedisMapService:
         live: list[str] = []
         stale: list[str] = []
         for name in names:
-            (live if self.map_count(workspace_name, name) > 0 else stale).append(name)
+            (live if self.map_count(workspace_id, name) > 0 else stale).append(name)
         if stale:
             self.redis.set_remove(registry_key, *stale)
         return tuple(live)
 
-    def delete_map(self, workspace_name: str, name: str) -> None:
-        keys = self.map_keys(workspace_name, name)
+    def delete_map(self, workspace_id: str, name: str) -> None:
+        keys = self.map_keys(workspace_id, name)
         try:
             pipeline = self.redis.pipeline(transaction=True)
             for key in keys:
-                pipeline.delete(self._key(map_entry_key(workspace_name, name, key)))
-            pipeline.delete(self._key(map_index_key(workspace_name, name)))
-            pipeline.set_remove(self._key(map_registry_key(workspace_name)), name)
+                pipeline.delete(self._key(map_entry_key(workspace_id, name, key)))
+            pipeline.delete(self._key(map_index_key(workspace_id, name)))
+            pipeline.set_remove(self._key(map_registry_key(workspace_id)), name)
             pipeline.execute()
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def delete_workspace(self, workspace_name: str) -> None:
-        for name in self.map_names(workspace_name):
-            self.delete_map(workspace_name, name)
+    def delete_workspace(self, workspace_id: str) -> None:
+        for name in self.map_names(workspace_id):
+            self.delete_map(workspace_id, name)
         try:
-            self.redis.delete(self._key(map_registry_key(workspace_name)))
+            self.redis.delete(self._key(map_registry_key(workspace_id)))
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
@@ -176,11 +176,11 @@ class RedisMapService:
 
     def _entry_metrics(
         self,
-        workspace_name: str,
+        workspace_id: str,
         name: str,
         keys: tuple[str, ...],
     ) -> tuple[tuple[int, int], ...]:
-        entry_keys = [self._key(map_entry_key(workspace_name, name, key)) for key in keys]
+        entry_keys = [self._key(map_entry_key(workspace_id, name, key)) for key in keys]
         try:
             pipeline = self.redis.pipeline(transaction=False)
             for entry_key in entry_keys:
@@ -212,18 +212,18 @@ class RedisSimpleQueueService:
 
     def simple_queue_put(
         self,
-        workspace_name: str,
+        workspace_id: str,
         name: str,
         value: bytes,
     ) -> None:
-        plan = plan_simple_queue_put(workspace_name, name, value)
+        plan = plan_simple_queue_put(workspace_id, name, value)
         recorded_at = self.clock()
-        activity_key = self._key(simple_queue_activity_key(workspace_name, name))
+        activity_key = self._key(simple_queue_activity_key(workspace_id, name))
         try:
             pipeline = self.redis.pipeline(transaction=True)
             pipeline.list_push(self._key(plan.queue_key), value)
             pipeline.list_push(
-                self._key(simple_queue_timestamps_name(workspace_name, name)),
+                self._key(simple_queue_timestamps_name(workspace_id, name)),
                 f"{recorded_at:.6f}",
             )
             pipeline.sorted_set_add(activity_key, {uuid.uuid4().hex: recorded_at})
@@ -233,14 +233,14 @@ class RedisSimpleQueueService:
                 recorded_at - SIMPLE_QUEUE_ACTIVITY_RETENTION_SECONDS,
             )
             pipeline.expire(activity_key, SIMPLE_QUEUE_ACTIVITY_RETENTION_SECONDS)
-            pipeline.set_add(self._key(simple_queue_registry_key(workspace_name)), name)
+            pipeline.set_add(self._key(simple_queue_registry_key(workspace_id)), name)
             pipeline.execute()
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def simple_queue_pop(self, workspace_name: str, name: str) -> bytes:
-        queue_key = self._key(simple_queue_name(workspace_name, name))
-        timestamps_key = self._key(simple_queue_timestamps_name(workspace_name, name))
+    def simple_queue_pop(self, workspace_id: str, name: str) -> bytes:
+        queue_key = self._key(simple_queue_name(workspace_id, name))
+        timestamps_key = self._key(simple_queue_timestamps_name(workspace_id, name))
         try:
             pipeline = self.redis.pipeline(transaction=True)
             pipeline.list_pop(queue_key)
@@ -255,8 +255,8 @@ class RedisSimpleQueueService:
             raise UpstreamUnavailableError(str(exc)) from exc
         return value or b""
 
-    def simple_queue_peek(self, workspace_name: str, name: str) -> bytes:
-        queue_key = self._key(simple_queue_name(workspace_name, name))
+    def simple_queue_peek(self, workspace_id: str, name: str) -> bytes:
+        queue_key = self._key(simple_queue_name(workspace_id, name))
         try:
             values = self.redis.list_range(queue_key, 0, 0)
         except Exception as exc:
@@ -265,24 +265,24 @@ class RedisSimpleQueueService:
             return b""
         return _to_bytes(values[0])
 
-    def simple_queue_empty(self, workspace_name: str, name: str) -> bool:
-        return self.simple_queue_size(workspace_name, name) == 0
+    def simple_queue_empty(self, workspace_id: str, name: str) -> bool:
+        return self.simple_queue_size(workspace_id, name) == 0
 
-    def simple_queue_size(self, workspace_name: str, name: str) -> int:
+    def simple_queue_size(self, workspace_id: str, name: str) -> int:
         try:
-            return self.redis.list_length(self._key(simple_queue_name(workspace_name, name)))
+            return self.redis.list_length(self._key(simple_queue_name(workspace_id, name)))
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
     def simple_queue_stats(
         self,
-        workspace_name: str,
+        workspace_id: str,
         name: str,
     ) -> SimpleQueueStats:
         recorded_at = self.clock()
-        queue_key = self._key(simple_queue_name(workspace_name, name))
-        timestamps_key = self._key(simple_queue_timestamps_name(workspace_name, name))
-        activity_key = self._key(simple_queue_activity_key(workspace_name, name))
+        queue_key = self._key(simple_queue_name(workspace_id, name))
+        timestamps_key = self._key(simple_queue_timestamps_name(workspace_id, name))
+        activity_key = self._key(simple_queue_activity_key(workspace_id, name))
         try:
             size = self.redis.list_length(queue_key)
             timestamps = self.redis.list_range(timestamps_key, 0, 0)
@@ -303,30 +303,30 @@ class RedisSimpleQueueService:
             put_rate_per_minute=len(activity),
         )
 
-    def simple_queue_names(self, workspace_name: str) -> tuple[str, ...]:
-        registry_key = self._key(simple_queue_registry_key(workspace_name))
+    def simple_queue_names(self, workspace_id: str) -> tuple[str, ...]:
+        registry_key = self._key(simple_queue_registry_key(workspace_id))
         try:
             names = sorted(_to_text(item) for item in self.redis.set_members(registry_key))
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
         return tuple(names)
 
-    def delete_queue(self, workspace_name: str, name: str) -> None:
+    def delete_queue(self, workspace_id: str, name: str) -> None:
         try:
             pipeline = self.redis.pipeline(transaction=True)
-            pipeline.delete(self._key(simple_queue_name(workspace_name, name)))
-            pipeline.delete(self._key(simple_queue_timestamps_name(workspace_name, name)))
-            pipeline.delete(self._key(simple_queue_activity_key(workspace_name, name)))
-            pipeline.set_remove(self._key(simple_queue_registry_key(workspace_name)), name)
+            pipeline.delete(self._key(simple_queue_name(workspace_id, name)))
+            pipeline.delete(self._key(simple_queue_timestamps_name(workspace_id, name)))
+            pipeline.delete(self._key(simple_queue_activity_key(workspace_id, name)))
+            pipeline.set_remove(self._key(simple_queue_registry_key(workspace_id)), name)
             pipeline.execute()
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def delete_workspace(self, workspace_name: str) -> None:
-        for name in self.simple_queue_names(workspace_name):
-            self.delete_queue(workspace_name, name)
+    def delete_workspace(self, workspace_id: str) -> None:
+        for name in self.simple_queue_names(workspace_id):
+            self.delete_queue(workspace_id, name)
         try:
-            self.redis.delete(self._key(simple_queue_registry_key(workspace_name)))
+            self.redis.delete(self._key(simple_queue_registry_key(workspace_id)))
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 

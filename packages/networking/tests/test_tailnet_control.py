@@ -344,6 +344,7 @@ def _control(
             oauth_client_id="oauth-client-id",
             oauth_client_secret=SecretStr(CLIENT_SECRET),
             agent_tag="tag:lazycloud-agent",
+            control_plane_tag="tag:lazycloud-control-plane",
             auth_key_ttl_seconds=300,
         ),
         transport=transport,

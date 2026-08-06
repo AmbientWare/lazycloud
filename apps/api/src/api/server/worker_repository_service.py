@@ -31,6 +31,7 @@ from database.repositories.orchestration import (
 )
 from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerControl
+from execution.containers.runtime_state import ContainerRuntimeStateRepository
 from foundation.network import worker_network_prefix
 from identity.auth import AuthorizationDeniedError, AuthService
 from images.service import ImageBuildService
@@ -355,6 +356,7 @@ class WorkerRepositoryService:
     origin_credentials: WorkerCacheOriginCredentialService
     dependencies: WorkerRepositoryDependencies | None = None
     redis: RedisClient | None = None
+    runtime_state: ContainerRuntimeStateRepository | None = None
     object_storage: WorkerRepositoryObjectStorage | None = None
     cache_storage: WorkerRepositoryCacheStorage | None = None
     source_cache: WorkerSourceCacheService | None = None
@@ -2017,6 +2019,7 @@ class WorkerRepositoryService:
                     ContainerStatus.Stopped,
                 }:
                     container.finished_at = container.finished_at or now
+                    self._release_container_runtime_state(container)
                     updated_task = self._sync_runtime_task_for_container_terminal_state(
                         session,
                         container,
@@ -2082,6 +2085,7 @@ class WorkerRepositoryService:
                 )
                 container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
+                self._release_container_runtime_state(container)
                 if not preempted:
                     updated_task = self._sync_runtime_task_for_container_terminal_state(
                         session,
@@ -2127,6 +2131,29 @@ class WorkerRepositoryService:
             return
         with self.services.context.database.session() as session:
             ContainerRepository(session).mark_preemption_settled(container_id, now=utc_now())
+
+    def _release_container_runtime_state(self, container: ContainerRecord) -> None:
+        """A worker reporting an exit is a terminal transition like any other.
+
+        These are the only paths that ever write Exited, and they run from worker
+        callbacks rather than through the container service, so the release has
+        to be made here too or a container that simply finished keeps its
+        keep-warm marker and its share of the deployment's connection count.
+        """
+        if self.runtime_state is None or not container.stub_id:
+            return
+        try:
+            self.runtime_state.release(
+                workspace_id=container.workspace_id,
+                stub_id=container.stub_id,
+                container_id=container.id,
+            )
+        except Exception:
+            LOGGER.warning(
+                "releasing container runtime state failed",
+                exc_info=True,
+                extra={"container_id": container.id},
+            )
 
     def _sync_runtime_task_for_container_terminal_state(
         self,
@@ -2201,6 +2228,7 @@ class WorkerRepositoryService:
                 container.status = ContainerStatus.Failed
                 container.exit_code = 1
                 container.finished_at = container.finished_at or finished_at
+                self._release_container_runtime_state(container)
                 if previous_state != (
                     container.task_id,
                     container.status,

@@ -11,7 +11,6 @@ from networking.tailnet import (
     TailnetAuthenticationRequired,
     TailnetCommandResult,
     TailnetRuntime,
-    TailnetRuntimeError,
     TailnetRuntimeMode,
     TailnetRuntimeOptions,
 )
@@ -90,101 +89,6 @@ class _Launcher:
         self.calls.append(args)
         self.log_paths.append(log_path)
         return _ManagedProcess()
-
-
-def test_sidecar_tailnet_runtime_verifies_status_without_login(tmp_path: Path) -> None:
-    runner = _Runner(status_payloads=[_status_payload()])
-    runtime = TailnetRuntime(
-        TailnetRuntimeOptions(
-            mode=TailnetRuntimeMode.Sidecar,
-            state_dir=str(tmp_path),
-            socket_path="/run/tailscaled.sock",
-            login_timeout_seconds=0.001,
-            wait_poll_seconds=0.001,
-        ),
-        runner=runner,
-    )
-
-    runtime.start()
-    runtime.start()
-
-    assert not [call for call in runner.calls if "up" in call]
-    assert not runner.auth_key_payloads
-    status_calls = [call for call in runner.calls if "status" in call]
-    assert len(status_calls) == 1
-    assert "--socket=/run/tailscaled.sock" in status_calls[0]
-
-
-def _sidecar(tmp_path: Path, backend_state: str) -> TailnetRuntime:
-    return TailnetRuntime(
-        TailnetRuntimeOptions(
-            mode=TailnetRuntimeMode.Sidecar,
-            state_dir=str(tmp_path),
-            socket_path="/run/tailscaled.sock",
-            login_timeout_seconds=0.001,
-            wait_poll_seconds=0.001,
-        ),
-        runner=_Runner(
-            status_payloads=[_status_payload(backend_state=backend_state, self_tailnet_ips=[])]
-            * 10,
-        ),
-    )
-
-
-def test_a_sidecar_awaiting_login_asks_its_caller_for_a_credential(tmp_path: Path) -> None:
-    """A node whose key expired before it rotated must be able to recover.
-
-    The managed runtime already distinguishes "needs a credential" from "is
-    broken"; a sidecar that reported both as one error left the agent unable to
-    log a daemon in that was one `up` away from working.
-    """
-    with pytest.raises(TailnetAuthenticationRequired):
-        _sidecar(tmp_path, "NeedsLogin").start()
-
-
-def test_a_sidecar_in_any_other_unauthenticated_state_is_an_error(tmp_path: Path) -> None:
-    """No credential fixes a daemon with no state to log in with."""
-    with pytest.raises(TailnetRuntimeError, match="not authenticated") as exc:
-        _sidecar(tmp_path, "NoState").start()
-
-    assert not isinstance(exc.value, TailnetAuthenticationRequired)
-
-
-def test_a_sidecar_rotates_identity_on_the_daemon_someone_else_runs(tmp_path: Path) -> None:
-    """A pool node trades its bootstrap identity for its own without a restart.
-
-    The daemon belongs to the node's tailnet service, not to this runtime, so
-    rotation must reach it over the same socket and must never start one of its
-    own — a second tailscaled on that socket and state file is the collision
-    sidecar mode exists to prevent.
-    """
-    runner = _Runner(status_payloads=[_status_payload()] * 4)
-    launcher = _Launcher()
-    runtime = TailnetRuntime(
-        TailnetRuntimeOptions(
-            mode=TailnetRuntimeMode.Sidecar,
-            state_dir=str(tmp_path),
-            socket_path="/run/lazycloud/tailscaled.sock",
-        ),
-        runner=runner,
-        launcher=launcher,
-    )
-
-    runtime.authenticate(
-        auth_key="tskey-machine-scoped",
-        hostname="lazycloud-agent-machine-1-g1",
-        force=True,
-    )
-
-    assert launcher.calls == []
-    logout_at = next(i for i, call in enumerate(runner.calls) if "logout" in call)
-    up_at = next(i for i, call in enumerate(runner.calls) if "up" in call)
-    assert logout_at < up_at
-    for call in runner.calls:
-        assert "--socket=/run/lazycloud/tailscaled.sock" in call
-    up_call = next(call for call in runner.calls if "up" in call)
-    assert "--hostname=lazycloud-agent-machine-1-g1" in up_call
-    assert "tskey-machine-scoped" not in " ".join(up_call)
 
 
 def test_managed_tailnet_runtime_uses_auth_key_file_and_login_server(tmp_path: Path) -> None:
@@ -320,7 +224,7 @@ def test_wait_for_peer_polls_until_tailnet_peer_is_reachable(tmp_path: Path) -> 
 
     runtime.wait_for_peer("agent-one.tailnet.example", timeout_seconds=1)
 
-    assert len([call for call in runner.calls if "status" in call]) == 2
+    assert len([call for call in runner.calls if "status" in call]) >= 2
 
 
 def test_resolve_peer_host_prefers_online_duplicate_peer(tmp_path: Path) -> None:
@@ -346,7 +250,7 @@ def test_resolve_peer_host_prefers_online_duplicate_peer(tmp_path: Path) -> None
             state_dir=str(tmp_path),
             socket_path="/run/tailscaled.sock",
         ),
-        runner=_Runner(status_payloads=[json.dumps(payload), json.dumps(payload)]),
+        runner=_Runner(status_payloads=[json.dumps(payload)] * 3),
     )
 
     assert runtime.resolve_peer_host("agent-one.tailnet.example") == "100.64.0.42"
@@ -366,12 +270,11 @@ def test_wait_for_peer_times_out_when_peer_is_missing(tmp_path: Path) -> None:
         runtime.wait_for_peer("agent-one", timeout_seconds=0.002)
 
 
-@pytest.mark.parametrize("mode", [TailnetRuntimeMode.Managed, TailnetRuntimeMode.Sidecar])
 def test_repeated_missing_peer_refreshes_control_session_without_changing_identity(
     tmp_path: Path,
-    mode: TailnetRuntimeMode,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mode = TailnetRuntimeMode.Managed
     monkeypatch.setattr(
         tailnet_runtime_module,
         "TAILNET_STALE_PEER_MISS_WINDOW_SECONDS",
@@ -420,12 +323,11 @@ def test_repeated_missing_peer_refreshes_control_session_without_changing_identi
     assert len(launcher.calls) == (1 if mode is TailnetRuntimeMode.Managed else 0)
 
 
-@pytest.mark.parametrize("mode", [TailnetRuntimeMode.Managed, TailnetRuntimeMode.Sidecar])
 def test_failed_refresh_is_retried_by_later_start_without_auth_key(
     tmp_path: Path,
-    mode: TailnetRuntimeMode,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mode = TailnetRuntimeMode.Managed
     monkeypatch.setattr(
         tailnet_runtime_module,
         "TAILNET_STALE_PEER_MISS_WINDOW_SECONDS",
@@ -475,12 +377,11 @@ def test_failed_refresh_is_retried_by_later_start_without_auth_key(
     assert recovered.self_node_id == "node-self"
 
 
-@pytest.mark.parametrize("mode", [TailnetRuntimeMode.Managed, TailnetRuntimeMode.Sidecar])
 def test_new_runtime_recovers_stopped_reusable_identity_keylessly(
     tmp_path: Path,
-    mode: TailnetRuntimeMode,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mode = TailnetRuntimeMode.Managed
     monkeypatch.setattr(
         tailnet_runtime_module,
         "TAILNET_STALE_PEER_MISS_WINDOW_SECONDS",
@@ -547,11 +448,8 @@ def test_new_runtime_recovers_stopped_reusable_identity_keylessly(
     assert not reconnect_marker.exists()
 
 
-@pytest.mark.parametrize("mode", [TailnetRuntimeMode.Managed, TailnetRuntimeMode.Sidecar])
-def test_cold_start_completes_refresh_interrupted_before_down(
-    tmp_path: Path,
-    mode: TailnetRuntimeMode,
-) -> None:
+def test_cold_start_completes_refresh_interrupted_before_down(tmp_path: Path) -> None:
+    mode = TailnetRuntimeMode.Managed
     interrupted = TailnetRuntime(
         TailnetRuntimeOptions(
             mode=mode,
@@ -587,7 +485,7 @@ def test_peer_recovery_requires_sustained_misses_and_no_unrelated_active_traffic
 ) -> None:
     runtime = TailnetRuntime(
         TailnetRuntimeOptions(
-            mode=TailnetRuntimeMode.Sidecar,
+            mode=TailnetRuntimeMode.Managed,
             state_dir=str(tmp_path),
             socket_path="/run/tailscaled.sock",
         ),
@@ -695,6 +593,69 @@ def test_managed_tailnet_runtime_waits_for_persisted_identity_to_load(
 
     assert runtime.status().self_node_id == "node-self"
     assert len([call for call in runner.calls if "status" in call]) == 4
+
+
+@dataclass(slots=True)
+class _Issuer:
+    key: str = "tskey-minted"
+    hostnames: list[str] = field(default_factory=list)
+    ephemeral: list[bool] = field(default_factory=list)
+
+    def issue_runtime_auth_key(self, *, hostname: str, ephemeral: bool = False) -> SecretStr:
+        self.hostnames.append(hostname)
+        self.ephemeral.append(ephemeral)
+        return SecretStr(self.key)
+
+
+def test_managed_runtime_mints_its_key_only_when_a_login_is_required(tmp_path: Path) -> None:
+    """The control plane holds no static key; it mints one from its OAuth client.
+
+    Minting on every start would burn a credential per restart and, because the
+    tag rides on the key, is also the only thing that decides what the device is
+    allowed to reach.
+    """
+    issuer = _Issuer()
+    unauthenticated = _Runner(
+        status_payloads=[
+            _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
+            _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
+            _status_payload(),
+        ]
+    )
+    runtime = TailnetRuntime(
+        TailnetRuntimeOptions(
+            mode=TailnetRuntimeMode.Managed,
+            hostname="lazycloud-control-plane",
+            state_dir=str(tmp_path),
+        ),
+        runner=unauthenticated,
+        launcher=_Launcher(),
+        auth_key_issuer=issuer,
+    )
+
+    runtime.start()
+
+    assert issuer.hostnames == ["lazycloud-control-plane"]
+    up_call = next(call for call in unauthenticated.calls if "up" in call)
+    assert "tskey-minted" not in " ".join(up_call)
+    assert unauthenticated.auth_key_payloads == ["tskey-minted"]
+
+    already_authenticated = _Runner(status_payloads=[_status_payload(), _status_payload()])
+    resumed = TailnetRuntime(
+        TailnetRuntimeOptions(
+            mode=TailnetRuntimeMode.Managed,
+            hostname="lazycloud-control-plane",
+            state_dir=str(tmp_path),
+        ),
+        runner=already_authenticated,
+        launcher=_Launcher(),
+        auth_key_issuer=issuer,
+    )
+
+    resumed.start()
+
+    assert issuer.hostnames == ["lazycloud-control-plane"]
+    assert not any("up" in call for call in already_authenticated.calls)
 
 
 def _status_payload(

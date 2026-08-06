@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -365,7 +365,10 @@ class GatewayControlService:
     route_prewarmer: RoutePrewarmService
     container_stopper: GatewayContainerStopper
     container_client_factory: SchedulerContainerClientFactory
-    runtime_callback_http_url: str
+    # Resolved per use, not held: the control plane publishes where it is
+    # actually reachable, and a value captured at construction would outlive a
+    # device rename that every agent picks up on its next poll.
+    runtime_origin: Callable[[], str]
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
     tailnet_control: TailnetControl | None = None
     route_authenticator: BackendRouteAuthenticator | None = None
@@ -659,7 +662,7 @@ class GatewayControlService:
             if stub is not None and stub.kind in {StubKind.Function, StubKind.CronJob}:
                 task = FunctionControlService(
                     self.services,
-                    gateway_http_url=self.runtime_callback_http_url,
+                    gateway_http_url=self.runtime_origin,
                 ).finish_function_task(
                     request.task_id,
                     request.task_status,
@@ -700,7 +703,7 @@ class GatewayControlService:
         with suppress(Exception):
             FunctionControlService(
                 self.services,
-                gateway_http_url=self.runtime_callback_http_url,
+                gateway_http_url=self.runtime_origin,
             ).release_dependents(task)
 
     def _record_task_lifecycle(
@@ -1668,7 +1671,7 @@ class GatewayControlService:
                     bootstrap_pool,
                     self.gateway_endpoint,
                     self.agent_image,
-                    gateway_runtime_http_url=self.runtime_callback_http_url,
+                    gateway_runtime_http_url=self.runtime_origin(),
                     tailnet=self.tailnet,
                     executor=agent_state.executor,
                 )
@@ -2104,7 +2107,7 @@ class GatewayControlService:
                 bootstrap_pool,
                 self.gateway_endpoint,
                 self.agent_image,
-                gateway_runtime_http_url=self.runtime_callback_http_url,
+                gateway_runtime_http_url=self.runtime_origin(),
                 tailnet=self.tailnet,
                 executor=response_state.executor,
             )

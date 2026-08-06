@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from control.service import ControlPlaneService, StubKind, StubRecord
@@ -27,6 +28,7 @@ from shared.env import (
     LIFECYCLE_HOOKS_ENV,
     STUB_ID_ENV,
     STUB_TYPE_ENV,
+    no_gateway_origin,
 )
 from shared.errors import DomainError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -100,7 +102,7 @@ class EndpointIngressDispatchSession:
 class EndpointControlService:
     services: ExecutionServices
     dispatcher: EndpointRequestDispatcher | None = None
-    gateway_http_url: str = ""
+    gateway_http_url: Callable[[], str] = no_gateway_origin
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -120,6 +122,7 @@ class EndpointControlService:
             EndpointServeRequest(
                 stub_id=stub.id,
                 workspace_name=workspace.name,
+                workspace_id=workspace.id,
                 timeout_seconds=timeout_seconds,
                 python_executable=config.image.python_executable,
             )
@@ -144,8 +147,9 @@ class EndpointControlService:
             HOT_RELOAD_ENV: "true",
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
-        if self.gateway_http_url:
-            env[GATEWAY_HTTP_URL_ENV] = self.gateway_http_url
+        gateway_http_url = self.gateway_http_url()
+        if gateway_http_url:
+            env[GATEWAY_HTTP_URL_ENV] = gateway_http_url
         with self.services.context.database.session() as session:
             container = self.services.containers.reserve_pending(
                 session,
@@ -719,7 +723,13 @@ class EndpointControlService:
                 container_id=target.container_id,
             )
             self._emit_dispatch_lifecycle(stub, record)
-            self.services.tasks.transition(task, TaskStatus.Running)
+            # Bind the task to the container that will serve it, so its record
+            # carries the same attribution every other workload kind has.
+            task = self.services.tasks.transition(
+                task,
+                TaskStatus.Running,
+                container_id=target.container_id,
+            )
             started = time.monotonic()
             try:
                 return dispatcher.forward_target(
@@ -789,7 +799,13 @@ class EndpointControlService:
                 container_id=target.container_id,
             )
             self._emit_dispatch_lifecycle(stub, record)
-            self.services.tasks.transition(task, TaskStatus.Running)
+            # Bind the task to the container that will serve it, so its record
+            # carries the same attribution every other workload kind has.
+            task = self.services.tasks.transition(
+                task,
+                TaskStatus.Running,
+                container_id=target.container_id,
+            )
             wait_seconds = max(
                 ((record.started_at or utc_now()) - record.enqueued_at).total_seconds(),
                 0.0,
@@ -996,8 +1012,9 @@ class EndpointDispatchStateRepository:
         return self.save(task, record)
 
     def save(self, task: Task, record: EndpointDispatchRecord) -> EndpointDispatchRecord:
-        task.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = record.model_dump(mode="json")
-        self.services.tasks.save(task)
+        payload = record.model_dump(mode="json")
+        task.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = payload
+        self.services.tasks.merge_kwargs(task.id, ENDPOINT_DISPATCH_TASK_KEY, payload)
         return record
 
     def transition(

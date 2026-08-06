@@ -84,13 +84,13 @@ return redis.call("DECR", KEYS[1])
 class RedisPodProxyConnectionRepository:
     redis: RedisClient
 
-    def container_connections(self, workspace_name: str, stub_id: str, container_id: str) -> int:
-        raw = self.redis.get(self._container_key(workspace_name, stub_id, container_id))
+    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int:
+        raw = self.redis.get(self._container_key(workspace_id, stub_id, container_id))
         return _non_negative_int(raw)
 
     def increment_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
@@ -99,14 +99,14 @@ class RedisPodProxyConnectionRepository:
         return self.redis.eval_int(
             _INCREMENT_CONTAINER_CONNECTIONS,
             2,
-            self._container_key(workspace_name, stub_id, container_id),
-            self._keep_warm_key(workspace_name, stub_id, container_id),
+            self._container_key(workspace_id, stub_id, container_id),
+            self._keep_warm_key(workspace_id, stub_id, container_id),
             _keep_warm_argument(keep_warm_seconds),
         )
 
     def decrement_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
@@ -115,16 +115,16 @@ class RedisPodProxyConnectionRepository:
         return self.redis.eval_int(
             _FINISH_CONTAINER_CONNECTION,
             2,
-            self._container_key(workspace_name, stub_id, container_id),
-            self._keep_warm_key(workspace_name, stub_id, container_id),
+            self._container_key(workspace_id, stub_id, container_id),
+            self._keep_warm_key(workspace_id, stub_id, container_id),
             _keep_warm_argument(keep_warm_seconds),
         )
 
-    def increment_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        return _non_negative_int(self.redis.increment(self._total_key(workspace_name, stub_id)))
+    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        return _non_negative_int(self.redis.increment(self._total_key(workspace_id, stub_id)))
 
-    def decrement_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        return self._decrement_or_delete(self._total_key(workspace_name, stub_id))
+    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        return self._decrement_or_delete(self._total_key(workspace_id, stub_id))
 
     def _decrement_or_delete(self, key: str) -> int:
         return self.redis.eval_int(
@@ -136,14 +136,14 @@ class RedisPodProxyConnectionRepository:
     def _key(self, value: str) -> str:
         return self.redis.key(value)
 
-    def _container_key(self, workspace_name: str, stub_id: str, container_id: str) -> str:
-        return self._key(pod_container_connections_key(workspace_name, stub_id, container_id))
+    def _container_key(self, workspace_id: str, stub_id: str, container_id: str) -> str:
+        return self._key(pod_container_connections_key(workspace_id, stub_id, container_id))
 
-    def _keep_warm_key(self, workspace_name: str, stub_id: str, container_id: str) -> str:
-        return self._key(pod_keep_warm_lock_key(workspace_name, stub_id, container_id))
+    def _keep_warm_key(self, workspace_id: str, stub_id: str, container_id: str) -> str:
+        return self._key(pod_keep_warm_lock_key(workspace_id, stub_id, container_id))
 
-    def _total_key(self, workspace_name: str, stub_id: str) -> str:
-        return self._key(pod_total_connections_key(workspace_name, stub_id))
+    def _total_key(self, workspace_id: str, stub_id: str) -> str:
+        return self._key(pod_total_connections_key(workspace_id, stub_id))
 
 
 @dataclass(slots=True)

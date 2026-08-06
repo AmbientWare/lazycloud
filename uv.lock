@@ -1281,6 +1281,7 @@ version = "0.1.0"
 source = { editable = "packages/networking" }
 dependencies = [
     { name = "compute" },
+    { name = "coordination" },
     { name = "httpx" },
     { name = "lazycloud-shared" },
     { name = "pydantic" },
@@ -1290,6 +1291,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "compute", editable = "packages/compute" },
+    { name = "coordination", editable = "packages/coordination" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic", specifier = ">=2.8,<3" },

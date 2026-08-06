@@ -27,6 +27,7 @@ from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
 from database.tailnet_cleanup import DatabaseTailnetCleanupStore
 from execution.collections.service import CollectionService
+from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.tasks import TaskService
@@ -269,10 +270,12 @@ class SchedulerAppServices:
             reclaim=capacity.reclaim,
             capacity_owner_mutations=RedisCapacityReservationRepository(redis),
         )
+        container_runtime_state = RedisContainerRuntimeStateRepository(redis)
         scheduling_persistence = ContainerSchedulingPersistenceService(
             context,
             events,
             workspace_changes,
+            runtime_state=container_runtime_state,
         )
         container_scheduler = SchedulerContainerRequestService(
             worker_repository,
@@ -299,6 +302,7 @@ class SchedulerAppServices:
             scheduler_cancellation=container_scheduler,
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
+            runtime_state=container_runtime_state,
         )
         container_shutdowns = ContainerShutdownService(
             container_repository,

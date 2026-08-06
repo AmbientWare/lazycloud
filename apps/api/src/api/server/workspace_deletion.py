@@ -36,10 +36,10 @@ _WORKSPACE_WORKLOAD_REDIS_ROOTS: tuple[tuple[str, ...], ...] = (
 )
 
 
-def _delete_workspace_workload_state(redis: RedisClient, workspace_name: str) -> int:
+def _delete_workspace_workload_state(redis: RedisClient, workspace_id: str) -> int:
     keys: set[str] = set()
     for root in _WORKSPACE_WORKLOAD_REDIS_ROOTS:
-        workspace_prefix = f"{redis.key(*root, workspace_name)}:"
+        workspace_prefix = f"{redis.key(*root, workspace_id)}:"
         for key in redis.scan(redis.key(*root, "*")):
             if key.startswith(workspace_prefix):
                 keys.add(key)
@@ -139,7 +139,7 @@ class WorkspaceDeletionService:
             workspace.id,
             container_ids=container_ids,
         )
-        _delete_workspace_workload_state(self.services.redis(), workspace.name)
+        _delete_workspace_workload_state(self.services.redis(), workspace.id)
 
         for pool in self.services.compute.list_pools_for_workspace_deletion(workspace.id):
             self.gateway.delete_pool_for_workspace_deletion(

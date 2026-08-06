@@ -1,7 +1,12 @@
 {
   "tagOwners": {
-    "${agent_tag}": ["autogroup:admin"],
-    "${control_plane_tag}": ["autogroup:admin"]
+    "${agent_tag}": ["autogroup:admin", "${control_plane_tag}"],
+    "${control_plane_tag}": ["autogroup:admin", "${control_plane_tag}"]
+  },
+  "autoApprovers": {
+    "services": {
+      "${control_plane_service}": ["${control_plane_tag}"]
+    }
   },
   "grants": [
     {
@@ -13,6 +18,11 @@
       "src": ["${agent_tag}"],
       "dst": ["${control_plane_tag}"],
       "ip": ["tcp:${control_plane_port}"]
+    },
+    {
+      "src": ["${agent_tag}"],
+      "dst": ["${control_plane_service}"],
+      "ip": ["tcp:${control_plane_port}", "tcp:${tcp_ingress_port}"]
     }
   ],
   "tests": [

@@ -166,9 +166,9 @@ def _autoscaler_operations(
     task_queues = TaskQueueControlService(
         services,
         redis=redis,
-        gateway_http_url=gateway_http_url,
+        gateway_http_url=lambda: gateway_http_url,
     )
-    endpoints = EndpointControlService(services, gateway_http_url=gateway_http_url)
+    endpoints = EndpointControlService(services, gateway_http_url=lambda: gateway_http_url)
     pods = PodControlService(services, redis=redis)
     return AutoscalerOperationsService(
         services,

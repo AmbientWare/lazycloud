@@ -29,6 +29,7 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from networking.tailnet import TailnetRuntime
+from networking.tailnet_control import TailscaleTailnetControl
 from observability.settings import (
     TelemetrySettings,
     UsageMetricsSettings,
@@ -249,7 +250,14 @@ def _production_api_services() -> ApiServices:
             decode_responses=False,
         )
         rollback.callback(binary_redis_client.close)
-        tailnet_runtime = TailnetRuntime(tailnet_runtime_settings)
+        # The control plane joins the tailnet the way every agent does, and
+        # `tailscale up` advertises no tag of its own: the tag rides on the key,
+        # so it mints its own rather than redeeming one a deployment supplied
+        # and may have scoped wrongly.
+        tailnet_runtime = TailnetRuntime(
+            tailnet_runtime_settings,
+            auth_key_issuer=TailscaleTailnetControl(tailnet_control_settings.to_control_config()),
+        )
         rollback.callback(tailnet_runtime.close)
         object_store_client = S3ObjectStoreClient.from_settings(object_store_settings)
         rollback.callback(object_store_client.close)

@@ -122,7 +122,7 @@ class FunctionMonitorStatus(StrEnum):
 
 
 class FunctionMonitorRequest(ContractModel):
-    workspace_name: str
+    workspace_id: str
     stub_id: str
     container_id: str
     task_id: str
@@ -147,7 +147,7 @@ class FunctionMonitorPlan(ContractModel):
 
 
 class FunctionHeartbeatRequest(ContractModel):
-    workspace_name: str
+    workspace_id: str
     task_id: str
     current_status: TaskStatus
     running_age_seconds: int = Field(default=0, ge=0)
@@ -162,7 +162,7 @@ class FunctionHeartbeatPlan(ContractModel):
 
 
 class FunctionStreamCancelRequest(ContractModel):
-    workspace_name: str
+    workspace_id: str
     stub_id: str
     task_id: str
     headless: bool = False
@@ -211,12 +211,12 @@ def function_prefix_key() -> str:
     return "function"
 
 
-def function_heartbeat_key(workspace_name: str, task_id: str) -> str:
-    return f"function:{workspace_name}:{task_id}:heartbeat"
+def function_heartbeat_key(workspace_id: str, task_id: str) -> str:
+    return f"function:{workspace_id}:{task_id}:heartbeat"
 
 
-def function_task_cancel_key(workspace_name: str, stub_id: str, task_id: str) -> str:
-    return f"task:{workspace_name}:{stub_id}:{task_id}:cancel"
+def function_task_cancel_key(workspace_id: str, stub_id: str, task_id: str) -> str:
+    return f"task:{workspace_id}:{stub_id}:{task_id}:cancel"
 
 
 def function_container_id(stub_kind: DeploymentKind, task_id: str, suffix: str) -> str:
@@ -273,9 +273,9 @@ def plan_function_container_start(
 
 
 def plan_function_monitor(request: FunctionMonitorRequest) -> FunctionMonitorPlan:
-    heartbeat_key = function_heartbeat_key(request.workspace_name, request.task_id)
+    heartbeat_key = function_heartbeat_key(request.workspace_id, request.task_id)
     cancel_channel_key = function_task_cancel_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.task_id,
     )
@@ -318,7 +318,7 @@ def plan_function_heartbeat(request: FunctionHeartbeatRequest) -> FunctionHeartb
     )
     return FunctionHeartbeatPlan(
         alive=bypass or request.heartbeat_present,
-        heartbeat_key=function_heartbeat_key(request.workspace_name, request.task_id),
+        heartbeat_key=function_heartbeat_key(request.workspace_id, request.task_id),
         checked_heartbeat_key=not bypass,
     )
 
@@ -333,7 +333,7 @@ def plan_function_stream_cancel(
         should_cancel=should_cancel,
         should_complete_dispatcher=should_cancel,
         cancel_channel_key=function_task_cancel_key(
-            request.workspace_name,
+            request.workspace_id,
             request.stub_id,
             request.task_id,
         ),

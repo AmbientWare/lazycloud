@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Self
 from urllib.parse import urlparse
 
 from compute.agent_control import TailnetConfig, host_is_unreachable_from_a_remote_machine
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import CONTROL_PLANE_TAILNET_HOSTNAME, ENV_PREFIX
 
@@ -32,7 +31,6 @@ class ProviderNetworkClass(StrEnum):
 
 class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
     hostname: str = CONTROL_PLANE_TAILNET_HOSTNAME
-    socket_path: str = "/var/run/tailscale/tailscaled.sock"
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_TAILNET_",
@@ -50,12 +48,6 @@ class TailnetRuntimeSettings(TailnetRuntimeOptions, BaseSettings):
     @classmethod
     def normalize_text(cls, value: str) -> str:
         return value.strip()
-
-    @model_validator(mode="after")
-    def managed_runtime_requires_auth_key(self) -> Self:
-        if self.mode is TailnetRuntimeMode.Managed and not self.auth_key.get_secret_value().strip():
-            raise ValueError("gateway Tailscale auth key is required by the tailnet runtime")
-        return self
 
     def to_agent_config(self) -> TailnetConfig:
         return TailnetConfig(control_url=self.control_url)
@@ -107,6 +99,7 @@ class TailnetControlSettings(BaseSettings):
             oauth_client_id=oauth_client_id,
             oauth_client_secret=self.oauth_client_secret,
             agent_tag=self.agent_tag,
+            control_plane_tag=self.control_plane_tag,
             auth_key_ttl_seconds=self.auth_key_ttl_seconds,
         )
 
@@ -160,19 +153,13 @@ def validate_provider_network_configuration(
             "machine; set LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL to the deployment's public "
             "ingress origin"
         )
-    # Nodes and workers dial the internal origin, not the public one. A Compose
-    # service name or a LAN address resolves on the control-plane host and
-    # nowhere else, and the machine that discovers that is an EC2 instance
-    # twenty minutes into a boot it will never finish.
-    internal_host = urlparse(internal_origin).hostname or ""
-    if not internal_host:
-        issues.append("internal control-plane origin must include a host")
-    elif host_is_unreachable_from_a_remote_machine(internal_host):
-        issues.append(
-            f"internal control-plane origin host {internal_host!r} is unreachable from a "
-            "remote machine; set LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to the control plane's "
-            "tailnet origin"
-        )
+    # The origin nodes and workers dial is not checked here any more. It is no
+    # longer configured: the control plane publishes the host of the tailnet
+    # device it actually registered, and this gate already refuses a connected
+    # deployment whose tailnet is disabled — so the Compose service name that
+    # used to reach this check can no longer be what a remote node receives.
+    # Validating the configured value would assert something nothing reads.
+    #
     # The third origin a remote node dials. Unlike the other two it is not used
     # during enrolment, so a wrong value here starts a machine that joins,
     # reports ready, accepts work, and only then fails to read its image.
@@ -186,16 +173,12 @@ def validate_provider_network_configuration(
             "plane's tailnet origin"
         )
     if runtime.mode is TailnetRuntimeMode.Disabled:
-        issues.append("tailnet runtime mode must be sidecar or managed")
+        issues.append("tailnet runtime mode must be managed")
     if not runtime.hostname:
         issues.append("tailnet hostname is required")
-    if runtime.mode is TailnetRuntimeMode.Sidecar and not runtime.socket_path:
-        issues.append("tailnet sidecar socket path is required")
-    if (
-        runtime.mode is TailnetRuntimeMode.Managed
-        and not runtime.auth_key.get_secret_value().strip()
-    ):
-        issues.append("managed tailnet runtime auth key is required")
+    # No static auth key is required: the control plane mints its own from the
+    # OAuth credentials this function already insists on, which is also what
+    # carries its tag.
 
     try:
         control.validated_tags()

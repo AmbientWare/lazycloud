@@ -87,7 +87,7 @@ def nested_calculation(value: int = 6) -> NestedCalculationResult:
     image=image,
     cpu=0.25,
     memory="128Mi",
-    keep_warm=0,
+    keep_warm=180,
 )
 def predict(value: int = 7, fail: bool = False) -> PredictionResult:
     if fail:
@@ -101,7 +101,7 @@ def predict(value: int = 7, fail: bool = False) -> PredictionResult:
     image=image,
     cpu=0.25,
     memory="128Mi",
-    keep_warm_seconds=0,
+    keep_warm_seconds=180,
 )
 async def service(
     scope: ASGIMessage,
@@ -158,7 +158,9 @@ web = app.pod(
     ports={"http": 8080},
     cpu=0.25,
     memory="128Mi",
-    keep_warm=0,
+    # -1 holds the pod up rather than releasing it when idle, so it never
+    # scales to zero and never answers a request from a cold boot.
+    keep_warm=-1,
 )
 
 # Sandboxes are created on demand, not deployed by ``app.deploy()``.

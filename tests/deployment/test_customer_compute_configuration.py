@@ -16,17 +16,15 @@ def _mapping(value: JsonValue, context: str) -> dict[str, JsonValue]:
     return value
 
 
-def test_compose_keeps_gateway_identity_credential_in_sidecar_only() -> None:
+def test_compose_holds_no_long_lived_tailnet_identity_credential() -> None:
+    """No service is handed a tailnet auth key, because none needs one.
+
+    The control plane mints its own from its OAuth client at the moment it joins,
+    which is also what carries its tag. A static key in a deployment file is both
+    a long-lived credential and a silent way to register an untagged device.
+    """
     rendered = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--profile",
-            "tailnet",
-            "--profile",
-            "tools",
-            "config",
-        ],
+        ["docker", "compose", "--profile", "tools", "config"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -34,14 +32,12 @@ def test_compose_keeps_gateway_identity_credential_in_sidecar_only() -> None:
     )
     config = _YAML_MAPPING.validate_python(yaml.safe_load(rendered.stdout))
     services = _mapping(config["services"], "services")
-    control_plane = _mapping(services["control-plane"], "control-plane")
-    cli = _mapping(services["cli"], "cli")
-    gateway = _mapping(services["tailnet-gateway"], "tailnet gateway")
-    control_plane_env = _mapping(control_plane["environment"], "control-plane environment")
-    cli_env = _mapping(cli["environment"], "CLI environment")
-    gateway_env = _mapping(gateway["environment"], "tailnet gateway environment")
 
-    assert "LAZYCLOUD_TAILNET_AUTH_KEY" not in control_plane_env
-    assert "LAZYCLOUD_TAILNET_AUTH_KEY" not in cli_env
+    for name, service in services.items():
+        environment = _mapping(service, name).get("environment") or {}
+        keys = set(_mapping(environment, f"{name} environment"))
+        assert "LAZYCLOUD_TAILNET_AUTH_KEY" not in keys, name
+        assert "TS_AUTHKEY" not in keys, name
+
+    cli_env = _mapping(_mapping(services["cli"], "cli")["environment"], "CLI environment")
     assert "LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY" in cli_env
-    assert "TS_AUTHKEY" in gateway_env

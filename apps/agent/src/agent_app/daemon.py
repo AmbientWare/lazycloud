@@ -607,8 +607,6 @@ class DockerAgentWorkerController:
         self,
         plan: AgentWorkerReconcilePlan,
         bootstrap: AgentBootstrap,
-        *,
-        worker_repository_url: str,
     ) -> list[AgentWorkerReconcileAction]:
         active_by_id = {slot.worker_id: slot for slot in self.active_slots()}
         applied: list[AgentWorkerReconcileAction] = []
@@ -621,11 +619,7 @@ class DockerAgentWorkerController:
             if action.action in {WorkerSlotAction.Start, WorkerSlotAction.Restart}:
                 if action.slot is None:
                     continue
-                self._start(
-                    action.slot,
-                    bootstrap,
-                    worker_repository_url=worker_repository_url,
-                )
+                self._start(action.slot, bootstrap)
                 active_by_id[action.worker_id] = action.slot
                 applied.append(action)
         self._save_active_slots(list(active_by_id.values()))
@@ -662,13 +656,7 @@ class DockerAgentWorkerController:
             msg = f"remove stopped workers failed: {remove_result.stderr or remove_result.stdout}"
             raise RuntimeError(msg)
 
-    def _start(
-        self,
-        slot: AgentWorkerSlot,
-        bootstrap: AgentBootstrap,
-        *,
-        worker_repository_url: str,
-    ) -> None:
+    def _start(self, slot: AgentWorkerSlot, bootstrap: AgentBootstrap) -> None:
         image = self.worker_image_override or slot.worker_image
         if not image:
             msg = f"worker image is required for slot {slot.worker_id}"
@@ -683,7 +671,6 @@ class DockerAgentWorkerController:
         plan = plan_worker_container(
             worker_bootstrap,
             slot,
-            worker_repository_url=worker_repository_url,
             state_dir=str(self.state_dir),
             image=image,
             target_host=self.target_host,
@@ -992,17 +979,7 @@ class AgentDaemonService:
             executor=self.options.executor,
             os_name=agent_worker_reconcile_os(self.options.os_name),
         )
-        applied = self.worker_controller.apply(
-            plan,
-            state.bootstrap,
-            # Worker RPC takes the runtime origin, never the public one: the
-            # ingress refuses `/worker-repository/*` at the edge, so a worker
-            # pointed at the public origin cannot report itself available and
-            # stays pending forever. Same precedence as `agent_gateway_env`.
-            worker_repository_url=(
-                state.bootstrap.gateway_runtime_http_url or state.sanitized_gateway_url
-            ),
-        )
+        applied = self.worker_controller.apply(plan, state.bootstrap)
         route_count = self._reconcile_routes(state, stream, route_proxy)
         telemetry_sent = self._send_telemetry(
             state,
@@ -1587,14 +1564,6 @@ def _tailnet_runtime_options(
         socket_path=options.tailnet_socket_path,
         tailscale_binary=options.tailnet_tailscale_binary,
         tailscaled_binary=options.tailnet_tailscaled_binary,
-        # The node reaches the control plane and the cache as tailnet peers, so
-        # it has to resolve tailnet names. Declining the tailnet's DNS left the
-        # VPC resolver answering `*.ts.net` from public records that point at
-        # Tailscale's own infrastructure rather than the peer, so every lookup
-        # succeeded and every connection to it timed out. Non-tailnet queries
-        # are forwarded upstream unchanged.
-        accept_dns=True,
-        accept_routes=False,
         userspace_networking=options.tailnet_userspace_networking,
     )
 

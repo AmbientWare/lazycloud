@@ -13,6 +13,7 @@ from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
+from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from tests.redis_fakes import FakeRedis
 
@@ -62,6 +63,12 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         ),
         map_service=maps,
         simple_queue_service=simple_queues,
+    )
+    # A running control plane publishes where it is reachable during startup,
+    # and everything that hands that address onward reads it back. These
+    # services are built without that startup, so the fixture stands in for it.
+    RedisControlPlaneOriginRepository(redis).publish(
+        services.gateway_settings.runtime_callback_http_url
     )
     ControlPlaneService(services.context).upsert_workspace("default")
     try:

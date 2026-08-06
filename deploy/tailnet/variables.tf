@@ -64,6 +64,28 @@ variable "agent_proxy_port" {
   }
 }
 
+variable "control_plane_service" {
+  description = "Tailscale Service the control plane advertises, and the address agents dial."
+  type        = string
+  default     = "svc:lazycloud-control-plane"
+
+  validation {
+    condition     = startswith(var.control_plane_service, "svc:") && length(var.control_plane_service) > 4
+    error_message = "control_plane_service must use the svc:<name> form."
+  }
+}
+
+variable "tcp_ingress_port" {
+  description = "TCP port the control plane serves pod ingress on, routed by SNI."
+  type        = number
+  default     = 1995
+
+  validation {
+    condition     = var.tcp_ingress_port >= 1024 && var.tcp_ingress_port <= 65535
+    error_message = "tcp_ingress_port must be an unprivileged TCP port."
+  }
+}
+
 variable "control_plane_port" {
   description = "TCP port the control plane serves to agents and workers over the tailnet."
   type        = number
@@ -75,16 +97,43 @@ variable "control_plane_port" {
   }
 }
 
-variable "gateway_auth_key_expiry_seconds" {
-  description = "Lifetime of the reusable gateway enrollment key. Rotate the deployed secret before this expires."
+variable "magic_dns" {
+  description = "Whether MagicDNS resolves tailnet names. The control-plane service address depends on it."
+  type        = bool
+  default     = true
+}
+
+variable "dns_search_paths" {
+  description = "Search domains for split DNS. Empty when no restricted nameservers are configured."
+  type        = list(string)
+  default     = []
+}
+
+variable "devices_approval_on" {
+  description = "Whether a new device waits for an admin before joining."
+  type        = bool
+  default     = false
+}
+
+variable "devices_auto_updates_on" {
+  description = "Whether devices update their Tailscale client automatically."
+  type        = bool
+  default     = true
+}
+
+variable "devices_key_duration_days" {
+  description = "Lifetime of a device key before it must be renewed."
   type        = number
-  default     = 7776000
+  default     = 180
 
   validation {
-    condition = (
-      var.gateway_auth_key_expiry_seconds >= 86400 &&
-      var.gateway_auth_key_expiry_seconds <= 7776000
-    )
-    error_message = "gateway_auth_key_expiry_seconds must be between one and 90 days."
+    condition     = var.devices_key_duration_days >= 1 && var.devices_key_duration_days <= 180
+    error_message = "devices_key_duration_days must be between one and 180 days."
   }
+}
+
+variable "users_approval_on" {
+  description = "Whether a new user waits for an admin before joining."
+  type        = bool
+  default     = true
 }

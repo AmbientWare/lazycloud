@@ -1,7 +1,7 @@
 # Deployment
 
 Root `compose.yaml` is the canonical local stack. This file is the operator
-runbook for it; the subdirectory READMEs cover individual sidecars and assets.
+runbook for it; the subdirectory READMEs cover individual services and assets.
 
 ## Connected-AWS acceptance environment
 
@@ -40,32 +40,19 @@ connection later.
 
 ### Recreating the control plane
 
-`tailnet-gateway` and `public-ingress` both run in the control plane's network
-namespace, so recreating `control-plane` destroys them and Compose does not bring
-them back. The stack then reports every service healthy while the control plane
-is absent from the tailnet and off the public origin; remote nodes fail to
-resolve it as a peer minutes later.
-
-Follow any `control-plane` recreate with:
-
 ```sh
-docker compose up -d --force-recreate tailnet-gateway public-ingress
+docker compose up -d --build control-plane
 ```
 
-Plain `up -d` is not enough: the sidecar can stay attached to the namespace of a
-control plane that no longer exists, and it stays healthy there.
+That is the whole procedure. The control plane runs its own `tailscaled`, so
+nothing else has to be recreated alongside it and no service borrows its network
+namespace.
 
-`tailscale status` reporting `Online: True` does not mean the control plane is
-reachable. It describes the sidecar's own session, which is healthy whether or
-not anything is listening behind it. Check from inside the shared namespace
-instead:
-
-```sh
-docker compose exec tailnet-gateway wget -qO- http://127.0.0.1:9000/healthz
-```
-
-A refusal there means the sidecar and the control plane are in different
-namespaces, whatever the tailnet says.
+It rejoins the tailnet under the device identity persisted in the
+`control-plane-tailnet-state` volume, minting a fresh tagged key from its OAuth
+client only when that identity is missing or expired. Its healthcheck resolves
+the host it advertises to workers, so a control plane that came up unable to
+reach the tailnet reports unhealthy rather than serving nothing quietly.
 
 ### Resetting local state
 
@@ -80,19 +67,19 @@ unless the image cache is the thing being tested.
 
 ### Naming the control plane
 
-Read the control plane's tailnet name from the running sidecar rather than
+Read the control plane's tailnet name from the running control plane rather than
 assuming it. A device that lost its name to a collision keeps the `-1` suffix,
-and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the sidecar actually
+and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the device actually
 holds. Do not delete a tailnet device to reclaim a nicer name: it invalidates the
-sidecar's identity and takes the control plane off the tailnet.
+control plane's identity and takes it off the tailnet.
 
 Give `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` the MagicDNS name, never the tailnet
-IP. The address changes when the sidecar re-registers, and a stale one does not
-fail at startup — the stack reports healthy and workers cannot reach the control
-plane, which surfaces much later as nodes that never report. Confirm it against
-`tailscale ip -4` in the sidecar after any change to that service.
+IP. The address changes when the device re-registers. The control plane's
+healthcheck resolves this host, so a stale one now shows up as an unhealthy
+container rather than as nodes that never report — but only the name is checked,
+not that it points at this deployment.
 
-Every deployment value naming the control plane has to carry the sidecar's real
+Every deployment value naming the control plane has to carry the real
 device name, `-1` suffix included — `LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL` as
 much as the runtime origin. Each is read on a different path, so fixing one
 proves nothing about the rest: an agent-binary URL pointing at the pre-collision

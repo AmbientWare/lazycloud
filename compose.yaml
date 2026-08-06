@@ -65,12 +65,16 @@ x-scheduler-env: &scheduler-env
   LAZYCLOUD_COMPUTE_RECLAIM_REGISTRATION_DEADLINE_SECONDS: "3600"
 
 x-tailnet-env: &tailnet-env
+  # The deployment's tailnet posture, not one process's: the control plane
+  # runs the daemon, and the scheduler refuses to start a connected
+  # deployment that declares no tailnet. Constructing a runtime is what
+  # starts a daemon, and only the control plane does that.
+  LAZYCLOUD_TAILNET_MODE: "${LAZYCLOUD_TAILNET_MODE:-managed}"
   LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID: "${LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID:-}"
   LAZYCLOUD_TAILNET_AGENT_TAG: "${LAZYCLOUD_TAILNET_AGENT_TAG:-tag:lazycloud-agent}"
   LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG: "${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane}"
   LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS: "${LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS:-300}"
-  LAZYCLOUD_TAILNET_ACCEPT_DNS: "false"
-  LAZYCLOUD_TAILNET_ACCEPT_ROUTES: "false"
+  LAZYCLOUD_TAILNET_CONTROL_URL: "${LAZYCLOUD_TAILNET_CONTROL_URL:-}"
 
 x-usage-credentials: &usage-credentials
   LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY: "${LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY:-}"
@@ -189,6 +193,7 @@ x-container-worker-settings: &container-worker-settings
 services:
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: "lazycloud"
       POSTGRES_USER: "lazycloud"
@@ -245,6 +250,7 @@ services:
 
   redis:
     image: redis:8-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${LAZYCLOUD_COMPOSE_REDIS_PORT:-6379}:6379"
@@ -258,6 +264,7 @@ services:
 
   object-store:
     image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
     command: ["/garage", "server", "--single-node", "--default-bucket"]
     environment:
       GARAGE_DEFAULT_BUCKET: "lazycloud-objects"
@@ -314,6 +321,7 @@ services:
 
   control-plane:
     image: api:local
+    restart: unless-stopped
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -350,22 +358,49 @@ services:
           *container-service-credentials,
           *cache-origin-registry,
         ]
+      # Each replica keeps its own device name and none of them is the address:
+      # callers are given the Tailscale Service every replica advertises, so a
+      # suffixed device name costs nothing and no caller holds one.
+      LAZYCLOUD_TAILNET_HOSTNAME: "${LAZYCLOUD_TAILNET_REPLICA_HOSTNAME:-lazycloud-control-plane-replica}"
+      # Container-local, never a shared volume: replicas would otherwise open the
+      # same tailscaled socket and all but the first would fail to start.
+      LAZYCLOUD_TAILNET_STATE_DIR: "/run/lazycloud/tailnet"
+      # The device goes away with the replica. Nothing was ever given its
+      # address, and a durable one would leave a dead peer per restart.
+      LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE: "true"
+    # One here only because this service publishes fixed host ports, which Compose
+    # cannot hand to a second container. Nothing in the process is singular: the
+    # tailnet service accepts as many advertisers as start, and the deployment
+    # scales by running this image somewhere that does not need a host port.
+    deploy:
+      replicas: 1
+    ports:
+      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
+      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
         condition: service_completed_successfully
       tcp-certificate:
         condition: service_completed_successfully
-    ports:
-      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
-      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
+    # The control plane runs its own tailscaled rather than borrowing a sidecar's
+    # network namespace. These are the same grants every agent already holds, and
+    # a real TUN device is required: workers reach this process inbound by its
+    # tailnet name, which userspace networking cannot bind.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - "${LAZYCLOUD_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
-      - tailnet-gateway-socket:/var/run/tailscale
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
+      # Loopback rather than the advertised address: a replica has to prove it
+      # serves before it can be one of the things that address resolves to, so a
+      # check that went out through the tailnet could never pass on a cold start.
       test:
         [
           "CMD",
@@ -376,7 +411,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 10s
+      start_period: 30s
 
   cli:
     profiles: ["tools"]
@@ -409,43 +444,6 @@ services:
     volumes:
       - lazycloud-files:/var/lib/lazycloud
 
-  tailnet-gateway:
-    # Not optional and not behind a profile: the control plane always runs its
-    # tailnet runtime, so a stack without this sidecar starts, reports healthy,
-    # and then fails workloads with "tailscale status failed" from far away.
-    image: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
-    restart: unless-stopped
-    depends_on:
-      control-plane:
-        condition: service_started
-    network_mode: "service:control-plane"
-    environment:
-      TS_AUTHKEY: "${LAZYCLOUD_TAILNET_AUTH_KEY:-}"
-      TS_AUTH_ONCE: "true"
-      TS_HOSTNAME: "${LAZYCLOUD_TAILNET_HOSTNAME:-lazycloud-control-plane}"
-      TS_STATE_DIR: "${LAZYCLOUD_COMPOSE_TAILNET_STATE_DIR:-/var/lib/tailscale}"
-      TS_SOCKET: "${LAZYCLOUD_TAILNET_SOCKET_PATH:-/var/run/tailscale/tailscaled.sock}"
-      TS_USERSPACE: "${LAZYCLOUD_TAILNET_USERSPACE_NETWORKING:-false}"
-      TS_EXTRA_ARGS: "--advertise-tags=${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane} --accept-dns=false --accept-routes=false --login-server=${LAZYCLOUD_TAILNET_CONTROL_URL:-https://controlplane.tailscale.com}"
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    volumes:
-      - tailnet-gateway-state:/var/lib/tailscale
-      - tailnet-gateway-socket:/var/run/tailscale
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          tailscale --socket="$${TS_SOCKET}" status --json |
-          grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-
   public-ingress:
     profiles:
       - public-ingress
@@ -453,8 +451,7 @@ services:
     restart: unless-stopped
     depends_on:
       control-plane:
-        condition: service_started
-    network_mode: "service:control-plane"
+        condition: service_healthy
     command:
       - tunnel
       - --config
@@ -519,10 +516,23 @@ services:
         export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
         temporary="$${token_path}.tmp"
         rm -f "$$temporary"
-        lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" --ttl 15m \
+        # Retried, because health is a lagging signal: the ingress reports what
+        # was true at its last probe, and a replica recreated since then refuses
+        # until it is listening. One attempt turns that window into a stack with
+        # no join credential and an agent that never arrives.
+        attempt=1
+        until lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" --ttl 15m \
           | python -c \
               'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.load(sys.stdin)["token"], encoding="utf-8")' \
               "$$temporary"
+        do
+          if [ "$$attempt" -ge 30 ]; then
+            echo "no control plane issued a join credential after $$attempt attempts" >&2
+            exit 1
+          fi
+          attempt=$$((attempt + 1))
+          sleep 2
+        done
         chmod 0600 "$$temporary"
         mv "$$temporary" "$$token_path"
         echo "compose agent one-use join credential initialized"
@@ -609,6 +619,12 @@ services:
 
   scheduler:
     image: scheduler:local
+    # Two, like the control plane. The work that spends money already
+    # serialises on a Redis key per capacity owner; what needed fixing was the
+    # orphan confirmation window and pod expiry, both of which decided from
+    # process-local state.
+    deploy:
+      replicas: 2
     restart: unless-stopped
     build:
       context: .
@@ -895,6 +911,7 @@ services:
 
   cache-server:
     image: cache-server:local
+    restart: unless-stopped
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -1034,8 +1051,6 @@ volumes:
   lazycloud-source-cache-cpu-secondary:
   lazycloud-source-cache-gpu:
   lazycloud-registry:
-  tailnet-gateway-state:
-  tailnet-gateway-socket:
   tcp-ingress-tls:
 
 secrets:

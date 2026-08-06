@@ -1486,7 +1486,6 @@ def plan_worker_container(
     bootstrap: AgentBootstrap,
     slot: AgentWorkerSlot,
     *,
-    worker_repository_url: str,
     state_dir: str,
     image: str,
     image_id: str = "",
@@ -1510,6 +1509,7 @@ def plan_worker_container(
     }
     if image_id:
         labels[f"{NAME}.agent.worker_image_id"] = image_id
+    gateway_env = agent_gateway_env(bootstrap)
     env = {
         WORKER_CONFIG_PATH_ENV: DEFAULT_WORKER_CONFIG_PATH,
         "WORKER_ID": slot.worker_id,
@@ -1524,7 +1524,12 @@ def plan_worker_container(
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
         "WORKER_NETWORK_PREFIX": slot.network_prefix,
         "WORKER_ROUTE_TARGET": target_host,
-        WORKER_REPOSITORY_URL_ENV: normalize_gateway_url(worker_repository_url),
+        # The same origin the worker's gateway client uses. Computing it a second
+        # time here is what let the two disagree: one honoured the agent's
+        # runtime-URL override and the other did not, so the worker held a
+        # reachable gateway and an unreachable repository and never reported
+        # itself available.
+        WORKER_REPOSITORY_URL_ENV: gateway_env[GATEWAY_HTTP_URL_ENV],
     }
     if slot.gpu_count > 0:
         assignment = slot.gpu_assignment or "all"
@@ -1535,7 +1540,7 @@ def plan_worker_container(
         # suffix without an address names peers the worker cannot look up.
         env[WORKER_PEER_RESOLVER_ADDRESS_ENV] = peer_resolver_address
         env[WORKER_TAILNET_DNS_SUFFIX_ENV] = tailnet_dns_suffix
-    env.update(agent_gateway_env(bootstrap))
+    env.update(gateway_env)
     volumes = [
         f"{dirs.images}:/images",
         f"{dirs.tmp}:{AGENT_CONTAINER_TMP_PATH}",

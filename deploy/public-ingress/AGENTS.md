@@ -1,6 +1,6 @@
 # Public Ingress
 
-The `cloudflared` sidecar that puts the control plane on the public internet.
+The `cloudflared` service that puts the control plane on the public internet.
 `cloudflared.yml` is the entire public surface: the tunnel is locally managed, so
 nothing outside this file adds or removes a route. `README.md` covers operating
 and rotating it.

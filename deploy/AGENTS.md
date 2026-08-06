@@ -1,6 +1,6 @@
 # Deployment
 
-Compose files, container images, provisioning assets, and the sidecars that put
+Compose files, container images, provisioning assets, and the ingress that puts
 the platform on a network.
 
 Root `compose.yaml` is the canonical local stack. It stays aligned with the

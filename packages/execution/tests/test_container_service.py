@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from control.service import ControlPlaneService, StubKind
 from coordination.event_bus import (
     EventBusEvent,
     EventBusSendResult,
@@ -21,6 +22,7 @@ from database.repositories.orchestration import (
     WorkerRepository,
 )
 from execution.containers.planning import ContainerSchedulingOptions
+from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from scheduler.containers import (
     SchedulerContainerCancellationResult,
@@ -33,6 +35,12 @@ from shared.container_requests import WorkerStartupKind
 from shared.containers import ContainerRecord
 from shared.errors import ConflictError, InvalidInputError
 from shared.tasks import TaskStatus
+from shared.workload_keys import (
+    pod_container_connections_key,
+    pod_keep_warm_lock_key,
+    pod_total_connections_key,
+)
+from tests.real_redis import RealRedisActors
 
 
 class _Scheduler:
@@ -327,3 +335,66 @@ def test_container_stop_failure_never_persists_success(
     assert isolated_services.containers.get(container.id).status == container.status
     assert container.task_id is not None
     assert isolated_services.tasks.get(container.task_id).status is TaskStatus.Pending
+
+
+def test_stopping_a_container_gives_up_the_redis_state_it_held(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    """A terminal container must not keep pinning the deployment.
+
+    Its keep-warm marker carries no TTL when the workload asked never to scale to
+    zero, and its share of the connection count is what decides whether the
+    deployment may scale down at all. Both used to be released by whichever
+    caller remembered, so a container that died any way other than being stopped
+    kept both forever — the marker inert, the count billing.
+    """
+    redis = real_redis_actors.client()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=_Scheduler(),
+            scheduler_cancellation=_Cancellation(
+                SchedulerContainerCancellationResult(
+                    container_id="placeholder",
+                    state_found=False,
+                    worker_id="",
+                    worker_stop_required=False,
+                )
+            ),
+            event_bus=_EventBus(),
+            runtime_state=RedisContainerRuntimeStateRepository(redis),
+        ),
+    )
+    app = isolated_services.apps.create("released_on_stop_app")
+    stub = ControlPlaneService(isolated_services.context).create_stub(
+        "released_on_stop_pod",
+        kind=StubKind.Pod,
+        handler="pkg.workloads:handler",
+        app_id=app.id,
+        config={"image": {"image_id": "image-pod"}},
+    )
+    container = isolated_services.containers.run(
+        "released-on-stop",
+        "python:3.12",
+        ["python", "-c", "print('ok')"],
+        stub_id=stub.id,
+    )
+    stub_id = container.stub_id or ""
+    keep_warm = redis.key(pod_keep_warm_lock_key(container.workspace_id, stub_id, container.id))
+    connections = redis.key(
+        pod_container_connections_key(container.workspace_id, stub_id, container.id)
+    )
+    total = redis.key(pod_total_connections_key(container.workspace_id, stub_id))
+    redis.set(keep_warm, "1")
+    redis.set(connections, 2)
+    redis.set(total, 5)
+
+    isolated_services.containers.stop(container.id)
+
+    assert not redis.exists(keep_warm)
+    assert not redis.exists(connections)
+    # The stub total drops by exactly this container's share, so the containers
+    # still serving traffic keep theirs.
+    assert int(str(redis.get(total))) == 3

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -20,7 +20,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.env import GATEWAY_HTTP_URL_ENV
+from shared.env import GATEWAY_HTTP_URL_ENV, no_gateway_origin
 from shared.errors import ConflictError, DomainError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.function_payloads import (
@@ -74,7 +74,7 @@ FUNCTION_LIKE_STUB_KINDS = {StubKind.Function, StubKind.CronJob}
 @dataclass(slots=True)
 class FunctionControlService:
     services: ExecutionServices
-    gateway_http_url: str = ""
+    gateway_http_url: Callable[[], str] = no_gateway_origin
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -350,7 +350,7 @@ class FunctionControlService:
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
                 image_id=config.effective_image_id,
-                env=_function_runtime_env(config.env_list, self.gateway_http_url),
+                env=_function_runtime_env(config.env_list, self.gateway_http_url()),
                 secret_env=[],
                 lifecycle_hooks=config.lifecycle_hooks,
             )
@@ -821,10 +821,10 @@ class FunctionControlService:
 
     def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:
         task = self.services.tasks.get(request.task_id)
-        workspace = self._task_workspace_name(task)
+        workspace = self._task_workspace_id(task)
         plan = plan_function_monitor(
             planning.FunctionMonitorRequest(
-                workspace_name=workspace,
+                workspace_id=workspace,
                 stub_id=request.stub_id,
                 container_id=request.container_id,
                 task_id=request.task_id,
@@ -871,10 +871,10 @@ class FunctionControlService:
         )
         return FunctionCronResponse(cron_job_id=record.name)
 
-    def _task_workspace_name(self, task: Task) -> str:
+    def _task_workspace_id(self, task: Task) -> str:
         if not task.workspace_id:
             raise InvalidInputError(f"function task {task.id} is missing workspace ownership")
-        return self.control_plane.get_workspace(task.workspace_id).name
+        return task.workspace_id
 
 
 def _function_runtime_env(values: Iterable[str], gateway_http_url: str) -> list[str]:

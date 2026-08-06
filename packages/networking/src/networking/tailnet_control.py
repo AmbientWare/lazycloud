@@ -170,6 +170,7 @@ class TailscaleTailnetControlConfig(BaseModel):
     oauth_client_id: str = Field(min_length=1)
     oauth_client_secret: SecretStr
     agent_tag: str = Field(min_length=5)
+    control_plane_tag: str = Field(min_length=5)
     auth_key_ttl_seconds: int = Field(
         default=DEFAULT_TAILNET_AUTH_KEY_TTL_SECONDS,
         ge=30,
@@ -208,7 +209,7 @@ class TailscaleTailnetControlConfig(BaseModel):
             raise ValueError("Tailscale OAuth client secret is required")
         return value
 
-    @field_validator("agent_tag")
+    @field_validator("agent_tag", "control_plane_tag")
     @classmethod
     def tag_must_be_valid(cls, value: str) -> str:
         normalized = value.strip().lower()
@@ -218,8 +219,14 @@ class TailscaleTailnetControlConfig(BaseModel):
 
     @property
     def issuable_tags(self) -> tuple[str, ...]:
-        """The tags this control plane may mint auth keys for."""
-        return (self.agent_tag,)
+        """The tags this control plane may mint auth keys for.
+
+        Its own tag is here because it joins the tailnet the same way every agent
+        does. `tailscale up` carries no tag of its own, so the tag can only come
+        from the key that redeems it: an untagged key produces an untagged device
+        and a silently different set of grants.
+        """
+        return (self.agent_tag, self.control_plane_tag)
 
 
 class _TailscaleResponseModel(BaseModel):
@@ -323,20 +330,46 @@ class TailscaleTailnetControl:
     def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey:
         machine = _required_identifier(machine_id, "machine ID")
         expected_hostname = _required_hostname(hostname)
+        return self._issue_auth_key(
+            tag=self.config.agent_tag,
+            description=f"machine {machine} {expected_hostname}",
+        )
+
+    def issue_runtime_auth_key(self, *, hostname: str, ephemeral: bool = False) -> SecretStr:
+        """Mint the key this process redeems for its own tailnet device.
+
+        An ephemeral device deregisters itself once it goes offline, which is
+        what a replaceable replica wants: it holds no address anyone was given,
+        and a durable one would leave a dead record behind on every restart.
+        """
+        expected_hostname = _required_hostname(hostname)
+        return self._issue_auth_key(
+            tag=self.config.control_plane_tag,
+            description=f"control plane {expected_hostname}",
+            ephemeral=ephemeral,
+        ).key
+
+    def _issue_auth_key(
+        self,
+        *,
+        tag: str,
+        description: str,
+        ephemeral: bool = False,
+    ) -> TailnetAuthKey:
         request = _CreateAuthKeyRequest(
             capabilities=_AuthKeyCapabilities(
                 devices=_DeviceCapabilities(
-                    create=_DeviceCreateCapability(tags=(self.config.agent_tag,))
+                    create=_DeviceCreateCapability(tags=(tag,), ephemeral=ephemeral)
                 )
             ),
             expirySeconds=self.config.auth_key_ttl_seconds,
-            description=f"machine {machine} {expected_hostname}",
+            description=description,
         )
         response = self._authenticated_request(
             "POST",
             "/api/v2/tailnet/-/keys",
             content=request.model_dump_json(by_alias=True),
-            tag=self.config.agent_tag,
+            tag=tag,
         )
         parsed = self._parse_response(response, _CreateAuthKeyResponse, "auth-key creation")
         return TailnetAuthKey(
