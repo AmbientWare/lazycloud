@@ -123,14 +123,15 @@ class AwsAccountConnectionSettings(BaseModel):
 
 
 class AwsCapacityEnvironmentSettings(BaseSettings):
-    """The managed-capacity values no release can publish.
+    """The managed-capacity value no release can publish.
 
-    Which AMIs carry GPU drivers and what an instance hour costs are the
-    deployment's own decisions; the worker image, agent artifact URL, and baked
-    CPU AMIs are facts of the release it points at.
+    What an instance hour costs is the deployment's own decision. The worker
+    image, agent artifact URL and both baked AMI catalogs are facts of the release
+    it points at — GPU AMIs became one when the release started baking them, and
+    a deployment naming its own would be asserting a driver the release never
+    built.
     """
 
-    gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     instance_hourly_micros: dict[str, int] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(

@@ -123,7 +123,7 @@ def deployment_release(
             worker_image_digest="" if manifest is None else manifest.container_worker_image,
             agent_binary_url="" if manifest is None else manifest.agent_artifact_object.public_url,
             cpu_ami_ids={} if manifest is None else manifest.capacity_cpu_ami_ids,
-            gpu_ami_ids=aws_capacity.gpu_ami_ids,
+            gpu_ami_ids={} if manifest is None else manifest.capacity_gpu_ami_ids,
             instance_hourly_micros=aws_capacity.instance_hourly_micros,
         ),
         aws_connections=AwsAccountConnectionSettings(

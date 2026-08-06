@@ -25,6 +25,7 @@ _VERSION = "2026.07.14"
 _AGENT_SHA256 = "a" * 64
 _WORKER_IMAGE = f"registry.example.com/container-worker@sha256:{'b' * 64}"
 _CPU_AMI_IDS = {"us-east-1": "ami-0123456789abcdef0"}
+_GPU_AMI_IDS = {"us-east-1": "ami-0fedcba9876543210"}
 
 
 def _release_manifest() -> AwsReleaseManifest:
@@ -47,6 +48,7 @@ def _release_manifest() -> AwsReleaseManifest:
         agent_artifact_sha256=_AGENT_SHA256,
         container_worker_image=_WORKER_IMAGE,
         capacity_cpu_ami_ids=_CPU_AMI_IDS,
+        capacity_gpu_ami_ids=_GPU_AMI_IDS,
         objects=[
             ReleaseObject(
                 local_path="objects/connection-template.json",
@@ -75,6 +77,9 @@ def _release_manifest() -> AwsReleaseManifest:
             "LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS": json.dumps(
                 _CPU_AMI_IDS, sort_keys=True, separators=(",", ":")
             ),
+            "LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS": json.dumps(
+                _GPU_AMI_IDS, sort_keys=True, separators=(",", ":")
+            ),
             "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": template_url,
         },
     )
@@ -87,7 +92,6 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
         _release_manifest(),
         agent_binaries=AgentBinaryEnvironmentSettings(binary_dir=Path("/var/lib/lazycloud/agent")),
         aws_capacity=AwsCapacityEnvironmentSettings(
-            gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
             instance_hourly_micros={"i4i.xlarge": 340_000},
         ),
         aws_connections=AwsAccountConnectionEnvironmentSettings(
@@ -101,6 +105,9 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
     assert release.agent_binaries.binary_sha256_by_arch == {"amd64": _AGENT_SHA256}
     assert release.aws_capacity.worker_image_digest == _WORKER_IMAGE
     assert release.aws_capacity.cpu_ami_ids == _CPU_AMI_IDS
+    # The GPU catalog now arrives from the release too, so a deployment cannot
+    # name a GPU AMI carrying a driver the release never baked.
+    assert release.aws_capacity.gpu_ami_ids == _GPU_AMI_IDS
     assert release.aws_capacity.agent_binary_url.endswith(
         f"/agents/{_VERSION}/{_AGENT_SHA256}/{AGENT_AMD64_FILENAME}"
     )

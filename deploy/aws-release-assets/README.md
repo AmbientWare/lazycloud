@@ -96,8 +96,7 @@ release's own facts and rejects a manifest whose block disagrees. Published
 manifests are immutable, so it stays in the document.
 
 What no release can know stays authored beside the deployment: the local
-agent-binary mount (`LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`), the regional GPU AMI catalog
-(`LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS`), instance price estimates
+agent-binary mount (`LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`), instance price estimates
 (`LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS`), and the connected-AWS
 control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`). Managed
 capacity is those plus the three the release publishes or none of them, and a

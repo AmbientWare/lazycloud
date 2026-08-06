@@ -24,6 +24,7 @@ import urllib.request
 from base64 import b64encode
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from urllib.request import pathname2url
@@ -34,6 +35,18 @@ from shared.app_identity import AGENT_NAME
 from shared.tailscale_install import TAILSCALE_INSTALL_VERSION
 
 _AGENT_FILENAME = "lazycloud-agent-linux-amd64"
+# One driver serves every card this fleet rents: the branch is unified from
+# Turing through Blackwell, so the GPU image is one per region rather than one per
+# model. Pinned rather than "latest" because gVisor's nvproxy validates the driver
+# ABI it was built against, so the node driver, the gVisor release and this image
+# are one decision.
+_NVIDIA_DRIVER_BRANCH = "580"
+# A GPU bake must run on a GPU or it cannot check its own work; this is the
+# cheapest instance that has one.
+_GPU_BAKE_INSTANCE_TYPE = "g4dn.xlarge"
+# The driver and CUDA userspace do not fit in the CPU image's 16 GiB.
+_GPU_ROOT_VOLUME_GIB = 40
+_CPU_ROOT_VOLUME_GIB = 16
 _AL2023_SSM_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 _CLI_TIMEOUT_SECONDS = 300
@@ -119,8 +132,14 @@ class _AgentArtifact:
     size_bytes: int
 
 
+class _BakeVariant(StrEnum):
+    Cpu = "cpu"
+    Gpu = "gpu"
+
+
 @dataclass(frozen=True, slots=True)
 class _BakeRequest:
+    variant: _BakeVariant
     release_version: str
     agent: _AgentArtifact
     agent_url: str
@@ -134,7 +153,18 @@ class _BakeRequest:
 
     @property
     def image_name(self) -> str:
-        return f"lazycloud-node-{self.release_version}-amd64"
+        """Distinct per variant, because reuse is silently wrong.
+
+        An existing image is matched by name alone, so a GPU bake sharing the CPU
+        name would find that image `available` and return it — publishing a
+        driverless AMI as the GPU catalog entry.
+        """
+        suffix = "-gpu" if self.variant is _BakeVariant.Gpu else ""
+        return f"lazycloud-node-{self.release_version}{suffix}-amd64"
+
+    @property
+    def root_volume_gib(self) -> int:
+        return _GPU_ROOT_VOLUME_GIB if self.variant is _BakeVariant.Gpu else _CPU_ROOT_VOLUME_GIB
 
 
 def main() -> None:
@@ -143,6 +173,12 @@ def main() -> None:
             "Bake immutable per-region connected-AWS node AMIs "
             "(Docker + pinned Tailscale + release agent + pre-pulled worker image)."
         )
+    )
+    parser.add_argument(
+        "--variant",
+        choices=[variant.value for variant in _BakeVariant],
+        default=_BakeVariant.Cpu.value,
+        help="cpu bakes the default node image; gpu adds the NVIDIA driver and toolkit",
     )
     parser.add_argument("--release-version", required=True)
     parser.add_argument(
@@ -156,7 +192,11 @@ def main() -> None:
     parser.add_argument("--bucket-region", required=True)
     parser.add_argument("--key-prefix", default="connected-aws")
     parser.add_argument("--regions", nargs="+", default=["us-east-1"])
-    parser.add_argument("--instance-type", default="t3.small")
+    parser.add_argument(
+        "--instance-type",
+        default=None,
+        help="defaults to t3.small for cpu and a GPU instance for gpu",
+    )
     parser.add_argument("--instance-profile", default=None)
     parser.add_argument("--subnet-id", default=None)
     parser.add_argument("--instance-timeout-seconds", type=int, default=1500)
@@ -196,12 +236,14 @@ def main() -> None:
         aws_cli=args.aws_cli,
     )
 
+    variant = _BakeVariant(args.variant)
     request = _BakeRequest(
+        variant=variant,
         release_version=version,
         agent=agent,
         agent_url=agent_url,
         worker_image=args.worker_image,
-        instance_type=args.instance_type,
+        instance_type=args.instance_type or _default_bake_instance_type(variant),
         instance_profile=args.instance_profile,
         subnet_id=args.subnet_id,
         instance_timeout_seconds=args.instance_timeout_seconds,
@@ -428,7 +470,7 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
             {
                 "DeviceName": "/dev/xvda",
                 "Ebs": {
-                    "VolumeSize": 16,
+                    "VolumeSize": request.root_volume_gib,
                     "VolumeType": "gp3",
                     "Encrypted": True,
                     "DeleteOnTermination": True,
@@ -632,6 +674,7 @@ INSTALLER_EOF
 sh /tmp/lazycloud-agent-install.sh --install-only --agent-url __AGENT_BINARY_URL__
 rm -f /tmp/lazycloud-agent-install.sh
 
+__GPU_SETUP__
 systemctl enable --now amazon-ssm-agent
 # A pool node produces no console output and reports nothing once its agent
 # cannot reach the control plane. Without SSM every failure in that window is
@@ -641,11 +684,38 @@ systemctl is-enabled amazon-ssm-agent
 docker pull "$WORKER_IMAGE_DIGEST"
 
 cat > /etc/lazycloud-node-image.json <<MARKER
-{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","tailscale_version":"${TAILSCALE_VERSION}","worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true}
+{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","tailscale_version":"${TAILSCALE_VERSION}","worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER
 
 shutdown -h now
 """
+
+
+_GPU_SETUP_FRAGMENT = """
+# Drivers first: nvidia-container-toolkit configures a docker runtime that cannot
+# work without them, and a node whose toolkit registered against no driver reports
+# healthy and fails every GPU container.
+dnf install -y dnf-plugins-core
+dnf config-manager --add-repo \
+  https://developer.download.nvidia.com/compute/cuda/repos/amzn2023/x86_64/cuda-amzn2023.repo
+dnf module install -y nvidia-driver:__NVIDIA_DRIVER_BRANCH__
+curl -fsSL -o /etc/yum.repos.d/nvidia-container-toolkit.repo \
+  https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo
+dnf install -y nvidia-container-toolkit
+nvidia-ctk runtime configure --runtime=docker
+systemctl restart docker
+
+# Prove the image before it is registered. A GPU AMI that cannot see its own card
+# otherwise ships, launches, enrols, reports no GPUs, and is marked unschedulable
+# while billing — a failure that surfaces hours later and nowhere near the bake.
+nvidia-smi -L
+docker info --format '{{json .Runtimes}}' | grep -q nvidia
+"""
+
+
+def _default_bake_instance_type(variant: _BakeVariant) -> str:
+    """A GPU bake must run where it can see a GPU, or it cannot verify itself."""
+    return _GPU_BAKE_INSTANCE_TYPE if variant is _BakeVariant.Gpu else "t3.small"
 
 
 def _bake_user_data(request: _BakeRequest) -> str:
@@ -655,8 +725,15 @@ def _bake_user_data(request: _BakeRequest) -> str:
         "__AGENT_SHA256__": request.agent.sha256,
         "__WORKER_IMAGE_DIGEST__": request.worker_image,
         "__RELEASE_VERSION__": request.release_version,
+        "__VARIANT__": request.variant.value,
     }
     script = _BAKE_USER_DATA_TEMPLATE
+    gpu_setup = (
+        _GPU_SETUP_FRAGMENT.replace("__NVIDIA_DRIVER_BRANCH__", _NVIDIA_DRIVER_BRANCH)
+        if request.variant is _BakeVariant.Gpu
+        else ""
+    )
+    script = script.replace("__GPU_SETUP__", gpu_setup)
     for placeholder, value in values.items():
         script = script.replace(placeholder, shlex.quote(value))
     installer = build_agent_install_script(

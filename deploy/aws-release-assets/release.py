@@ -112,6 +112,11 @@ def main() -> None:
         default="{}",
         help="JSON object mapping AWS region to the baked CPU node AMI ID",
     )
+    stage.add_argument(
+        "--gpu-ami-ids",
+        default="{}",
+        help="JSON object mapping AWS region to the baked GPU node AMI ID",
+    )
     stage.add_argument("--output", type=Path, required=True)
 
     validate_local = subparsers.add_parser("validate-local")
@@ -140,7 +145,8 @@ def main() -> None:
             bucket=args.bucket,
             region=args.region,
             key_prefix=args.key_prefix,
-            cpu_ami_ids=_parse_cpu_ami_ids(args.cpu_ami_ids),
+            cpu_ami_ids=_parse_ami_ids(args.cpu_ami_ids, flag="--cpu-ami-ids"),
+            gpu_ami_ids=_parse_ami_ids(args.gpu_ami_ids, flag="--gpu-ami-ids"),
             output=args.output,
         )
         print(manifest.model_dump_json())
@@ -168,12 +174,49 @@ def main() -> None:
     print(manifest.model_dump_json())
 
 
-def _parse_cpu_ami_ids(raw: str) -> dict[str, str]:
+def _parse_ami_ids(raw: str, *, flag: str) -> dict[str, str]:
     try:
         parsed = RootModel[dict[str, str]].model_validate_json(raw).root
     except ValidationError as exc:
-        raise ValueError("--cpu-ami-ids must be a JSON object mapping region to AMI ID") from exc
+        raise ValueError(f"{flag} must be a JSON object mapping region to AMI ID") from exc
     return parsed
+
+
+def _normalized_ami_catalog(
+    catalog: dict[str, str] | None,
+    *,
+    catalog_name: str,
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_region, raw_ami_id in sorted((catalog or {}).items()):
+        region = raw_region.strip().lower()
+        ami_id = raw_ami_id.strip().lower()
+        if not REGION_PATTERN.fullmatch(region):
+            raise ValueError(f"{catalog_name} AMI catalog has an invalid region")
+        if not AMI_PATTERN.fullmatch(ami_id):
+            raise ValueError(f"{catalog_name} AMI catalog has an invalid AMI ID")
+        normalized[region] = ami_id
+    return normalized
+
+
+def _ami_catalog_environment(
+    cpu_ami_ids: dict[str, str],
+    gpu_ami_ids: dict[str, str],
+) -> dict[str, str]:
+    """The catalog entries the manifest expects back, byte for byte.
+
+    `validate_release` compares the whole environment by equality, so this and the
+    expectation it is checked against have to be written in one change or every
+    manifest fails validation at both ends.
+    """
+    return {
+        name: json.dumps(catalog, sort_keys=True, separators=(",", ":"))
+        for name, catalog in (
+            ("LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS", cpu_ami_ids),
+            ("LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS", gpu_ami_ids),
+        )
+        if catalog
+    }
 
 
 def stage_release(
@@ -186,6 +229,7 @@ def stage_release(
     key_prefix: str,
     output: Path,
     cpu_ami_ids: dict[str, str] | None = None,
+    gpu_ami_ids: dict[str, str] | None = None,
 ) -> AwsReleaseManifest:
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("release version contains invalid characters")
@@ -199,15 +243,8 @@ def stage_release(
         raise ValueError("AWS release key prefix is invalid")
     if not WORKER_IMAGE_PATTERN.fullmatch(worker_image):
         raise ValueError("container-worker image must use an immutable sha256 digest reference")
-    normalized_cpu_ami_ids: dict[str, str] = {}
-    for raw_ami_region, raw_ami_id in sorted((cpu_ami_ids or {}).items()):
-        ami_region = raw_ami_region.strip().lower()
-        ami_id = raw_ami_id.strip().lower()
-        if not REGION_PATTERN.fullmatch(ami_region):
-            raise ValueError("CPU AMI catalog has an invalid region")
-        if not AMI_PATTERN.fullmatch(ami_id):
-            raise ValueError("CPU AMI catalog has an invalid AMI ID")
-        normalized_cpu_ami_ids[ami_region] = ami_id
+    normalized_cpu_ami_ids = _normalized_ami_catalog(cpu_ami_ids, catalog_name="CPU")
+    normalized_gpu_ami_ids = _normalized_ami_catalog(gpu_ami_ids, catalog_name="GPU")
 
     agent_manifest_path = agent_version_dir.resolve() / "manifest.json"
     agent_manifest = AgentArtifactManifest.model_validate_json(
@@ -271,6 +308,7 @@ def stage_release(
         agent_artifact_sha256=agent.sha256,
         container_worker_image=worker_image,
         capacity_cpu_ami_ids=normalized_cpu_ami_ids,
+        capacity_gpu_ami_ids=normalized_gpu_ami_ids,
         objects=[
             ReleaseObject(
                 local_path=template_local.as_posix(),
@@ -297,14 +335,9 @@ def stage_release(
             "LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL": agent_url,
             "LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST": worker_image,
             "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": template_url,
-            **(
-                {
-                    "LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS": json.dumps(
-                        normalized_cpu_ami_ids, sort_keys=True, separators=(",", ":")
-                    )
-                }
-                if normalized_cpu_ami_ids
-                else {}
+            **_ami_catalog_environment(
+                normalized_cpu_ami_ids,
+                normalized_gpu_ami_ids,
             ),
         },
     )

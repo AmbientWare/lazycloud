@@ -27,7 +27,8 @@ surfaced an hour later on a running EC2 node.
 uv run python deploy/release.py \
   --bucket "$AWS_RELEASE_ASSET_BUCKET" \
   --worker-repository <registry>/lazycloud-container-worker \
-  --cpu-ami us-east-1=ami-<id>
+  --cpu-ami us-east-1=ami-<id> \
+  --gpu-ami us-east-1=ami-<id>
 ```
 
 It refuses a dirty tree, because a version label that names a revision the
@@ -37,14 +38,23 @@ release, and points `.env` at the published manifest.
 
 `.env` receives one line: `LAZYCLOUD_RELEASE_MANIFEST_URL`. The agent artifact
 version and digest, the URL serving it, the container-worker image, the customer
-authorization template, and the baked CPU AMIs are read from that manifest at
-startup. They were six copied variables until a deployment held five from one
+authorization template, and both baked AMI catalogs are read from that manifest
+at startup. They were six copied variables until a deployment held five from one
 release and one from another; there is now no second place for them to disagree.
 
-`--cpu-ami` names the base image managed nodes boot, and the release verifies it
-exists before publishing. It is not optional for a deployment that runs managed
-capacity: a release naming no AMI produces a control plane that refuses to start
-rather than a pool that launches nothing.
+`--cpu-ami` names the base image managed nodes boot. It is not optional for a
+deployment that runs managed capacity: a release naming no AMI produces a control
+plane that refuses to start rather than a pool that launches nothing.
+
+`--gpu-ami` names the GPU node image from the same bake, and is optional — a
+release without one simply offers no GPU instance types, and CPU capacity is
+unaffected. Supply it and every GPU type in the catalog becomes launchable in that
+region, because one image serves every card: the driver branch is unified across
+Turing through Blackwell.
+
+Neither flag is verified against AWS during a release. `verify` can check that the
+AMIs exist, but only when run with `--aws-cli-verify`, which neither this command
+nor the workflow passes; the recorded ids are validated by pattern alone.
 
 `--arch` defaults to `amd64`, which is what AWS node classes consume. Building
 `arm64` needs binfmt registered first (`docker run --privileged tonistiigi/binfmt
