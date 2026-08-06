@@ -25,7 +25,9 @@ dist/agent-binarys/
 The Docker build runs `--help` on each target executable in both its build
 environment and Amazon Linux 2023 before export. The stager then computes each
 SHA-256 digest and records it in `manifest.json`.
-Mount the output root read-only at `LAZYCLOUD_AGENT_BINARY_DIR`. The mount is
+Mount the output root read-only: `LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR` is the
+host directory bound in, `LAZYCLOUD_AGENT_BINARY_DIR` where the control plane
+reads it inside the container. The mount is
 the deployment's; which version it holds and what that version must hash to are
 facts of the release that filled it, so neither is set by hand. The control
 plane resolves both from the release manifest at
