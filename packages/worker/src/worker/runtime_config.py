@@ -152,6 +152,7 @@ class RuntimeCommandRequest(ContractModel):
     force: bool = False
     all_processes: bool = False
     docker_enabled: bool = False
+    nvproxy: bool = False
     image_path: str | None = None
     work_dir: str | None = None
     leave_running: bool = False
@@ -549,7 +550,11 @@ def _plan_runsc_command(
     config: RuntimeBinaryConfig,
     request: RuntimeCommandRequest,
 ) -> RuntimeCommandPlan:
-    argv = _runsc_base_args(config, docker_enabled=request.docker_enabled)
+    argv = _runsc_base_args(
+        config,
+        docker_enabled=request.docker_enabled,
+        nvproxy=request.nvproxy,
+    )
     cleanup_argv: list[str] | None = None
     operation = request.operation
     if operation is RuntimeOperation.Run:
@@ -666,7 +671,12 @@ def _plan_runc_command(
     return RuntimeCommandPlan(runtime=OciRuntimeName.Runc, operation=operation, argv=argv)
 
 
-def _runsc_base_args(config: RuntimeBinaryConfig, *, docker_enabled: bool = False) -> list[str]:
+def _runsc_base_args(
+    config: RuntimeBinaryConfig,
+    *,
+    docker_enabled: bool = False,
+    nvproxy: bool = False,
+) -> list[str]:
     args = [config.runsc_path, "--root", config.runsc_root]
     if config.debug:
         args.extend(["--debug", "--debug-log", posixpath.join(config.runsc_root, "debug.log")])
@@ -675,6 +685,12 @@ def _runsc_base_args(config: RuntimeBinaryConfig, *, docker_enabled: bool = Fals
     args.extend(config.runsc_extra_args)
     if docker_enabled:
         args.append("--net-raw")
+    # Without this the sandbox has no NVIDIA driver proxy, so the device nodes in
+    # the bundle open onto nothing. Deliberately not paired with
+    # --nvproxy-allow-unsupported-driver: nvproxy validates the driver ABI it was
+    # built against, and a mismatch must fail by name rather than run unproven.
+    if nvproxy:
+        args.append("--nvproxy")
     return args
 
 
