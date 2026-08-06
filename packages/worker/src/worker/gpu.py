@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -14,8 +16,12 @@ from shared.contracts import ContractModel
 
 from worker.events import ContainerRequestContext
 from worker.execution import (
+    DeviceNode,
+    OciDevice,
     OciMount,
     inject_nvidia_environment,
+    nvidia_device_paths,
+    plan_nvidia_devices,
     plan_nvidia_mounts,
 )
 
@@ -113,10 +119,39 @@ class ContainerGpuAssignmentResult(ContractModel):
     assigned_devices: list[int] = Field(default_factory=list)
     env: list[str] = Field(default_factory=list)
     oci_mounts: list[OciMount] = Field(default_factory=list)
+    oci_devices: list[OciDevice] = Field(default_factory=list)
     cdi_devices: list[str] = Field(default_factory=list)
     ok: bool = True
     error_message: str = ""
     reason: str = ""
+
+
+class DeviceNodeProbe(Protocol):
+    def device_node(self, path: str) -> DeviceNode | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class HostDeviceNodeProbe:
+    """Reads a character device's numbers off the host.
+
+    Missing nodes answer None rather than raising: a driver without modeset, or
+    without uvm-tools, is a normal install, and a container that does not need
+    the node must not be refused because of it.
+    """
+
+    def device_node(self, path: str) -> DeviceNode | None:
+        try:
+            info = os.stat(path)
+        except OSError:
+            return None
+        if not stat.S_ISCHR(info.st_mode):
+            return None
+        return DeviceNode(
+            path=path,
+            major=os.major(info.st_rdev),
+            minor=os.minor(info.st_rdev),
+            file_mode=stat.S_IMODE(info.st_mode),
+        )
 
 
 class GpuDeviceIndexProvider(Protocol):
@@ -499,6 +534,7 @@ class WorkerGpuRuntimeAssigner:
     allocation: GpuAllocationBackend
     cdi_enabled: bool = True
     host_paths: set[str] = field(default_factory=set)
+    device_probe: DeviceNodeProbe = field(default_factory=HostDeviceNodeProbe)
 
     def assign_gpus(self, request: ContainerRequestContext) -> ContainerGpuAssignmentResult:
         if request.gpu_count <= 0:
@@ -524,6 +560,16 @@ class WorkerGpuRuntimeAssigner:
             assigned_devices=assigned,
             env=env_plan.env,
             oci_mounts=plan_nvidia_mounts(self.host_paths),
+            oci_devices=plan_nvidia_devices(
+                [
+                    node
+                    for node in (
+                        self.device_probe.device_node(path)
+                        for path in nvidia_device_paths(assigned)
+                    )
+                    if node is not None
+                ]
+            ),
             cdi_devices=[
                 f"{NVIDIA_GPU_RESOURCE_NAME}={device}" for device in assigned if self.cdi_enabled
             ],

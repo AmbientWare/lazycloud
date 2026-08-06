@@ -40,6 +40,7 @@ from worker.execution import (
     ContainerEnvironmentRequest,
     ContainerResourceRequest,
     GatewayServiceSettings,
+    OciDevice,
     OciMount,
     OciMountType,
     PortBinding,
@@ -539,6 +540,11 @@ class OciRuntimeSpecBuilder:
             return
         if gpu_result.oci_mounts:
             self._extend_mounts(spec, gpu_result.oci_mounts)
+        # The devices are the whole point. Annotations below describe the
+        # assignment; only these let the container open a GPU, and `/dev` is a
+        # fresh tmpfs so nothing arrives by inheritance.
+        if gpu_result.oci_devices:
+            self._extend_devices(spec, gpu_result.oci_devices)
         annotations = spec.get("annotations")
         if not isinstance(annotations, dict):
             annotations = {}
@@ -589,6 +595,44 @@ class OciRuntimeSpecBuilder:
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, path)
         return path
+
+    def _extend_devices(
+        self,
+        spec: dict[str, JsonValue],
+        devices_to_add: list[OciDevice],
+    ) -> None:
+        """Add the device nodes and the cgroup rules that permit opening them.
+
+        Both halves are required. A node without its rule is visible and
+        unopenable, and the failure surfaces inside the workload as a CUDA
+        initialisation error rather than as anything naming permissions.
+        """
+        linux = spec.get("linux")
+        if not isinstance(linux, dict):
+            linux = {}
+            spec["linux"] = linux
+        devices = linux.get("devices")
+        if not isinstance(devices, list):
+            devices = []
+            linux["devices"] = devices
+        present = {
+            str(device.get("path"))
+            for device in devices
+            if isinstance(device, dict) and device.get("path") is not None
+        }
+        resources = linux.get("resources")
+        if not isinstance(resources, dict):
+            resources = {}
+            linux["resources"] = resources
+        allowed = resources.get("devices")
+        if not isinstance(allowed, list):
+            allowed = []
+            resources["devices"] = allowed
+        for device in devices_to_add:
+            if device.path in present:
+                continue
+            devices.append(device.as_oci_dict())
+            allowed.append(device.as_cgroup_allow())
 
     def _extend_mounts(
         self,

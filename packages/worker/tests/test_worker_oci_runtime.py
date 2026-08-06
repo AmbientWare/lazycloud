@@ -24,6 +24,8 @@ from worker.container_rootfs import (
     ContainerRootfsStatus,
 )
 from worker.events import ContainerRequestContext
+from worker.execution import OciDevice
+from worker.gpu import ContainerGpuAssignmentResult
 from worker.oci_runtime import (
     OciRuntimeCommandController,
     OciRuntimeCommandTimeout,
@@ -444,3 +446,47 @@ def test_container_tmpfs_mounts_are_bounded_by_the_memory_request() -> None:
 
     assert sized["/volumes"] == ["size=512m"]
     assert sized["/dev/shm"] == ["size=512m"]
+
+
+def test_a_gpu_container_receives_device_nodes_and_permission_to_open_them() -> None:
+    """Annotations describe an assignment; devices are what make it real.
+
+    `/dev` is built as a fresh tmpfs with no devices, `runc` ignores the CDI
+    annotation that containerd would honour, and no OCI hook is injected. So
+    without this the container gets the CUDA environment, the libraries, and
+    nothing to open — which surfaces inside the workload as a CUDA
+    initialisation error naming neither GPUs nor permissions.
+    """
+    builder = OciRuntimeSpecBuilder()
+    spec: dict[str, JsonValue] = build_base_oci_config()
+    assignment = ContainerGpuAssignmentResult(
+        container_id="gpu-container",
+        requested_count=1,
+        assigned_devices=[0],
+        oci_devices=[
+            OciDevice(path="/dev/nvidiactl", major=195, minor=255, file_mode=0o666),
+            OciDevice(path="/dev/nvidia0", major=195, minor=0, file_mode=0o666),
+        ],
+        cdi_devices=["nvidia.com/gpu=0"],
+    )
+
+    builder._apply_gpu(spec, assignment)  # pyright: ignore[reportPrivateUsage]
+
+    linux = spec["linux"]
+    assert isinstance(linux, dict)
+    devices = linux["devices"]
+    assert isinstance(devices, list)
+    assert [device["path"] for device in devices if isinstance(device, dict)] == [
+        "/dev/nvidiactl",
+        "/dev/nvidia0",
+    ]
+    resources = linux["resources"]
+    assert isinstance(resources, dict)
+    allowed = resources["devices"]
+    assert isinstance(allowed, list)
+    # A node without its cgroup rule is visible and unopenable.
+    assert [(rule["major"], rule["minor"]) for rule in allowed if isinstance(rule, dict)] == [
+        (195, 255),
+        (195, 0),
+    ]
+    assert all(rule["allow"] is True for rule in allowed if isinstance(rule, dict))
