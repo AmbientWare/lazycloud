@@ -84,6 +84,7 @@ from worker.runtime_config import (
     parse_runtime_state,
     plan_runtime_command,
     prepare_oci_spec_for_runtime,
+    spec_has_gpu,
 )
 from worker.sandbox_server import (
     WORKER_CONTAINER_UPLOADS_HOST_PATH,
@@ -827,6 +828,7 @@ class OciRuntimeCommandController:
                 container_id=spec.container_id,
                 bundle_path=spec.bundle_path,
                 docker_enabled=spec.docker_enabled,
+                nvproxy=spec_has_gpu(spec.spec),
             ),
         )
         command = self.start_command(plan.argv, output_sink=output_sink)
