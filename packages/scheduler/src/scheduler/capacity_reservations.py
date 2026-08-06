@@ -1793,7 +1793,16 @@ def _gpu_matches(gpu_type: str, request: SchedulerWorkerRequest) -> bool:
 
 
 def _supports_docker(runtimes: Iterable[str]) -> bool:
-    return bool(set(runtimes) & {"runc", "runsc", "gvisor", "sandboxed-oci"})
+    # "gvisor" and "sandboxed-oci" are spellings a worker registered before the
+    # move to gVisor; they mean runsc and are matched so an existing reservation
+    # keeps its worker rather than being re-placed.
+    sandboxed = {
+        OciRuntimeName.Runc.value,
+        OciRuntimeName.Runsc.value,
+        "gvisor",
+        "sandboxed-oci",
+    }
+    return bool(set(runtimes) & sandboxed)
 
 
 __all__ = [

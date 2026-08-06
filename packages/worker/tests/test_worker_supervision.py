@@ -146,7 +146,7 @@ def test_worker_supervision_handles_sandbox_oom_with_forced_stop() -> None:
     assert require_str(attrs["runtime"], name="OOM event runtime") == OciRuntimeName.Runsc.value
 
 
-def test_worker_supervision_records_runc_oom_without_stop() -> None:
+def test_worker_supervision_records_cgroup_oom_without_stop() -> None:
     sink = EventSink()
     stopper = Stopper()
     service = WorkerSupervisionService(
