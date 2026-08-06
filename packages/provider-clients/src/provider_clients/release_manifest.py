@@ -54,6 +54,7 @@ class AwsReleaseManifest(ReleaseModel):
     agent_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     container_worker_image: str = Field(pattern=WORKER_IMAGE_PATTERN.pattern)
     capacity_cpu_ami_ids: dict[str, str] = Field(default_factory=dict)
+    capacity_gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     objects: list[ReleaseObject]
     deployment_environment: dict[str, str]
 
@@ -100,11 +101,17 @@ class AwsReleaseManifest(ReleaseModel):
             raise ValueError(f"unsupported AWS release manifest schema: {self.schema_version}")
         if not VERSION_PATTERN.fullmatch(self.release_version):
             raise ValueError("invalid AWS release version")
-        for ami_region, ami_id in self.capacity_cpu_ami_ids.items():
-            if not REGION_PATTERN.fullmatch(ami_region):
-                raise ValueError("AWS release CPU AMI catalog has an invalid region")
-            if not AMI_PATTERN.fullmatch(ami_id):
-                raise ValueError("AWS release CPU AMI catalog has an invalid AMI ID")
+        for catalog_name, catalog in (
+            ("CPU", self.capacity_cpu_ami_ids),
+            ("GPU", self.capacity_gpu_ami_ids),
+        ):
+            for ami_region, ami_id in catalog.items():
+                if not REGION_PATTERN.fullmatch(ami_region):
+                    msg = f"AWS release {catalog_name} AMI catalog has an invalid region"
+                    raise ValueError(msg)
+                if not AMI_PATTERN.fullmatch(ami_id):
+                    msg = f"AWS release {catalog_name} AMI catalog has an invalid AMI ID"
+                    raise ValueError(msg)
         if self.agent_artifact_version != self.release_version:
             raise ValueError("agent artifact version must equal the AWS release version")
         if not S3_NAME_PATTERN.fullmatch(self.bucket):
@@ -162,12 +169,16 @@ class AwsReleaseManifest(ReleaseModel):
             "LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST": self.container_worker_image,
             "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": template_objects[0].public_url,
         }
-        if self.capacity_cpu_ami_ids:
-            expected_environment["LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS"] = json.dumps(
-                self.capacity_cpu_ami_ids,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+        for env_name, catalog in (
+            ("LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS", self.capacity_cpu_ami_ids),
+            ("LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS", self.capacity_gpu_ami_ids),
+        ):
+            if catalog:
+                expected_environment[env_name] = json.dumps(
+                    catalog,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
         if self.deployment_environment != expected_environment:
             raise ValueError("AWS release deployment environment is incomplete or inconsistent")
         return self

@@ -47,9 +47,27 @@ idempotent: an existing `available` image with the release name is reused and a
 `pending` one is awaited.
 
 Cost: one `t3.small` plus a 16 GiB gp3 volume for roughly 5–10 minutes per
-region per bake, plus AMI/snapshot storage for the baked image.
+region per bake, plus AMI/snapshot storage for the baked image. A `--variant gpu`
+bake costs more: a `g4dn.xlarge` and a 40 GiB volume, and the driver install adds
+several minutes.
 
-GPU AMIs are out of scope for now: only the CPU catalog
-(`LAZYCLOUD_AWS_CAPACITY_CPU_AMI_IDS`) is baked and published;
-`LAZYCLOUD_AWS_CAPACITY_GPU_AMI_IDS` stays operator-provided until a GPU bake
-variant exists.
+`--variant gpu` bakes the GPU node image. It is the same image plus the pinned
+NVIDIA driver and container toolkit, registered as
+`lazycloud-node-<version>-gpu-amd64` — a distinct name because an existing image
+is matched by name alone, and a GPU bake sharing the CPU name would find that
+image and publish a driverless AMI as the GPU catalog entry.
+
+One image serves every card the catalog offers. The driver branch is unified from
+Turing through Blackwell, so T4, A10G, L4, L40S, A100, H100, H200 and B200 all
+boot the same AMI, and the catalog is one entry per region rather than one per
+model.
+
+The driver version is pinned rather than tracking latest, because gVisor's nvproxy
+validates the driver ABI it was built against. The gVisor release, this driver and
+the node image are one decision; changing any of them alone produces sandboxes
+that refuse to start GPU containers.
+
+The bake proves itself before registering: it runs `nvidia-smi -L` and checks
+docker reports an `nvidia` runtime. An image that cannot see its own card fails
+the bake rather than shipping, launching, enrolling, reporting no GPUs, and
+sitting unschedulable while it bills.

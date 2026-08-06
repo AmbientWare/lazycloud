@@ -102,12 +102,12 @@ def _in_service(service: str, argv: Sequence[str], *, stdin: str | None = None) 
     return _run(["docker", "compose", "exec", "-T", service, *argv], capture=True, stdin=stdin)
 
 
-def _parse_region_amis(entries: Sequence[str]) -> dict[str, str]:
+def _parse_region_amis(entries: Sequence[str], *, flag: str) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for entry in entries:
         region, separator, ami_id = entry.partition("=")
         if not separator or not region.strip() or not ami_id.strip():
-            raise ReleaseError(f"--cpu-ami takes REGION=AMI, not {entry!r}")
+            raise ReleaseError(f"{flag} takes REGION=AMI, not {entry!r}")
         parsed[region.strip()] = ami_id.strip()
     return parsed
 
@@ -179,6 +179,7 @@ def publish_release(
     region: str,
     aws_cli: str,
     cpu_ami_ids: dict[str, str],
+    gpu_ami_ids: dict[str, str],
 ) -> str:
     """Stage, validate, publish, and verify; return the URL the manifest is served at."""
     bundle = _REPOSITORY_ROOT / "dist" / "connected-aws"
@@ -201,6 +202,8 @@ def publish_release(
             region,
             "--cpu-ami-ids",
             json.dumps(cpu_ami_ids, sort_keys=True, separators=(",", ":")),
+            "--gpu-ami-ids",
+            json.dumps(gpu_ami_ids, sort_keys=True, separators=(",", ":")),
             "--output",
             str(bundle),
         ]
@@ -504,6 +507,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--aws-cli", default="aws")
     parser.add_argument("--arch", action="append", dest="architectures")
     parser.add_argument(
+        "--gpu-ami",
+        action="append",
+        dest="gpu_amis",
+        metavar="REGION=AMI",
+        help="baked GPU node AMI for a region; omit for a deployment that runs no GPUs",
+    )
+    parser.add_argument(
         "--cpu-ami",
         action="append",
         dest="cpu_amis",
@@ -531,7 +541,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        cpu_ami_ids = _parse_region_amis(args.cpu_amis or [])
+        cpu_ami_ids = _parse_region_amis(args.cpu_amis or [], flag="--cpu-ami")
+        gpu_ami_ids = _parse_region_amis(args.gpu_amis or [], flag="--gpu-ami")
         version = source_revision(allow_dirty=args.allow_dirty)
         print(f"source revision: {version}", flush=True)
 
@@ -552,6 +563,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             region=args.region,
             aws_cli=args.aws_cli,
             cpu_ami_ids=cpu_ami_ids,
+            gpu_ami_ids=gpu_ami_ids,
         )
         print("published and verified the release", flush=True)
 
