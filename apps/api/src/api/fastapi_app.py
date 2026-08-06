@@ -9,6 +9,8 @@ from uuid import uuid4
 
 import uvicorn
 from compute.aws_connections import AwsAccountConnectionService
+from coordination.redis_client import RedisClient
+from coordination.token_lock import renew_token_lock, try_acquire_token_lock
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.pods.service import PodControlService
@@ -25,10 +27,16 @@ from gateway.events import (
 from gateway.service import GatewayControlService
 from identity.auth import AuthError, AuthorizationDeniedError
 from images.control import ImageControlService
-from networking.tailnet import TailnetRuntimeError
+from networking.control_plane_origin import (
+    DEFAULT_CONTROL_PLANE_ORIGIN_TTL_SECONDS as CONTROL_PLANE_ORIGIN_TTL_SECONDS,
+)
+from networking.control_plane_origin import (
+    RedisControlPlaneOriginRepository,
+    runtime_origin_for_host,
+)
 from observability.telemetry import setup_telemetry
 from pydantic import JsonValue
-from shared.app_identity import DISPLAY_NAME
+from shared.app_identity import CONTROL_PLANE_TAILNET_HOSTNAME, DISPLAY_NAME
 from shared.errors import (
     ConflictError,
     DomainError,
@@ -57,6 +65,9 @@ from api.web_static import mount_web_app
 from database import ControlPlaneRecoveryFence
 
 logger = logging.getLogger(__name__)
+
+# The port the API serves inside its container, which the service forwards to.
+CONTROL_PLANE_SERVED_PORT = 9000
 
 _DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     DomainError: status.HTTP_400_BAD_REQUEST,
@@ -149,10 +160,21 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                 )
                 recovery_fence.start_serving()
                 if api_services.tailnet_runtime is not None:
-                    try:
-                        api_services.tailnet_runtime.start()
-                    except TailnetRuntimeError as exc:
-                        logger.warning("tailnet runtime startup failed: %s", exc)
+                    # Fatal rather than logged: the control plane reaches every
+                    # agent over the tailnet, so one that comes up without it
+                    # serves nothing and reports healthy while doing it. A
+                    # deployment that wants no tailnet says so with the disabled
+                    # mode, which never reaches here.
+                    api_services.tailnet_runtime.start()
+                    _publish_service_origin(api_services)
+                    origin_heartbeat = _create_background_task(
+                        _republish_service_origin(api_services)
+                    )
+                    cleanup.push_async_callback(
+                        _capture_task_cleanup_failure,
+                        cleanup_failures,
+                        origin_heartbeat,
+                    )
                 if tcp_ingress is not None:
                     cleanup.push_async_callback(
                         _capture_async_cleanup_failure,
@@ -163,6 +185,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                 route_reconciliation = _create_background_task(
                     _reconcile_agent_routes(
                         route_repository,
+                        api_services.redis_client,
                         interval_seconds=(
                             api_services.agent_route_reconciliation_settings.interval_seconds
                         ),
@@ -312,22 +335,103 @@ def _emit_reconciliation_failure(
         )
 
 
+def _publish_service_origin(api_services: ApiServices) -> str:
+    """Offer this control plane as a host for the deployment's address.
+
+    The address belongs to the service, not to this process. Another control
+    plane advertising the same one is not a conflict to resolve but the point:
+    callers reach whichever is available, and none of them ever learns a
+    replica's own name.
+    """
+    tailnet_runtime = api_services.tailnet_runtime
+    if tailnet_runtime is None:
+        raise RuntimeError("a control plane without a tailnet runtime has no address to offer")
+    settings = api_services.tcp_ingress_settings
+    ports = (
+        (CONTROL_PLANE_SERVED_PORT, settings.port)
+        if settings.enabled
+        else (CONTROL_PLANE_SERVED_PORT,)
+    )
+    host = tailnet_runtime.advertise_service(CONTROL_PLANE_TAILNET_HOSTNAME, ports)
+    origin = runtime_origin_for_host(
+        api_services.gateway_settings.runtime_callback_http_url,
+        host,
+    )
+    RedisControlPlaneOriginRepository(api_services.redis_client).publish(
+        origin,
+        ttl_seconds=CONTROL_PLANE_ORIGIN_TTL_SECONDS,
+    )
+    logger.info("published control-plane service origin: %s", origin)
+    return origin
+
+
+async def _republish_service_origin(api_services: ApiServices) -> None:
+    """Keep the address alive, and stop if it cannot be.
+
+    The published value carries a TTL, so a heartbeat that fails quietly is a
+    countdown rather than a degradation: once it expires every resolve() in the
+    deployment raises while this process keeps serving and reporting healthy.
+    """
+    interval = max(CONTROL_PLANE_ORIGIN_TTL_SECONDS / 3, 1.0)
+    deadline_failures = max(int(CONTROL_PLANE_ORIGIN_TTL_SECONDS / interval) - 1, 1)
+    consecutive_failures = 0
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_publish_service_origin, api_services)
+        except Exception:
+            consecutive_failures += 1
+            logger.exception(
+                "republishing the control-plane origin failed (%s of %s before it expires)",
+                consecutive_failures,
+                deadline_failures,
+            )
+            if consecutive_failures >= deadline_failures:
+                raise
+        else:
+            consecutive_failures = 0
+
+
 async def _reconcile_agent_routes(
     repository: WorkerRepositoryService,
+    redis: RedisClient,
     *,
     interval_seconds: float,
     event_sink: GatewayEventSink | None = None,
 ) -> None:
+    """Remove routes whose backend is gone, from one control plane at a time.
+
+    This scans a shared registry and deletes from it, so running it in every
+    control plane would have them racing to delete each other's findings. The
+    lease is renewed rather than released, so the winner keeps the work while it
+    is alive and another takes over only once its lease expires unrenewed.
+    """
+    lease_key = redis.key("control-plane", "leases", "agent-routes")
+    holder = str(uuid4())
+    lease_seconds = max(int(interval_seconds * 3), 2)
+    holding = False
     while True:
         try:
-            result = await asyncio.to_thread(repository.reconcile_orphan_agent_routes)
-            if result.removed:
-                logger.info(
-                    "reconciled agent route registry: scanned=%s removed=%s",
-                    result.scanned,
-                    result.removed,
+            # Renewing is not the same call as acquiring. Acquisition is `nx`, so
+            # a holder asking for its own live lease is refused and would hand
+            # the work to nobody every other cycle.
+            holding = holding and renew_token_lock(
+                redis, lease_key, holder, ttl_seconds=lease_seconds
+            )
+            if not holding:
+                holding = try_acquire_token_lock(
+                    redis, lease_key, holder, ttl_seconds=lease_seconds
                 )
+            if holding:
+                result = await asyncio.to_thread(repository.reconcile_orphan_agent_routes)
+                if result.removed:
+                    logger.info(
+                        "reconciled agent route registry: scanned=%s removed=%s",
+                        result.scanned,
+                        result.removed,
+                    )
         except Exception as exc:
+            holding = False
             logger.exception("agent route registry reconciliation failed")
             _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))

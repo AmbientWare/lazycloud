@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -49,8 +50,11 @@ from execution.containers.planning import (
     resolve_oci_runtime,
     validate_checkpoint_request,
 )
+from execution.containers.runtime_state import ContainerRuntimeStateRepository
 from execution.context import ExecutionContext
 from execution.tasks import TaskService
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _shell_split(command: str | Iterable[str]) -> list[str]:
@@ -126,6 +130,7 @@ class ContainerService:
     scheduler_cancellation: SchedulerContainerCancellation
     event_bus: ContainerEventBus
     workspace_changes: WorkspaceChangePublisher
+    runtime_state: ContainerRuntimeStateRepository | None = None
 
     def reserve_pending(
         self,
@@ -256,6 +261,7 @@ class ContainerService:
             record.status = ContainerStatus.Failed
             record.exit_code = 1
             record.finished_at = utc_now()
+            self._release_runtime_state(record)
             with self.context.database.session() as session:
                 failed = ContainerRepository(session).records.upsert(
                     record,
@@ -503,6 +509,7 @@ class ContainerService:
                 self.tasks.cancel(record.task_id)
             record.status = ContainerStatus.Stopped
             record.finished_at = utc_now()
+            self._release_runtime_state(record)
         with self.context.database.session() as session:
             updated = ContainerRepository(session).records.upsert(
                 record,
@@ -520,6 +527,29 @@ class ContainerService:
         if state_changed:
             self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
         return updated
+
+    def _release_runtime_state(self, record: ContainerRecord) -> None:
+        """Give up the Redis state this container held.
+
+        Best effort on purpose: the container is already terminal in the record
+        that matters, and refusing to persist that because a cache write failed
+        would trade a stale key for a container stuck Running forever. Whatever
+        is left behind is reclaimed when the app or workspace is deleted.
+        """
+        if self.runtime_state is None or not record.stub_id:
+            return
+        try:
+            self.runtime_state.release(
+                workspace_id=record.workspace_id,
+                stub_id=record.stub_id,
+                container_id=record.id,
+            )
+        except Exception:
+            LOGGER.warning(
+                "releasing container runtime state failed",
+                exc_info=True,
+                extra={"container_id": record.id},
+            )
 
     def stop_for_workspace_deletion(
         self,

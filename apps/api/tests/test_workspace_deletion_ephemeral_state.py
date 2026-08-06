@@ -58,12 +58,12 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
     redis = isolated_services.redis()
 
     deleted_keys = {
-        redis.key(*root, deleted_workspace.name, "stub", "state") for root in _WORKLOAD_KEY_ROOTS
+        redis.key(*root, deleted_workspace.id, "stub", "state") for root in _WORKLOAD_KEY_ROOTS
     }
     peer_keys = {
-        redis.key(*root, peer_workspace.name, "stub", "state") for root in _WORKLOAD_KEY_ROOTS
+        redis.key(*root, peer_workspace.id, "stub", "state") for root in _WORKLOAD_KEY_ROOTS
     }
-    unrelated_key = redis.key("coordination", deleted_workspace.name, "state")
+    unrelated_key = redis.key("coordination", deleted_workspace.id, "state")
     for key in deleted_keys | peer_keys | {unrelated_key}:
         assert redis.set(key, "present")
 
@@ -82,7 +82,7 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
     assert all(not redis.exists(key) for key in deleted_keys)
     assert all(redis.exists(key) for key in peer_keys)
     assert redis.exists(unrelated_key)
-    assert _delete_workspace_workload_state(redis, deleted_workspace.name) == 0
+    assert _delete_workspace_workload_state(redis, deleted_workspace.id) == 0
     assert all(redis.exists(key) for key in peer_keys)
     assert redis.exists(unrelated_key)
 

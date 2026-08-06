@@ -52,7 +52,7 @@ class PodProxyTarget:
 
 @dataclass(slots=True)
 class PodProxySession:
-    workspace_name: str
+    workspace_id: str
     stub_id: str
     target: PodProxyTarget
     keep_warm_seconds: int | None
@@ -91,13 +91,11 @@ class PodProxySocketClient(Protocol):
 
 
 class PodProxyConnectionRepository(Protocol):
-    def container_connections(
-        self, workspace_name: str, stub_id: str, container_id: str
-    ) -> int: ...
+    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int: ...
 
     def increment_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
@@ -106,50 +104,50 @@ class PodProxyConnectionRepository(Protocol):
 
     def decrement_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
         keep_warm_seconds: int | None,
     ) -> int: ...
 
-    def increment_total_connections(self, workspace_name: str, stub_id: str) -> int: ...
+    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
-    def decrement_total_connections(self, workspace_name: str, stub_id: str) -> int: ...
+    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
 
 @dataclass(slots=True)
 class NullPodProxyConnectionRepository:
-    def container_connections(self, workspace_name: str, stub_id: str, container_id: str) -> int:
-        _ = workspace_name, stub_id, container_id
+    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int:
+        _ = workspace_id, stub_id, container_id
         return 0
 
     def increment_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
         keep_warm_seconds: int | None,
     ) -> int:
-        _ = workspace_name, stub_id, container_id, keep_warm_seconds
+        _ = workspace_id, stub_id, container_id, keep_warm_seconds
         return 0
 
     def decrement_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
         keep_warm_seconds: int | None,
     ) -> int:
-        _ = workspace_name, stub_id, container_id, keep_warm_seconds
+        _ = workspace_id, stub_id, container_id, keep_warm_seconds
         return 0
 
-    def increment_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        _ = workspace_name, stub_id
+    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        _ = workspace_id, stub_id
         return 0
 
-    def decrement_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        _ = workspace_name, stub_id
+    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        _ = workspace_id, stub_id
         return 0

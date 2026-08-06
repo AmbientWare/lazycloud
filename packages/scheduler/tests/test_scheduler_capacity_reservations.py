@@ -518,34 +518,6 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
     assert primary_reservation.status is CapacityReservationStatus.Released
 
 
-def test_a_named_group_never_spills_into_a_unit_of_another_group(
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    """Failover stays inside the pool the request named.
-
-    A unit is a candidate because it feeds the requested group, so a healthier
-    unit of some other group is not an alternative however high its priority:
-    spilling there would run tenant work on a fleet the workload did not ask
-    for.
-    """
-    primary = _Controller(ensure_status=CapacityAcquisitionStatus.AtLimit, priority=1)
-    fallback = _Controller(
-        capacity_owner_id=OTHER_OWNER_ID,
-        unit_name=UnitName("another-group"),
-        priority=100,
-    )
-    service = CapacityReservationService(
-        _repository(real_redis_actors),
-        lambda: [fallback, primary],
-    )
-
-    result = service.acquire(_request("strict"), now=datetime(2026, 1, 1, tzinfo=UTC))
-
-    assert result.status is CapacityAcquisitionStatus.AtLimit
-    assert result.capacity_owner_id == OWNER_ID
-    assert fallback.ensure_calls == []
-
-
 def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() -> None:
     compute = ComputeUnitCapacityController(
         "workspace-1",
@@ -558,6 +530,12 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
         _request("wrong-workspace").model_copy(update={"workspace_id": "workspace-2"})
     )
     assert not compute.accepts(_request("oversized", cpu=4_001))
+    # A unit only ever serves the pool the request named. Failing over to a unit
+    # of another pool would run tenant work on a fleet nobody asked for, and this
+    # filter is the only thing standing between a request and that fleet.
+    assert not compute.accepts(
+        _request("other-pool").model_copy(update={"pool_selector": "another-pool"})
+    )
 
 
 def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(

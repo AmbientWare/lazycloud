@@ -75,6 +75,9 @@ from scheduler.services import SchedulerServices
 LOGGER = logging.getLogger(__name__)
 WORKER_POOL_DRAIN_SOURCE = "worker_pool.drain"
 CRON_JOB_LOCK_TTL_SECONDS = 10
+# Short enough that a scheduler dying mid-sweep does not hold expiry shut for
+# long, and long enough that one sweep finishes inside it.
+POD_EXPIRY_LOCK_TTL_SECONDS = 30
 CRON_JOB_DEPLOYMENT_KINDS = {DeploymentKind.Function, DeploymentKind.CronJob}
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
@@ -101,6 +104,20 @@ class WorkerCleanupRepository(Protocol):
 
 class OrphanedContainerNetworkRepository(Protocol):
     def remove_container_ips(self, container_id: str) -> None: ...
+
+
+class OrphanedContainerConfirmationRepository(Protocol):
+    def first_observed_at(
+        self,
+        container_id: str,
+        *,
+        now: datetime,
+        ttl_seconds: int,
+    ) -> datetime: ...
+
+    def claim_confirmed(self, container_id: str) -> bool: ...
+
+    def forget(self, container_id: str) -> None: ...
 
 
 class SchedulerVolumeMeteringBatch(Protocol):
@@ -229,6 +246,7 @@ class SchedulerStateStores:
     compute: RedisComputeStateRepository | None = None
     pools: SchedulerPoolStateService | None = None
     orphaned_container_networks: OrphanedContainerNetworkRepository | None = None
+    orphaned_container_confirmations: OrphanedContainerConfirmationRepository | None = None
     cron_job_locks: RedisClient | None = None
 
 
@@ -278,10 +296,6 @@ class Scheduler:
     )
     orphaned_container_confirmation_seconds: float = ORPHANED_CONTAINER_CONFIRMATION_SECONDS
     last_orphaned_container_reconcile_at: datetime | None = field(default=None, init=False)
-    orphaned_container_observed_at: dict[str, datetime] = field(
-        default_factory=dict,
-        init=False,
-    )
 
     @property
     def runtime_services(self) -> SchedulerServices:
@@ -730,13 +744,12 @@ class Scheduler:
             return []
         self.last_orphaned_container_reconcile_at = current_time
 
+        confirmations = self.states.orphaned_container_confirmations
+        if confirmations is None:
+            return []
         active = self.runtime_services.containers.list(
             statuses=(ContainerStatus.Pending, ContainerStatus.Running),
         )
-        active_ids = {container.id for container in active}
-        for container_id in tuple(self.orphaned_container_observed_at):
-            if container_id not in active_ids:
-                self.orphaned_container_observed_at.pop(container_id, None)
 
         failed: list[str] = []
         for container in active:
@@ -746,15 +759,21 @@ class Scheduler:
                 worker_id=container.runtime_worker_id,
             )
             if state is not None or recoverable_request:
-                self.orphaned_container_observed_at.pop(container.id, None)
+                confirmations.forget(container.id)
                 continue
-            observed_at = self.orphaned_container_observed_at.setdefault(
+            observed_at = confirmations.first_observed_at(
                 container.id,
-                current_time,
+                now=current_time,
+                ttl_seconds=int(self.orphaned_container_confirmation_seconds * 10),
             )
             if (
                 current_time - observed_at
             ).total_seconds() < self.orphaned_container_confirmation_seconds:
+                continue
+            # Removing the record is the claim. Another scheduler that reached the
+            # same conclusion finds it gone and leaves the container alone, so it
+            # is failed once rather than once per scheduler.
+            if not confirmations.claim_confirmed(container.id):
                 continue
             request = SchedulerWorkerRequest(
                 workspace_id=container.workspace_id,
@@ -770,7 +789,6 @@ class Scheduler:
                 ORPHANED_CONTAINER_FAILURE_REASON,
                 now=current_time,
             )
-            self.orphaned_container_observed_at.pop(container.id, None)
             failed.append(container.id)
         return failed
 
@@ -858,11 +876,29 @@ class Scheduler:
         pod_control = self.workloads.pod_control
         if pod_control is None:
             return []
+        cron_job_locks = self.states.cron_job_locks
+        if cron_job_locks is None:
+            return []
+        # Expiring a pod stops its container, cancels its task and announces both.
+        # Nothing downstream of that is idempotent, and the decision is taken from
+        # a read rather than a locked row, so two schedulers sweeping together
+        # each act on the same expired pod.
+        lock_key = cron_job_locks.key("scheduler", "leases", "pod-expiry")
+        token = uuid4().hex
+        if not try_acquire_token_lock(
+            cron_job_locks,
+            lock_key,
+            token,
+            ttl_seconds=POD_EXPIRY_LOCK_TTL_SECONDS,
+        ):
+            return []
         try:
             return pod_control.expire_pods(now=now)
         except Exception:
             LOGGER.exception("scheduler pod expiry failed")
             return []
+        finally:
+            release_token_lock(cron_job_locks, lock_key, token)
 
     def _best_effort_refresh_pool_states(
         self,

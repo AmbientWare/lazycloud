@@ -12,6 +12,7 @@ from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
+from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
 
@@ -81,6 +82,12 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
             binary_version="test",
             binary_sha256_by_arch={"amd64": "a" * 64},
         ),
+    )
+    # A running control plane publishes where it is reachable during startup,
+    # and everything that hands that address onward reads it back. These
+    # services are built without that startup, so the fixture stands in for it.
+    RedisControlPlaneOriginRepository(redis).publish(
+        services.gateway_settings.runtime_callback_http_url
     )
     services.control_plane_service.upsert_workspace("default")
     services.control_plane_service.ensure_workspace_storage("default")

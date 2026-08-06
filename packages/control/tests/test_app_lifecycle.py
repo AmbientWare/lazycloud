@@ -825,12 +825,12 @@ def _execution_redis_keys(
         assert deployment.stub_id is not None
         stub_id = deployment.stub_id
         if deployment.kind is DeploymentKind.TaskQueue:
-            root = redis.key("taskqueue", "default", stub_id)
+            root = redis.key("taskqueue", workspace_id, stub_id)
             keys.update(
                 {
                     root,
                     f"{root}:processing_lock:container",
-                    redis.key("scheduler", "serve", "lock", "default", stub_id),
+                    redis.key("scheduler", "serve", "lock", workspace_id, stub_id),
                     redis.key(
                         "autoscaling",
                         "taskqueues",
@@ -841,12 +841,12 @@ def _execution_redis_keys(
                 }
             )
         elif deployment.kind is DeploymentKind.Endpoint:
-            root = redis.key("endpoint", "default", stub_id)
+            root = redis.key("endpoint", workspace_id, stub_id)
             keys.update(
                 {
                     root,
                     f"{root}:keep_warm_lock:container",
-                    redis.key("scheduler", "serve", "lock", "default", stub_id),
+                    redis.key("scheduler", "serve", "lock", workspace_id, stub_id),
                     redis.key(
                         "autoscaling",
                         "endpoints",
@@ -857,7 +857,7 @@ def _execution_redis_keys(
                 }
             )
         elif deployment.kind is DeploymentKind.Pod:
-            root = redis.key("pod", "default", stub_id)
+            root = redis.key("pod", workspace_id, stub_id)
             keys.update(
                 {
                     root,

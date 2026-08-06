@@ -34,14 +34,24 @@ TAILNET_STALE_PEER_MISS_WINDOW_SECONDS = 60.0
 TAILNET_STALE_PEER_RECOVERY_COOLDOWN_SECONDS = 300.0
 TAILNET_RECONNECT_MARKER_NAME = ".reconnect-node-id"
 TAILSCALED_LOG_NAME = "tailscaled.log"
+SERVICE_NAME_PREFIX = "svc:"
 
 _JSON_VALUE_ADAPTER = TypeAdapter[JsonValue](JsonValue)
 
 
 class TailnetRuntimeMode(StrEnum):
     Disabled = "disabled"
-    Sidecar = "sidecar"
     Managed = "managed"
+
+
+class TailnetAuthKeyIssuer(Protocol):
+    """Mints the key this runtime redeems for its own tailnet device.
+
+    Consulted only when a login is actually required, so a restart that resumes a
+    persisted device identity mints nothing.
+    """
+
+    def issue_runtime_auth_key(self, *, hostname: str, ephemeral: bool = False) -> SecretStr: ...
 
 
 class TailnetRuntimeError(RuntimeError):
@@ -56,7 +66,11 @@ class TailnetAuthenticationRequired(TailnetRuntimeError):
 
 
 class TailnetRuntimeOptions(ContractModel):
-    mode: TailnetRuntimeMode = TailnetRuntimeMode.Sidecar
+    # Running a tailnet daemon is opted into, never inherited: a process that
+    # did not ask for one must not start one as a side effect of construction.
+    # The deployments that need it say so, and the remote-provider gate refuses
+    # a connected deployment that left it off.
+    mode: TailnetRuntimeMode = TailnetRuntimeMode.Disabled
     hostname: str = ""
     auth_key: SecretStr = SecretStr("")
     control_url: str = ""
@@ -64,8 +78,10 @@ class TailnetRuntimeOptions(ContractModel):
     socket_path: str = ""
     tailscale_binary: str = "tailscale"
     tailscaled_binary: str = "tailscaled"
-    accept_dns: bool = False
-    accept_routes: bool = False
+    # A device that deregisters when it goes offline. Correct for anything
+    # replaceable: it holds no address that was handed out, so leaving a record
+    # behind on every restart buys nothing and accumulates dead peers.
+    ephemeral_device: bool = False
     userspace_networking: bool = False
     login_timeout_seconds: float = Field(default=DEFAULT_TAILNET_LOGIN_TIMEOUT_SECONDS, gt=0)
     status_timeout_seconds: float = Field(default=DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS, gt=0)
@@ -77,12 +93,12 @@ class TailnetRuntimeOptions(ContractModel):
 
     @field_validator("mode", mode="before")
     @classmethod
-    def blank_mode_defaults_to_sidecar(
+    def blank_mode_defaults_to_disabled(
         cls,
         value: str | TailnetRuntimeMode,
     ) -> str | TailnetRuntimeMode:
         if value == "":
-            return TailnetRuntimeMode.Sidecar
+            return TailnetRuntimeMode.Disabled
         return value
 
 
@@ -197,6 +213,7 @@ class TailnetRuntime:
     options: TailnetRuntimeOptions
     runner: TailnetCommandRunner = field(default_factory=SubprocessTailnetCommandRunner)
     launcher: TailnetProcessLauncher = field(default_factory=SubprocessTailnetProcessLauncher)
+    auth_key_issuer: TailnetAuthKeyIssuer | None = None
     _process: TailnetManagedProcess | None = field(default=None, init=False, repr=False)
     _started: bool = field(default=False, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
@@ -208,43 +225,51 @@ class TailnetRuntime:
 
     def start(self) -> None:
         with self._lock:
-            if self._started and (
-                self.options.mode is TailnetRuntimeMode.Sidecar or self._managed_process_alive()
-            ):
+            if self.options.mode is TailnetRuntimeMode.Disabled:
+                return
+            if self._started and self._managed_process_alive():
                 return
             self._validate_start_config()
-            if self.options.mode is TailnetRuntimeMode.Managed:
-                self._start_managed_daemon()
-                status = self._managed_status()
-                if self._resume_reconnect_if_required(status):
-                    return
-                if not _sidecar_authenticated(status):
-                    auth_key = self.options.auth_key.get_secret_value()
-                    if auth_key.strip():
-                        if not self.options.hostname.strip():
-                            raise TailnetRuntimeError("tailnet hostname is required")
-                        self._run_up(
-                            auth_key=auth_key,
-                            hostname=self.options.hostname,
-                            control_url=self.options.control_url,
-                        )
-                        status = self._managed_status()
-                    if _sidecar_authenticated(status):
-                        self._started = True
-                        return
+            self._start_managed_daemon()
+            status = self._managed_status()
+            if self._resume_reconnect_if_required(status):
+                return
+            if not _authenticated(status):
+                auth_key = self._resolve_auth_key()
+                if auth_key.strip():
+                    if not self.options.hostname.strip():
+                        raise TailnetRuntimeError("tailnet hostname is required")
+                    self._run_up(
+                        auth_key=auth_key,
+                        hostname=self.options.hostname,
+                        control_url=self.options.control_url,
+                    )
+                    status = self._managed_status()
+                if not _authenticated(status):
                     if status.backend_state.strip().lower() == "needslogin":
                         raise TailnetAuthenticationRequired(status.backend_state)
                     raise TailnetRuntimeError(
                         f"managed tailnet is not authenticated "
                         f"({status.backend_state or 'unknown'})"
                     )
-            else:
-                status = self._managed_status()
-                if self._resume_reconnect_if_required(status):
-                    return
-                if not _sidecar_authenticated(status):
-                    self._verify_sidecar()
             self._started = True
+
+    def _resolve_auth_key(self) -> str:
+        configured = self.options.auth_key.get_secret_value()
+        if configured.strip() or self.auth_key_issuer is None:
+            return configured
+        hostname = self.options.hostname.strip()
+        if not hostname:
+            raise TailnetRuntimeError("tailnet hostname is required")
+        try:
+            return self.auth_key_issuer.issue_runtime_auth_key(
+                hostname=hostname,
+                ephemeral=self.options.ephemeral_device,
+            ).get_secret_value()
+        except TailnetRuntimeError:
+            raise
+        except Exception as exc:
+            raise TailnetRuntimeError(f"could not mint a tailnet auth key: {exc}") from exc
 
     def authenticate(
         self,
@@ -270,17 +295,12 @@ class TailnetRuntime:
             raise TailnetRuntimeError("tailnet hostname is required")
         with self._lock:
             self._validate_start_config()
-            # Only a managed runtime owns its daemon. Starting one in sidecar
-            # mode would put a second tailscaled on the same socket and state
-            # file as the process that already runs it, which is the collision
-            # this mode exists to avoid.
-            if self.options.mode is TailnetRuntimeMode.Managed:
-                self._start_managed_daemon()
+            self._start_managed_daemon()
             status = self._managed_status()
-            if _sidecar_authenticated(status) and not force:
+            if _authenticated(status) and not force:
                 self._started = True
                 return status
-            if force and _sidecar_authenticated(status):
+            if force and _authenticated(status):
                 # `tailscale up` will not move an authenticated node onto a new
                 # identity, so the existing session has to be dropped first or
                 # the daemon keeps the name the control plane already rejected.
@@ -290,7 +310,7 @@ class TailnetRuntime:
                 )
                 self._run_up(auth_key=auth_key, hostname=hostname, control_url=control_url)
                 status = self._managed_status()
-                if not _sidecar_authenticated(status):
+                if not _authenticated(status):
                     raise TailnetRuntimeError(
                         f"tailnet re-login completed without an authenticated device "
                         f"({status.backend_state or 'unknown'})"
@@ -303,7 +323,7 @@ class TailnetRuntime:
                 )
             self._run_up(auth_key=auth_key, hostname=hostname, control_url=control_url)
             status = self._managed_status()
-            if not _sidecar_authenticated(status):
+            if not _authenticated(status):
                 raise TailnetRuntimeError(
                     f"tailnet login completed without an authenticated device "
                     f"({status.backend_state or 'unknown'})"
@@ -330,6 +350,67 @@ class TailnetRuntime:
         if result.returncode != 0:
             raise TailnetRuntimeError(_command_error("tailscale status failed", result))
         return parse_tailscale_status(result.stdout)
+
+    def self_dns_name(self) -> str:
+        """The name this device is registered under.
+
+        Granted by the tailnet rather than chosen here: a collision on the
+        requested hostname is resolved with a numeric suffix, so what a
+        deployment asked for and what it got are not reliably the same string.
+        """
+        if self.options.mode is TailnetRuntimeMode.Disabled:
+            return ""
+        return self.status().self_dns_name
+
+    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str:
+        """Offer this node as a host for a service, and answer with its address.
+
+        A service is not a device: several nodes advertise the same one and the
+        tailnet routes callers to whichever is available. That is what lets the
+        address outlive any single node, which a device name cannot do — ask two
+        nodes for one hostname and the second is silently granted a suffixed one.
+
+        Forwarding is raw TCP rather than TLS-terminating on purpose. The control
+        plane routes one of these ports by SNI itself, and a proxy that decrypted
+        on the way through would leave nothing to route on.
+
+        A disabled tailnet answers with no address, as it does for its own device
+        name, and the caller falls back to the origin it was configured with.
+        """
+        if self.options.mode is TailnetRuntimeMode.Disabled:
+            return ""
+        name = _required_service_name(service)
+        for port in ports:
+            result = self.runner.run(
+                self._tailscale_args(
+                    "serve",
+                    f"--service={name}",
+                    f"--tcp={port}",
+                    "--bg",
+                    f"tcp://127.0.0.1:{port}",
+                ),
+                timeout_seconds=self.options.status_timeout_seconds,
+            )
+            if result.returncode != 0:
+                raise TailnetRuntimeError(
+                    _command_error(f"advertising {name} on port {port} failed", result)
+                )
+        return self.service_dns_name(name)
+
+    def service_dns_name(self, service: str) -> str:
+        """Where callers reach the service, in this tailnet.
+
+        Composed rather than read back because the two halves come from places
+        that cannot disagree: the name is the one we asked for — a service that
+        was already taken fails to advertise rather than quietly becoming
+        something else — and the tailnet domain comes from this node's own
+        registered name.
+        """
+        name = _required_service_name(service).removeprefix(SERVICE_NAME_PREFIX)
+        _, _, domain = self.self_dns_name().strip().rstrip(".").partition(".")
+        if not domain:
+            raise TailnetRuntimeError("this node has no tailnet domain to place a service in")
+        return f"{name}.{domain}"
 
     def peers(self) -> list[TailnetPeerView]:
         return self.status().peers
@@ -438,7 +519,7 @@ class TailnetRuntime:
         with self._lock:
             self._validate_start_config()
             before = self._managed_status()
-            if not _sidecar_authenticated(before) or not before.self_node_id:
+            if not _authenticated(before) or not before.self_node_id:
                 raise TailnetRuntimeError("tailnet identity is not authenticated before refresh")
             self._set_reconnect_expected_node_id(before.self_node_id, down_completed=False)
             down = self.runner.run(
@@ -464,7 +545,7 @@ class TailnetRuntime:
             expected_node_id = status.self_node_id
             self._set_reconnect_expected_node_id(expected_node_id, down_completed=True)
         if not self._reconnect_down_completed:
-            if _sidecar_authenticated(status):
+            if _authenticated(status):
                 down = self.runner.run(
                     self._tailscale_args("down"),
                     timeout_seconds=self.options.status_timeout_seconds,
@@ -479,7 +560,7 @@ class TailnetRuntime:
             self._set_reconnect_expected_node_id(expected_node_id, down_completed=True)
             self._run_reconnect_and_verify()
             return True
-        if _sidecar_authenticated(status):
+        if _authenticated(status):
             self._complete_reconnect(status, expected_node_id=expected_node_id)
             return True
         if not stopped:
@@ -504,7 +585,7 @@ class TailnetRuntime:
         *,
         expected_node_id: str,
     ) -> None:
-        if not _sidecar_authenticated(status):
+        if not _authenticated(status):
             raise TailnetRuntimeError(
                 "tailnet control-session refresh did not restore authentication"
             )
@@ -571,10 +652,6 @@ class TailnetRuntime:
     def _validate_start_config(self) -> None:
         if not self.options.tailscale_binary.strip():
             raise TailnetRuntimeError("tailscale binary is not configured")
-        if self.options.mode is TailnetRuntimeMode.Sidecar:
-            if not self.options.socket_path.strip():
-                raise TailnetRuntimeError("tailnet sidecar socket path is required")
-            return
         if not self.options.tailscaled_binary.strip():
             raise TailnetRuntimeError("tailscaled binary is not configured")
 
@@ -669,33 +746,6 @@ class TailnetRuntime:
             timeout_seconds=min(timeout_seconds, self.options.status_timeout_seconds),
         )
 
-    def _verify_sidecar(self) -> None:
-        result = TailnetCommandResult(returncode=1, stderr="tailnet sidecar status did not run")
-        status = TailnetStatus()
-        deadline = time.monotonic() + self.options.login_timeout_seconds
-        while True:
-            result = self.runner.run(
-                self._tailscale_args("status", "--json"),
-                timeout_seconds=min(1.0, self.options.status_timeout_seconds),
-            )
-            if result.returncode == 0:
-                status = parse_tailscale_status(result.stdout)
-                if _sidecar_authenticated(status):
-                    return
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(min(self.options.wait_poll_seconds, max(deadline - time.monotonic(), 0.001)))
-        if result.returncode != 0:
-            raise TailnetRuntimeError(_command_error("tailnet sidecar status failed", result))
-        state = status.backend_state or "unknown"
-        if state.strip().lower() == "needslogin":
-            # The same signal a managed runtime raises, so a caller holding a
-            # credential can log the daemon in. Without it an agent that
-            # restarts into an unauthenticated sidecar — a node whose key
-            # expired before it ever rotated — can never recover.
-            raise TailnetAuthenticationRequired(status.backend_state)
-        raise TailnetRuntimeError(f"tailnet sidecar is not authenticated ({state})")
-
     def _tailscale_up_args(
         self,
         auth_key_path: str,
@@ -703,12 +753,22 @@ class TailnetRuntime:
         hostname: str,
         control_url: str,
     ) -> list[str]:
+        # Fixed, not configurable. Every node here addresses its peers by tailnet
+        # name, and MagicDNS is the only thing that resolves one, so a deployment
+        # that declined it would be one where the peer is reachable by address
+        # and unreachable by the name actually dialled — work placed nowhere
+        # while both ends report healthy. Declining it has also left a VPC
+        # resolver answering `*.ts.net` from public records that point at
+        # Tailscale's infrastructure instead of the peer, so every lookup
+        # succeeded and every connection timed out. Non-tailnet queries are
+        # forwarded upstream unchanged. Nothing here is a subnet router, so
+        # accepting routes would only import someone else's.
         args = self._tailscale_args(
             "up",
             f"--auth-key=file:{auth_key_path}",
             f"--hostname={hostname.strip()}",
-            f"--accept-dns={_bool_flag(self.options.accept_dns)}",
-            f"--accept-routes={_bool_flag(self.options.accept_routes)}",
+            "--accept-dns=true",
+            "--accept-routes=false",
             "--reset",
         )
         if control_url.strip():
@@ -726,9 +786,7 @@ class TailnetRuntime:
     def _socket_path(self) -> str:
         if self.options.socket_path:
             return self.options.socket_path
-        if self.options.mode is TailnetRuntimeMode.Managed:
-            return str(Path(self.options.state_dir) / TAILSCALED_SOCKET_NAME)
-        return ""
+        return str(Path(self.options.state_dir) / TAILSCALED_SOCKET_NAME)
 
     def _managed_process_alive(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -824,11 +882,18 @@ def _merged_env(env: Mapping[str, str] | None) -> dict[str, str] | None:
     return merged
 
 
-def _bool_flag(value: bool) -> str:
-    return "true" if value else "false"
+def _required_service_name(service: str) -> str:
+    normalized = service.strip()
+    if not normalized:
+        raise TailnetRuntimeError("a tailnet service name is required")
+    if not normalized.startswith(SERVICE_NAME_PREFIX):
+        return f"{SERVICE_NAME_PREFIX}{normalized}"
+    if normalized == SERVICE_NAME_PREFIX:
+        raise TailnetRuntimeError("a tailnet service name is required")
+    return normalized
 
 
-def _sidecar_authenticated(status: TailnetStatus) -> bool:
+def _authenticated(status: TailnetStatus) -> bool:
     state = status.backend_state.strip().lower()
     if state in {"", "needslogin", "stopped", "nostate"}:
         return False

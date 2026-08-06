@@ -14,6 +14,7 @@ from execution.services import ExecutionServices
 from execution.taskqueues.service import TaskQueueControlService
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
+from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from scheduler.agent_pool import SchedulerAgentPoolService
 from scheduler.autoscaling import (
     EndpointAutoscalingService,
@@ -48,6 +49,7 @@ from scheduler.service import (
 )
 from scheduler.services import SchedulerServices
 from scheduler.state import (
+    RedisOrphanedContainerConfirmationRepository,
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
@@ -160,22 +162,27 @@ class SchedulerRuntime:
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
     ) -> SchedulerRuntime:
+        # The same origin the control plane published, read the same way the
+        # control plane reads it back. This process has no tailnet device of
+        # its own, so deriving the address locally would work there and be
+        # wrong here.
+        runtime_origin = RedisControlPlaneOriginRepository(redis_client).resolve
         compute_states = RedisComputeStateRepository(redis_client)
         pool_states = RedisWorkerPoolStateRepository(redis_client)
         worker_states = RedisSchedulerWorkerRepository(redis_client)
         container_states = RedisSchedulerContainerRepository(redis_client)
         function_control = FunctionControlService(
             execution_services,
-            gateway_http_url=runtime_callback_http_url,
+            gateway_http_url=runtime_origin,
         )
         task_queue_control = TaskQueueControlService(
             execution_services,
             redis=redis_client,
-            gateway_http_url=runtime_callback_http_url,
+            gateway_http_url=runtime_origin,
         )
         endpoint_control = EndpointControlService(
             execution_services,
-            gateway_http_url=runtime_callback_http_url,
+            gateway_http_url=runtime_origin,
         )
         endpoint_dispatches = EndpointDispatchAutoscalingReader(
             EndpointDispatchStateRepository(execution_services)
@@ -239,6 +246,9 @@ class SchedulerRuntime:
                     compute_states,
                 ),
                 orphaned_container_networks=RedisWorkerNetworkIpRepository(redis_client),
+                orphaned_container_confirmations=(
+                    RedisOrphanedContainerConfirmationRepository(redis_client)
+                ),
                 cron_job_locks=redis_client,
             ),
             capacity=SchedulerCapacityControls(

@@ -56,28 +56,28 @@ class SimpleQueuePutPlan(ContractModel):
     value_size_bytes: int = Field(ge=0)
 
 
-def map_entry_key(workspace_name: str, name: str, key: str) -> str:
-    return f"{MAP_KEY_PREFIX}:{workspace_name}:{name}:{key}"
+def map_entry_key(workspace_id: str, name: str, key: str) -> str:
+    return f"{MAP_KEY_PREFIX}:{workspace_id}:{name}:{key}"
 
 
-def map_index_key(workspace_name: str, name: str) -> str:
-    return f"{MAP_KEY_PREFIX}:{workspace_name}:{name}:index"
+def map_index_key(workspace_id: str, name: str) -> str:
+    return f"{MAP_KEY_PREFIX}:{workspace_id}:{name}:index"
 
 
-def map_registry_key(workspace_name: str) -> str:
-    return f"{MAP_KEY_PREFIX}-registry:{workspace_name}"
+def map_registry_key(workspace_id: str) -> str:
+    return f"{MAP_KEY_PREFIX}-registry:{workspace_id}"
 
 
 def plan_map_set(
-    workspace_name: str,
+    workspace_id: str,
     name: str,
     key: str,
     value: bytes,
     *,
     ttl_seconds: int = 0,
 ) -> MapSetPlan:
-    entry_key = map_entry_key(workspace_name, name, key)
-    index_key = map_index_key(workspace_name, name)
+    entry_key = map_entry_key(workspace_id, name, key)
+    index_key = map_index_key(workspace_id, name)
     value_size = len(value)
 
     if value_size > MAX_MAP_VALUE_SIZE_BYTES:
@@ -109,15 +109,15 @@ def plan_map_set(
     )
 
 
-def plan_map_delete(workspace_name: str, name: str, key: str) -> MapDeletePlan:
+def plan_map_delete(workspace_id: str, name: str, key: str) -> MapDeletePlan:
     return MapDeletePlan(
-        entry_key=map_entry_key(workspace_name, name, key),
-        index_key=map_index_key(workspace_name, name),
+        entry_key=map_entry_key(workspace_id, name, key),
+        index_key=map_index_key(workspace_id, name),
     )
 
 
 def plan_map_live_keys(
-    workspace_name: str,
+    workspace_id: str,
     name: str,
     *,
     indexed_keys: set[str] | frozenset[str] | list[str] | tuple[str, ...],
@@ -128,7 +128,7 @@ def plan_map_live_keys(
     live = tuple(sorted(indexed & existing))
     stale = tuple(sorted(indexed - existing))
     return MapLiveKeysPlan(
-        index_key=map_index_key(workspace_name, name),
+        index_key=map_index_key(workspace_id, name),
         live_keys=live,
         stale_keys=stale,
     )
@@ -138,24 +138,24 @@ def simple_queue_prefix() -> str:
     return SIMPLE_QUEUE_KEY_PREFIX
 
 
-def simple_queue_name(workspace_name: str, name: str) -> str:
-    return f"{SIMPLE_QUEUE_KEY_PREFIX}:{workspace_name}:{name}"
+def simple_queue_name(workspace_id: str, name: str) -> str:
+    return f"{SIMPLE_QUEUE_KEY_PREFIX}:{workspace_id}:{name}"
 
 
-def simple_queue_timestamps_name(workspace_name: str, name: str) -> str:
-    return f"{simple_queue_name(workspace_name, name)}:timestamps"
+def simple_queue_timestamps_name(workspace_id: str, name: str) -> str:
+    return f"{simple_queue_name(workspace_id, name)}:timestamps"
 
 
-def simple_queue_activity_key(workspace_name: str, name: str) -> str:
-    return f"{simple_queue_name(workspace_name, name)}:activity"
+def simple_queue_activity_key(workspace_id: str, name: str) -> str:
+    return f"{simple_queue_name(workspace_id, name)}:activity"
 
 
-def simple_queue_registry_key(workspace_name: str) -> str:
-    return f"{SIMPLE_QUEUE_KEY_PREFIX}-registry:{workspace_name}"
+def simple_queue_registry_key(workspace_id: str) -> str:
+    return f"{SIMPLE_QUEUE_KEY_PREFIX}-registry:{workspace_id}"
 
 
-def plan_simple_queue_put(workspace_name: str, name: str, value: bytes) -> SimpleQueuePutPlan:
+def plan_simple_queue_put(workspace_id: str, name: str, value: bytes) -> SimpleQueuePutPlan:
     return SimpleQueuePutPlan(
-        queue_key=simple_queue_name(workspace_name, name),
+        queue_key=simple_queue_name(workspace_id, name),
         value_size_bytes=len(value),
     )

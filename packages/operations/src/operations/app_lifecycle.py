@@ -49,7 +49,6 @@ class ProductionAppExecutionLifecycleEffects:
 
     def delete_app_execution(self, *, workspace_id: str, app_id: str) -> None:
         with self.context.database.session() as session:
-            workspace_name = self.context.workspace(session, workspace_id).name
             stubs = StubRepository(session).list_for_app(
                 workspace_id=workspace_id,
                 app_id=app_id,
@@ -71,27 +70,20 @@ class ProductionAppExecutionLifecycleEffects:
                     workspace_id=workspace_id,
                     queues={f"taskqueue:{stub_id}" for stub_id in task_queue_stub_ids},
                 )
-        self._delete_app_ephemeral_state(
-            workspace_id=workspace_id,
-            workspace_name=workspace_name,
-            stubs=stubs,
-        )
+        self._delete_app_ephemeral_state(workspace_id=workspace_id, stubs=stubs)
 
     def _delete_app_ephemeral_state(
         self,
         *,
         workspace_id: str,
-        workspace_name: str,
         stubs: list[StubRecord],
     ) -> None:
         keys: set[str] = set()
         for stub in stubs:
             if stub.kind is StubKind.TaskQueue:
-                keys.update(self._stub_root_keys(task_queue_list_key(workspace_name, stub.id)))
-                keys.add(self.redis.key(task_queue_instance_lock_key(workspace_name, stub.id)))
-                keys.add(
-                    self.redis.key(task_queue_scheduler_serve_lock_key(workspace_name, stub.id))
-                )
+                keys.update(self._stub_root_keys(task_queue_list_key(workspace_id, stub.id)))
+                keys.add(self.redis.key(task_queue_instance_lock_key(workspace_id, stub.id)))
+                keys.add(self.redis.key(task_queue_scheduler_serve_lock_key(workspace_id, stub.id)))
                 keys.add(
                     self.redis.key(
                         "autoscaling",
@@ -102,9 +94,9 @@ class ProductionAppExecutionLifecycleEffects:
                     )
                 )
             elif stub.kind in {StubKind.Endpoint, StubKind.Asgi}:
-                keys.update(self._stub_root_keys(f"endpoint:{workspace_name}:{stub.id}"))
-                keys.add(self.redis.key(endpoint_instance_lock_key(workspace_name, stub.id)))
-                keys.add(self.redis.key(endpoint_serve_lock_key(workspace_name, stub.id)))
+                keys.update(self._stub_root_keys(f"endpoint:{workspace_id}:{stub.id}"))
+                keys.add(self.redis.key(endpoint_instance_lock_key(workspace_id, stub.id)))
+                keys.add(self.redis.key(endpoint_serve_lock_key(workspace_id, stub.id)))
                 keys.add(
                     self.redis.key(
                         "autoscaling",
@@ -115,8 +107,8 @@ class ProductionAppExecutionLifecycleEffects:
                     )
                 )
             elif stub.kind in {StubKind.Pod, StubKind.Sandbox}:
-                keys.update(self._stub_root_keys(f"pod:{workspace_name}:{stub.id}"))
-                keys.add(self.redis.key(pod_instance_lock_key(workspace_name, stub.id)))
+                keys.update(self._stub_root_keys(f"pod:{workspace_id}:{stub.id}"))
+                keys.add(self.redis.key(pod_instance_lock_key(workspace_id, stub.id)))
                 keys.add(
                     self.redis.key(
                         "autoscaling",

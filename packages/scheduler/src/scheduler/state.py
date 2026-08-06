@@ -459,6 +459,9 @@ class SchedulerStateKeys:
     redis: RedisClient
     namespace: str = "scheduler"
 
+    def orphaned_container_confirmation(self, container_id: str) -> str:
+        return self.redis.key(self.namespace, "orphaned-containers", container_id)
+
     def worker_state(self, worker_id: str) -> str:
         return self.redis.key(self.namespace, "workers", worker_id, "state")
 
@@ -2447,6 +2450,58 @@ class RedisSchedulerContainerRepository:
         if int(self.redis.set_cardinality(index_key)) == 0:
             self.redis.delete(index_key)
         return states
+
+
+@dataclass(init=False, slots=True)
+class RedisOrphanedContainerConfirmationRepository:
+    """When a container was first seen unscheduled, shared across schedulers.
+
+    The confirmation window exists so a container mid-handoff is not mistaken for
+    an abandoned one. Held in a scheduler's memory it is not a window at all once
+    a second scheduler exists: each keeps its own clock, both start it at a
+    different moment, and both independently conclude the container is dead. It
+    also resets on every restart, which quietly forgives containers that really
+    were orphaned.
+    """
+
+    redis: RedisClient
+    keys: SchedulerStateKeys
+
+    def __init__(self, redis: RedisClient, keys: SchedulerStateKeys | None = None) -> None:
+        self.redis = redis
+        self.keys = keys or SchedulerStateKeys(redis)
+
+    def first_observed_at(
+        self,
+        container_id: str,
+        *,
+        now: datetime,
+        ttl_seconds: int,
+    ) -> datetime:
+        """Record this observation, and answer with the earliest one recorded."""
+        key = self.keys.orphaned_container_confirmation(container_id)
+        self.redis.set(key, now.isoformat(), ex=max(ttl_seconds, 1), nx=True)
+        stored = self.redis.get(key)
+        if stored is None:
+            return now
+        try:
+            return datetime.fromisoformat(str(stored))
+        except ValueError:
+            return now
+
+    def claim_confirmed(self, container_id: str) -> bool:
+        """Take the right to fail this container, exactly once across schedulers.
+
+        The observation record doubles as the claim: whichever scheduler removes
+        it is the one that acts, and the others find nothing and move on. A
+        separate lock would leave the same container failable twice in the gap
+        between reading the clock and taking the lock.
+        """
+        key = self.keys.orphaned_container_confirmation(container_id)
+        return self.redis.getdel(key) is not None
+
+    def forget(self, container_id: str) -> None:
+        self.redis.delete(self.keys.orphaned_container_confirmation(container_id))
 
 
 @dataclass(init=False, slots=True)

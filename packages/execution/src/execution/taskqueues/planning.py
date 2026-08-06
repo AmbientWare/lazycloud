@@ -38,6 +38,7 @@ TASK_QUEUE_DEFAULT_PYTHON_EXECUTABLE = "python3.12"
 class TaskQueueServeRequest(ContractModel):
     stub_id: str
     workspace_name: str = "default"
+    workspace_id: str
     timeout_seconds: int = Field(default=DEFAULT_TASK_QUEUE_SERVE_TIMEOUT_SECONDS, gt=0)
     python_executable: ManagedPythonExecutable = TASK_QUEUE_DEFAULT_PYTHON_EXECUTABLE
     runner_module: str = TASK_QUEUE_SERVE_RUNNER_MODULE
@@ -54,14 +55,6 @@ class TaskQueueServePlan(ContractModel):
     @property
     def authorized(self) -> bool:
         return True
-
-
-class TaskQueueServeCompletionPlan(ContractModel):
-    workspace_name: str
-    stub_id: str
-    container_id: str
-    release_keep_warm_lock_key: str
-    keep_serve_lock: bool = True
 
 
 class TaskQueuePutStatus(StrEnum):
@@ -95,6 +88,7 @@ class TaskQueuePopStatus(StrEnum):
 
 class TaskQueuePopRequest(ContractModel):
     workspace_name: str
+    workspace_id: str
     stub_id: str
     container_id: str
     queue_length: int = Field(default=0, ge=0)
@@ -125,6 +119,7 @@ class TaskQueueMonitorStatus(StrEnum):
 
 class TaskQueueMonitorRequest(ContractModel):
     workspace_name: str
+    workspace_id: str
     stub_id: str
     container_id: str
     task_id: str
@@ -156,6 +151,7 @@ class TaskQueueCompletionAction(StrEnum):
 
 class TaskQueueCompleteRequest(ContractModel):
     workspace_name: str
+    workspace_id: str
     stub_id: str
     container_id: str
     task_id: str
@@ -207,28 +203,24 @@ class TaskQueueTaskCancellationDecision(ContractModel):
     terminal_before_cancel: bool = False
 
 
-def task_queue_list_key(workspace_name: str, stub_id: str) -> str:
-    return f"taskqueue:{workspace_name}:{stub_id}"
+def task_queue_list_key(workspace_id: str, stub_id: str) -> str:
+    return f"taskqueue:{workspace_id}:{stub_id}"
 
 
-def task_queue_instance_lock_key(workspace_name: str, stub_id: str) -> str:
-    return f"taskqueue:{workspace_name}:{stub_id}:instance_lock"
+def task_queue_instance_lock_key(workspace_id: str, stub_id: str) -> str:
+    return f"taskqueue:{workspace_id}:{stub_id}:instance_lock"
 
 
-def task_queue_task_heartbeat_key(workspace_name: str, stub_id: str, task_id: str) -> str:
-    return f"taskqueue:{workspace_name}:{stub_id}:task:heartbeat:{task_id}"
+def task_queue_task_heartbeat_key(workspace_id: str, stub_id: str, task_id: str) -> str:
+    return f"taskqueue:{workspace_id}:{stub_id}:task:heartbeat:{task_id}"
 
 
-def task_queue_task_duration_key(workspace_name: str, stub_id: str) -> str:
-    return f"taskqueue:{workspace_name}:{stub_id}:task_duration"
+def task_queue_task_duration_key(workspace_id: str, stub_id: str) -> str:
+    return f"taskqueue:{workspace_id}:{stub_id}:task_duration"
 
 
-def task_queue_average_task_duration_key(workspace_name: str, stub_id: str) -> str:
-    return f"taskqueue:{workspace_name}:{stub_id}:avg_task_duration"
-
-
-def task_queue_scheduler_serve_lock_key(workspace_name: str, stub_id: str) -> str:
-    return f"scheduler:serve:lock:{workspace_name}:{stub_id}"
+def task_queue_scheduler_serve_lock_key(workspace_id: str, stub_id: str) -> str:
+    return f"scheduler:serve:lock:{workspace_id}:{stub_id}"
 
 
 def decide_task_queue_serve_scale(
@@ -260,26 +252,9 @@ def plan_task_queue_serve(request: TaskQueueServeRequest) -> TaskQueueServePlan:
     return TaskQueueServePlan(
         request=request,
         entrypoint=[request.python_executable, "-m", request.runner_module],
-        serve_lock_key=task_queue_scheduler_serve_lock_key(request.workspace_name, request.stub_id),
+        serve_lock_key=task_queue_scheduler_serve_lock_key(request.workspace_id, request.stub_id),
         serve_lock_ttl_seconds=request.timeout_seconds,
         wait_timeout_seconds=request.timeout_seconds,
-    )
-
-
-def plan_task_queue_serve_completion(
-    request: TaskQueueServeRequest,
-    *,
-    container_id: str,
-) -> TaskQueueServeCompletionPlan:
-    return TaskQueueServeCompletionPlan(
-        workspace_name=request.workspace_name,
-        stub_id=request.stub_id,
-        container_id=container_id,
-        release_keep_warm_lock_key=task_queue_keep_warm_lock_key(
-            request.workspace_name,
-            request.stub_id,
-            container_id,
-        ),
     )
 
 
@@ -309,9 +284,9 @@ def plan_task_queue_put(request: TaskQueuePutRequest) -> TaskQueuePutPlan:
 
 
 def plan_task_queue_pop(request: TaskQueuePopRequest) -> TaskQueuePopPlan:
-    queue_key = task_queue_list_key(request.workspace_name, request.stub_id)
+    queue_key = task_queue_list_key(request.workspace_id, request.stub_id)
     processing_lock_key = task_queue_processing_lock_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.container_id,
     )
@@ -323,18 +298,18 @@ def plan_task_queue_pop(request: TaskQueuePopRequest) -> TaskQueuePopPlan:
         )
 
     running_lock_index_key = task_queue_running_lock_index_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.container_id,
     )
     running_lock_key = task_queue_running_lock_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.container_id,
         request.task_message.task_id,
     )
     heartbeat_key = task_queue_task_heartbeat_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.task_message.task_id,
     )
@@ -363,12 +338,12 @@ def plan_task_queue_pop(request: TaskQueuePopRequest) -> TaskQueuePopPlan:
 
 def plan_task_queue_monitor(request: TaskQueueMonitorRequest) -> TaskQueueMonitorPlan:
     heartbeat_key = task_queue_task_heartbeat_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.task_id,
     )
     running_lock_key = task_queue_running_lock_key(
-        request.workspace_name,
+        request.workspace_id,
         request.stub_id,
         request.container_id,
         request.task_id,
@@ -428,7 +403,7 @@ def plan_task_queue_complete(request: TaskQueueCompleteRequest) -> TaskQueueComp
         terminal=is_terminal_task_status(final_status),
         keep_warm_lock_key=(
             task_queue_keep_warm_lock_key(
-                request.workspace_name,
+                request.workspace_id,
                 request.stub_id,
                 request.container_id,
             )
@@ -436,17 +411,17 @@ def plan_task_queue_complete(request: TaskQueueCompleteRequest) -> TaskQueueComp
             else None
         ),
         running_lock_index_key=task_queue_running_lock_index_key(
-            request.workspace_name,
+            request.workspace_id,
             request.stub_id,
             request.container_id,
         ),
         running_lock_key=task_queue_running_lock_key(
-            request.workspace_name,
+            request.workspace_id,
             request.stub_id,
             request.container_id,
             request.task_id,
         ),
-        task_duration_key=task_queue_task_duration_key(request.workspace_name, request.stub_id),
+        task_duration_key=task_queue_task_duration_key(request.workspace_id, request.stub_id),
         task_duration_ms=request.task_duration_ms,
         store_result=request.result is not None,
         result_size_bytes=len(request.result) if request.result is not None else 0,

@@ -12,7 +12,11 @@ from typing import Protocol
 from uuid import uuid4
 
 from coordination.redis_client import RedisClient, redis_text
-from coordination.token_lock import release_token_lock, try_acquire_token_lock
+from coordination.token_lock import (
+    release_token_lock,
+    renew_token_lock,
+    try_acquire_token_lock,
+)
 from pydantic import Field, model_validator
 from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
@@ -54,14 +58,6 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
 DEFAULT_CAPACITY_RESERVATION_RETENTION_SECONDS = 86_400
-
-RENEW_CAPACITY_MUTATION_LOCK_SCRIPT = """
-if redis.call("GET", KEYS[1]) ~= ARGV[1] then
-    return 0
-end
-redis.call("EXPIRE", KEYS[1], ARGV[2])
-return 1
-"""
 
 
 class CapacityReservationStatus(StrEnum):
@@ -638,12 +634,11 @@ class RedisCapacityReservationRepository:
             interval_seconds = max(ttl_seconds / 3, 0.1)
             while not stop_renewal.wait(interval_seconds):
                 try:
-                    renewed = self.redis.eval_int(
-                        RENEW_CAPACITY_MUTATION_LOCK_SCRIPT,
-                        1,
+                    renewed = renew_token_lock(
+                        self.redis,
                         key,
                         token,
-                        ttl_seconds,
+                        ttl_seconds=int(ttl_seconds),
                     )
                 except Exception as exc:
                     LOGGER.exception(
@@ -653,7 +648,7 @@ class RedisCapacityReservationRepository:
                     lease_loss.append(("renewal failed", exc))
                     lease_lost.set()
                     return
-                if renewed != 1:
+                if not renewed:
                     lease_loss.append(("the lock was taken by another holder", None))
                     lease_lost.set()
                     return

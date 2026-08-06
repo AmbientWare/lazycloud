@@ -13,18 +13,44 @@ LazyCloud-owned test resources. Do not apply this whole-policy Terraform module
 to such a Tailnet unless the user explicitly assigns the entire policy to this
 module and a reviewed plan proves unrelated state is preserved.
 
-It creates a deny-by-default policy, a scoped agent OAuth client, and an
-ephemeral gateway enrollment key. The hosted Tailnet already must exist.
+It creates a deny-by-default policy, a scoped OAuth client, and the tailnet-wide
+DNS and device settings this deployment depends on. The hosted Tailnet already
+must exist.
+
+Nothing here mints a long-lived enrollment key. The control plane issues its own
+short-lived, tagged key through the OAuth client when it joins, so no credential
+sits in a deployment file waiting to be leaked or to expire unnoticed.
 
 Two tags carry two different reaches. `control_plane_tag` may dial an agent's
 route proxy; `agent_tag` may dial the control plane. A node that has not
 enrolled yet holds no tailnet identity at all: it reaches the control plane over
 the public origin and joins the tailnet with the machine key enrolment vends it.
 
-The agent OAuth client owns `agent_tag`, the only tag the control plane mints
-for — changing that tag list replaces the client, so re-export
-`agent_oauth_client_id` and `agent_oauth_client_secret` to the deployment secret
-manager after any plan that does.
+The OAuth client owns both tags. It mints `agent_tag` keys for every node it
+enrols and `control_plane_tag` keys for the device the control plane registers as
+itself — `tailscale up` advertises no tag, so for the control plane this client is
+the only thing that can apply one. Changing that tag list replaces the client, so
+re-export `agent_oauth_client_id` and `agent_oauth_client_secret` to the
+deployment secret manager after any plan that does.
+
+Both tags therefore list `control_plane_tag` among their owners. An OAuth client
+authenticates as its tags rather than as a user, so a tag owned only by
+`autogroup:admin` is a tag the client cannot apply: every mint fails with
+"requested tags are invalid or not permitted", and the deployment enrols nothing.
+Self-ownership on `control_plane_tag` is what lets each control plane mint the key
+for its own device, which is what makes a second replica a start rather than an
+enrolment step.
+
+The control plane advertises `control_plane_service` and is reached there rather
+than at any one device's name. `autoApprovers` lets a node carrying
+`control_plane_tag` become a service proxy without an admin approving each one,
+which is what allows a second control plane to be added by starting it.
+
+The service itself is a resource here because it must exist before any node may
+advertise it, and advertising an absent one fails silently: the node sets the
+preference, the coordination server reads it back, and the name still resolves
+nowhere while every process reports healthy. `autoApprovers` approves a proxy for
+a service; it does not create the service.
 
 ## Backend and credentials
 
@@ -73,7 +99,6 @@ state into the deployment secret manager:
 | --- | --- |
 | `agent_oauth_client_id` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID` |
 | `agent_oauth_client_secret` | `LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET` |
-| `gateway_auth_key` | `LAZYCLOUD_TAILNET_AUTH_KEY` |
 
 `runtime_configuration` carries both tag names, which must match the
 deployment's `LAZYCLOUD_TAILNET_AGENT_TAG` and
