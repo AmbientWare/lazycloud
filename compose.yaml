@@ -65,6 +65,11 @@ x-scheduler-env: &scheduler-env
   LAZYCLOUD_COMPUTE_RECLAIM_REGISTRATION_DEADLINE_SECONDS: "3600"
 
 x-tailnet-env: &tailnet-env
+  # The deployment's tailnet posture, not one process's: the control plane
+  # runs the daemon, and the scheduler refuses to start a connected
+  # deployment that declares no tailnet. Constructing a runtime is what
+  # starts a daemon, and only the control plane does that.
+  LAZYCLOUD_TAILNET_MODE: "${LAZYCLOUD_TAILNET_MODE:-managed}"
   LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID: "${LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID:-}"
   LAZYCLOUD_TAILNET_AGENT_TAG: "${LAZYCLOUD_TAILNET_AGENT_TAG:-tag:lazycloud-agent}"
   LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG: "${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane}"
@@ -352,10 +357,6 @@ services:
           *container-service-credentials,
           *cache-origin-registry,
         ]
-      # The one process that runs a tailnet daemon, and it says so rather than
-      # inheriting it: every other service holding these settings only reads
-      # them.
-      LAZYCLOUD_TAILNET_MODE: "managed"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
