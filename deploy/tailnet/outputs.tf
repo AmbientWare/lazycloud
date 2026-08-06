@@ -12,8 +12,8 @@ output "agent_oauth_client_secret" {
 output "runtime_configuration" {
   description = "Non-secret Tailnet values consumed by Compose."
   value = {
-    LAZYCLOUD_TAILNET_AGENT_TAG          = var.agent_tag
-    LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG  = var.control_plane_tag
+    LAZYCLOUD_TAILNET_AGENT_TAG         = var.agent_tag
+    LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG = var.control_plane_tag
   }
 }
 

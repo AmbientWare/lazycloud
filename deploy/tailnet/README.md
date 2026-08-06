@@ -13,18 +13,30 @@ LazyCloud-owned test resources. Do not apply this whole-policy Terraform module
 to such a Tailnet unless the user explicitly assigns the entire policy to this
 module and a reviewed plan proves unrelated state is preserved.
 
-It creates a deny-by-default policy, a scoped agent OAuth client, and an
-ephemeral gateway enrollment key. The hosted Tailnet already must exist.
+It creates a deny-by-default policy, a scoped OAuth client, and the tailnet-wide
+DNS and device settings this deployment depends on. The hosted Tailnet already
+must exist.
+
+Nothing here mints a long-lived enrollment key. The control plane issues its own
+short-lived, tagged key through the OAuth client when it joins, so no credential
+sits in a deployment file waiting to be leaked or to expire unnoticed.
 
 Two tags carry two different reaches. `control_plane_tag` may dial an agent's
 route proxy; `agent_tag` may dial the control plane. A node that has not
 enrolled yet holds no tailnet identity at all: it reaches the control plane over
 the public origin and joins the tailnet with the machine key enrolment vends it.
 
-The agent OAuth client owns `agent_tag`, the only tag the control plane mints
-for — changing that tag list replaces the client, so re-export
-`agent_oauth_client_id` and `agent_oauth_client_secret` to the deployment secret
-manager after any plan that does.
+The OAuth client owns both tags. It mints `agent_tag` keys for every node it
+enrols and `control_plane_tag` keys for the device the control plane registers as
+itself — `tailscale up` advertises no tag, so for the control plane this client is
+the only thing that can apply one. Changing that tag list replaces the client, so
+re-export `agent_oauth_client_id` and `agent_oauth_client_secret` to the
+deployment secret manager after any plan that does.
+
+The control plane advertises `control_plane_service` and is reached there rather
+than at any one device's name. `autoApprovers` lets a node carrying
+`control_plane_tag` become a service proxy without an admin approving each one,
+which is what allows a second control plane to be added by starting it.
 
 ## Backend and credentials
 
