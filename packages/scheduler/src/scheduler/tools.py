@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import Field, JsonValue, model_validator
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
 from shared.timestamps import utc_now
 
 
@@ -261,12 +262,27 @@ _DOCKER_ENABLED_RUNTIME_CLASSES = frozenset({"runsc", "gvisor", "sandboxed-oci"}
 
 
 def _gpu_type_matches_request(worker_gpu_type: str, request: SchedulingRequest) -> bool:
-    requested = {item for item in request.gpu_request if item and item.lower() != "none"}
+    """Match the way placement matches, or the two disagree about the same worker.
+
+    Pool selection normalises both sides through `normalize_gpu_type`, so a
+    request naming a GPU in any of its spellings finds a pool and provisions a
+    machine. Comparing raw strings here then refused the very worker that machine
+    registered: the documented `gpu="l4"` reached a pool advertising `"L4"` and
+    never placed, and the workload failed on a retry limit that named nothing.
+    """
+    requested = {
+        normalize_gpu_type(item)
+        for item in request.gpu_request
+        if item and normalize_gpu_type(item) != NO_GPU
+    }
     if request.gpu_type:
-        requested.add(request.gpu_type)
+        requested.add(normalize_gpu_type(request.gpu_type))
+    requested.discard(NO_GPU)
     if not requested:
         return True
-    return "any" in {item.lower() for item in requested} or worker_gpu_type in requested
+    if GPU_ANY in requested:
+        return True
+    return normalize_gpu_type(worker_gpu_type) in requested
 
 
 def _requires_specific_gpu_type(request: SchedulingRequest) -> bool:
