@@ -32,7 +32,6 @@ workspace = [
     "api",
     "agent-app",
     "cache-server-app",
-    "control-plane-ingress-app",
     "cli",
     "container-worker-app",
     "scheduler-app",
@@ -81,7 +80,6 @@ members = [
     "apps/api",
     "apps/agent",
     "apps/cache-server",
-    "apps/control-plane-ingress",
     "apps/cli",
     "apps/container-worker",
     "apps/scheduler",
@@ -95,7 +93,6 @@ api = { workspace = true }
 agent-app = { workspace = true }
 cache = { workspace = true }
 cache-server-app = { workspace = true }
-control-plane-ingress-app = { workspace = true }
 cli = { workspace = true }
 coordination = { workspace = true }
 compute = { workspace = true }

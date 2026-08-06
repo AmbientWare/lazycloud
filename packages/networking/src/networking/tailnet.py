@@ -34,6 +34,7 @@ TAILNET_STALE_PEER_MISS_WINDOW_SECONDS = 60.0
 TAILNET_STALE_PEER_RECOVERY_COOLDOWN_SECONDS = 300.0
 TAILNET_RECONNECT_MARKER_NAME = ".reconnect-node-id"
 TAILSCALED_LOG_NAME = "tailscaled.log"
+SERVICE_NAME_PREFIX = "svc:"
 
 _JSON_VALUE_ADAPTER = TypeAdapter[JsonValue](JsonValue)
 
@@ -362,6 +363,51 @@ class TailnetRuntime:
         if self.options.mode is TailnetRuntimeMode.Disabled:
             return ""
         return self.status().self_dns_name
+
+    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str:
+        """Offer this node as a host for a service, and answer with its address.
+
+        A service is not a device: several nodes advertise the same one and the
+        tailnet routes callers to whichever is available. That is what lets the
+        address outlive any single node, which a device name cannot do — ask two
+        nodes for one hostname and the second is silently granted a suffixed one.
+
+        Forwarding is raw TCP rather than TLS-terminating on purpose. The control
+        plane routes one of these ports by SNI itself, and a proxy that decrypted
+        on the way through would leave nothing to route on.
+        """
+        name = _required_service_name(service)
+        for port in ports:
+            result = self.runner.run(
+                self._tailscale_args(
+                    "serve",
+                    f"--service={name}",
+                    f"--tcp={port}",
+                    "--bg",
+                    f"tcp://127.0.0.1:{port}",
+                ),
+                timeout_seconds=self.options.status_timeout_seconds,
+            )
+            if result.returncode != 0:
+                raise TailnetRuntimeError(
+                    _command_error(f"advertising {name} on port {port} failed", result)
+                )
+        return self.service_dns_name(name)
+
+    def service_dns_name(self, service: str) -> str:
+        """Where callers reach the service, in this tailnet.
+
+        Composed rather than read back because the two halves come from places
+        that cannot disagree: the name is the one we asked for — a service that
+        was already taken fails to advertise rather than quietly becoming
+        something else — and the tailnet domain comes from this node's own
+        registered name.
+        """
+        name = _required_service_name(service).removeprefix(SERVICE_NAME_PREFIX)
+        _, _, domain = self.self_dns_name().strip().rstrip(".").partition(".")
+        if not domain:
+            raise TailnetRuntimeError("this node has no tailnet domain to place a service in")
+        return f"{name}.{domain}"
 
     def peers(self) -> list[TailnetPeerView]:
         return self.status().peers
@@ -825,6 +871,17 @@ def _merged_env(env: Mapping[str, str] | None) -> dict[str, str] | None:
 
 def _bool_flag(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _required_service_name(service: str) -> str:
+    normalized = service.strip()
+    if not normalized:
+        raise TailnetRuntimeError("a tailnet service name is required")
+    if not normalized.startswith(SERVICE_NAME_PREFIX):
+        return f"{SERVICE_NAME_PREFIX}{normalized}"
+    if normalized == SERVICE_NAME_PREFIX:
+        raise TailnetRuntimeError("a tailnet service name is required")
+    return normalized
 
 
 def _authenticated(status: TailnetStatus) -> bool:

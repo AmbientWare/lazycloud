@@ -15,7 +15,7 @@ x-redis-env: &redis-env
   LAZYCLOUD_REDIS_URL: "redis://redis:6379/0"
 x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://127.0.0.1:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
-  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane-ingress:9000}"
+  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane:9000}"
 
 x-api-env: &api-env
   LAZYCLOUD_TCP_INGRESS_ENABLED: "true"
@@ -128,7 +128,7 @@ x-lazycloud-depends: &lazycloud-depends
     condition: service_completed_successfully
 
 x-lazycloud-role-depends: &lazycloud-role-depends
-  control-plane-ingress:
+  control-plane:
     condition: service_healthy
 
 x-container-worker-healthcheck: &container-worker-healthcheck
@@ -175,7 +175,7 @@ x-container-worker-settings: &container-worker-settings
     - /bin/sh
     - -ec
     - |
-      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane-ingress:9000" ]; then
+      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane:9000" ]; then
         compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
         if [ -z "$$compose_gateway" ]; then
           echo "Docker gateway is required for the public worker repository URL" >&2
@@ -360,9 +360,9 @@ services:
           *container-service-credentials,
           *cache-origin-registry,
         ]
-      # A replica is not the deployment's address, so it must not compete for
-      # that name: the ingress owns it, and a replica taking it first would push
-      # the ingress onto a suffixed one.
+      # Each replica keeps its own device name and none of them is the address:
+      # callers are given the Tailscale Service every replica advertises, so a
+      # suffixed device name costs nothing and no caller holds one.
       LAZYCLOUD_TAILNET_HOSTNAME: "${LAZYCLOUD_TAILNET_REPLICA_HOSTNAME:-lazycloud-control-plane-replica}"
       # Container-local, never a shared volume: replicas would otherwise open the
       # same tailscaled socket and all but the first would fail to start.
@@ -370,12 +370,15 @@ services:
       # The device goes away with the replica. Nothing was ever given its
       # address, and a durable one would leave a dead peer per restart.
       LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE: "true"
-    # Two by default so the ordinary stack runs the shape production runs. A
-    # single replica hides everything that only appears with company: a loop
-    # that double-runs, state that cannot be shared, a caller pinned to one
-    # container.
+    # One here only because this service publishes fixed host ports, which Compose
+    # cannot hand to a second container. Nothing in the process is singular: the
+    # tailnet service accepts as many advertisers as start, and the deployment
+    # scales by running this image somewhere that does not need a host port.
     deploy:
-      replicas: 2
+      replicas: 1
+    ports:
+      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
+      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
@@ -397,9 +400,9 @@ services:
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
-      # Only that this replica serves. Whether the deployment is reachable at
-      # the address it advertises is the ingress's assertion to make, and a
-      # replica that waited on it could never become healthy in the first place.
+      # Loopback rather than the advertised address: a replica has to prove it
+      # serves before it can be one of the things that address resolves to, so a
+      # check that went out through the tailnet could never pass on a cold start.
       test:
         [
           "CMD",
@@ -407,51 +410,6 @@ services:
           "-c",
           "from urllib.request import urlopen; urlopen('http://127.0.0.1:9000/health', timeout=3).read()",
         ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  control-plane-ingress:
-    # The address the deployment answers on. It holds the tailnet identity and
-    # publishes the origin every agent, worker, and container is given, so those
-    # callers never learn a replica's address and a replica can be replaced or
-    # scaled without stranding anything that was handed one.
-    image: control-plane-ingress:local
-    restart: unless-stopped
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-      target: control-plane-ingress
-      args: *lazycloud-build-args
-    environment:
-      <<:
-        [
-          *process-env,
-          *redis-env,
-          *gateway-env,
-          *tailnet-env,
-          *tailnet-control-credentials,
-        ]
-    depends_on:
-      redis:
-        condition: service_healthy
-      # Started, not healthy: a replica proves itself by serving, and it cannot
-      # serve through an ingress that is waiting for it.
-      control-plane:
-        condition: service_started
-    ports:
-      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
-      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    volumes:
-      - control-plane-ingress-tailnet-state:/var/lib/lazycloud/tailnet
-    healthcheck:
-      test: ["CMD", "python", "-m", "control_plane_ingress_app.health_probe"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -483,7 +441,7 @@ services:
           *container-service-credentials,
         ]
     depends_on:
-      control-plane-ingress:
+      control-plane:
         condition: service_healthy
     volumes:
       - lazycloud-files:/var/lib/lazycloud
@@ -494,7 +452,7 @@ services:
     image: "${LAZYCLOUD_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.7.3}"
     restart: unless-stopped
     depends_on:
-      control-plane-ingress:
+      control-plane:
         condition: service_healthy
     command:
       - tunnel
@@ -581,10 +539,10 @@ services:
         mv "$$temporary" "$$token_path"
         echo "compose agent one-use join credential initialized"
     environment:
-      GATEWAY_HTTP_URL: "http://control-plane-ingress:9000"
+      GATEWAY_HTTP_URL: "http://control-plane:9000"
       WORKSPACE_ID: "default"
     depends_on:
-      control-plane-ingress:
+      control-plane:
         condition: service_healthy
     volumes:
       - "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}:${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}"
@@ -757,7 +715,7 @@ services:
     environment: &container-worker-environment
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      WORKER_REPOSITORY_URL: "http://control-plane-ingress:9000"
+      WORKER_REPOSITORY_URL: "http://control-plane:9000"
       WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
       WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
       BUILDAH_RUNTIME: "/usr/local/sbin/runc"
@@ -894,7 +852,7 @@ services:
     environment:
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      WORKER_REPOSITORY_URL: "http://control-plane-ingress:9000"
+      WORKER_REPOSITORY_URL: "http://control-plane:9000"
       WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
       WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
       NVIDIA_VISIBLE_DEVICES: "all"
@@ -921,7 +879,7 @@ services:
       WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
       LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "${LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE:-/var/lib/lazycloud/cache-token/cache-service-token}"
     depends_on:
-      control-plane-ingress:
+      control-plane:
         condition: service_healthy
       worker-token:
         condition: service_completed_successfully
@@ -1095,7 +1053,6 @@ volumes:
   lazycloud-source-cache-cpu-secondary:
   lazycloud-source-cache-gpu:
   lazycloud-registry:
-  control-plane-ingress-tailnet-state:
   tcp-ingress-tls:
 
 secrets:

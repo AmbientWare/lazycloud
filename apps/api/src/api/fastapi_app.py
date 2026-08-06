@@ -27,9 +27,16 @@ from gateway.events import (
 from gateway.service import GatewayControlService
 from identity.auth import AuthError, AuthorizationDeniedError
 from images.control import ImageControlService
+from networking.control_plane_origin import (
+    DEFAULT_CONTROL_PLANE_ORIGIN_TTL_SECONDS as CONTROL_PLANE_ORIGIN_TTL_SECONDS,
+)
+from networking.control_plane_origin import (
+    RedisControlPlaneOriginRepository,
+    runtime_origin_for_host,
+)
 from observability.telemetry import setup_telemetry
 from pydantic import JsonValue
-from shared.app_identity import DISPLAY_NAME
+from shared.app_identity import CONTROL_PLANE_TAILNET_HOSTNAME, DISPLAY_NAME
 from shared.errors import (
     ConflictError,
     DomainError,
@@ -58,6 +65,9 @@ from api.web_static import mount_web_app
 from database import ControlPlaneRecoveryFence
 
 logger = logging.getLogger(__name__)
+
+# The port the API serves inside its container, which the service forwards to.
+CONTROL_PLANE_SERVED_PORT = 9000
 
 _DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     DomainError: status.HTTP_400_BAD_REQUEST,
@@ -156,6 +166,15 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                     # deployment that wants no tailnet says so with the disabled
                     # mode, which never reaches here.
                     api_services.tailnet_runtime.start()
+                    _publish_service_origin(api_services)
+                    origin_heartbeat = _create_background_task(
+                        _republish_service_origin(api_services)
+                    )
+                    cleanup.push_async_callback(
+                        _capture_task_cleanup_failure,
+                        cleanup_failures,
+                        origin_heartbeat,
+                    )
                 if tcp_ingress is not None:
                     cleanup.push_async_callback(
                         _capture_async_cleanup_failure,
@@ -314,6 +333,61 @@ def _emit_reconciliation_failure(
             level=EventLevel.Error,
             data={"loop": loop_name, "error_type": type(exc).__name__},
         )
+
+
+def _publish_service_origin(api_services: ApiServices) -> str:
+    """Offer this control plane as a host for the deployment's address.
+
+    The address belongs to the service, not to this process. Another control
+    plane advertising the same one is not a conflict to resolve but the point:
+    callers reach whichever is available, and none of them ever learns a
+    replica's own name.
+    """
+    tailnet_runtime = api_services.tailnet_runtime
+    if tailnet_runtime is None:
+        raise RuntimeError("a control plane without a tailnet runtime has no address to offer")
+    settings = api_services.tcp_ingress_settings
+    ports = (CONTROL_PLANE_SERVED_PORT, settings.port) if settings.enabled else (
+        CONTROL_PLANE_SERVED_PORT,
+    )
+    host = tailnet_runtime.advertise_service(CONTROL_PLANE_TAILNET_HOSTNAME, ports)
+    origin = runtime_origin_for_host(
+        api_services.gateway_settings.runtime_callback_http_url,
+        host,
+    )
+    RedisControlPlaneOriginRepository(api_services.redis_client).publish(
+        origin,
+        ttl_seconds=CONTROL_PLANE_ORIGIN_TTL_SECONDS,
+    )
+    logger.info("published control-plane service origin: %s", origin)
+    return origin
+
+
+async def _republish_service_origin(api_services: ApiServices) -> None:
+    """Keep the address alive, and stop if it cannot be.
+
+    The published value carries a TTL, so a heartbeat that fails quietly is a
+    countdown rather than a degradation: once it expires every resolve() in the
+    deployment raises while this process keeps serving and reporting healthy.
+    """
+    interval = max(CONTROL_PLANE_ORIGIN_TTL_SECONDS / 3, 1.0)
+    deadline_failures = max(int(CONTROL_PLANE_ORIGIN_TTL_SECONDS / interval) - 1, 1)
+    consecutive_failures = 0
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_publish_service_origin, api_services)
+        except Exception:
+            consecutive_failures += 1
+            logger.exception(
+                "republishing the control-plane origin failed (%s of %s before it expires)",
+                consecutive_failures,
+                deadline_failures,
+            )
+            if consecutive_failures >= deadline_failures:
+                raise
+        else:
+            consecutive_failures = 0
 
 
 async def _reconcile_agent_routes(

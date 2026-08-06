@@ -149,6 +149,10 @@ class _StubTailnetRuntime:
     def self_dns_name(self) -> str:
         return ""
 
+    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str:
+        _ = service, ports
+        return ""
+
     def wait_for_peer(self, host: str, timeout_seconds: float) -> None:
         _ = host, timeout_seconds
 

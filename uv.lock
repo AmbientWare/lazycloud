@@ -13,7 +13,6 @@ members = [
     "compute",
     "container-worker-app",
     "control",
-    "control-plane-ingress-app",
     "coordination",
     "database",
     "execution",
@@ -598,27 +597,6 @@ requires-dist = [
     { name = "identity", editable = "packages/identity" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic", specifier = ">=2,<3" },
-]
-
-[[package]]
-name = "control-plane-ingress-app"
-version = "0.1.0"
-source = { editable = "apps/control-plane-ingress" }
-dependencies = [
-    { name = "coordination" },
-    { name = "gateway" },
-    { name = "lazycloud-shared" },
-    { name = "networking" },
-    { name = "pydantic-settings" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "coordination", editable = "packages/coordination" },
-    { name = "gateway", editable = "packages/gateway" },
-    { name = "lazycloud-shared", editable = "packages/shared" },
-    { name = "networking", editable = "packages/networking" },
-    { name = "pydantic-settings", specifier = ">=2.4,<3" },
 ]
 
 [[package]]
@@ -2340,7 +2318,6 @@ dev = [
     { name = "compute" },
     { name = "container-worker-app" },
     { name = "control" },
-    { name = "control-plane-ingress-app" },
     { name = "coordination" },
     { name = "database" },
     { name = "execution" },
@@ -2378,7 +2355,6 @@ workspace = [
     { name = "compute" },
     { name = "container-worker-app" },
     { name = "control" },
-    { name = "control-plane-ingress-app" },
     { name = "coordination" },
     { name = "database" },
     { name = "execution" },
@@ -2418,7 +2394,6 @@ dev = [
     { name = "compute", editable = "packages/compute" },
     { name = "container-worker-app", editable = "apps/container-worker" },
     { name = "control", editable = "packages/control" },
-    { name = "control-plane-ingress-app", editable = "apps/control-plane-ingress" },
     { name = "coordination", editable = "packages/coordination" },
     { name = "database", editable = "packages/database" },
     { name = "execution", editable = "packages/execution" },
@@ -2456,7 +2431,6 @@ workspace = [
     { name = "compute", editable = "packages/compute" },
     { name = "container-worker-app", editable = "apps/container-worker" },
     { name = "control", editable = "packages/control" },
-    { name = "control-plane-ingress-app", editable = "apps/control-plane-ingress" },
     { name = "coordination", editable = "packages/coordination" },
     { name = "database", editable = "packages/database" },
     { name = "execution", editable = "packages/execution" },

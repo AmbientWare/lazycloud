@@ -261,6 +261,8 @@ class ApiTailnetRuntime(
 
     def self_dns_name(self) -> str: ...
 
+    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str: ...
+
 
 @dataclass(frozen=True, slots=True)
 class SchedulerAgentCapacityInterruptionSink:

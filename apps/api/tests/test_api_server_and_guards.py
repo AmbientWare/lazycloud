@@ -44,6 +44,10 @@ class _FailingTailnetRuntime:
     def self_dns_name(self) -> str:
         return ""
 
+    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str:
+        _ = service, ports
+        return ""
+
 
 class _RecordingTelemetry:
     def __init__(self, *, fail_shutdown: bool = False) -> None:
