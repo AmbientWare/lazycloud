@@ -2484,7 +2484,10 @@ class ComputeService:
             workspace_id = self.context.workspace(session, workspace).id
             repository = ComputeUnitRepository(session)
             unit = repository.get_by_capacity_owner_id(capacity_owner_id, for_update=True)
-            if unit is None:
+            # The owner id is globally unique, so the lookup crosses workspaces;
+            # a unit belonging to another one reports as missing rather than as
+            # forbidden, which would confirm the id exists.
+            if unit is None or unit.workspace_id != workspace_id:
                 raise NotFoundError(f"compute unit {capacity_owner_id!r} not found")
             machines = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
             highest = max(
