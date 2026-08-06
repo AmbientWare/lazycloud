@@ -27,6 +27,25 @@ resource "tailscale_acl" "customer_compute" {
   }
 }
 
+# The address the deployment answers on, and the reason a control plane can be
+# replaced or added without stranding a caller. It is not a device: the tailnet
+# owns the name and routes to whichever node currently advertises it.
+#
+# It has to exist before a node may advertise it. A node that advertises an
+# absent service is not refused — it sets the preference, the coordination server
+# reads it back, and nothing else happens. The name then resolves nowhere while
+# every process reports healthy, which is the failure this resource prevents.
+# `autoApprovers` in the policy approves a proxy for this service; it does not
+# create one.
+resource "tailscale_service" "control_plane" {
+  name    = var.control_plane_service
+  ports   = [for port in [var.control_plane_port, var.tcp_ingress_port] : "tcp:${port}"]
+  tags    = [var.control_plane_tag]
+  comment = "LazyCloud ${var.environment} control plane"
+
+  depends_on = [tailscale_acl.customer_compute]
+}
+
 # An OAuth client may only mint auth keys for tags it owns. It mints for both:
 # the agent tag for every node it enrols, and its own tag for the device the
 # control plane registers when it joins the tailnet. `tailscale up` advertises no

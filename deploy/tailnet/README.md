@@ -46,6 +46,12 @@ than at any one device's name. `autoApprovers` lets a node carrying
 `control_plane_tag` become a service proxy without an admin approving each one,
 which is what allows a second control plane to be added by starting it.
 
+The service itself is a resource here because it must exist before any node may
+advertise it, and advertising an absent one fails silently: the node sets the
+preference, the coordination server reads it back, and the name still resolves
+nowhere while every process reports healthy. `autoApprovers` approves a proxy for
+a service; it does not create the service.
+
 ## Backend and credentials
 
 Terraform state contains secrets. Supply a standard remote backend owned by the
