@@ -14,6 +14,7 @@ from networking.settings import (
     TailnetControlSettings,
     TailnetRuntimeSettings,
 )
+from networking.tailnet import TailnetRuntimeMode
 from provider_aws import (
     AwsAccountAuthorizationCleanupResult,
     AwsAccountAuthorizationCleanupStatus,
@@ -95,7 +96,10 @@ def _enabled_settings() -> _AwsOwnerSettings:
             binary_version="0.1.0",
             binary_sha256_by_arch={"amd64": "b" * 64},
         ),
-        runtime=TailnetRuntimeSettings(),
+        runtime=TailnetRuntimeSettings(
+            mode=TailnetRuntimeMode.Managed,
+            hostname="lazycloud-control-plane",
+        ),
         control=TailnetControlSettings(
             oauth_client_id="oauth-client-id",
             oauth_client_secret=SecretStr("oauth-client-secret"),
