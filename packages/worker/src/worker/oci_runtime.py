@@ -81,6 +81,7 @@ from worker.runtime_config import (
     RuntimeState,
     RuntimeUnavailableError,
     build_base_oci_config,
+    normalize_oci_runtime,
     parse_runtime_state,
     plan_runtime_command,
     prepare_oci_spec_for_runtime,
@@ -1388,6 +1389,10 @@ def _select_runtime_config(
     runtime: OciRuntimeName,
     configs: dict[OciRuntimeName, RuntimeBinaryConfig] | None,
 ) -> RuntimeBinaryConfig:
+    # A container persisted before the move to gVisor names runc. Resolve it the
+    # way every other entry point does: refusing here strands a running container
+    # on a worker that advertises only runsc, with no way to reach it again.
+    runtime = normalize_oci_runtime(runtime)
     if configs is None:
         return RuntimeBinaryConfig(runtime=runtime)
     config = configs.get(runtime)
