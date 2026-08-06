@@ -356,6 +356,16 @@ services:
           *container-service-credentials,
           *cache-origin-registry,
         ]
+      # A replica is not the deployment's address, so it must not compete for
+      # that name: the ingress owns it, and a replica taking it first would push
+      # the ingress onto a suffixed one.
+      LAZYCLOUD_TAILNET_HOSTNAME: "${LAZYCLOUD_TAILNET_REPLICA_HOSTNAME:-lazycloud-control-plane-replica}"
+      # Container-local, never a shared volume: replicas would otherwise open the
+      # same tailscaled socket and all but the first would fail to start.
+      LAZYCLOUD_TAILNET_STATE_DIR: "/run/lazycloud/tailnet"
+      # The device goes away with the replica. Nothing was ever given its
+      # address, and a durable one would leave a dead peer per restart.
+      LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE: "true"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
@@ -374,9 +384,6 @@ services:
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - "${LAZYCLOUD_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
-      # Its own volume, not a directory inside the shared one: this holds the
-      # device identity, and losing it registers a new device on every restart.
-      - control-plane-tailnet-state:/var/lib/lazycloud/tailnet
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
@@ -1058,7 +1065,6 @@ volumes:
   lazycloud-source-cache-cpu-secondary:
   lazycloud-source-cache-gpu:
   lazycloud-registry:
-  control-plane-tailnet-state:
   control-plane-ingress-tailnet-state:
   tcp-ingress-tls:
 

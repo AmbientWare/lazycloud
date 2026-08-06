@@ -50,7 +50,7 @@ class TailnetAuthKeyIssuer(Protocol):
     persisted device identity mints nothing.
     """
 
-    def issue_runtime_auth_key(self, *, hostname: str) -> SecretStr: ...
+    def issue_runtime_auth_key(self, *, hostname: str, ephemeral: bool = False) -> SecretStr: ...
 
 
 class TailnetRuntimeError(RuntimeError):
@@ -77,6 +77,10 @@ class TailnetRuntimeOptions(ContractModel):
     socket_path: str = ""
     tailscale_binary: str = "tailscale"
     tailscaled_binary: str = "tailscaled"
+    # A device that deregisters when it goes offline. Correct for anything
+    # replaceable: it holds no address that was handed out, so leaving a record
+    # behind on every restart buys nothing and accumulates dead peers.
+    ephemeral_device: bool = False
     accept_dns: bool = False
     accept_routes: bool = False
     userspace_networking: bool = False
@@ -259,7 +263,10 @@ class TailnetRuntime:
         if not hostname:
             raise TailnetRuntimeError("tailnet hostname is required")
         try:
-            return self.auth_key_issuer.issue_runtime_auth_key(hostname=hostname).get_secret_value()
+            return self.auth_key_issuer.issue_runtime_auth_key(
+                hostname=hostname,
+                ephemeral=self.options.ephemeral_device,
+            ).get_secret_value()
         except TailnetRuntimeError:
             raise
         except Exception as exc:

@@ -335,18 +335,32 @@ class TailscaleTailnetControl:
             description=f"machine {machine} {expected_hostname}",
         )
 
-    def issue_runtime_auth_key(self, *, hostname: str) -> SecretStr:
-        """Mint the key this control plane redeems for its own tailnet device."""
+    def issue_runtime_auth_key(self, *, hostname: str, ephemeral: bool = False) -> SecretStr:
+        """Mint the key this process redeems for its own tailnet device.
+
+        An ephemeral device deregisters itself once it goes offline, which is
+        what a replaceable replica wants: it holds no address anyone was given,
+        and a durable one would leave a dead record behind on every restart.
+        """
         expected_hostname = _required_hostname(hostname)
         return self._issue_auth_key(
             tag=self.config.control_plane_tag,
             description=f"control plane {expected_hostname}",
+            ephemeral=ephemeral,
         ).key
 
-    def _issue_auth_key(self, *, tag: str, description: str) -> TailnetAuthKey:
+    def _issue_auth_key(
+        self,
+        *,
+        tag: str,
+        description: str,
+        ephemeral: bool = False,
+    ) -> TailnetAuthKey:
         request = _CreateAuthKeyRequest(
             capabilities=_AuthKeyCapabilities(
-                devices=_DeviceCapabilities(create=_DeviceCreateCapability(tags=(tag,)))
+                devices=_DeviceCapabilities(
+                    create=_DeviceCreateCapability(tags=(tag,), ephemeral=ephemeral)
+                )
             ),
             expirySeconds=self.config.auth_key_ttl_seconds,
             description=description,
