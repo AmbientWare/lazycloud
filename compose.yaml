@@ -15,7 +15,7 @@ x-redis-env: &redis-env
   LAZYCLOUD_REDIS_URL: "redis://redis:6379/0"
 x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://127.0.0.1:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
-  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane:9000}"
+  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane-ingress:9000}"
 
 x-api-env: &api-env
   LAZYCLOUD_TCP_INGRESS_ENABLED: "true"
@@ -175,7 +175,7 @@ x-container-worker-settings: &container-worker-settings
     - /bin/sh
     - -ec
     - |
-      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane:9000" ]; then
+      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane-ingress:9000" ]; then
         compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
         if [ -z "$$compose_gateway" ]; then
           echo "Docker gateway is required for the public worker repository URL" >&2
@@ -366,6 +366,12 @@ services:
       # The device goes away with the replica. Nothing was ever given its
       # address, and a durable one would leave a dead peer per restart.
       LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE: "true"
+    # Two by default so the ordinary stack runs the shape production runs. A
+    # single replica hides everything that only appears with company: a loop
+    # that double-runs, state that cannot be shared, a caller pinned to one
+    # container.
+    deploy:
+      replicas: 2
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
@@ -558,7 +564,7 @@ services:
         mv "$$temporary" "$$token_path"
         echo "compose agent one-use join credential initialized"
     environment:
-      GATEWAY_HTTP_URL: "http://control-plane:9000"
+      GATEWAY_HTTP_URL: "http://control-plane-ingress:9000"
       WORKSPACE_ID: "default"
     depends_on:
       control-plane-ingress:
@@ -728,7 +734,7 @@ services:
     environment: &container-worker-environment
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      WORKER_REPOSITORY_URL: "http://control-plane:9000"
+      WORKER_REPOSITORY_URL: "http://control-plane-ingress:9000"
       WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
       WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
       BUILDAH_RUNTIME: "/usr/local/sbin/runc"
@@ -865,7 +871,7 @@ services:
     environment:
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      WORKER_REPOSITORY_URL: "http://control-plane:9000"
+      WORKER_REPOSITORY_URL: "http://control-plane-ingress:9000"
       WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
       WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
       NVIDIA_VISIBLE_DEVICES: "all"
