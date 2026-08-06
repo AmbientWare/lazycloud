@@ -965,8 +965,8 @@ configs:
     content: |
       configuration:
         execution:
-          runtime: ${WORKER_RUNTIME:-runc}
-          runtimes: [runc, runsc]
+          runtime: ${WORKER_RUNTIME:-runsc}
+          runtimes: [runsc]
           capacity:
             cpu_millicores: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CPU_MILLICORES:-4000}
             memory_mib: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}
@@ -1002,8 +1002,8 @@ configs:
     content: |
       configuration:
         execution:
-          runtime: ${WORKER_RUNTIME:-runc}
-          runtimes: [runc, runsc]
+          runtime: ${WORKER_RUNTIME:-runsc}
+          runtimes: [runsc]
           capacity:
             cpu_millicores: ${LAZYCLOUD_COMPOSE_GPU_WORKER_CPU_MILLICORES:-8000}
             memory_mib: ${LAZYCLOUD_COMPOSE_GPU_WORKER_MEMORY_MIB:-16384}

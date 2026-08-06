@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from compute.offers import ComputeOffer
+from compute.offers import (
+    DEFAULT_POOLED_NODE_ARCHITECTURE,
+    DEFAULT_POOLED_NODE_RUNTIME,
+    ComputeOffer,
+    pooled_cloud_offer,
+)
 from compute.providers import (
     PooledCapacityProvider,
     ProviderCapacityPhase,
@@ -14,7 +19,6 @@ from compute.providers import (
 )
 from pydantic import ValidationError
 from shared.compute_policy import (
-    ComputeCapacityMode,
     ComputeUnitProviderState,
 )
 
@@ -74,31 +78,23 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                         "aws",
                         region,
                         instance.instance_type,
-                        "amd64",
-                        "runc",
+                        DEFAULT_POOLED_NODE_ARCHITECTURE,
+                        DEFAULT_POOLED_NODE_RUNTIME,
                     )
                 )
                 offers.append(
-                    ComputeOffer(
-                        id=f"{region}:{instance.instance_type}",
+                    pooled_cloud_offer(
+                        offer_id=f"{region}:{instance.instance_type}",
                         provider=self.provider_ref,
                         cloud="aws",
                         instance_type=instance.instance_type,
                         region=region,
                         cpu_millicores=instance.cpu_millicores,
                         memory_mb=instance.memory_mb,
-                        storage_mb=200 * 1024,
-                        architecture="amd64",
-                        runtime="runc",
+                        hourly_cost_micros=self.instance_hourly_micros[instance.instance_type],
+                        capability_key=capability_key,
                         gpu=instance.gpu.value if instance.gpu is not None else None,
                         gpu_count=instance.gpu_count,
-                        node_count=1,
-                        hourly_cost_micros=self.instance_hourly_micros[instance.instance_type],
-                        reliability=1.0,
-                        available=100,
-                        capacity_mode=ComputeCapacityMode.Pooled,
-                        capability_key=capability_key,
-                        supports_scale_to_zero=True,
                     )
                 )
         return offers

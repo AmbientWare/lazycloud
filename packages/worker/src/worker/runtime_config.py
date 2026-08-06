@@ -80,7 +80,7 @@ class RuntimeCapabilities(ContractModel):
 
 
 class RuntimeBinaryConfig(ContractModel):
-    runtime: OciRuntimeName = OciRuntimeName.Runc
+    runtime: OciRuntimeName = OciRuntimeName.Runsc
     runc_path: str = "/usr/local/sbin/runc"
     runsc_path: str = "runsc"
     runsc_platform: str = ""
@@ -210,7 +210,12 @@ def base_runtime_config(engine: RuntimeEngine = RuntimeEngine.LocalProcess) -> R
 def normalize_oci_runtime(value: OciRuntimeName | RuntimeEngine | str) -> OciRuntimeName:
     raw = value.value if isinstance(value, StrEnum) else str(value)
     normalized = raw.strip().lower()
-    if normalized in {OciRuntimeName.Runc.value, RuntimeEngine.Oci.value, ""}:
+    # An unspecified runtime sandboxes. This is the worker's own normaliser, so a
+    # default of runc here would quietly undo the sandbox for any path that did
+    # not name a runtime explicitly.
+    if normalized in {RuntimeEngine.Oci.value, ""}:
+        return OciRuntimeName.Runsc
+    if normalized == OciRuntimeName.Runc.value:
         return OciRuntimeName.Runc
     if normalized in {
         OciRuntimeName.Runsc.value,
@@ -274,7 +279,7 @@ def runtime_availability(
 
 
 def build_base_oci_config(
-    runtime: OciRuntimeName | RuntimeEngine | str = OciRuntimeName.Runc,
+    runtime: OciRuntimeName | RuntimeEngine | str = OciRuntimeName.Runsc,
     *,
     root_path: str = "rootfs",
     command: list[str] | None = None,

@@ -446,7 +446,7 @@ def plan_sandbox_upload_file(
     root_path: str,
     mounts: list[SandboxContainerMount] | None = None,
     cwd: str = "/workspace",
-    runtime: OciRuntimeName | str = OciRuntimeName.Runc,
+    runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
     mode: int = 0o644,
     data_size_bytes: int = 0,
     upload_file_name: str = "upload",

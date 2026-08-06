@@ -307,7 +307,7 @@ class ContainerExecutionContext(ContractModel):
     checkpoint_readiness_interval_seconds: float = 1.0
     entrypoint: list[str] = Field(default_factory=list)
     cwd: str = "/workspace"
-    runtime: OciRuntimeName = OciRuntimeName.Runc
+    runtime: OciRuntimeName = OciRuntimeName.Runsc
     docker_enabled: bool = False
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)

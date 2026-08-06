@@ -1442,7 +1442,7 @@ def build_agent_worker_config(
 ) -> WorkerConfiguration:
     return WorkerConfiguration(
         execution=WorkerExecutionConfiguration(
-            runtime=OciRuntimeName.Runc,
+            runtime=OciRuntimeName.Runsc,
             capacity=WorkerCapacityConfiguration(
                 cpu_millicores=slot.cpu_millicores,
                 memory_mib=slot.memory_mb,

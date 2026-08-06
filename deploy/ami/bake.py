@@ -41,6 +41,18 @@ _AGENT_FILENAME = "lazycloud-agent-linux-amd64"
 # ABI it was built against, so the node driver, the gVisor release and this image
 # are one decision.
 _NVIDIA_DRIVER_BRANCH = "580"
+# The builds within that branch whose ABI the pinned gVisor knows. The branch
+# alone is not a pin: 580.95.05 is registered by nvproxy as explicitly
+# unsupported, so a bake that took whatever the branch offered could ship an
+# image whose sandbox refuses every GPU container. Keep in step with
+# GVISOR_VERSION in docker/Dockerfile.worker.
+_NVPROXY_SUPPORTED_DRIVERS = (
+    "580.65.06",
+    "580.105.08",
+    "580.126.09",
+    "580.159.03",
+    "580.173.02",
+)
 # A GPU bake must run on a GPU or it cannot check its own work; this is the
 # cheapest instance that has one.
 _GPU_BAKE_INSTANCE_TYPE = "g4dn.xlarge"
@@ -710,6 +722,21 @@ systemctl restart docker
 # while billing — a failure that surfaces hours later and nowhere near the bake.
 nvidia-smi -L
 docker info --format '{{json .Runtimes}}' | grep -q nvidia
+
+# The sandbox is the reason this image exists, and gVisor's driver proxy accepts
+# only ABIs it was built against. Catching a mismatch here costs one bake;
+# catching it later means every GPU container on the fleet fails to start.
+INSTALLED_DRIVER="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader \
+  | head -1 | tr -d '[:space:]')"
+echo "installed NVIDIA driver: ${INSTALLED_DRIVER}"
+case " __NVPROXY_SUPPORTED_DRIVERS__ " in
+  *" ${INSTALLED_DRIVER} "*) ;;
+  *)
+    echo "driver ${INSTALLED_DRIVER} is not an ABI the pinned gVisor proxies" >&2
+    echo "supported: __NVPROXY_SUPPORTED_DRIVERS__" >&2
+    exit 1
+    ;;
+esac
 """
 
 
@@ -729,7 +756,9 @@ def _bake_user_data(request: _BakeRequest) -> str:
     }
     script = _BAKE_USER_DATA_TEMPLATE
     gpu_setup = (
-        _GPU_SETUP_FRAGMENT.replace("__NVIDIA_DRIVER_BRANCH__", _NVIDIA_DRIVER_BRANCH)
+        _GPU_SETUP_FRAGMENT.replace("__NVIDIA_DRIVER_BRANCH__", _NVIDIA_DRIVER_BRANCH).replace(
+            "__NVPROXY_SUPPORTED_DRIVERS__", " ".join(_NVPROXY_SUPPORTED_DRIVERS)
+        )
         if request.variant is _BakeVariant.Gpu
         else ""
     )

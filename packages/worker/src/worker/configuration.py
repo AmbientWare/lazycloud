@@ -50,10 +50,8 @@ class WorkerCapacityConfiguration(ContractModel):
 
 
 class WorkerExecutionConfiguration(ContractModel):
-    runtime: OciRuntimeName = OciRuntimeName.Runc
-    runtimes: list[OciRuntimeName] = Field(
-        default_factory=lambda: [OciRuntimeName.Runc, OciRuntimeName.Runsc]
-    )
+    runtime: OciRuntimeName = OciRuntimeName.Runsc
+    runtimes: list[OciRuntimeName] = Field(default_factory=lambda: [OciRuntimeName.Runsc])
     capacity: WorkerCapacityConfiguration = Field(default_factory=WorkerCapacityConfiguration)
     pool_mode: WorkerPoolMode = WorkerPoolMode.Public
     requires_pool_selector: bool = False

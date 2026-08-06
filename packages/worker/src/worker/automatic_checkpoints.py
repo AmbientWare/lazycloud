@@ -25,7 +25,7 @@ from worker.container_service.protocols import (
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
 )
-from worker.runtime_config import OciRuntimeName, RuntimeContainerStatus, runtime_capabilities
+from worker.runtime_config import RuntimeContainerStatus, runtime_capabilities
 
 CHECKPOINT_RUNNER_KINDS = {
     WorkerStartupKind.Endpoint,
@@ -144,8 +144,6 @@ class WorkerAutomaticCheckpointService:
         shutil.rmtree(signal_dir.parent, ignore_errors=True)
 
     def _validate(self, context: ContainerExecutionContext) -> None:
-        if context.runtime is not OciRuntimeName.Runc:
-            raise RuntimeError("checkpointing requires the runc runtime")
         if context.request.gpu_count > 1:
             raise RuntimeError("checkpointing does not support more than one GPU")
         if context.startup_kind not in CHECKPOINT_RUNNER_KINDS | CHECKPOINT_HTTP_KINDS | {

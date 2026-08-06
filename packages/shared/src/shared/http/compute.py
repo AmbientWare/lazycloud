@@ -47,7 +47,7 @@ class UnitPolicy(HttpModel):
     worker_memory_mib: int = Field(default=0, ge=0)
     worker_gpu_type: str = Field(default="", max_length=160)
     worker_gpu_count: int = Field(default=0, ge=0)
-    worker_runtimes: tuple[str, ...] = ("runc",)
+    worker_runtimes: tuple[str, ...] = ("runsc",)
     worker_preemptible: bool = False
     idle_drain_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
     scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)

@@ -25,7 +25,7 @@ class ComputeOffer(ContractModel):
     memory_mb: int = 0
     storage_mb: int = 0
     architecture: str = "amd64"
-    runtime: str = "runc"
+    runtime: str = "runsc"
     gpu: str | None = None
     gpu_count: int = 0
     node_count: int = 0
@@ -41,6 +41,63 @@ class ComputeOffer(ContractModel):
     latitude: float = 0.0
     longitude: float = 0.0
     labels: dict[str, str] = Field(default_factory=dict)
+
+
+# What a pooled cloud node is, independent of whose cloud it is. A provider that
+# restated these would be free to drift from the others, and the drift would show
+# up as a workload that fits on one cloud and not another for reasons nobody
+# chose.
+DEFAULT_POOLED_NODE_STORAGE_MB = 200 * 1024
+DEFAULT_POOLED_NODE_ARCHITECTURE = "amd64"
+DEFAULT_POOLED_NODE_RUNTIME = "runsc"
+DEFAULT_POOLED_NODE_AVAILABILITY = 100
+
+
+def pooled_cloud_offer(
+    *,
+    offer_id: str,
+    provider: str,
+    cloud: str,
+    instance_type: str,
+    region: str,
+    cpu_millicores: int,
+    memory_mb: int,
+    hourly_cost_micros: int,
+    capability_key: str,
+    gpu: str | None = None,
+    gpu_count: int = 0,
+    storage_mb: int = DEFAULT_POOLED_NODE_STORAGE_MB,
+    architecture: str = DEFAULT_POOLED_NODE_ARCHITECTURE,
+    runtime: str = DEFAULT_POOLED_NODE_RUNTIME,
+) -> ComputeOffer:
+    """One node of pooled capacity, described the same way whoever rents it.
+
+    A provider supplies only what is genuinely its own — the instance type, the
+    region, the price, the hardware. Everything else is a platform decision and
+    lives here, so adding a second cloud cannot quietly disagree with the first
+    about what a node is or which runtime it runs.
+    """
+    return ComputeOffer(
+        id=offer_id,
+        provider=provider,
+        cloud=cloud,
+        instance_type=instance_type,
+        region=region,
+        cpu_millicores=cpu_millicores,
+        memory_mb=memory_mb,
+        storage_mb=storage_mb,
+        architecture=architecture,
+        runtime=runtime,
+        gpu=gpu,
+        gpu_count=gpu_count,
+        node_count=1,
+        hourly_cost_micros=hourly_cost_micros,
+        reliability=1.0,
+        available=DEFAULT_POOLED_NODE_AVAILABILITY,
+        capacity_mode=ComputeCapacityMode.Pooled,
+        capability_key=capability_key,
+        supports_scale_to_zero=True,
+    )
 
 
 class OfferRequest(ContractModel):

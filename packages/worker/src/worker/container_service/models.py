@@ -60,7 +60,7 @@ class WorkerContainerServiceInstance(ContractModel):
     upper_path: str = ""
     workspace_path: str = ""
     cwd: str = "/workspace"
-    runtime: OciRuntimeName = OciRuntimeName.Runc
+    runtime: OciRuntimeName = OciRuntimeName.Runsc
     env: list[str] = Field(default_factory=list)
     request_env: list[str] = Field(default_factory=list)
     build_secret_env: list[str] = Field(default_factory=list)

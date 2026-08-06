@@ -111,7 +111,7 @@ class CapacityAcquisitionShape(ContractModel):
     memory_mib: int = Field(gt=0)
     gpu_type: str = Field(default="", max_length=160)
     gpu_count: int = Field(default=0, ge=0)
-    runtime: str = Field(default="runc", min_length=1, max_length=80)
+    runtime: str = Field(default="runsc", min_length=1, max_length=80)
     preemptible: bool = False
 
     @model_validator(mode="after")
