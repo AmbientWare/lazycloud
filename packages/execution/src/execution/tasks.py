@@ -216,28 +216,69 @@ class TaskService:
                 container_id=task.container_id or "",
             )
 
+    def merge_kwargs(self, task_id: str, key: str, value: JsonValue) -> Task:
+        """Store one keyword entry against a task without rewriting the rest.
+
+        Callers that hold a task while another party advances it must not write
+        the whole row back to record one field: the endpoint dispatcher kept its
+        state here and, saving its own copy, reverted the container and start
+        time the task had been given in between.
+        """
+        with self.context.database.session() as session:
+            task_repository = TaskRepository(session)
+            current = task_repository.get_for_update_across_workspaces(task_id)
+            if current is None:
+                msg = f"task not found: {task_id}"
+                raise NotFoundError(msg)
+            current.kwargs[key] = value
+            return task_repository.records.upsert_across_workspaces(
+                current,
+                workspace_id=current.workspace_id,
+                name=current.name,
+                status=current.status.value,
+            )
+
     def transition(
         self,
         task: Task,
         status: TaskStatus,
         *,
+        container_id: str | None = None,
         result: JsonValue = None,
         function_result: FunctionResultPayload | None = None,
         error: str | None = None,
         exit_code: int | None = None,
     ) -> Task:
+        """Move a task to its next status, from whatever the row currently holds.
+
+        The caller's copy is not what gets written. A task is advanced by more
+        than one party — the dispatcher marks it running and binds it to a
+        container, the caller finishes it — so saving the object the caller
+        happens to be holding silently reverts every field written since it was
+        read. That is how endpoint tasks lost the container and start time the
+        dispatcher had already recorded.
+        """
         if status is TaskStatus.Running:
-            return self._start_task(task, container_id=task.container_id)
-        task.status = status
-        if status == TaskStatus.Running:
-            task.started_at = utc_now()
-        if is_terminal_task_status(status):
-            task.finished_at = utc_now()
-        task.result = result
-        task.function_result = function_result
-        task.error = error
-        task.exit_code = exit_code
-        updated = self.save(task)
+            return self._start_task(task, container_id=container_id or task.container_id)
+        with self.context.database.session() as session:
+            task_repository = TaskRepository(session)
+            current = task_repository.get_for_update_across_workspaces(task.id)
+            if current is None:
+                msg = f"task not found: {task.id}"
+                raise NotFoundError(msg)
+            current.status = status
+            if is_terminal_task_status(status):
+                current.finished_at = utc_now()
+            current.result = result
+            current.function_result = function_result
+            current.error = error
+            current.exit_code = exit_code
+            updated = task_repository.records.upsert_across_workspaces(
+                current,
+                workspace_id=current.workspace_id,
+                name=current.name,
+                status=status.value,
+            )
         self._sync_latest_attempt(
             updated,
             status,

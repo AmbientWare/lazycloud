@@ -722,7 +722,13 @@ class EndpointControlService:
                 container_id=target.container_id,
             )
             self._emit_dispatch_lifecycle(stub, record)
-            self.services.tasks.transition(task, TaskStatus.Running)
+            # Bind the task to the container that will serve it, so its record
+            # carries the same attribution every other workload kind has.
+            task = self.services.tasks.transition(
+                task,
+                TaskStatus.Running,
+                container_id=target.container_id,
+            )
             started = time.monotonic()
             try:
                 return dispatcher.forward_target(
@@ -792,7 +798,13 @@ class EndpointControlService:
                 container_id=target.container_id,
             )
             self._emit_dispatch_lifecycle(stub, record)
-            self.services.tasks.transition(task, TaskStatus.Running)
+            # Bind the task to the container that will serve it, so its record
+            # carries the same attribution every other workload kind has.
+            task = self.services.tasks.transition(
+                task,
+                TaskStatus.Running,
+                container_id=target.container_id,
+            )
             wait_seconds = max(
                 ((record.started_at or utc_now()) - record.enqueued_at).total_seconds(),
                 0.0,
@@ -999,8 +1011,9 @@ class EndpointDispatchStateRepository:
         return self.save(task, record)
 
     def save(self, task: Task, record: EndpointDispatchRecord) -> EndpointDispatchRecord:
-        task.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = record.model_dump(mode="json")
-        self.services.tasks.save(task)
+        payload = record.model_dump(mode="json")
+        task.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = payload
+        self.services.tasks.merge_kwargs(task.id, ENDPOINT_DISPATCH_TASK_KEY, payload)
         return record
 
     def transition(
