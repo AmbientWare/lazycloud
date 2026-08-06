@@ -33,6 +33,14 @@ the only thing that can apply one. Changing that tag list replaces the client, s
 re-export `agent_oauth_client_id` and `agent_oauth_client_secret` to the
 deployment secret manager after any plan that does.
 
+Both tags therefore list `control_plane_tag` among their owners. An OAuth client
+authenticates as its tags rather than as a user, so a tag owned only by
+`autogroup:admin` is a tag the client cannot apply: every mint fails with
+"requested tags are invalid or not permitted", and the deployment enrols nothing.
+Self-ownership on `control_plane_tag` is what lets each control plane mint the key
+for its own device, which is what makes a second replica a start rather than an
+enrolment step.
+
 The control plane advertises `control_plane_service` and is reached there rather
 than at any one device's name. `autoApprovers` lets a node carrying
 `control_plane_tag` become a service proxy without an admin approving each one,

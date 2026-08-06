@@ -103,12 +103,6 @@ variable "magic_dns" {
   default     = true
 }
 
-variable "dns_nameservers" {
-  description = "Global nameservers for the tailnet. Empty keeps Tailscale's own resolution."
-  type        = list(string)
-  default     = []
-}
-
 variable "dns_search_paths" {
   description = "Search domains for split DNS. Empty when no restricted nameservers are configured."
   type        = list(string)
@@ -141,5 +135,5 @@ variable "devices_key_duration_days" {
 variable "users_approval_on" {
   description = "Whether a new user waits for an admin before joining."
   type        = bool
-  default     = false
+  default     = true
 }

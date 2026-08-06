@@ -63,16 +63,10 @@ resource "tailscale_dns_preferences" "customer_compute" {
   }
 }
 
-resource "tailscale_dns_nameservers" "customer_compute" {
-  nameservers = var.dns_nameservers
-
-  lifecycle {
-    precondition {
-      condition     = var.confirm_dedicated_tailnet
-      error_message = "Refusing to manage tailnet DNS until confirm_dedicated_tailnet is true."
-    }
-  }
-}
+# Global nameservers are deliberately absent. The tailnet resolves through
+# Tailscale's own servers, and the provider's nameserver resource requires at
+# least one entry, so managing it here could only mean inventing an override
+# nothing asked for.
 
 resource "tailscale_dns_search_paths" "customer_compute" {
   search_paths = var.dns_search_paths
