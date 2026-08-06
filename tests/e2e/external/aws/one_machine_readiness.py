@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from lazycloud.cli.control import compute_client
 from shared.aws_connections import AwsAccountConnectionPhase
 from shared.compute_enrollment import MachineServiceState
-from shared.compute_policy import AwsWorkspaceComputePolicy, ComputePlacementTarget
+from shared.compute_policy import AwsWorkspaceComputePolicy
 from shared.http.compute_policy import (
     WorkspaceComputeInstanceResponse,
     WorkspaceComputePolicyUpdateRequest,
@@ -52,11 +52,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         idle_timeout_seconds=aws.idle_timeout_seconds,
         root_volume_gib=aws.root_volume_gib,
     )
-    if current.default_placement is not ComputePlacementTarget.Aws or current.aws != parity:
+    if current.default_pool != "aws" or current.aws != parity:
         client.update_policy(
             WorkspaceComputePolicyUpdateRequest(
                 expected_revision=current.revision,
-                default_placement=ComputePlacementTarget.Aws,
+                default_pool="aws",
                 aws=parity,
             )
         )

@@ -229,7 +229,7 @@ class RuntimeCheckpointCreator:
                     checkpoint_root=self.checkpoint_root,
                     origin_storage_available=self.origin_storage_available,
                     content_cache_available=self.content_cache_available,
-                    locality=instance.pool_name,
+                    locality=instance.pool,
                     gpu=instance.gpu,
                 )
             )
@@ -252,7 +252,7 @@ class RuntimeCheckpointCreator:
                 metadata = self.persister.persist_checkpoint(persistence_plan)
                 metadata = metadata.model_copy(
                     update={
-                        "locality": metadata.locality or instance.pool_name,
+                        "locality": metadata.locality or instance.pool,
                         "accelerator": metadata.accelerator or checkpoint_accelerator(instance.gpu),
                     }
                 )
@@ -460,7 +460,7 @@ def _available_checkpoint_payload(
         cache_hash=metadata.cache_hash,
         cache_size_bytes=metadata.cache_size_bytes,
         origin_key=metadata.origin_key,
-        locality=metadata.locality or instance.pool_name,
+        locality=metadata.locality or instance.pool,
         accelerator=metadata.accelerator,
     )
 

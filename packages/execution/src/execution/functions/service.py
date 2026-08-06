@@ -403,7 +403,6 @@ class FunctionControlService:
                 gpu_request=container_plan.gpu_request,
                 gpu_count=container_plan.gpu_count,
                 pool_selector=config.runtime.pool_selector or "",
-                requested_placement=stub.config.placement,
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",
                 docker_enabled=config.runtime.docker_enabled,

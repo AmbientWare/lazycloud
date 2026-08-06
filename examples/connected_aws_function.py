@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import NamedTuple, Protocol, TypedDict
 
-from lazycloud import App, ComputePlacementTarget, FunctionCall, Image
+from lazycloud import App, FunctionCall, Image
 
 
 class ProbeResult(TypedDict):
@@ -40,7 +40,6 @@ def connected_aws_probe(app_slug: str) -> ConnectedAwsProbeApp:
         cpu=0.25,
         memory="128Mi",
         timeout_seconds=600,
-        placement=ComputePlacementTarget.Aws,
     )
     return ConnectedAwsProbeApp(app=app, probe=probe)
 
@@ -53,7 +52,6 @@ deterministic_probe = app.function(
     cpu=0.25,
     memory="128Mi",
     timeout_seconds=600,
-    placement=ComputePlacementTarget.Aws,
 )
 
 

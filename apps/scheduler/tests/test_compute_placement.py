@@ -10,7 +10,7 @@ from compute.request_placement import (
 from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus,
     CapacityProvisioningReservation,
-    ComputePoolCapacityController,
+    ComputeUnitCapacityController,
 )
 from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.state import SchedulerWorkerRequest
@@ -25,24 +25,25 @@ from shared.capacity import (
 from shared.capacity import (
     CapacityAcquisitionStatus as ComputeCapacityAcquisitionStatus,
 )
-from shared.compute_fleet import Pool
 from shared.compute_policy import (
-    ComputePlacement,
-    ComputePlacementSource,
-    ComputePlacementTarget,
+    ComputeUnitRecord,
+    MachinePool,
+    UnitName,
 )
 from shared.scheduling import SchedulerWorkerRecord
 
 _OWNER_ID = "11111111-1111-4111-8111-111111111111"
+_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
+_SIBLING_OWNER_ID = "33333333-3333-4333-8333-333333333333"
 
 
-def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
+def test_scheduler_stamps_the_resolved_pool_and_every_unit_in_it_accepts() -> None:
+    """The request carries a pool, and each unit feeding it is a candidate."""
     capacity = _RecordingCapacity()
     request = SchedulerWorkerRequest(
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id="container-1",
-        requested_placement=ComputePlacementTarget.Aws,
         cpu_millicores=1_000,
         memory_mib=2_048,
     )
@@ -50,30 +51,48 @@ def test_scheduler_forwards_typed_ad_hoc_placement_to_capacity_owner() -> None:
     placed = SchedulerComputePlacement(capacity).place(request)
 
     assert capacity.requests[0].deployment_id == ""
-    assert capacity.requests[0].requested_placement is ComputePlacementTarget.Aws
     assert capacity.requests[0].requirements.cpu_millicores == 1_000
     assert capacity.requests[0].requirements.memory_mb == 2_048
-    assert placed.pool_selector == "internal-aws-cpu"
-    assert placed.capacity_owner_id == _OWNER_ID
-    assert placed.requested_placement is ComputePlacementTarget.Aws
-    assert placed.placement_source is ComputePlacementSource.WorkloadOverride
+    assert placed.pool_selector == "aws"
 
     compute = _RequestedComputeCapacity()
-    controller = ComputePoolCapacityController(
+    controller = ComputeUnitCapacityController(
         workspace_id="workspace-1",
-        pool=_internal_aws_pool(),
+        unit=_internal_aws_pool(),
         compute=compute,
         workers=_NoWorkers(),
     )
     assert controller.accepts(placed)
-    assert not controller.accepts(placed.model_copy(update={"capacity_owner_id": ""}))
+    # A second unit feeding the same group is equally a candidate; that is what
+    # gives the acquisition loop something to fail over to.
+    sibling = ComputeUnitCapacityController(
+        workspace_id="workspace-1",
+        unit=_internal_aws_pool().model_copy(
+            update={
+                "id": _SIBLING_OWNER_ID,
+                "capacity_owner_id": _SIBLING_OWNER_ID,
+                "name": "internal-aws-cpu-west",
+            }
+        ),
+        compute=compute,
+        workers=_NoWorkers(),
+    )
+    assert sibling.accepts(placed)
+    # A unit feeding a different group is not.
+    other_group = ComputeUnitCapacityController(
+        workspace_id="workspace-1",
+        unit=_internal_aws_pool().model_copy(update={"pool": "another-group"}),
+        compute=compute,
+        workers=_NoWorkers(),
+    )
+    assert not other_group.accepts(placed)
 
     now = datetime(2026, 7, 22, tzinfo=UTC)
     acquisition_shape = controller.reservation_shape(placed)
     reservation = CapacityProvisioningReservation(
         id="22222222-2222-4222-8222-222222222222",
         capacity_owner_id=_OWNER_ID,
-        pool_name="internal-aws-cpu",
+        pool=MachinePool("internal-aws-cpu"),
         owner_kind=CapacityOwnerKind.PooledProvider,
         acquisition_shape=acquisition_shape,
         schedulable_shape=acquisition_shape.model_copy(update={"memory_mib": 15_500}),
@@ -101,16 +120,7 @@ class _RecordingCapacity:
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
         self.requests.append(request)
-        return ComputeCapacityPlacementResult(
-            placement=ComputePlacement(
-                target=ComputePlacementTarget.Aws,
-                source=ComputePlacementSource.WorkloadOverride,
-                provider="aws",
-                region="us-east-1",
-                pool_name="internal-aws-cpu",
-            ),
-            capacity_owner_id=_OWNER_ID,
-        )
+        return ComputeCapacityPlacementResult(pool=MachinePool("aws"))
 
 
 @dataclass(slots=True)
@@ -148,14 +158,17 @@ class _NoWorkers:
         return []
 
 
-def _internal_aws_pool() -> Pool:
-    return Pool(
-        name="internal-aws-cpu",
+def _internal_aws_pool() -> ComputeUnitRecord:
+    return ComputeUnitRecord(
+        id=_OWNER_ID,
+        workspace_id=_WORKSPACE_ID,
+        name=UnitName("internal-aws-cpu"),
+        pool=MachinePool("aws"),
         provider="aws",
         capacity_owner_id=_OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
-        max_workers=10,
+        max_machines=10,
         scaling_enabled=True,
         default_eligible=False,
         worker_cpu_millicores=4_000,

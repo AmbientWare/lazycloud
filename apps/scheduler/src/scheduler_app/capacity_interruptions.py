@@ -24,7 +24,7 @@ class DatabaseCapacityInterruptionSource:
                 enrollment_id=record.id,
                 credential_generation=record.credential_generation,
                 workspace_id=record.workspace_id,
-                pool_name=record.pool_name,
+                pool=record.pool,
                 machine_id=record.machine_id,
                 state=record.capacity_state,
                 reason=record.capacity_reason,

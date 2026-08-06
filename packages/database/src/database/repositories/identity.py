@@ -23,7 +23,6 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.tables.base import DatabaseBase
-from database.tables.compute import ComputeLedgerTable
 from database.tables.execution import EventTable
 from database.tables.identity import (
     ConcurrencyLimitTable,
@@ -465,7 +464,6 @@ def _workspace_purge_excluded_tables() -> set[str]:
         _mapped_table_name(UsageRecordTable),
         _mapped_table_name(UsageBillingWindowTable),
         _mapped_table_name(UsageBillingContributionTable),
-        _mapped_table_name(ComputeLedgerTable),
     }
 
 

@@ -115,7 +115,7 @@ function RuntimeFacts({
   return (
     <div className="grid grid-cols-2 content-start gap-x-4 gap-y-4 p-4 lg:grid-cols-5">
       <Fact label="Version" value={`v${deployment.version}`} />
-      <Fact label="Placement" value={placementLabel(deployment)} />
+      <Fact label="Pool" value={poolLabel(deployment)} />
       {showRunning ? (
         <Fact label="Running" value={Intl.NumberFormat().format(runningContainers)} />
       ) : null}
@@ -139,11 +139,8 @@ function RuntimeFacts({
   );
 }
 
-function placementLabel(deployment: Deployment): string {
-  const placement = deployment.spec.placement;
-  if (!placement) return "Not reported";
-  if (placement.target === "managed") return "Managed";
-  return placement.region ? `AWS · ${placement.region}` : "AWS";
+function poolLabel(deployment: Deployment): string {
+  return deployment.spec.pool || "Not reported";
 }
 
 function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic: boolean }) {

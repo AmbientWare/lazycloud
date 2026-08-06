@@ -12,7 +12,7 @@ from shared.http.compute import (
     ContainerResponse,
     ContainerWithAppPageResponse,
     MachineListResponse,
-    PoolListResponse,
+    UnitListResponse,
     WorkerListResponse,
 )
 from shared.http.deployments import (
@@ -227,10 +227,10 @@ class ResourceControlClient:
             self.channel.get(self._path("/api/v1/machines")),
         )
 
-    def list_pools(self) -> PoolListResponse:
+    def list_units(self) -> UnitListResponse:
         return _validate_response(
-            PoolListResponse,
-            self.channel.get(self._path("/api/v1/pools")),
+            UnitListResponse,
+            self.channel.get(self._path("/api/v1/units")),
         )
 
     def list_workers(self) -> WorkerListResponse:

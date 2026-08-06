@@ -531,7 +531,7 @@ def _worker_identity(config: WorkerSettings) -> WorkerRouteIdentity:
     execution = config.configuration.execution
     return WorkerRouteIdentity(
         worker_id=config.worker_id,
-        pool_name=config.pool_name,
+        pool=config.pool,
         machine_id=config.machine_id,
         pod_address=config.pod_address,
         container_service_port=config.container_service_port,
@@ -597,7 +597,7 @@ def _scheduler_worker_record(
     capacity = execution.capacity
     return SchedulerWorkerRecord(
         worker_id=identity.worker_id,
-        pool_name=identity.pool_name,
+        pool=identity.pool,
         capacity_owner_id=_required_capacity_owner_id(config),
         machine_id=identity.machine_id,
         status=SchedulerWorkerStatus.Pending,
@@ -689,7 +689,7 @@ def _client_network_backend(
             RemoteWorkerNetworkIpRepository(client),
             # The control plane scopes every network mutation by the worker's own
             # record; this prefix only names the network in local state and logs.
-            network_prefix=config.network_prefix or config.pool_name or config.worker_id,
+            network_prefix=config.network_prefix or config.pool or config.worker_id,
             worker_id=config.worker_id,
         )
     )

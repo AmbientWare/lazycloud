@@ -4,6 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import Field
+from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport
@@ -91,7 +92,7 @@ class WorkerContainerServiceInstance(ContractModel):
     stub_type: str = ""
     worker_id: str = ""
     machine_id: str = ""
-    pool_name: str = ""
+    pool: MachinePool = MachinePool("")
     route_local_target_host: str = ""
     route_transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     agent_worker: bool = True
@@ -114,11 +115,11 @@ class WorkerContainerServiceInstance(ContractModel):
 
     @property
     def route_context(self) -> WorkerRouteContext | None:
-        if not (self.workspace_id and self.machine_id and self.worker_id and self.pool_name):
+        if not (self.workspace_id and self.machine_id and self.worker_id and self.pool):
             return None
         return WorkerRouteContext(
             workspace_id=self.workspace_id,
-            pool_name=self.pool_name,
+            pool=self.pool,
             machine_id=self.machine_id,
             worker_id=self.worker_id,
             container_id=self.container_id,

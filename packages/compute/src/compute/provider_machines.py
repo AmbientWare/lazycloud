@@ -19,9 +19,9 @@ from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
     TailnetCleanupTombstoneRepository,
 )
 from database.repositories.orchestration import (
@@ -43,9 +43,10 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolRecord,
-    ComputePoolVisibility,
+    ComputeUnitPhase,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
+    MachinePool,
 )
 from shared.contracts import ContractModel
 from shared.errors import (
@@ -71,9 +72,9 @@ from compute.providers import (
     PooledCapacityProvider,
     ProviderCapacityPhase,
     ProviderMachineStatus,
-    ProviderPoolBootstrap,
-    ProviderPoolRequest,
-    ProviderPoolSnapshot,
+    ProviderUnitBootstrap,
+    ProviderUnitRequest,
+    ProviderUnitSnapshot,
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
@@ -160,23 +161,23 @@ def _reservation_open(status: str) -> bool:
     return status not in {ReservationStatus.Deleted.value, ReservationStatus.Failed.value}
 
 
-def _require_internal_pooled_pool(
-    pool: ComputePoolRecord | None,
+def _require_internal_pooled_unit(
+    unit: ComputeUnitRecord | None,
     *,
-    pool_name: str,
-) -> ComputePoolRecord:
-    if pool is None:
-        raise NotFoundError(f"compute pool not found: {pool_name}")
+    unit_ref: str,
+) -> ComputeUnitRecord:
+    if unit is None:
+        raise NotFoundError(f"compute unit not found: {unit_ref}")
     if (
-        pool.visibility is not ComputePoolVisibility.Internal
-        or pool.capacity_mode is not ComputeCapacityMode.Pooled
-        or pool.capacity_owner_kind is not CapacityOwnerKind.PooledProvider
+        unit.visibility is not ComputeUnitVisibility.Internal
+        or unit.capacity_mode is not ComputeCapacityMode.Pooled
+        or unit.capacity_owner_kind is not CapacityOwnerKind.PooledProvider
     ):
-        raise InvalidInputError(f"compute pool {pool_name!r} is not provider-scaled")
-    return pool
+        raise InvalidInputError(f"compute unit {unit_ref!r} is not provider-scaled")
+    return unit
 
 
-def _provider_zero_capacity_converged(snapshot: ProviderPoolSnapshot) -> bool:
+def _provider_zero_capacity_converged(snapshot: ProviderUnitSnapshot) -> bool:
     return (
         snapshot.phase is ProviderCapacityPhase.Ready
         and snapshot.desired_machines == 0
@@ -185,23 +186,14 @@ def _provider_zero_capacity_converged(snapshot: ProviderPoolSnapshot) -> bool:
     )
 
 
-def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputePoolPhase:
+def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputeUnitPhase:
     return {
-        ProviderCapacityPhase.Provisioning: ComputePoolPhase.Provisioning,
-        ProviderCapacityPhase.Ready: ComputePoolPhase.Ready,
-        ProviderCapacityPhase.Degraded: ComputePoolPhase.Degraded,
-        ProviderCapacityPhase.Deleting: ComputePoolPhase.Deleting,
-        ProviderCapacityPhase.Deleted: ComputePoolPhase.Deleted,
+        ProviderCapacityPhase.Provisioning: ComputeUnitPhase.Provisioning,
+        ProviderCapacityPhase.Ready: ComputeUnitPhase.Ready,
+        ProviderCapacityPhase.Degraded: ComputeUnitPhase.Degraded,
+        ProviderCapacityPhase.Deleting: ComputeUnitPhase.Deleting,
+        ProviderCapacityPhase.Deleted: ComputeUnitPhase.Deleted,
     }[phase]
-
-
-def _pool_config_int(pool: ComputePoolRecord, key: str, *, default: int) -> int:
-    value = pool.config.get(key)
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int | float):
-        return int(value)
-    return default
 
 
 def _unique_nonempty(values: list[str]) -> list[str]:
@@ -218,25 +210,24 @@ def _utc(value: datetime | None) -> datetime:
     return utc_now() if value is None else to_utc(value)
 
 
-def provider_pool_request(
-    pool_bootstrap_factory: ProviderPoolBootstrapFactory | None,
-    pool: ComputePoolRecord,
+def provider_unit_request(
+    pool_bootstrap_factory: ProviderUnitBootstrapFactory | None,
+    pool: ComputeUnitRecord,
     offer: ComputeOffer,
-) -> ProviderPoolRequest:
+) -> ProviderUnitRequest:
     if pool_bootstrap_factory is None or pool.provider_connection_id is None:
         raise RuntimeError("provider pool bootstrap is not configured")
-    root_volume_gib = _pool_config_int(pool, "root_volume_gib", default=200)
-    return ProviderPoolRequest(
+    return ProviderUnitRequest(
         workspace_id=pool.workspace_id,
-        pool_id=pool.id,
-        pool_name=pool.name,
+        unit_id=pool.id,
+        unit_name=pool.name,
         provider_ref=pool.provider_ref,
         provider_connection_id=pool.provider_connection_id,
         generation=pool.generation,
         offer=offer,
         desired_machines=pool.desired_machines,
         max_machines=pool.max_machines,
-        root_volume_gib=root_volume_gib,
+        root_volume_gib=pool.root_volume_gib,
         bootstrap=pool_bootstrap_factory.bootstrap(pool, offer),
         provider_state=pool.provider_state,
     )
@@ -266,14 +257,14 @@ class _ProviderInstanceMetadataEnvelope(ContractModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ProviderPoolBootstrapFactory(Protocol):
+class ProviderUnitBootstrapFactory(Protocol):
     """What a booting node needs to reach the control plane and enrol."""
 
     def bootstrap(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-    ) -> ProviderPoolBootstrap: ...
+    ) -> ProviderUnitBootstrap: ...
 
 
 LOGGER = logging.getLogger(__name__)
@@ -285,7 +276,7 @@ class ProviderMachineReconciler:
 
     context: ComputeContext
     reclaim: ComputeReclaimPolicy
-    pool_bootstrap_factory: ProviderPoolBootstrapFactory | None
+    pool_bootstrap_factory: ProviderUnitBootstrapFactory | None
     workspace_changes: WorkspaceChangePublisher | None
     scheduler_hooks: ComputeSchedulerHooks | None
     source_cache_lifecycle: SourceCacheStorageLifecycleService
@@ -294,7 +285,7 @@ class ProviderMachineReconciler:
     def _reconcile_provider_machines(
         self,
         session: DatabaseSession,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         instances: list[ComputeProviderInstanceRecord],
         *,
         clients: Mapping[str, DirectMachineProvider],
@@ -325,7 +316,7 @@ class ProviderMachineReconciler:
                 for record in records
                 if record.machine_id and record.machine_id not in overdue_machine_ids
             }
-            probe = client.reconcile_machines(pool.name, expected, terminate_stale=False)
+            probe = client.reconcile_machines(pool.pool, expected, terminate_stale=False)
             stale = set(probe.stale_machine_ids)
             if overdue_machine_ids:
                 observed = {item.machine_id: item for item in probe.observed_machines}
@@ -393,7 +384,7 @@ class ProviderMachineReconciler:
             self._terminate_overdue_stale_machines(
                 client,
                 provider_name=provider_name,
-                pool_name=pool.name,
+                pool=pool.pool,
                 expected=expected,
                 stale=stale - overdue_machine_ids,
                 now=now,
@@ -447,7 +438,7 @@ class ProviderMachineReconciler:
                         "reclaimed provider machine that did not become ready",
                         extra={
                             "provider": provider_name,
-                            "pool_name": pool.name,
+                            "pool": pool.name,
                             "machine_id": record.machine_id,
                             "provider_instance_id": record.instance_id or record.id,
                         },
@@ -458,9 +449,9 @@ class ProviderMachineReconciler:
         self,
         session: DatabaseSession,
         *,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-        snapshot: ProviderPoolSnapshot,
+        snapshot: ProviderUnitSnapshot,
         now: datetime,
         destroyed_record_ids: set[str],
     ) -> set[str]:
@@ -523,7 +514,6 @@ class ProviderMachineReconciler:
                 "status": provider_status,
                 "source": "workspace_policy",
                 "pool_id": pool.id,
-                "capacity_request_id": None,
                 "instance_type": offer.instance_type,
                 "instance_id": instance_id,
                 "machine_id": settled_existing.machine_id if settled_existing is not None else None,
@@ -607,14 +597,14 @@ class ProviderMachineReconciler:
 
     def _apply_pooled_snapshot(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-        snapshot: ProviderPoolSnapshot,
+        snapshot: ProviderUnitSnapshot,
         *,
         provider: PooledCapacityProvider,
         update_capacity: bool,
         now: datetime | None = None,
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         current_time = _utc(now)
         phase = _compute_pool_phase(snapshot.phase)
         # Providers never own the relaunch bookkeeping: carry it from the durable
@@ -630,7 +620,7 @@ class ProviderMachineReconciler:
                 "launch_attempt_baseline": pool.provider_state.launch_attempt_baseline,
             }
         )
-        provider_request = provider_pool_request(self.pool_bootstrap_factory, pool, offer)
+        provider_request = provider_unit_request(self.pool_bootstrap_factory, pool, offer)
         observed_instance_ids = {item.provider_instance_id for item in snapshot.instances}
         authoritative_zero = _provider_zero_capacity_converged(snapshot)
         with self.context.database.session() as session:
@@ -671,17 +661,17 @@ class ProviderMachineReconciler:
         }
         if unproved:
             if snapshot.phase is ProviderCapacityPhase.Deleted:
-                phase = ComputePoolPhase.Deleting
+                phase = ComputeUnitPhase.Deleting
             elif snapshot.desired_machines != snapshot.observed_machines or authoritative_zero:
-                phase = ComputePoolPhase.Updating
+                phase = ComputeUnitPhase.Updating
         if provider_state.degraded_reason is not None and phase not in {
-            ComputePoolPhase.Deleting,
-            ComputePoolPhase.Deleted,
+            ComputeUnitPhase.Deleting,
+            ComputeUnitPhase.Deleted,
         }:
-            phase = ComputePoolPhase.Degraded
+            phase = ComputeUnitPhase.Degraded
         missing_machine_ids: set[str]
         with self.context.database.session() as session:
-            repository = ComputePoolRepository(session)
+            repository = ComputeUnitRepository(session)
             if update_capacity:
                 updated = repository.update_capacity(
                     pool.id,
@@ -716,78 +706,21 @@ class ProviderMachineReconciler:
         for machine_id in missing_machine_ids:
             self.retire_provider_pool_machine(
                 updated.workspace_id,
-                updated.name,
+                updated.capacity_owner_id,
                 machine_id,
                 reason="provider instance storage destroyed",
                 now=current_time,
             )
         if self.scheduler_hooks is not None:
-            self.scheduler_hooks.register_internal_pool(updated, offer)
+            self.scheduler_hooks.register_internal_unit(updated, offer)
         publish_workspace_change(
             self.workspace_changes,
             workspace_id=updated.workspace_id,
-            topic=WorkspaceChangeTopic.ComputePools,
+            topic=WorkspaceChangeTopic.ComputeUnits,
             change=WorkspaceChangeType.Updated,
             resource_id=updated.id,
         )
         return updated
-
-    def _record_provider_instance(
-        self,
-        session: DatabaseSession,
-        *,
-        pool_id: str,
-        capacity_request_id: str,
-        machine: Machine,
-        offer: ComputeOffer,
-        remote_id: str,
-        status: str,
-        source: str,
-        ttl_seconds: int,
-        now: datetime,
-        registration_token_hash: str,
-        launch_state: str = _LAUNCH_STATE_COMMITTED,
-    ) -> ComputeProviderInstanceRecord:
-        expires_at = now + timedelta(seconds=ttl_seconds)
-        normalized_status = _reservation_status_from_provider(status).value
-        return ComputeProviderInstanceRepository(session).records.create(
-            {
-                "pool_id": pool_id,
-                "capacity_request_id": capacity_request_id,
-                "provider": offer.provider,
-                "offer_id": offer.id,
-                "instance_type": offer.instance_type,
-                "instance_id": remote_id,
-                "machine_id": machine.id,
-                "gpu": offer.gpu,
-                "gpu_count": offer.gpu_count,
-                "cpu_millicores": offer.cpu_millicores,
-                "memory_mb": offer.memory_mb,
-                "hourly_cost_micros": offer.hourly_cost_micros,
-                "committed_micros": offer.hourly_cost_micros * _whole_hours(ttl_seconds),
-                "source": source,
-                "status": normalized_status,
-                "expires_at": expires_at,
-                "billing_renewal_at": now + timedelta(hours=1),
-                "bootstrap_phase": MachineBootstrapPhase.Requested,
-                "bootstrap_failure_reason": None,
-                "bootstrap_observed_at": now,
-                "launch_attempt": 1,
-                "metadata": {
-                    "cloud": offer.cloud,
-                    "region": offer.region,
-                    "node_count": offer.node_count or 1,
-                    "storage_mb": offer.storage_mb,
-                    "commitment_started_at": now.isoformat(),
-                    "billing_cursor_at": now.isoformat(),
-                    "registration_token_hash": registration_token_hash,
-                    "launch_state": launch_state,
-                },
-                "created_at": now,
-                "updated_at": now,
-            },
-            status=normalized_status,
-        )
 
     def _record_failed_launch_cleanup(
         self,
@@ -964,7 +897,7 @@ class ProviderMachineReconciler:
     def _retire_provider_pool_machines(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
         *,
         machine_ids: set[str] | None,
         reason: str,
@@ -978,7 +911,7 @@ class ProviderMachineReconciler:
             machines = MachineRepository(session)
             workers = WorkerRepository(session)
             credentials = ComputeJoinCredentialRepository(session)
-            for enrollment in enrollments.list_for_pool(workspace_id, pool_name):
+            for enrollment in enrollments.list_for_unit(workspace_id, capacity_owner_id):
                 if machine_ids is not None and enrollment.machine_id not in machine_ids:
                     continue
                 hot_state_retirements.append(enrollment)
@@ -1016,9 +949,9 @@ class ProviderMachineReconciler:
                         worker.model_copy(update={"status": ResourceStatus.Deleted}),
                         workspace_id=workspace_id,
                     )
-            for credential in credentials.list_for_pool(
+            for credential in credentials.list_for_unit(
                 workspace_id,
-                pool_name,
+                capacity_owner_id,
                 for_update=True,
             ):
                 join_token_hashes.add(credential.token_hash)
@@ -1029,12 +962,11 @@ class ProviderMachineReconciler:
             for enrollment in hot_state_retirements:
                 self.scheduler_hooks.retire_machine(
                     enrollment.workspace_id,
-                    enrollment.pool_name,
                     enrollment.machine_id,
                     reason,
                 )
             for token_hash in join_token_hashes:
-                self.scheduler_hooks.revoke_pool_join_token(token_hash)
+                self.scheduler_hooks.revoke_unit_join_token(token_hash)
         for machine_id in changed_machine_ids:
             publish_workspace_change(
                 self.workspace_changes,
@@ -1048,7 +980,7 @@ class ProviderMachineReconciler:
     def retire_provider_pool_machine(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
         machine_id: str,
         *,
         reason: str,
@@ -1056,7 +988,7 @@ class ProviderMachineReconciler:
     ) -> tuple[str, ...]:
         return self._retire_provider_pool_machines(
             workspace_id,
-            pool_name,
+            capacity_owner_id,
             machine_ids={machine_id},
             reason=reason,
             now=_utc(now),
@@ -1067,7 +999,7 @@ class ProviderMachineReconciler:
         client: DirectMachineProvider,
         *,
         provider_name: str,
-        pool_name: str,
+        pool: MachinePool,
         expected: set[str],
         stale: set[str],
         now: datetime,
@@ -1083,7 +1015,7 @@ class ProviderMachineReconciler:
         for key in [
             key
             for key in self.stale_first_seen
-            if key[0] == provider_name and key[1] == pool_name and key[2] not in stale
+            if key[0] == provider_name and key[1] == pool and key[2] not in stale
         ]:
             del self.stale_first_seen[key]
         if not stale:
@@ -1092,7 +1024,7 @@ class ProviderMachineReconciler:
         overdue: set[str] = set()
         for machine_id in stale:
             first_seen = self.stale_first_seen.setdefault(
-                (provider_name, pool_name, machine_id),
+                (provider_name, pool, machine_id),
                 now,
             )
             if now - first_seen >= grace:
@@ -1100,17 +1032,17 @@ class ProviderMachineReconciler:
         if not overdue:
             return
         result = client.reconcile_machines(
-            pool_name,
+            pool,
             expected | (stale - overdue),
             terminate_stale=True,
         )
         for machine_id in result.terminated_machine_ids:
-            self.stale_first_seen.pop((provider_name, pool_name, machine_id), None)
+            self.stale_first_seen.pop((provider_name, pool, machine_id), None)
             LOGGER.warning(
                 "terminated stale provider machine unknown to durable state",
                 extra={
                     "provider": provider_name,
-                    "pool_name": pool_name,
+                    "pool": pool,
                     "machine_id": machine_id,
                 },
             )
@@ -1118,7 +1050,7 @@ class ProviderMachineReconciler:
     def _provider_bootstrap_failure_to_reclaim(
         self,
         session: DatabaseSession,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         record: ComputeProviderInstanceRecord,
         *,
         now: datetime,
@@ -1169,24 +1101,24 @@ class ProviderMachineReconciler:
 
     def _persist_zero_capacity_repair(
         self,
-        pool: ComputePoolRecord,
+        unit: ComputeUnitRecord,
         *,
         maximum: int,
-        observed: ProviderPoolSnapshot,
-    ) -> ComputePoolRecord:
+        observed: ProviderUnitSnapshot,
+    ) -> ComputeUnitRecord:
         with self.context.database.session() as session:
-            pools = ComputePoolRepository(session)
-            current = _require_internal_pooled_pool(
-                pools.get_by_name(pool.workspace_id, pool.name, for_update=True),
-                pool_name=pool.name,
+            pools = ComputeUnitRepository(session)
+            current = _require_internal_pooled_unit(
+                pools.get(unit.id, for_update=True),
+                unit_ref=unit.id,
             )
             if (
-                current.capacity_owner_id != pool.capacity_owner_id
-                or current.generation != pool.generation
+                current.capacity_owner_id != unit.capacity_owner_id
+                or current.generation != unit.generation
                 or current.desired_machines != 0
             ):
                 raise ConflictError(
-                    f"compute pool {pool.name!r} zero-capacity repair was superseded"
+                    f"compute pool {unit.name!r} zero-capacity repair was superseded"
                 )
             intent = pools.update_capacity(
                 current.id,
@@ -1194,12 +1126,12 @@ class ProviderMachineReconciler:
                 desired_machines=0,
                 max_machines=maximum,
                 observed_machines=observed.observed_machines,
-                phase=ComputePoolPhase.Updating,
+                phase=ComputeUnitPhase.Updating,
                 provider_state=observed.provider_state,
             )
             if intent is None:
                 raise ConflictError(
-                    f"compute pool {pool.name!r} zero-capacity repair was superseded"
+                    f"compute pool {unit.name!r} zero-capacity repair was superseded"
                 )
             return intent
 
@@ -1225,7 +1157,7 @@ class ProviderMachineReconciler:
         )
         TailnetCleanupTombstoneRepository(session).schedule(
             workspace_id=enrollment.workspace_id,
-            pool_name=enrollment.pool_name,
+            pool=enrollment.pool,
             machine_id=enrollment.machine_id,
             generations=generations,
             auth_key_ids=auth_key_ids,

@@ -180,7 +180,7 @@ class RoutePrewarmService:
         attrs: dict[str, JsonValue] = dict(result.attrs)
         event_data: dict[str, JsonValue] = {
             "workspace_id": agent_state.workspace_id,
-            "pool_name": agent_state.pool_name,
+            "pool": agent_state.pool,
             "machine_id": agent_state.machine_id,
             "worker_id": route.worker_id,
             "container_id": route.container_id,

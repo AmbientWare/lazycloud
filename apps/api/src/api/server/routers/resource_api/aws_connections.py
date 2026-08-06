@@ -100,7 +100,7 @@ def _response(connection: AwsAccountConnection) -> AwsConnectionResponse:
         account_id=connection.account_id,
         phase=connection.phase,
         revision=connection.revision,
-        accepts_placement=connection.accepts_placement,
+        hosts_workloads=connection.hosts_workloads,
         can_manage_existing_capacity=connection.can_manage_existing_capacity,
         available_actions=connection.available_actions,
         detail=_CONNECTION_DETAIL[connection.phase],

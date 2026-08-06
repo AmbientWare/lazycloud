@@ -65,7 +65,7 @@ class AwsConnectionResponse(HttpModel):
     account_id: str
     phase: AwsAccountConnectionPhase
     revision: int = Field(ge=1)
-    accepts_placement: bool
+    hosts_workloads: bool
     can_manage_existing_capacity: bool
     available_actions: tuple[AwsAccountConnectionAvailableAction, ...] = ()
     detail: str = Field(max_length=512)

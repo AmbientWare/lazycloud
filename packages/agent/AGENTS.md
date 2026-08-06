@@ -1,6 +1,6 @@
 # Agent Package
 
-Reusable behavior for the agent that runs on customer and private-pool machines:
+Reusable behavior for the agent that runs on customer and private-unit machines:
 installation, daemon lifecycle, enrollment, and telemetry.
 
 Process arguments and startup stay in `apps/agent`. API handlers, SDK code, app

@@ -23,7 +23,6 @@ from foundation.ids import optional_uuid
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import Field
-from shared.compute_policy import ComputePlacementTarget
 from shared.container_requests import (
     OciRuntimeName,
     StopContainerReason,
@@ -176,7 +175,6 @@ class ContainerService:
         gpu_request: Iterable[str] | None = None,
         gpu_count: int = 0,
         pool_selector: str = "",
-        requested_placement: ComputePlacementTarget | None = None,
         runtime: OciRuntimeName | str = OciRuntimeName.Runc,
         runtime_class: str = "",
         docker_enabled: bool = False,
@@ -243,7 +241,6 @@ class ContainerService:
                 gpu_request=list(gpu_request) if gpu_request is not None else None,
                 gpu_count=gpu_count,
                 pool_selector=pool_selector,
-                requested_placement=requested_placement,
                 runtime=runtime,
                 runtime_class=runtime_class,
                 docker_enabled=docker_enabled,
@@ -369,7 +366,6 @@ class ContainerService:
             gpu_request=[str(item) for item in options.gpu_request or []],
             gpu_count=options.gpu_count,
             pool_selector=options.pool_selector,
-            requested_placement=options.requested_placement,
             runtime_class=runtime_constraint,
             docker_enabled=options.docker_enabled,
             preemptible=options.preemptible,

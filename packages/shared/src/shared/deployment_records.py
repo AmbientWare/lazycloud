@@ -6,11 +6,7 @@ from typing import Annotated
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import (
-    ComputePlacement,
-    ComputePlacementSource,
-    ComputePlacementTarget,
-)
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.deployments import DeploymentKind
 from shared.http.client_manifests import ClientContract
@@ -249,7 +245,6 @@ class DeploymentSpec(ContractModel):
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     client_contract: ClientContract | None = None
-    placement: ComputePlacementTarget | None = None
 
     @field_validator("methods")
     @classmethod
@@ -278,13 +273,12 @@ class Deployment(ContractModel):
     stub_id: str | None = None
     version: int = 1
     spec: DeploymentSpec
-    resolved_placement: ComputePlacement = Field(
-        default_factory=lambda: ComputePlacement(
-            target=ComputePlacementTarget.Managed,
-            source=ComputePlacementSource.WorkspaceDefault,
-            provider=ComputePlacementTarget.Managed.value,
-        )
-    )
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    """Pool this deployment was pinned to when it was created.
+
+    Resolved once at deploy time: a workspace that later changes its default
+    must not move workloads already running.
+    """
     active: bool = True
     deleted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)

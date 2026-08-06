@@ -196,7 +196,6 @@ def plan_image_build_container_request(
         # runs. Forcing Managed strands every build on a deployment whose capacity
         # is a connected provider: the request queues for local capacity that does
         # not exist and retries until it gives up.
-        requested_placement=None,
         architecture=request.plan.spec.architecture.value,
         payload=payload,
     )

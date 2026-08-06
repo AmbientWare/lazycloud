@@ -31,6 +31,7 @@ from observability.settings import UsagePricingSettings
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.billing import BillableMetric, BillingCoverageStatus
 from shared.compute_enrollment import MachineReadinessPhase
+from shared.compute_policy import MachinePool, UnitName
 from shared.deployments import StubKind
 from shared.http.usage import UsageBillingPeriod
 from shared.http_transport import HttpChannel
@@ -820,10 +821,10 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
     compute_states = RedisComputeStateRepository(RedisClient(FakeRedis(), key_prefix="usage-node"))
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    isolated_services.compute.create_pool("usage-managed", workspace=workspace_id)
+    unit = isolated_services.compute.create_unit(UnitName("usage-managed"), workspace=workspace_id)
     machine = isolated_services.compute.create_machine(
         workspace=workspace_id,
-        pool="usage-managed",
+        pool=MachinePool("usage-managed"),
     )
     token_hash = hash_compute_token("agent-token")
     joined_at = utc_now() - timedelta(seconds=30)
@@ -831,7 +832,8 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
         enrollment = ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
-                pool_name="usage-managed",
+                capacity_owner_id=unit.capacity_owner_id,
+                pool=MachinePool("usage-managed"),
                 machine_id=machine.id,
                 machine_fingerprint_hash=hash_compute_token("machine-1"),
                 credential_hash=token_hash,
@@ -847,7 +849,8 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
         ComputeAgentTokenState(
             token_hash=token_hash,
             workspace_id=workspace_id,
-            pool_name="usage-managed",
+            capacity_owner_id=unit.capacity_owner_id,
+            pool=MachinePool("usage-managed"),
             machine_id=machine.id,
             credential_id=enrollment.id,
             credential_generation=enrollment.credential_generation,

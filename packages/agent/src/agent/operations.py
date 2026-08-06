@@ -25,6 +25,7 @@ from shared.app_identity import (
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, PreflightSeverity
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.env import (
     GATEWAY_GRPC_HOST_ENV,
@@ -98,7 +99,7 @@ class AgentWorkerNetwork(ContractModel):
 
 class AgentJoinRequest(ContractModel):
     name: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     endpoint: str = "http://127.0.0.1:9000"
     token_secret: str | None = None
     version: str = "local"
@@ -123,7 +124,7 @@ class AgentHostStatus(ContractModel):
     state_path: str
     active_worker_count: int = 0
     workspace_id: str = ""
-    pool_name: str = ""
+    pool: MachinePool = MachinePool("")
     machine_id: str = ""
     gateway_url: str = ""
     service: AgentServiceRuntimeStatus
@@ -158,7 +159,7 @@ def build_join_command(request: AgentJoinRequest) -> list[str]:
         "--name",
         request.name,
         "--pool",
-        request.pool,
+        str(request.pool),
         "--endpoint",
         request.endpoint,
         "--version",
@@ -991,7 +992,7 @@ class AgentBootstrap(ContractModel):
 class AgentState(ContractModel):
     gateway_url: str
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str
     agent_token: str
     credential_id: str
@@ -1067,7 +1068,7 @@ class AgentWorkerDirs(ContractModel):
 class AgentWorkerSlot(ContractModel):
     worker_id: str
     worker_token: str = ""
-    pool_name: str = "default"
+    pool: MachinePool = MachinePool("default")
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     machine_id: str = ""
     cpu_millicores: int = 0
@@ -1352,7 +1353,7 @@ def agent_state_payload(
     return {
         "gateway_url": state.gateway_url,
         "workspace_id": state.workspace_id,
-        "pool_name": state.pool_name,
+        "pool": state.pool,
         "machine_id": state.machine_id,
         "agent_token": state.agent_token,
         "credential_id": state.credential_id,
@@ -1505,7 +1506,7 @@ def plan_worker_container(
         f"{NAME}.agent.managed": "true",
         f"{NAME}.agent.worker_id": slot.worker_id,
         f"{NAME}.agent.machine_id": slot.machine_id,
-        f"{NAME}.agent.pool_name": slot.pool_name,
+        f"{NAME}.agent.pool_name": str(slot.pool),
     }
     if image_id:
         labels[f"{NAME}.agent.worker_image_id"] = image_id
@@ -1513,12 +1514,12 @@ def plan_worker_container(
         WORKER_CONFIG_PATH_ENV: DEFAULT_WORKER_CONFIG_PATH,
         "WORKER_ID": slot.worker_id,
         "WORKER_TOKEN": slot.worker_token,
-        "WORKER_POOL": slot.pool_name,
+        "WORKER_POOL": str(slot.pool),
         "WORKER_CAPACITY_OWNER_ID": slot.capacity_owner_id,
         "WORKER_MACHINE": slot.machine_id,
         "WORKER_POD_ADDRESS": target_host,
         "WORKER_CONTAINER_SERVICE_PORT": str(container_service_port),
-        "CACHE_LOCALITY": slot.pool_name,
+        "CACHE_LOCALITY": str(slot.pool),
         "CACHE_NODE": slot.machine_id,
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
         "WORKER_NETWORK_PREFIX": slot.network_prefix,
@@ -1583,7 +1584,7 @@ def same_worker_slot(a: AgentWorkerSlot | None, b: AgentWorkerSlot | None) -> bo
         return a is b
     comparable = [
         "worker_id",
-        "pool_name",
+        "pool",
         "machine_id",
         "cpu_millicores",
         "memory_mb",

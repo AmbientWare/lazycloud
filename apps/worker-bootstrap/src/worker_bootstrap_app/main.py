@@ -16,6 +16,7 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
 )
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
+from shared.compute_policy import MachinePool
 from shared.identity import TokenKind
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -30,7 +31,7 @@ class WorkerBootstrapArguments(argparse.Namespace):
     """
 
     worker_id: str | None
-    pool_name: str | None
+    pool: MachinePool | None
     machine_id: str | None
     ttl_seconds: int
 
@@ -44,7 +45,7 @@ class WorkerTokenArguments(argparse.Namespace):
 @dataclass(frozen=True)
 class WorkerBootstrapResult:
     worker_id: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str
     status: str
     ttl_seconds: int
@@ -52,7 +53,7 @@ class WorkerBootstrapResult:
     def to_dict(self) -> dict[str, str | int]:
         return {
             "worker_id": self.worker_id,
-            "pool_name": self.pool_name,
+            "pool": self.pool,
             "machine_id": self.machine_id,
             "status": self.status,
             "ttl_seconds": self.ttl_seconds,
@@ -62,7 +63,7 @@ class WorkerBootstrapResult:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=WORKER_BOOTSTRAP_PROCESS_NAME)
     parser.add_argument("--worker-id")
-    parser.add_argument("--pool", dest="pool_name", default=None)
+    parser.add_argument("--pool", dest="pool", default=None)
     parser.add_argument("--machine-id")
     parser.add_argument("--ttl-seconds", type=int, default=DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS)
     return parser
@@ -90,7 +91,7 @@ def bootstrap_scheduler_worker(
     )
     return WorkerBootstrapResult(
         worker_id=worker.worker_id,
-        pool_name=worker.pool_name,
+        pool=worker.pool,
         machine_id=worker.machine_id,
         status=worker.status.value,
         ttl_seconds=ttl_seconds,
@@ -179,7 +180,7 @@ def _settings_from_args(args: WorkerBootstrapArguments) -> WorkerSettings:
     loaded = WorkerSettings()
     return WorkerSettings(
         worker_id=_override(args.worker_id, loaded.worker_id),
-        pool_name=_override(args.pool_name, loaded.pool_name),
+        pool=_override(args.pool, loaded.pool),
         machine_id=_override(args.machine_id, loaded.machine_id),
     )
 

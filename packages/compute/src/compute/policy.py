@@ -9,13 +9,12 @@ from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeMachineEnrollmentRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
     WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.orchestration import PoolRepository
 from database.types import DatabaseSession
 from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue
@@ -28,12 +27,10 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import (
     AwsWorkspaceComputePolicy,
-    ComputePlacement,
-    ComputePlacementSource,
-    ComputePlacementTarget,
-    ComputePoolPhase,
-    ComputePoolRecord,
     ComputeResourceRequirements,
+    ComputeUnitPhase,
+    ComputeUnitRecord,
+    MachinePool,
     WorkspaceComputePolicy,
 )
 from shared.contracts import ContractModel
@@ -88,8 +85,19 @@ class ComputeInstanceView:
 @dataclass(frozen=True, slots=True)
 class ComputeWorkloadView:
     deployment: Deployment
-    placement: ComputePlacement
+    pool: MachinePool
     resources: ComputeResourceRequirements
+
+
+@dataclass(frozen=True, slots=True)
+class MachinePoolView:
+    """One pool a workload may name, described by the units feeding it."""
+
+    name: str
+    is_default: bool
+    providers: tuple[str, ...]
+    unit_count: int
+    gpu_types: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +113,8 @@ class ComputeSummary:
 
 
 class AwsDefaultCapacityOwner(Protocol):
+    def workspace_has_ready_connection(self, workspace: str) -> bool: ...
+
     def reconcile_aws_default_capacity(
         self,
         *,
@@ -118,7 +128,7 @@ class AwsDefaultCapacityOwner(Protocol):
         min_free_memory_mib: int,
         root_volume_gib: int,
         idle_timeout_seconds: int,
-    ) -> ComputePoolRecord: ...
+    ) -> ComputeUnitRecord: ...
 
     def clear_aws_default_capacity(self, *, workspace: str, release_capacity: bool) -> None: ...
 
@@ -139,17 +149,22 @@ def _aws_capacity_is_zero(aws: AwsWorkspaceComputePolicy) -> bool:
 class AwsDefaultCapacityBaseline:
     capacity: AwsDefaultCapacityOwner
 
-    def reconcile(self, policy: WorkspaceComputePolicy) -> ComputePoolRecord | None:
-        zero_capacity = _aws_capacity_is_zero(policy.aws)
-        if policy.default_placement is not ComputePlacementTarget.Aws or zero_capacity:
-            # A zero-capacity policy owns zero machines whatever the placement:
-            # clearing floors alone would leave durable desired capacity (and
-            # billing) behind. Gating this release on placement instead of on the
-            # policy left an AWS-default workspace paying for the warm machine
-            # after it zeroed the only control it was given.
+    def reconcile(self, policy: WorkspaceComputePolicy) -> ComputeUnitRecord | None:
+        """Hold the warm baseline a connected workspace's policy asks for.
+
+        The policy applies the same way whether the machines are LazyCloud's own
+        fleet or the customer's account, so nothing here asks where workloads
+        are scheduled. Two preconditions do gate it: a workspace with no ready
+        connection has no account to build in, and a workspace that zeroed every
+        capacity control it was given wants no machines. Clearing floors without
+        releasing would leave durable desired capacity, and its billing, behind.
+        """
+        if not self.capacity.workspace_has_ready_connection(policy.workspace_id):
+            return None
+        if _aws_capacity_is_zero(policy.aws):
             self.capacity.clear_aws_default_capacity(
                 workspace=policy.workspace_id,
-                release_capacity=zero_capacity,
+                release_capacity=True,
             )
             return None
         aws = policy.aws
@@ -196,7 +211,7 @@ class WorkspaceComputePolicyService:
         *,
         workspace: str,
         expected_revision: int,
-        default_placement: ComputePlacementTarget,
+        default_pool: str,
         aws: AwsWorkspaceComputePolicy,
     ) -> WorkspaceComputePolicy:
         self._validate_aws_policy(aws)
@@ -219,17 +234,11 @@ class WorkspaceComputePolicyService:
                     raise RuntimeError("workspace compute policy is unavailable")
             if current.revision != expected_revision:
                 raise ConflictError("workspace compute policy revision was superseded")
-            if default_placement is ComputePlacementTarget.Aws:
-                connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-                if connection is None or not connection.accepts_placement:
-                    raise ConflictError(
-                        "connect and validate AWS before making it the default placement"
-                    )
             saved = repository.save(
                 current.model_copy(
                     update={
                         "revision": current.revision + 1,
-                        "default_placement": default_placement,
+                        "default_pool": default_pool or current.default_pool,
                         "aws": aws,
                         "updated_at": utc_now(),
                     }
@@ -239,7 +248,15 @@ class WorkspaceComputePolicyService:
             self.aws_default_capacity.reconcile(saved)
         return saved
 
-    def reconcile_capacity_at_startup(self) -> tuple[ComputePoolRecord, ...]:
+    def reconcile_workspace_baseline(self, workspace_id: str) -> None:
+        """Apply the workspace's warm baseline now that it can be built."""
+        if self.aws_default_capacity is None:
+            return
+        with self.context.database.session() as session:
+            policy = self._policy_in_session(session, workspace_id)
+        self.aws_default_capacity.reconcile(policy)
+
+    def reconcile_capacity_at_startup(self) -> tuple[ComputeUnitRecord, ...]:
         baseline = self.aws_default_capacity
         if baseline is None:
             return ()
@@ -260,75 +277,66 @@ class WorkspaceComputePolicyService:
             pool for policy in policies if (pool := baseline.reconcile(policy)) is not None
         )
 
-    def resolve_placement(
-        self,
-        *,
-        workspace: str,
-        requested: ComputePlacementTarget | None = None,
-        attached_pool: str = "",
-        requirements: ComputeResourceRequirements | None = None,
-    ) -> ComputePlacement:
-        del requirements
-        if requested is not None and attached_pool:
-            raise InvalidInputError(
-                "workload placement cannot combine an explicit target with a self-hosted pool"
-            )
+    def default_machine_pool(self, *, workspace: str) -> MachinePool:
+        """Pool a workload lands in when it names none."""
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            policy = self._policy_in_session(session, workspace_id)
-            if attached_pool:
-                pool = ComputePoolRepository(session).get_by_name(workspace_id, attached_pool)
-                if pool is not None:
-                    return self._attached_pool_placement(pool)
-                scheduler_pool = PoolRepository(session).get(
-                    attached_pool,
-                    workspace_id=workspace_id,
-                )
-                if scheduler_pool is not None:
-                    return ComputePlacement(
-                        target=ComputePlacementTarget.Managed,
-                        source=ComputePlacementSource.AttachedPool,
-                        provider=scheduler_pool.provider,
-                        pool_name=scheduler_pool.name,
-                    )
-                raise InvalidInputError(f"attached compute pool {attached_pool!r} was not found")
-            target = requested if requested is not None else policy.default_placement
-            source = (
-                ComputePlacementSource.WorkloadOverride
-                if requested is not None
-                else ComputePlacementSource.WorkspaceDefault
-            )
-            if target is ComputePlacementTarget.Managed:
-                return ComputePlacement(
-                    target=target,
-                    source=source,
-                    provider=ComputePlacementTarget.Managed.value,
-                    region="",
-                )
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-            if connection is None or not connection.accepts_placement:
-                raise ConflictError("AWS placement requires a ready workspace connection")
-            region = policy.aws.default_region
-            if region not in policy.aws.allowed_regions:
-                raise InvalidInputError(f"AWS region {region!r} is not allowed by workspace policy")
-            return ComputePlacement(
-                target=target,
-                source=source,
-                provider=ComputePlacementTarget.Aws.value,
-                region=region,
-                provider_ref=f"aws:{connection.id}",
-            )
+            return self._policy_in_session(session, workspace_id).default_pool
 
-    def resolve_deployment_placement(
+    def connection_for_machine_pool(
         self,
-        spec: DeploymentSpec,
         *,
         workspace: str,
-    ) -> ComputePlacement:
-        return self.resolve_placement(
-            workspace=workspace,
-            requested=spec.placement,
-            attached_pool=_deployment_pool_name(spec),
+        pool: MachinePool,
+    ) -> AwsAccountConnection | None:
+        """The ready connection whose units feed this pool, if one does.
+
+        A pool nobody provisions into is legal — naming a pool creates it —
+        so this answering None means the pool is fed by joined machines alone
+        and there is nothing to provision.
+        """
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+        if connection is None or not connection.hosts_workloads:
+            return None
+        return connection if connection.pool == pool else None
+
+    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str:
+        """Pin the pool a deployment runs in for as long as it exists."""
+        named = _deployment_pool_name(spec)
+        if named:
+            return named
+        return self.default_machine_pool(workspace=workspace)
+
+    def pools(self, *, workspace: str) -> tuple[MachinePoolView, ...]:
+        """Every pool this workspace can schedule into.
+
+        Derived from the units that feed each pool rather than stored: naming a
+        pool creates it, so there is no separate list to keep in step. A pool a
+        workload names but nothing feeds yet is absent, which is the useful
+        answer — it has no capacity to offer.
+        """
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            units = ComputeUnitRepository(session).list_for_workspace(workspace_id)
+            default_pool = self._policy_in_session(session, workspace_id).default_pool
+        grouped: dict[str, list[ComputeUnitRecord]] = {}
+        for unit in units:
+            if unit.phase is ComputeUnitPhase.Deleted:
+                continue
+            grouped.setdefault(unit.pool, []).append(unit)
+        return tuple(
+            MachinePoolView(
+                name=name,
+                is_default=name == default_pool,
+                providers=tuple(sorted({unit.provider for unit in members})),
+                unit_count=len(members),
+                gpu_types=tuple(
+                    sorted({unit.worker_gpu_type for unit in members if unit.worker_gpu_type})
+                ),
+            )
+            for name, members in sorted(grouped.items())
         )
 
     def catalog(
@@ -342,7 +350,7 @@ class WorkspaceComputePolicyService:
     def instances(self, *, workspace: str) -> tuple[ComputeInstanceView, ...]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
             instances = ComputeProviderInstanceRepository(session)
             enrollments = ComputeMachineEnrollmentRepository(session)
             if self.worker_state is None:
@@ -353,7 +361,7 @@ class WorkspaceComputePolicyService:
                     record,
                     region=pool.region,
                     workspace_id=workspace_id,
-                    pool_name=pool.name,
+                    pool=pool.pool,
                     enrollments=enrollments,
                     worker_state=self.worker_state,
                 )
@@ -381,7 +389,7 @@ class WorkspaceComputePolicyService:
                 views.append(
                     ComputeWorkloadView(
                         deployment=deployment,
-                        placement=deployment.resolved_placement,
+                        pool=deployment.pool,
                         resources=requirements,
                     )
                 )
@@ -423,23 +431,11 @@ class WorkspaceComputePolicyService:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-            pools = ComputePoolRepository(session).list_internal(workspace_id=workspace_id)
+            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         if connection is not None or any(
-            pool.phase is not ComputePoolPhase.Deleted for pool in pools
+            pool.phase is not ComputeUnitPhase.Deleted for pool in pools
         ):
             raise ConflictError("disconnect AWS compute before deleting this workspace")
-
-    @staticmethod
-    def _attached_pool_placement(pool: ComputePoolRecord) -> ComputePlacement:
-        aws = pool.provider_ref.startswith("aws:")
-        return ComputePlacement(
-            target=ComputePlacementTarget.Aws if aws else ComputePlacementTarget.Managed,
-            source=ComputePlacementSource.AttachedPool,
-            provider="aws" if aws else "managed",
-            region=pool.region if aws else "",
-            pool_name=pool.name,
-            provider_ref=pool.provider_ref,
-        )
 
     @staticmethod
     def _requirements(deployment: Deployment) -> ComputeResourceRequirements:
@@ -534,7 +530,7 @@ def _compute_instance_view(
     *,
     region: str,
     workspace_id: str,
-    pool_name: str,
+    pool: MachinePool,
     enrollments: ComputeMachineEnrollmentRepository,
     worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:
@@ -554,7 +550,7 @@ def _compute_instance_view(
         enrollment = enrollments.by_machine(
             workspace_id,
             record.machine_id,
-            pool_name=pool_name,
+            pool=pool,
         )
         if machine_serves_workloads(
             enrollment,
@@ -608,5 +604,6 @@ __all__ = [
     "ComputeInstanceView",
     "ComputeSummary",
     "ComputeWorkloadView",
+    "MachinePoolView",
     "WorkspaceComputePolicyService",
 ]

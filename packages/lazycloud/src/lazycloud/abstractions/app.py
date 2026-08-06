@@ -42,7 +42,6 @@ from lazycloud.abstractions.function import _function as function_decorator
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PlacementInput,
     PoolInput,
     RetryPolicyInput,
     SchemaInput,
@@ -59,8 +58,6 @@ class AppOperationError(RuntimeError):
 
 
 class AppResource(Protocol):
-    placement: PlacementInput
-
     def spec(self) -> DeploymentSpec: ...
 
 
@@ -140,7 +137,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R]: ...
@@ -181,7 +177,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
@@ -221,7 +216,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R] | Callable[[Callable[P, R]], Function[P, R]]:
@@ -246,7 +240,7 @@ class App:
             task_policy: Scheduling policy for invocation retries and timeouts.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, placement, provider, metadata: Compute placement and custom metadata.
+            pool, provider, metadata: Scheduling group and custom metadata.
         """
         kwargs = _function_options(
             image=image,
@@ -280,7 +274,6 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata,
         )
@@ -324,7 +317,6 @@ class App:
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], CronJob[P, R]]:
@@ -348,7 +340,7 @@ class App:
             task_policy: Scheduling policy for invocation retries and timeouts.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, placement, provider, metadata: Compute placement and custom metadata.
+            pool, provider, metadata: Scheduling group and custom metadata.
         """
         kwargs = _function_options(
             image=image,
@@ -382,7 +374,6 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=False,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata,
         )
@@ -428,7 +419,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R]: ...
@@ -469,7 +459,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
@@ -509,7 +498,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R] | Callable[[Callable[P, R]], Endpoint[P, R]]:
@@ -538,7 +526,7 @@ class App:
             autoscaler, task_policy: Scheduling policies.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, placement, provider, metadata: Compute placement and custom metadata.
+            pool, provider, metadata: Scheduling group and custom metadata.
         """
         kwargs = _endpoint_options(
             image=image,
@@ -572,7 +560,6 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata,
         )
@@ -608,7 +595,6 @@ class App:
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
     ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
         """Register an ASGI application owned by this app.
@@ -631,7 +617,7 @@ class App:
             env, secrets, volumes: Runtime configuration injected into workers.
             on_start: Startup hook invoked by the workload runner.
             autoscaler, task_policy: Scheduling policies.
-            pool, placement, provider: Compute placement options.
+            pool, provider: Scheduling group options.
         """
         kwargs = _asgi_options(
             name=name,
@@ -657,7 +643,6 @@ class App:
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             pool=pool,
-            placement=placement,
             provider=provider,
         )
         factory = asgi_decorator(_app_slug=self.slug, **kwargs)
@@ -695,7 +680,6 @@ class App:
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
     ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
         """Register a realtime WebSocket-style handler owned by this app.
@@ -717,7 +701,7 @@ class App:
             env, secrets, volumes: Runtime configuration injected into workers.
             on_start: Startup hook invoked by the workload runner.
             autoscaler, task_policy: Scheduling policies.
-            pool, placement, provider: Compute placement options.
+            pool, provider: Scheduling group options.
         """
         kwargs = _asgi_options(
             name=name,
@@ -743,7 +727,6 @@ class App:
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             pool=pool,
-            placement=placement,
             provider=provider,
         )
         factory = realtime_decorator(_app_slug=self.slug, **kwargs)
@@ -795,7 +778,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> TaskQueueFunction[P, R]: ...
@@ -842,7 +824,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], TaskQueueFunction[P, R]]: ...
@@ -888,7 +869,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> TaskQueueFunction[P, R] | Callable[[Callable[P, R]], TaskQueueFunction[P, R]]:
@@ -918,7 +898,7 @@ class App:
             autoscaler, task_policy: Scheduling policies.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, placement, provider, metadata: Compute placement and custom metadata.
+            pool, provider, metadata: Scheduling group and custom metadata.
         """
         kwargs = _task_queue_options(
             image=image,
@@ -958,7 +938,6 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata,
         )
@@ -996,7 +975,6 @@ class App:
         docker_enabled: bool = False,
         preemptible: bool = False,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> Pod:
@@ -1048,7 +1026,6 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=dict(metadata or {}),
         )
@@ -1076,7 +1053,6 @@ class App:
         preemptible: bool = False,
         ports: Iterable[int] | None = None,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
@@ -1120,7 +1096,6 @@ class App:
             preemptible=preemptible,
             ports=ports,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata,
             command=command,
@@ -1134,7 +1109,6 @@ class App:
         name: str | None = None,
         workspace: str | None = None,
         external_url: str | None = None,
-        placement: PlacementInput = None,
         source_root: str | Path | None = None,
         image: Image | None = None,
         cpu: float | None = None,
@@ -1162,7 +1136,6 @@ class App:
             name: Deployment name override when deploying one resource.
             workspace: Workspace slug or name for the deployment.
             external_url: External URL to attach to endpoint-style deployments.
-            placement: Compute placement applied to every selected deployable resource.
             source_root: Local source directory packaged for each selected resource.
             image, cpu, memory, gpu, gpu_count: Runtime overrides applied before deployment.
             env, secrets, ports, keep_warm, tcp, pool, entrypoint: Additional runtime
@@ -1184,7 +1157,6 @@ class App:
                 keep_warm=keep_warm,
                 tcp=tcp,
                 pool=pool,
-                placement=placement,
                 preemptible=preemptible,
                 entrypoint=entrypoint,
             )
@@ -1313,7 +1285,6 @@ def _configure_deployable_resource(
     keep_warm: int | None,
     tcp: bool | None,
     pool: PoolInput,
-    placement: PlacementInput,
     preemptible: bool | None,
     entrypoint: Iterable[str] | None,
 ) -> None:
@@ -1337,7 +1308,6 @@ def _configure_deployable_resource(
             env=env,
             secrets=secrets,
             pool=pool,
-            placement=placement,
             preemptible=preemptible,
         )
         return
@@ -1368,8 +1338,6 @@ def _configure_deployable_resource(
             resource.keep_warm = keep_warm
         if pool is not None:
             resource.pool = pool
-        if placement is not None:
-            resource.placement = placement
         if preemptible is not None:
             resource.preemptible = preemptible
         return
@@ -1402,8 +1370,6 @@ def _configure_deployable_resource(
             resource.keep_warm_seconds = keep_warm
         if pool is not None:
             resource.pool = pool
-        if placement is not None:
-            resource.placement = placement
         return
     if isinstance(resource, TaskQueueFunction):
         unsupported = _unsupported_override_names(
@@ -1432,8 +1398,6 @@ def _configure_deployable_resource(
             resource.keep_warm_seconds = keep_warm
         if pool is not None:
             resource.pool = pool
-        if placement is not None:
-            resource.placement = placement
         if preemptible is not None:
             resource.preemptible = preemptible
         return
@@ -1452,7 +1416,6 @@ def _configure_deployable_resource(
             secrets=list(secrets) if secrets is not None else None,
             tcp=tcp,
             pool=pool,
-            placement=placement,
             preemptible=preemptible,
         )
         return
@@ -1554,7 +1517,6 @@ def _function_options(
     docker_enabled: bool,
     preemptible: bool,
     pool: PoolInput,
-    placement: PlacementInput,
     provider: str | None,
     metadata: dict[str, Any] | None,
 ) -> FunctionOptions:
@@ -1590,7 +1552,6 @@ def _function_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "pool": pool,
-        "placement": placement,
         "provider": provider,
         "metadata": metadata,
     }
@@ -1629,7 +1590,6 @@ def _endpoint_options(
     docker_enabled: bool,
     preemptible: bool,
     pool: PoolInput,
-    placement: PlacementInput,
     provider: str | None,
     metadata: dict[str, Any] | None,
 ) -> EndpointOptions:
@@ -1665,7 +1625,6 @@ def _endpoint_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "pool": pool,
-        "placement": placement,
         "provider": provider,
         "metadata": metadata,
     }
@@ -1696,7 +1655,6 @@ def _asgi_options(
     task_policy: TaskPolicy | Mapping[str, Any] | None,
     checkpoint_enabled: bool,
     pool: PoolInput,
-    placement: PlacementInput,
     provider: str | None,
 ) -> ASGIOptions:
     return {
@@ -1723,7 +1681,6 @@ def _asgi_options(
         "task_policy": task_policy,
         "checkpoint_enabled": checkpoint_enabled,
         "pool": pool,
-        "placement": placement,
         "provider": provider,
     }
 
@@ -1767,7 +1724,6 @@ def _task_queue_options(
     docker_enabled: bool,
     preemptible: bool,
     pool: PoolInput,
-    placement: PlacementInput,
     provider: str | None,
     metadata: dict[str, Any] | None,
 ) -> TaskQueueOptions:
@@ -1809,7 +1765,6 @@ def _task_queue_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "pool": pool,
-        "placement": placement,
         "provider": provider,
         "metadata": metadata,
     }
@@ -1842,7 +1797,6 @@ def _pod_options(
     docker_enabled: bool,
     preemptible: bool,
     pool: PoolInput,
-    placement: PlacementInput,
     provider: str | None,
     metadata: dict[str, Any],
 ) -> PodOptions:
@@ -1872,7 +1826,6 @@ def _pod_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "pool": pool,
-        "placement": placement,
         "provider": provider,
         "metadata": metadata,
     }
@@ -1899,7 +1852,6 @@ def _sandbox_options(
     preemptible: bool,
     ports: Iterable[int] | None,
     pool: PoolInput,
-    placement: PlacementInput,
     provider: str | None,
     metadata: Mapping[str, Any] | None,
     command: Iterable[str] | None,
@@ -1924,7 +1876,6 @@ def _sandbox_options(
         "preemptible": preemptible,
         "ports": ports,
         "pool": pool,
-        "placement": placement,
         "provider": provider,
         "metadata": metadata,
         "command": command,

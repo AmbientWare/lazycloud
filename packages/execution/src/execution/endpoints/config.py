@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+from shared.compute_policy import MachinePool
 from shared.deployment_records import (
     DEFAULT_MAX_PENDING_TASKS,
     resolve_http_wait_timeout_seconds,
@@ -48,12 +49,6 @@ class EndpointRuntimeConfig(ContainerResourceConfig):
     checkpoint_enabled: bool = False
 
 
-class EndpointPoolConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    name: str = ""
-
-
 class EndpointMetadataConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
@@ -73,7 +68,7 @@ class EndpointStubConfig(BaseModel):
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
     max_pending_tasks: int | None = Field(default=None, ge=0)
-    pool: EndpointPoolConfig = Field(default_factory=EndpointPoolConfig)
+    pool: MachinePool = MachinePool("")
     metadata: EndpointMetadataConfig = Field(default_factory=EndpointMetadataConfig)
 
     @property
@@ -82,7 +77,7 @@ class EndpointStubConfig(BaseModel):
 
     @property
     def effective_pool_selector(self) -> str:
-        return self.runtime.pool_selector or self.pool.name
+        return self.runtime.pool_selector or self.pool
 
     @property
     def effective_retry_policy(self) -> RetryPolicy:

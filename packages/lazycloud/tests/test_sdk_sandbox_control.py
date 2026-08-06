@@ -518,5 +518,5 @@ def test_sandbox_prepare_emits_canonical_deployment_request() -> None:
         request.docker_enabled,
         request.preemptible,
     ) == (True, True, True, True)
-    assert request.pool == {"name": "gpu-pool"}
+    assert request.pool == "gpu-pool"
     assert [(volume.id, volume.mount_path) for volume in request.volumes] == [("data", "/data")]

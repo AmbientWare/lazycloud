@@ -516,19 +516,32 @@ def dial_local_target(local_target: str, *, timeout_seconds: float) -> socket.so
         msg = f"invalid local target: {local_target}"
         raise OSError(msg)
     try:
-        return socket.create_connection((host, port), timeout=timeout_seconds)
+        return _connect_within(host, port, timeout_seconds)
     except OSError as first_error:
         fallback_host = "127.0.0.1"
         if host in {fallback_host, "localhost"}:
             raise
         try:
-            return socket.create_connection((fallback_host, port), timeout=timeout_seconds)
+            return _connect_within(fallback_host, port, timeout_seconds)
         except OSError as fallback_error:
             msg = (
                 f"dial {local_target} failed: {first_error}; "
                 f"loopback fallback {fallback_host}:{port} failed: {fallback_error}"
             )
             raise OSError(msg) from fallback_error
+
+
+def _connect_within(host: str, port: int, timeout_seconds: float) -> socket.socket:
+    """Bound how long the dial may take, but not how long the connection may live.
+
+    ``create_connection`` leaves its timeout on the socket it returns, so it would
+    go on applying to every later ``recv``. A proxied connection that stays quiet
+    for longer than the dial budget—an idle terminal, a stream between messages—
+    would then fail mid-session and tear the tunnel down.
+    """
+    connection = socket.create_connection((host, port), timeout=timeout_seconds)
+    connection.settimeout(None)
+    return connection
 
 
 def target_host_port(target: str) -> tuple[str, int]:

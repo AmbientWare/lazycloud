@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from shared.deployment_records import Deployment
-from shared.http.compute_policy import ResolvedComputePlacementResponse
 from shared.http.deployments import (
     DeploymentActionCapabilitiesResponse,
     DeploymentResourcesResponse,
@@ -18,7 +17,6 @@ def deployment_response(
     actions: DeploymentActionCapabilitiesResponse | None = None,
 ) -> DeploymentResponse:
     spec = deployment.spec
-    placement = deployment.resolved_placement
     return DeploymentResponse(
         id=deployment.id,
         name=deployment.name,
@@ -33,12 +31,7 @@ def deployment_response(
             cron=spec.cron,
             command=spec.command,
             ports=spec.ports,
-            placement=ResolvedComputePlacementResponse(
-                target=placement.target,
-                source=placement.source,
-                provider=placement.provider,
-                region=placement.region,
-            ),
+            pool=deployment.pool,
         ),
         active=deployment.active,
         deleted_at=deployment.deleted_at,

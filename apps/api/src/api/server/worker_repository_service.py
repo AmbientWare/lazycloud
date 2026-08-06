@@ -22,11 +22,11 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import RedisClient, redis_text
 from database.context import ServiceContext
+from database.repositories.compute import ComputeUnitRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
-    PoolRepository,
     WorkerRepository,
 )
 from database.types import DatabaseSession
@@ -423,7 +423,7 @@ class WorkerRepositoryService:
                     worker_id,
                     workspace_id=private_principal.workspace_id,
                 )
-                if durable_worker is None or durable_worker.pool != worker.pool_name:
+                if durable_worker is None or durable_worker.pool != worker.pool:
                     raise ConflictError(
                         f"worker {worker_id} enrollment does not match scheduler state"
                     )
@@ -436,7 +436,7 @@ class WorkerRepositoryService:
         *,
         principal: WorkerRepositoryPrincipal | None,
     ) -> None:
-        if request.pool_selector and request.pool_selector != worker.pool_name:
+        if request.pool_selector and request.pool_selector != worker.pool:
             raise ConflictError(
                 f"worker {worker.worker_id} does not belong to requested pool "
                 f"{request.pool_selector}"
@@ -691,16 +691,19 @@ class WorkerRepositoryService:
         if not worker.capacity_owner_id:
             raise ConflictError("worker registration requires a capacity owner identity")
         with self.services.context.database.session() as session:
-            pool = PoolRepository(session).get(
-                worker.pool_name,
-                workspace_id=principal.workspace_id,
-            )
-            if pool is None:
+            # A pool is fed by any number of units, so the worker is admitted on
+            # the unit it names and the pool is checked against that unit. The
+            # two failures stay distinct: a pool no unit feeds yet is a pool that
+            # may still be provisioning and is worth retrying, while an owner that
+            # does not feed the pool it claims can never succeed.
+            units = ComputeUnitRepository(session)
+            feeding = units.list_for_machine_pool(principal.workspace_id, worker.pool)
+            if not feeding:
                 raise UpstreamUnavailableError(
-                    f"worker capacity pool is unavailable: {worker.pool_name}"
+                    f"worker capacity pool is unavailable: {worker.pool}"
                 )
-            if pool.capacity_owner_id != worker.capacity_owner_id:
-                raise ConflictError(f"worker capacity owner does not match pool {worker.pool_name}")
+            if all(unit.capacity_owner_id != worker.capacity_owner_id for unit in feeding):
+                raise ConflictError(f"worker capacity owner does not match pool {worker.pool}")
             if not principal.is_private_worker:
                 return
             if not worker.machine_id or not worker.requires_pool_selector:
@@ -722,10 +725,7 @@ class WorkerRepositoryService:
                 raise ConflictError(
                     f"worker {worker.worker_id} does not belong to registration workspace"
                 )
-            if (
-                durable_worker.machine_id != worker.machine_id
-                or durable_worker.pool != worker.pool_name
-            ):
+            if durable_worker.machine_id != worker.machine_id or durable_worker.pool != worker.pool:
                 raise ConflictError(
                     f"worker {worker.worker_id} enrollment does not match registration"
                 )
@@ -756,7 +756,7 @@ class WorkerRepositoryService:
                 durable_worker.model_copy(
                     update={
                         "machine_id": worker.machine_id,
-                        "pool": worker.pool_name,
+                        "pool": worker.pool,
                         "last_seen_at": now,
                     }
                 ),
@@ -1051,7 +1051,7 @@ class WorkerRepositoryService:
                 continue
             if compute.delete_agent_route_state(
                 route.workspace_id,
-                route.pool_name,
+                route.pool,
                 route.machine_id,
                 route.route_id,
             ):
@@ -1112,23 +1112,38 @@ class WorkerRepositoryService:
             return
         repository = RedisComputeStateRepository(self.redis)
         for route in routes:
-            if not (route.route_id and route.workspace_id and route.pool_name and route.machine_id):
+            if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
                 continue
-            repository.save_agent_route_state(route)
+            # The owner is stamped from the worker record rather than taken from
+            # the request: hot state is keyed by it, and a worker declaring which
+            # unit owns it could write into another unit's namespace.
+            worker = self.workers.get_worker(route.worker_id)
+            if worker is None or not worker.capacity_owner_id:
+                continue
+            repository.save_agent_route_state(
+                route.model_copy(update={"capacity_owner_id": worker.capacity_owner_id})
+            )
 
     def _unpublish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
             return
         repository = RedisComputeStateRepository(self.redis)
-        unique_routes = {
-            (route.workspace_id, route.pool_name, route.machine_id, route.route_id)
-            for route in routes
-            if route.route_id and route.workspace_id and route.pool_name and route.machine_id
-        }
-        for workspace_id, pool_name, machine_id, route_id in sorted(unique_routes):
+        # Deleted under the same owner key the publish path wrote, resolved the
+        # same way, or the route outlives its container.
+        unique_routes: set[tuple[str, str, str, str]] = set()
+        for route in routes:
+            if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
+                continue
+            worker = self.workers.get_worker(route.worker_id)
+            if worker is None or not worker.capacity_owner_id:
+                continue
+            unique_routes.add(
+                (route.workspace_id, worker.capacity_owner_id, route.machine_id, route.route_id)
+            )
+        for workspace_id, capacity_owner_id, machine_id, route_id in sorted(unique_routes):
             repository.delete_agent_route_state(
                 workspace_id,
-                pool_name,
+                capacity_owner_id,
                 machine_id,
                 route_id,
             )

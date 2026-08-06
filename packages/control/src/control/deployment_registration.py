@@ -189,7 +189,6 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
     resources = spec.resources
     metadata = _deployment_metadata(spec)
     pool = _deployment_pool(metadata)
-    pool_selector = _pool_name(pool)
     return StubConfig.model_validate(
         {
             "object_id": "",
@@ -250,7 +249,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                 "docker_enabled": (_metadata_optional_bool(metadata, "docker_enabled") or False),
                 "block_network": _metadata_optional_bool(metadata, "block_network") or False,
                 "allow_list": _metadata_string_list(metadata, "allow_list"),
-                "pool_selector": pool_selector,
+                "pool_selector": pool,
             },
             "env": dict(spec.env),
             "route": spec.route,
@@ -293,13 +292,15 @@ def _deployment_metadata(spec: DeploymentSpec) -> dict[str, JsonValue]:
     return metadata
 
 
-def _deployment_pool(metadata: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+def _deployment_pool(metadata: Mapping[str, JsonValue]) -> str:
+    """The scheduling group a workload named, from its decorator metadata."""
     pool = metadata.get("pool")
+    if isinstance(pool, str):
+        return pool.strip()
     if isinstance(pool, dict):
-        return dict(pool)
-    if isinstance(pool, str) and pool.strip():
-        return {"name": pool.strip()}
-    return {}
+        name = pool.get("name")
+        return name.strip() if isinstance(name, str) else ""
+    return ""
 
 
 def _deployment_autoscaler_config(spec: DeploymentSpec) -> dict[str, JsonValue]:
@@ -377,11 +378,6 @@ def _metadata_string_list(metadata: Mapping[str, JsonValue], key: str) -> list[s
         msg = f"metadata field {key!r} must be a list of strings"
         raise ValueError(msg)
     return [item for item in value if isinstance(item, str)]
-
-
-def _pool_name(pool: Mapping[str, JsonValue]) -> str:
-    value = pool.get("name")
-    return value.strip() if isinstance(value, str) else ""
 
 
 def _volume_mount_config(volume: VolumeMount) -> JsonValue:

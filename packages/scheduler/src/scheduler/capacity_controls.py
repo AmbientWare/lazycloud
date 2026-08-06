@@ -14,7 +14,7 @@ from scheduler.agent_pool import (
 from scheduler.capacity_reservations import (
     CapacityAcquisitionController,
     CapacityWorkerRepository,
-    ComputePoolCapacityController,
+    ComputeUnitCapacityController,
 )
 from scheduler.pool_drain import (
     WorkerPoolDrainContainerRepository,
@@ -41,31 +41,39 @@ class SchedulerCapacityControllerProvider:
     containers: WorkerPoolDrainContainerRepository
 
     def agent_pool_configs(self) -> list[AgentPoolConfig]:
-        configs: dict[tuple[str, str], AgentPoolConfig] = {}
-        for workspace_id, pool in self.services.compute.list_pools_across_workspaces():
-            config = agent_pool_config_from_pool(pool, workspace_id=workspace_id)
+        """One config per provisioning unit that runs agent machines.
+
+        Keyed by capacity owner, not by pool label: several units may feed one
+        group, and keying by the label would silently drop all but one of them.
+        """
+        configs: dict[str, AgentPoolConfig] = {}
+        for unit in self.services.compute.list_units_across_workspaces():
+            config = agent_pool_config_from_pool(unit)
             if config is not None:
-                configs[(config.workspace_id, config.pool_name)] = config
+                configs[config.capacity_owner_id] = config
         for state in self.compute_states.list_all_pool_states():
             config = agent_pool_config_from_compute_state(state)
-            configs[(config.workspace_id, config.pool_name)] = config
-        return [configs[key] for key in sorted(configs, key=lambda item: (item[0], item[1]))]
+            configs[config.capacity_owner_id] = config
+        return [
+            configs[key]
+            for key in sorted(
+                configs,
+                key=lambda item: (configs[item].workspace_id, configs[item].pool, item),
+            )
+        ]
 
     def capacity_acquisition_controllers(self) -> list[CapacityAcquisitionController]:
-        controllers: list[CapacityAcquisitionController] = []
-        for workspace_id, pool in self.services.compute.list_pools_across_workspaces():
-            if pool.capacity_owner_kind in {
-                CapacityOwnerKind.ManagedPool,
-                CapacityOwnerKind.PooledProvider,
-            }:
-                controllers.append(
-                    ComputePoolCapacityController(
-                        workspace_id,
-                        pool,
-                        self.services.compute,
-                        self.workers,
-                    )
-                )
+        controllers: list[CapacityAcquisitionController] = [
+            ComputeUnitCapacityController(
+                unit.workspace_id,
+                unit,
+                self.services.compute,
+                self.workers,
+            )
+            for unit in self.services.compute.list_units_across_workspaces()
+            if unit.capacity_owner_kind
+            in {CapacityOwnerKind.PooledProvider, CapacityOwnerKind.PooledProvider}
+        ]
         controllers.sort(key=lambda item: item.capacity_owner_id)
         return controllers
 

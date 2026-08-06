@@ -6,6 +6,7 @@ from typing import Protocol
 
 from pydantic import Field
 from shared.compute_enrollment import AgentCapacityState
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
@@ -44,7 +45,7 @@ class CapacityInterruption(ContractModel):
     enrollment_id: str
     credential_generation: int = Field(ge=1)
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str
     state: AgentCapacityState
     reason: str
@@ -184,7 +185,7 @@ class SchedulerCapacityInterruptionService:
         current_time = now or utc_now()
         results: list[WorkerPreemptionResult] = []
         for worker in self.workers.list_workers_on_machine(interruption.machine_id):
-            if worker.pool_name != interruption.pool_name:
+            if worker.pool != interruption.pool:
                 continue
             operation = WorkerPreemptionOperation(
                 operation_id=(

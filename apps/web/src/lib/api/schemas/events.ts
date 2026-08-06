@@ -6,7 +6,7 @@ export const workspaceChangeTopics = [
   "workloads",
   "tasks",
   "containers",
-  "compute.pools",
+  "compute.units",
   "compute.machines",
   "compute.workers",
   "compute.agents",

@@ -8,7 +8,7 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.app_slug import validate_app_slug
 from shared.bytes_transport import EncodedBytesBody
 from shared.compute_enrollment import AgentCapacityState
-from shared.compute_policy import ComputePlacementTarget
+from shared.compute_policy import MachinePool
 from shared.deployments import DeploymentKind
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
@@ -212,8 +212,8 @@ class GetOrCreateStubRequest(HttpModel):
     allow_list: list[str] = Field(default_factory=list)
     docker_enabled: bool = False
     preemptible: bool = False
-    pool: dict[str, JsonValue] = Field(default_factory=dict)
-    placement: ComputePlacementTarget | None = None
+    pool: MachinePool = MachinePool(Field(default="", max_length=240))
+    """Pool this workload lands in, empty to take the default."""
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     client_contract: ClientContract | None = None
     workspace: str = "default"

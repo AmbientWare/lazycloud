@@ -16,7 +16,6 @@ from container_worker_app import runtime as worker_runtime
 from coordination.redis_client import RedisClient
 from images.settings import ImageBuildContainerSettings
 from observability.settings import (
-    ManagedBillingClientSettings,
     UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
@@ -73,7 +72,6 @@ def _create_scheduler_app_services(
             workspace_changes=services.workspace_change_stream_settings,
             usage_metrics=UsageMetricsSettings(),
             usage_pricing=UsagePricingSettings(),
-            managed_billing=ManagedBillingClientSettings(),
         ),
         storage=SchedulerStorageSettings(
             object_store=services.object_store_settings,

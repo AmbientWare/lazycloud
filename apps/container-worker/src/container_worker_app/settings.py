@@ -17,6 +17,7 @@ from shared.app_identity import (
     OBJECT_STORE_SECRET_ACCESS_KEY,
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.compute_policy import MachinePool
 from shared.env import (
     GATEWAY_HTTP_URL_ENV,
     WORKER_PEER_RESOLVER_ADDRESS_ENV,
@@ -105,8 +106,8 @@ class WorkerSettings(BaseSettings):
         default=30.0,
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
     )
-    pool_name: str = Field(
-        default="default",
+    pool: MachinePool = Field(
+        default=MachinePool("default"),
         validation_alias="WORKER_POOL",
     )
     capacity_owner_id: str = Field(

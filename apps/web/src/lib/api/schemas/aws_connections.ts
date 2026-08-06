@@ -76,7 +76,7 @@ export const awsConnectionSchema = z
     pending_authorization: awsAuthorizationGenerationSchema.nullable(),
     retiring_authorization: awsAuthorizationGenerationSchema.nullable(),
     revision: z.number().int().positive(),
-    accepts_placement: z.boolean(),
+    hosts_workloads: z.boolean(),
     can_manage_existing_capacity: z.boolean(),
     available_actions: z.array(awsConnectionActionSchema),
     detail: z.string().max(512),

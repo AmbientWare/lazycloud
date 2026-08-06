@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from pydantic import JsonValue
+from shared.compute_policy import MachinePool
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionCloudpickleInvocation
@@ -749,10 +750,20 @@ def _stub_request_from_spec(
         allow_list=_metadata_str_list(metadata, "allow_list"),
         docker_enabled=_metadata_bool(metadata, "docker_enabled"),
         preemptible=spec.resources.preemptible,
-        pool=_metadata_mapping(metadata, "pool"),
-        placement=spec.placement,
+        pool=MachinePool(_metadata_pool_name(metadata)),
         workspace=workspace,
     )
+
+
+def _metadata_pool_name(metadata: Mapping[str, JsonValue]) -> str:
+    """The group a workload named, from the metadata its decorator wrote."""
+    pool = metadata.get("pool")
+    if isinstance(pool, str):
+        return pool.strip()
+    if isinstance(pool, dict):
+        name = pool.get("name")
+        return str(name).strip() if isinstance(name, str) else ""
+    return ""
 
 
 def _stub_volume_config(volume: VolumeMount) -> dict[str, JsonValue]:

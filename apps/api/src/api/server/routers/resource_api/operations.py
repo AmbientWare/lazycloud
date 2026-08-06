@@ -23,9 +23,6 @@ from shared.http.operations import (
     ImageBuildListResponse,
     ImageBuildRequest,
     ImageBuildResponse,
-    ProviderListResponse,
-    ProviderResponse,
-    ProviderSetRequest,
     SchedulerContainerDispatchListResponse,
     SchedulerContainerDispatchResponse,
 )
@@ -464,60 +461,6 @@ def delete_cache_entry(
     services: ApiServices = Depends(current_services),
 ) -> None:
     services.cache_storage.delete(namespace, key)
-
-
-@router.get("/api/v1/providers", response_model=ProviderListResponse, operation_id="list_providers")
-def list_providers(
-    workspace_id: read_workspace,
-    _auth: admin_access,
-    services: ApiServices = Depends(current_services),
-) -> ProviderListResponse:
-    return ProviderListResponse(
-        providers=[
-            ProviderResponse.model_validate(item)
-            for item in services.providers.list(enabled=None, workspace=workspace_id)
-        ]
-    )
-
-
-@router.post(
-    "/api/v1/providers",
-    response_model=ProviderResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="set_provider",
-)
-def set_provider(
-    request: ProviderSetRequest,
-    workspace_id: write_workspace,
-    _auth: admin_access,
-    services: ApiServices = Depends(current_services),
-) -> ProviderResponse:
-    return ProviderResponse.model_validate(
-        services.providers.set(
-            request.name,
-            kind=request.kind,
-            enabled=request.enabled,
-            priority=request.priority,
-            config=request.config,
-            labels=request.labels,
-            workspace=workspace_id,
-        )
-    )
-
-
-@router.delete(
-    "/api/v1/providers/{name}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-    operation_id="delete_provider",
-)
-def delete_provider(
-    name: str,
-    workspace_id: write_workspace,
-    _auth: admin_access,
-    services: ApiServices = Depends(current_services),
-) -> None:
-    services.providers.delete(name, workspace=workspace_id)
 
 
 @router.get("/api/v1/agents", response_model=AgentListResponse, operation_id="list_agents")

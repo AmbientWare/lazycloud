@@ -6,12 +6,15 @@ from enum import StrEnum
 from typing import Protocol
 
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
-from compute.projection import PoolConfig, normalize_pool_config
-from compute.state import ComputeAgentTokenState, ComputePoolState
+from compute.projection import PoolConfig, normalize_unit_config
+from compute.state import ComputeAgentTokenState, ComputeUnitState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
-from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_fleet import Pool
+from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityOwnerKind
+from shared.compute_policy import (
+    ComputeUnitRecord,
+    MachinePool,
+)
 from shared.contracts import ContractModel
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -20,7 +23,6 @@ from shared.scheduling import (
 )
 from shared.timestamps import utc_now
 
-AGENT_PROVIDER_NAME = "agent"
 DEFAULT_AGENT_WORKER_BUILD_VERSION = "local"
 
 
@@ -33,7 +35,7 @@ class AgentPoolWorkerAction(StrEnum):
 
 class AgentPoolConfig(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
@@ -48,7 +50,7 @@ class AgentPoolWorkerResult(ContractModel):
 
 class AgentPoolReconcileResult(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     ensured_worker_ids: list[str] = Field(default_factory=list)
     existing_worker_ids: list[str] = Field(default_factory=list)
     disabled_worker_ids: list[str] = Field(default_factory=list)
@@ -63,7 +65,7 @@ class AgentMachineRepository(Protocol):
     def list_agent_token_states(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
     ) -> list[ComputeAgentTokenState]: ...
 
 
@@ -100,11 +102,11 @@ class AgentWorkerPoolController:
         current_time = now or utc_now()
         result = AgentPoolReconcileResult(
             workspace_id=self.config.workspace_id,
-            pool_name=self.config.pool_name,
+            pool=self.config.pool,
         )
         for machine in self.machines.list_agent_token_states(
             self.config.workspace_id,
-            self.config.pool_name,
+            self.config.capacity_owner_id,
         ):
             outcome = self.ensure_machine_worker(machine, now=current_time)
             if outcome.action is AgentPoolWorkerAction.Ensured:
@@ -201,32 +203,31 @@ class SchedulerAgentPoolService:
         return [self.controller(config).reconcile(now=now) for config in configs]
 
 
-def agent_pool_config_from_pool(
-    pool: Pool,
-    *,
-    workspace_id: str,
-) -> AgentPoolConfig | None:
-    mode = pool.labels.get("mode", "")
-    if pool.provider != AGENT_PROVIDER_NAME and mode != "private":
+def agent_pool_config_from_pool(pool: ComputeUnitRecord) -> AgentPoolConfig | None:
+    """Config for a unit whose machines join, or None for one that provisions.
+
+    The unit's capacity owner kind decides. A `WorkspaceAgent` unit owns no
+    provider resources — its machines arrive by joining — so the agent pool
+    controller drives it; a unit backed by an auto-scaling group is driven by
+    the capacity controller instead.
+    """
+    if pool.capacity_owner_kind is not CapacityOwnerKind.WorkspaceAgent:
         return None
     return AgentPoolConfig(
-        workspace_id=workspace_id,
-        pool_name=pool.name,
+        workspace_id=pool.workspace_id,
+        pool=pool.pool,
         capacity_owner_id=pool.capacity_owner_id,
-        gpu_type=pool.labels.get("gpu", ""),
-        worker_build_version=pool.labels.get(
-            "worker_build_version",
-            DEFAULT_AGENT_WORKER_BUILD_VERSION,
-        ),
+        gpu_type=pool.worker_gpu_type,
+        worker_build_version=DEFAULT_AGENT_WORKER_BUILD_VERSION,
     )
 
 
-def agent_pool_config_from_compute_state(state: ComputePoolState) -> AgentPoolConfig:
+def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolConfig:
     config = _pool_config_from_metadata(state)
-    normalized = normalize_pool_config(config)
+    normalized = normalize_unit_config(config)
     return AgentPoolConfig(
         workspace_id=state.workspace_id,
-        pool_name=state.name,
+        pool=state.pool,
         capacity_owner_id=state.capacity_owner_id,
         gpu_type=(normalized.gpu[0] if normalized and normalized.gpu else ""),
         worker_build_version=str(
@@ -246,8 +247,11 @@ def agent_machine_worker_record(
     gpu_types = _machine_gpu_types(machine, config)
     return SchedulerWorkerRecord(
         worker_id=agent_machine_worker_id(machine.machine_id),
-        pool_name=config.pool_name,
-        capacity_owner_id=config.capacity_owner_id,
+        pool=config.pool,
+        # The machine's own owner, not the controller's: a joined machine in a
+        # group an auto-scaling unit also feeds carries the unit that issued its
+        # credential, which is what keeps that unit's drain from terminating it.
+        capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",
@@ -275,10 +279,23 @@ def agent_machine_schedulable(
 ) -> bool:
     return (
         machine.workspace_id == config.workspace_id
-        and machine.pool_name == config.pool_name
+        and _machine_owned_by(machine, config)
         and machine.executor == expected_executor
         and agent_machine_connected(agent_telemetry_state(machine), now=now)
     )
+
+
+def _machine_owned_by(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> bool:
+    """Whether this unit's controller owns the machine.
+
+    Several units may feed one pool, so matching on the pool label alone would
+    have every one of their controllers claim every machine in it. The worker id
+    is derived from the machine, so they would each write the same worker with a
+    different owner and alternate it on every reconcile.
+    """
+    if machine.capacity_owner_id:
+        return machine.capacity_owner_id == config.capacity_owner_id
+    return machine.pool == config.pool
 
 
 def _machine_gpu_types(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> list[str]:
@@ -289,7 +306,7 @@ def _machine_gpu_types(machine: ComputeAgentTokenState, config: AgentPoolConfig)
     return list(dict.fromkeys(values))
 
 
-def _pool_config_from_metadata(state: ComputePoolState) -> PoolConfig:
+def _pool_config_from_metadata(state: ComputeUnitState) -> PoolConfig:
     raw_config = state.metadata.get("config")
     if isinstance(raw_config, dict):
         return PoolConfig.model_validate(raw_config)

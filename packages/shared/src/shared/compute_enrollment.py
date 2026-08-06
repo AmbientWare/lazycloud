@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -86,7 +87,7 @@ class MachineBootstrapFailureReason(StringEnum):
 class TailnetCleanupTombstone(ContractModel):
     id: str
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str
     generations: list[int] = Field(default_factory=list)
     auth_key_ids: list[str] = Field(default_factory=list)

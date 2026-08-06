@@ -20,7 +20,7 @@ from shared.http.pods import CreatePodRequest, CreatePodResponse
 from typing_extensions import Self
 
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import PlacementInput, PoolInput, build_resource_metadata
+from lazycloud.abstractions.metadata import PoolInput, build_resource_metadata
 from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import volume_mounts
@@ -89,7 +89,6 @@ class PodOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
     metadata: dict[str, Any]
 
@@ -197,7 +196,6 @@ class Pod(ControlClientConfigMixin):
     docker_enabled: bool = False
     preemptible: bool = False
     pool: PoolInput = None
-    placement: PlacementInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -269,7 +267,6 @@ class Pod(ControlClientConfigMixin):
             env=self.env,
             secrets=self.secrets,
             volumes=self.volumes,
-            placement=self.placement,
             metadata=build_resource_metadata(
                 app=self._app_slug,
                 authorized=self.authorized,
@@ -310,7 +307,6 @@ class Pod(ControlClientConfigMixin):
         secrets: list[str] | None = None,
         tcp: bool | None = None,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         preemptible: bool | None = None,
     ) -> Self:
         if image is not None:
@@ -340,8 +336,6 @@ class Pod(ControlClientConfigMixin):
             self.tcp = tcp
         if pool is not None:
             self.pool = pool
-        if placement is not None:
-            self.placement = placement
         if preemptible is not None:
             self.preemptible = preemptible
         return self

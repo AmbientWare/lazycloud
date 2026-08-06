@@ -4,15 +4,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
-from database.repositories.orchestration import PoolRepository
-from shared.capacity import CapacityOwnerKind
-from shared.compute_fleet import Pool
-from shared.compute_policy import (
-    ComputePlacement,
-    ComputePlacementTarget,
-    ComputePoolRecord,
-    ComputeResourceRequirements,
-)
+from database.repositories.compute import ComputeUnitRepository
+from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord, MachinePool
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.gpu import GPU_ANY, normalize_gpu_type
@@ -33,21 +26,19 @@ class PooledCapacityOwner(Protocol):
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
-    ) -> ComputePoolRecord: ...
+    ) -> ComputeUnitRecord: ...
 
 
 class ComputeCapacityPlacementRequest(ContractModel):
     workspace_id: str
     deployment_id: str = ""
-    attached_pool: str = ""
-    requested_placement: ComputePlacementTarget | None = None
+    requested_pool: str = ""
     requirements: ComputeResourceRequirements
 
 
 @dataclass(frozen=True, slots=True)
 class ComputeCapacityPlacementResult:
-    placement: ComputePlacement
-    capacity_owner_id: str | None = None
+    pool: MachinePool
 
 
 @dataclass(slots=True)
@@ -57,49 +48,62 @@ class ComputeCapacityPlacementService:
     compute: PooledCapacityOwner
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
-        placement = self._deployment_placement(request)
-        if placement is None:
-            placement = self.policies.resolve_placement(
-                workspace=request.workspace_id,
-                requested=request.requested_placement,
-                attached_pool=request.attached_pool,
-                requirements=request.requirements,
+        """Name the pool a request lands in, provisioning a unit if none fits.
+
+        The group is the answer; the unit inside it is the capacity
+        controllers' to pick. Provisioning happens here only when no existing
+        unit in the pool can host the shape and the pool is one a connected
+        account feeds — a pool fed only by joined machines has nothing to
+        provision into and is left as it is.
+        """
+        pool = self._machine_pool_for(request)
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, request.workspace_id).id
+            units = ComputeUnitRepository(session).list_for_machine_pool(
+                workspace_id, MachinePool(pool)
             )
-        selected_pool = self._scheduler_pool(request, placement)
-        if selected_pool is not None:
-            return ComputeCapacityPlacementResult(
-                placement=placement.model_copy(update={"pool_name": selected_pool.name}),
-                capacity_owner_id=selected_pool.capacity_owner_id,
-            )
-        if placement.target is not ComputePlacementTarget.Aws:
-            return ComputeCapacityPlacementResult(placement=placement)
+        if any(_pool_supports(unit, request.requirements) for unit in units):
+            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
+        connection = self.policies.connection_for_machine_pool(
+            workspace=request.workspace_id,
+            pool=MachinePool(pool),
+        )
+        if connection is None:
+            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
         policy = self.policies.get_policy(workspace=request.workspace_id)
         aws = policy.aws
         machine_limit = (
             aws.max_gpu_instances if request.requirements.gpu_count > 0 else aws.max_cpu_instances
         )
-        pool = self.compute.prepare_pooled_capacity(
+        self.compute.prepare_pooled_capacity(
             workspace=request.workspace_id,
             requirements=request.requirements,
-            region=placement.region,
+            region=aws.default_region,
             desired_machines=0,
             workspace_machine_limit=machine_limit,
             root_volume_gib=aws.root_volume_gib,
             idle_timeout_seconds=aws.idle_timeout_seconds,
             allowed_instance_types=aws.allowed_instance_types,
         )
-        return ComputeCapacityPlacementResult(
-            placement=placement.model_copy(update={"pool_name": pool.name}),
-            capacity_owner_id=pool.capacity_owner_id,
-        )
+        return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
-    def _deployment_placement(
-        self,
-        request: ComputeCapacityPlacementRequest,
-    ) -> ComputePlacement | None:
+    def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
+        if request.requested_pool:
+            return request.requested_pool
+        deployment_pool = self._deployment_machine_pool(request)
+        if deployment_pool:
+            return deployment_pool
+        return self.policies.default_machine_pool(workspace=request.workspace_id)
+
+    def _deployment_machine_pool(self, request: ComputeCapacityPlacementRequest) -> str:
+        """The group a deployment was pinned to when it was created.
+
+        A deployment keeps the fleet it was deployed onto: a workspace that
+        later changes its default must not move workloads already running.
+        """
         if not request.deployment_id:
-            return None
+            return ""
         with self.context.database.session() as session:
             deployment = DeploymentRepository(session).get(
                 request.deployment_id,
@@ -109,45 +113,10 @@ class ComputeCapacityPlacementService:
             raise InvalidInputError(
                 f"deployment {request.deployment_id!r} was not found in the workspace"
             )
-        return deployment.resolved_placement
-
-    def _scheduler_pool(
-        self,
-        request: ComputeCapacityPlacementRequest,
-        placement: ComputePlacement,
-    ) -> Pool | None:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, request.workspace_id).id
-            pools = PoolRepository(session)
-            if placement.pool_name:
-                selected = pools.get(placement.pool_name, workspace_id=workspace_id)
-                if selected is None:
-                    raise InvalidInputError(
-                        f"attached compute pool {placement.pool_name!r} "
-                        "was not found in the workspace"
-                    )
-                if not _pool_supports(selected, request.requirements):
-                    raise InvalidInputError(
-                        f"attached compute pool {placement.pool_name!r} "
-                        "does not support the requested resources"
-                    )
-                return selected
-            if placement.target is not ComputePlacementTarget.Managed:
-                return None
-            candidates = [
-                pool
-                for pool in pools.list(workspace_id=workspace_id)
-                if pool.capacity_owner_kind is CapacityOwnerKind.WorkspaceAgent
-                and pool.default_eligible
-                and _pool_supports(pool, request.requirements)
-            ]
-        if not candidates:
-            return None
-        candidates.sort(key=lambda pool: (-pool.priority, pool.capacity_owner_id))
-        return candidates[0]
+        return deployment.pool
 
 
-def _pool_supports(pool: Pool, requirements: ComputeResourceRequirements) -> bool:
+def _pool_supports(pool: ComputeUnitRecord, requirements: ComputeResourceRequirements) -> bool:
     if pool.worker_cpu_millicores < requirements.cpu_millicores:
         return False
     if pool.worker_memory_mib < requirements.memory_mb:

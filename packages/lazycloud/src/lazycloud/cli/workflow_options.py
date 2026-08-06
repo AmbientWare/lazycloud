@@ -2,19 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from shared.compute_policy import ComputePlacementTarget
+from shared.compute_policy import MachinePool
 
-WorkflowValue = (
-    str
-    | float
-    | int
-    | bool
-    | dict[str, str]
-    | dict[str, int]
-    | list[str]
-    | ComputePlacementTarget
-    | None
-)
+WorkflowValue = str | float | int | bool | dict[str, str] | dict[str, int] | list[str] | None
 
 
 @dataclass(slots=True)
@@ -32,8 +22,7 @@ class DeploymentOverrides:
     ports: dict[str, int] = field(default_factory=dict)
     keep_warm: int | None = None
     tcp: bool | None = None
-    pool: str | None = None
-    placement: ComputePlacementTarget | None = None
+    pool: MachinePool | None = None
     preemptible: bool | None = None
     entrypoint: list[str] = field(default_factory=list)
     sync_dir: str | None = None
@@ -55,7 +44,6 @@ class DeploymentOverrides:
                 self.keep_warm is not None,
                 self.tcp is not None,
                 self.pool,
-                self.placement,
                 self.preemptible is not None,
                 self.entrypoint,
                 self.sync_dir,
@@ -79,8 +67,7 @@ def build_deployment_overrides(
     ports: list[str] | None = None,
     keep_warm: int | None = None,
     tcp: bool | None = None,
-    pool: str | None = None,
-    placement: ComputePlacementTarget | None = None,
+    pool: MachinePool | None = None,
     preemptible: bool | None = None,
     entrypoint: list[str] | None = None,
     sync_dir: str | None = None,
@@ -101,7 +88,6 @@ def build_deployment_overrides(
         keep_warm=keep_warm,
         tcp=tcp,
         pool=pool,
-        placement=placement,
         preemptible=preemptible,
         entrypoint=list(entrypoint or []),
         sync_dir=sync_dir,
@@ -127,7 +113,6 @@ def workflow_kwargs(
         "keep_warm": overrides.keep_warm,
         "tcp": overrides.tcp,
         "pool": overrides.pool,
-        "placement": overrides.placement,
         "preemptible": overrides.preemptible,
         "entrypoint": list(overrides.entrypoint),
         "sync_dir": overrides.sync_dir,

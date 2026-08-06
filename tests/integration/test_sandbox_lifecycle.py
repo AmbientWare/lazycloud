@@ -14,7 +14,6 @@ from identity.auth import AuthService
 from scheduler.autoscaling import PodAutoscalingService
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.state import SchedulerWorkerRequest
-from shared.compute_policy import ComputePlacementTarget
 from shared.container_requests import WorkerContainerRequestPayload
 from shared.containers import ContainerStatus
 from shared.http.pods import CreatePodRequest, PodSandboxUpdateTTLRequest
@@ -50,7 +49,6 @@ def test_sandbox_create_refresh_and_terminate_own_the_durable_ttl_lock(
     assert redis.exists(lock_key)
     assert 0 < redis.ttl(lock_key) <= 60
     assert scheduler.requests[0].stub_id == stub.id
-    assert scheduler.requests[0].requested_placement is ComputePlacementTarget.Aws
 
     service.sandbox_update_ttl(
         created.container_id,
@@ -175,7 +173,6 @@ def _sandbox_stub(services: ApiServices, *, keep_warm_seconds: int) -> StubRecor
     return control.update_stub_config(
         stub.id,
         fields={
-            "placement": ComputePlacementTarget.Aws,
             "runtime": {"keep_warm": keep_warm_seconds},
             "command": ["tail", "-f", "/dev/null"],
         },

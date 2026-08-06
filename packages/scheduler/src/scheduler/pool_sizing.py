@@ -6,8 +6,11 @@ from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field
-from shared.capacity import CapacityPoolPolicy, CapacityPoolSizingSnapshot
-from shared.compute_fleet import Pool
+from shared.capacity import CapacityPoolSizingSnapshot
+from shared.compute_policy import (
+    ComputeUnitRecord,
+    MachinePool,
+)
 from shared.contracts import ContractModel
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
@@ -37,7 +40,7 @@ class WorkerPoolEffectiveHeadroom(ContractModel):
 class WorkerPoolSizingPlan(ContractModel):
     action: WorkerPoolSizingAction
     capacity_owner_id: str
-    pool_name: str
+    pool: MachinePool
     current_units: int = Field(ge=0)
     target_units: int = Field(ge=0)
     headroom: WorkerPoolEffectiveHeadroom
@@ -97,7 +100,7 @@ def capacity_pool_selection_key(
 
 
 def effective_pool_headroom(
-    pool: Pool,
+    pool: ComputeUnitRecord,
     workers: Iterable[SchedulerWorkerRecord],
     *,
     reservations: Iterable[WorkerPoolSizingReservation] = (),
@@ -143,7 +146,7 @@ def effective_pool_headroom(
 
 
 def plan_worker_pool_sizing(
-    pool: Pool,
+    pool: ComputeUnitRecord,
     *,
     headroom: WorkerPoolEffectiveHeadroom,
     registered_units: int,
@@ -158,19 +161,19 @@ def plan_worker_pool_sizing(
     # straight back up to `initial_workers` on the next tick. The peak unit any
     # capacity operation ever asked for is that memory, and released rows keep it.
     initial_target_reached = (
-        registered_units >= pool.initial_workers
-        or sizing_state.peak_desired_units >= pool.initial_workers
+        registered_units >= pool.initial_machines
+        or sizing_state.peak_desired_units >= pool.initial_machines
     )
     current_units = max(registered_units, authoritative_units)
     baseline = max(
-        pool.min_workers,
-        0 if initial_target_reached else pool.initial_workers,
+        pool.min_machines,
+        0 if initial_target_reached else pool.initial_machines,
     )
     if not pool.scaling_enabled:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            pool=pool.pool,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -181,7 +184,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.Wait,
             capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            pool=pool.pool,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -194,18 +197,18 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            pool=pool.pool,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
             initial_target_reached=initial_target_reached,
             reason="worker-pool baseline and free headroom are satisfied",
         )
-    if current_units >= pool.max_workers:
+    if current_units >= pool.max_machines:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            pool=pool.pool,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -217,7 +220,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.Wait,
             capacity_owner_id=pool.capacity_owner_id,
-            pool_name=pool.name,
+            pool=pool.pool,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -228,9 +231,9 @@ def plan_worker_pool_sizing(
     return WorkerPoolSizingPlan(
         action=WorkerPoolSizingAction.ScaleUp,
         capacity_owner_id=pool.capacity_owner_id,
-        pool_name=pool.name,
+        pool=pool.pool,
         current_units=current_units,
-        target_units=min(current_units + 1, pool.max_workers),
+        target_units=min(current_units + 1, pool.max_machines),
         headroom=headroom,
         initial_target_reached=initial_target_reached,
         reason=(
@@ -242,7 +245,7 @@ def plan_worker_pool_sizing(
 
 
 def scale_up_retry_at(
-    pool: CapacityPoolPolicy,
+    pool: ComputeUnitRecord,
     state: CapacityPoolSizingSnapshot,
 ) -> datetime | None:
     """The earliest moment this pool may ask the provider for another unit.
@@ -267,7 +270,7 @@ def scale_up_retry_at(
 
 
 def _failure_retry_at(
-    pool: CapacityPoolPolicy,
+    pool: ComputeUnitRecord,
     state: CapacityPoolSizingSnapshot,
 ) -> datetime | None:
     if state.consecutive_failures <= 0 or state.last_failure_at is None:
@@ -281,7 +284,7 @@ def _failure_retry_at(
 
 
 def _below_minimum_headroom(
-    pool: CapacityPoolPolicy,
+    pool: ComputeUnitRecord,
     headroom: WorkerPoolEffectiveHeadroom,
 ) -> bool:
     return (
@@ -291,7 +294,7 @@ def _below_minimum_headroom(
     )
 
 
-def _worker_matches_pool_policy(pool: Pool, worker: SchedulerWorkerRecord) -> bool:
+def _worker_matches_pool_policy(pool: ComputeUnitRecord, worker: SchedulerWorkerRecord) -> bool:
     return (
         worker.capacity_owner_id == pool.capacity_owner_id
         and worker.total_cpu_millicores > 0

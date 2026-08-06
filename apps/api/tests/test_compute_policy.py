@@ -16,15 +16,15 @@ from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
+from control.service import ControlPlaneService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
-    ComputePoolRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeUnitRepository,
 )
-from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from gateway.settings import GatewaySettings
@@ -56,19 +56,22 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
+    LAZYCLOUD_MACHINE_POOL,
     ComputeCapacityMode,
-    ComputePlacementTarget,
-    ComputePoolRecord,
-    ComputePoolVisibility,
     ComputeResourceRequirements,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
+    MachinePool,
+    UnitName,
 )
 from shared.deployment_records import DeploymentSpec
-from shared.errors import InvalidInputError
 from shared.http.compute_policy import (
+    MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputePolicyResponse,
     WorkspaceComputeSummaryResponse,
 )
+from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from tests.url_constants import EXAMPLE_COM_URL
 
@@ -186,7 +189,7 @@ def test_workspace_policy_rejects_unavailable_catalog_selections(
         "/api/v1/compute/policy",
         json={
             "expected_revision": policy.revision,
-            "default_placement": "managed",
+            "default_pool": "lazycloud",
             "aws": {
                 **policy.aws.model_dump(mode="json"),
                 "default_region": "eu-west-1",
@@ -198,7 +201,7 @@ def test_workspace_policy_rejects_unavailable_catalog_selections(
         "/api/v1/compute/policy",
         json={
             "expected_revision": policy.revision,
-            "default_placement": "managed",
+            "default_pool": "lazycloud",
             "aws": {
                 **policy.aws.model_dump(mode="json"),
                 "default_region": "us-west-2",
@@ -232,18 +235,19 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     ready_machine_id = str(uuid4())
     now = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
-        ComputePoolRepository(session).upsert(
-            ComputePoolRecord(
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
                 id=pool_id,
                 capacity_owner_id=pool_id,
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
-                name="current-aws-inventory",
+                name=UnitName("current-aws-inventory"),
+                pool=MachinePool("aws"),
                 provider_ref=f"aws:{connection.id}",
                 provider_connection_id=connection.id,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                visibility=ComputePoolVisibility.Internal,
+                visibility=ComputeUnitVisibility.Internal,
                 region="us-east-1",
                 offer_id="us-east-1:i4i.xlarge",
                 capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",
@@ -253,7 +257,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         MachineRepository(session).upsert(
             Machine(
                 id=ready_machine_id,
-                pool="current-aws-inventory",
+                pool=MachinePool("aws"),
                 provider="aws",
                 status=ResourceStatus.Running,
                 created_at=now,
@@ -264,7 +268,8 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 workspace_id=workspace_id,
-                pool_name="current-aws-inventory",
+                capacity_owner_id=pool_id,
+                pool=MachinePool("aws"),
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -280,7 +285,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             Worker(
                 id=agent_machine_worker_id(ready_machine_id),
                 machine_id=ready_machine_id,
-                pool="current-aws-inventory",
+                pool=MachinePool("aws"),
                 status=ResourceStatus.Running,
                 last_seen_at=now,
                 created_at=now,
@@ -317,7 +322,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=agent_machine_worker_id(ready_machine_id),
-            pool_name="current-aws-inventory",
+            pool=MachinePool("aws"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=ready_machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -364,31 +369,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_inventory.data == []
 
 
-def test_policy_rejects_aws_default_without_ready_connection(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> None:
-    services = _configured_aws_services(isolated_services, request)
-    client = _client(services, request)
-    policy_response = client.get("/api/v1/compute/policy")
-    policy = WorkspaceComputePolicyResponse.model_validate_json(policy_response.content)
-
-    response = client.put(
-        "/api/v1/compute/policy",
-        json={
-            "expected_revision": policy.revision,
-            "default_placement": "aws",
-            "aws": policy.aws.model_dump(mode="json"),
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "connect and validate AWS before making it the default placement"
-    )
-
-
-def test_policy_accepts_placement_during_authorization_replacement(
+def test_policy_hosts_workloads_during_authorization_replacement(
     isolated_services: ApiServices,
 ) -> None:
     configuration = _aws_catalog_configuration()
@@ -405,139 +386,118 @@ def test_policy_accepts_placement_during_authorization_replacement(
     updated = policies.update_policy(
         workspace="default",
         expected_revision=current.revision,
-        default_placement=ComputePlacementTarget.Aws,
+        default_pool="aws",
         aws=current.aws,
     )
-    placement = policies.resolve_placement(
-        workspace="default",
-        requested=ComputePlacementTarget.Aws,
-    )
-
-    assert updated.default_placement is ComputePlacementTarget.Aws
-    assert placement.target is ComputePlacementTarget.Aws
-    assert placement.provider_ref.startswith("aws:")
+    assert updated.default_pool == "aws"
+    assert policies.default_machine_pool(workspace="default") == "aws"
 
 
-def test_explicit_placement_cannot_override_a_self_hosted_pool(
+def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
     isolated_services: ApiServices,
 ) -> None:
-    with pytest.raises(
-        InvalidInputError,
-        match="cannot combine an explicit target with a self-hosted pool",
-    ):
-        ComputeCapacityPlacementService(
-            isolated_services.context,
-            WorkspaceComputePolicyService(isolated_services.context),
-            _RecordingPooledCapacity(),
-        ).place(
-            ComputeCapacityPlacementRequest(
-                workspace_id=_workspace_id(isolated_services),
-                attached_pool="self-hosted",
-                requested_placement=ComputePlacementTarget.Aws,
-                requirements=ComputeResourceRequirements(),
-            )
-        )
+    """Placement resolves a pool; it never picks which unit inside it serves.
 
-
-def test_managed_placement_binds_workspace_agent_capacity_owner(
-    isolated_services: ApiServices,
-) -> None:
+    Two units feed one pool here. Placement answering with the pool is what
+    leaves the acquisition loop both candidates to fail over between; answering
+    with a unit would pin the request to one of them.
+    """
     workspace_id = _workspace_id(isolated_services)
-    with isolated_services.context.database.session() as session:
-        other_workspace = WorkspaceRepository(session).create(name=f"other-{uuid4()}")
-    other_owner_id = "10000000-0000-4000-8000-000000000001"
-    explicit_owner_id = "20000000-0000-4000-8000-000000000002"
-    default_owner_id = "30000000-0000-4000-8000-000000000003"
-    isolated_services.compute.create_pool(
-        "same-name",
-        workspace=other_workspace.id,
-        provider="agent",
-        capacity_owner_id=other_owner_id,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-    isolated_services.compute.create_pool(
-        "same-name",
-        workspace=workspace_id,
-        provider="agent",
-        capacity_owner_id=explicit_owner_id,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
-    isolated_services.compute.create_pool(
-        "platform-default",
-        workspace=workspace_id,
-        provider="aws",
-        default_eligible=True,
-        priority=1_000,
-        worker_cpu_millicores=8_000,
-        worker_memory_mib=16_384,
-    )
-    isolated_services.compute.create_pool(
-        "gpu-default",
-        workspace=workspace_id,
-        provider="agent",
-        default_eligible=True,
-        priority=900,
-        worker_cpu_millicores=8_000,
-        worker_memory_mib=16_384,
-        worker_gpu_type="L4",
-        worker_gpu_count=1,
-    )
-    isolated_services.compute.create_pool(
-        "agent-default",
-        workspace=workspace_id,
-        provider="agent",
-        capacity_owner_id=default_owner_id,
-        default_eligible=True,
-        priority=200,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-        worker_runtimes=("runc", "runsc"),
-    )
-    isolated_services.compute.create_pool(
-        "lower-priority-agent",
-        workspace=workspace_id,
-        provider="agent",
-        default_eligible=True,
-        priority=100,
-        worker_cpu_millicores=4_000,
-        worker_memory_mib=8_192,
-    )
+    for name, owner in (
+        ("unit-a", "10000000-0000-4000-8000-000000000001"),
+        ("unit-b", "20000000-0000-4000-8000-000000000002"),
+    ):
+        isolated_services.compute.create_unit(
+            UnitName(name),
+            workspace=workspace_id,
+            pool=MachinePool("shared-pool"),
+            provider="agent",
+            capacity_owner_id=owner,
+            worker_cpu_millicores=4_000,
+            worker_memory_mib=8_192,
+        )
+    recorder = _RecordingPooledCapacity()
     placement = ComputeCapacityPlacementService(
         isolated_services.context,
         WorkspaceComputePolicyService(isolated_services.context),
-        _RecordingPooledCapacity(),
+        recorder,
     )
-    requirements = ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024)
 
-    default_result = placement.place(
+    result = placement.place(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
-            requested_placement=ComputePlacementTarget.Managed,
-            requirements=requirements,
-        )
-    )
-    explicit_result = placement.place(
-        ComputeCapacityPlacementRequest(
-            workspace_id=workspace_id,
-            attached_pool="same-name",
-            requirements=requirements,
+            requested_pool="shared-pool",
+            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
     )
 
-    assert default_result.placement.pool_name == "agent-default"
-    assert default_result.capacity_owner_id == default_owner_id
-    assert explicit_result.placement.pool_name == "same-name"
-    assert explicit_result.capacity_owner_id == explicit_owner_id
-    with pytest.raises(InvalidInputError, match="does not support the requested resources"):
-        placement.place(
-            ComputeCapacityPlacementRequest(
-                workspace_id=workspace_id,
-                attached_pool="gpu-default",
-                requirements=requirements,
-            )
+    assert result.pool == "shared-pool"
+    # A unit in the pool already hosts this shape, so nothing is provisioned.
+    assert recorder.requests == []
+
+
+def test_placement_defaults_to_the_platform_pool_without_a_connection(
+    isolated_services: ApiServices,
+) -> None:
+    recorder = _RecordingPooledCapacity()
+    placement = ComputeCapacityPlacementService(
+        isolated_services.context,
+        WorkspaceComputePolicyService(isolated_services.context),
+        recorder,
+    )
+
+    result = placement.place(
+        ComputeCapacityPlacementRequest(
+            workspace_id=_workspace_id(isolated_services),
+            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
+    )
+
+    assert result.pool == LAZYCLOUD_MACHINE_POOL
+    # Nothing provisions into a pool no connected account feeds.
+    assert recorder.requests == []
+
+
+def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    """A caller only sees the pools its own workspace's units feed.
+
+    A pool is derived from the units feeding it rather than stored, so this
+    listing is only as scoped as the query behind it: a read across workspaces
+    would hand one tenant the names of another tenant's capacity.
+    """
+    control = ControlPlaneService(isolated_services.context)
+    caller = control.upsert_workspace("pool-listing-caller")
+    other = control.upsert_workspace("pool-listing-other")
+    isolated_services.compute.create_unit(
+        UnitName("caller-unit"),
+        workspace=caller.id,
+        pool=MachinePool("caller-pool"),
+        provider="agent",
+    )
+    isolated_services.compute.create_unit(
+        UnitName("other-unit"),
+        workspace=other.id,
+        pool=MachinePool("other-pool"),
+        provider="agent",
+    )
+    token, _record = AuthService(isolated_services.context).create_token(
+        "pool-listing-token",
+        kind=TokenKind.Workspace,
+        workspace_id=caller.id,
+    )
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+
+    response = client.get(
+        "/api/v1/compute/pools",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    pools = MachinePoolListResponse.model_validate_json(response.content)
+    assert [item.name for item in pools.data] == ["caller-pool"]
 
 
 def test_deployment_placement_is_pinned_when_workspace_default_changes(
@@ -562,7 +522,7 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
     policies.update_policy(
         workspace="default",
         expected_revision=policy.revision,
-        default_placement=ComputePlacementTarget.Aws,
+        default_pool="aws",
         aws=policy.aws,
     )
     created_after = isolated_services.deployments.deploy(
@@ -578,15 +538,13 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
             deployment_id=original.id,
-            requested_placement=ComputePlacementTarget.Aws,
             requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
     )
 
-    assert persisted_original.resolved_placement.target is ComputePlacementTarget.Managed
-    assert scheduled_original.placement.target is ComputePlacementTarget.Managed
-    assert created_after.resolved_placement.target is ComputePlacementTarget.Aws
-    assert created_after.resolved_placement.region == "us-east-1"
+    assert persisted_original.pool == LAZYCLOUD_MACHINE_POOL
+    assert scheduled_original.pool == LAZYCLOUD_MACHINE_POOL
+    assert created_after.pool == "aws"
 
 
 @dataclass(slots=True)
@@ -604,20 +562,21 @@ class _RecordingPooledCapacity:
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
-    ) -> ComputePoolRecord:
+    ) -> ComputeUnitRecord:
         del root_volume_gib, idle_timeout_seconds, allowed_instance_types
         self.requests.append(requirements)
-        return ComputePoolRecord(
+        return ComputeUnitRecord(
             id="11111111-1111-4111-8111-111111111111",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             capacity_owner_kind=CapacityOwnerKind.PooledProvider,
             capacity_owner_source=CapacityOwnerSource.Provider,
             workspace_id=workspace,
-            name="internal-aws-cpu",
+            name=UnitName("internal-aws-cpu"),
+            pool=MachinePool("aws"),
             provider_ref="aws:22222222-2222-4222-8222-222222222222",
             provider_connection_id="22222222-2222-4222-8222-222222222222",
             capacity_mode=ComputeCapacityMode.Pooled,
-            visibility=ComputePoolVisibility.Internal,
+            visibility=ComputeUnitVisibility.Internal,
             region=region,
             offer_id="us-east-1:i4i.xlarge",
             capability_key="aws:us-east-1:i4i.xlarge:amd64:runc",

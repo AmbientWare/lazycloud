@@ -23,7 +23,6 @@ SDK_OBJECTS: tuple[type[Any], ...] = (
     lazycloud.Task,
     lazycloud.Deployment,
     lazycloud.GpuType,
-    lazycloud.Pool,
     lazycloud.QueueDepthAutoscaler,
     lazycloud.RetryBackoff,
     lazycloud.RetryPolicy,

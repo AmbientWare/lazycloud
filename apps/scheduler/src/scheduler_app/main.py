@@ -15,7 +15,6 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from observability.settings import (
-    ManagedBillingClientSettings,
     UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
@@ -215,7 +214,6 @@ def build_scheduler_runtime(
             workspace_changes=WorkspaceChangeStreamSettings(),
             usage_metrics=UsageMetricsSettings(),
             usage_pricing=UsagePricingSettings(),
-            managed_billing=ManagedBillingClientSettings(),
         ),
         storage=SchedulerStorageSettings(
             object_store=S3ObjectStoreSettings(),

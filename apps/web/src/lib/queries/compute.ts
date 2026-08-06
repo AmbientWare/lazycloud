@@ -6,8 +6,9 @@ import {
   awsConnectionSchema,
   customerComputeCatalogSchema,
   customerComputeInstanceListSchema,
+  machinePoolListSchema,
   poolJoinCommandResponseSchema,
-  poolMachineListSchema,
+  unitMachineListSchema,
   workspaceComputePolicySchema,
   workerListSchema,
   type AwsConnection,
@@ -45,8 +46,8 @@ export function machinesQueryOptions(workspaceId: string) {
     queryKey: computeQueryKeys.machines(workspaceId),
     queryFn: () =>
       apiRequest(
-        withWorkspace("/api/v1/machines/self-hosted?limit=250", workspaceId),
-        poolMachineListSchema,
+        withWorkspace("/api/v1/machines/pool?pool=self-hosted&limit=250", workspaceId),
+        unitMachineListSchema,
       ),
     refetchInterval: 5_000,
     meta: workspaceLiveQueryMeta(true),
@@ -77,6 +78,15 @@ export function computeCatalogQueryOptions(workspaceId: string, enabled = true) 
         customerComputeCatalogSchema,
       ),
     staleTime: 5 * 60_000,
+  });
+}
+
+export function machinePoolsQueryOptions(workspaceId: string, enabled = true) {
+  return queryOptions({
+    queryKey: [...computeQueryKeys.root(workspaceId), "pools"] as const,
+    enabled,
+    queryFn: () =>
+      apiRequest(withWorkspace("/api/v1/compute/pools", workspaceId), machinePoolListSchema),
   });
 }
 

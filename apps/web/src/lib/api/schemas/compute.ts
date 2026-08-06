@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { appSchema, deploymentSchema } from "./apps";
-import { computePlacementTargetSchema } from "./compute_placement";
 import { stubSchema } from "./stubs";
 
 // Synced to shared.http.compute, shared.http.gateway, and
@@ -120,7 +119,7 @@ const awsWorkspaceComputePolicySchema = z
 export const workspaceComputePolicySchema = z
   .object({
     revision: z.number().int().positive(),
-    default_placement: computePlacementTargetSchema,
+    default_pool: z.string(),
     aws: awsWorkspaceComputePolicySchema,
     created_at: z.string(),
     updated_at: z.string(),
@@ -131,7 +130,7 @@ export type WorkspaceComputePolicy = z.infer<typeof workspaceComputePolicySchema
 export const workspaceComputePolicyUpdateRequestSchema = z
   .object({
     expected_revision: z.number().int().positive(),
-    default_placement: computePlacementTargetSchema,
+    default_pool: z.string(),
     aws: awsWorkspaceComputePolicySchema,
   })
   .strict();
@@ -166,6 +165,25 @@ export const customerComputeCatalogSchema = z
   })
   .strict();
 
+/** One pool a workload may name, described by the units feeding it. */
+export const machinePoolSchema = z
+  .object({
+    name: z.string(),
+    is_default: z.boolean().default(false),
+    providers: z.array(z.string()).default([]),
+    unit_count: z.number().int().nonnegative().default(0),
+    gpu_types: z.array(z.string()).default([]),
+  })
+  .strict();
+export type MachinePool = z.infer<typeof machinePoolSchema>;
+
+export const machinePoolListSchema = z
+  .object({
+    data: z.array(machinePoolSchema),
+    next: z.string(),
+  })
+  .strict();
+
 export const poolJoinCommandResponseSchema = z
   .object({
     command: z.string(),
@@ -188,11 +206,11 @@ const machinePreflightCheckSchema = z
   })
   .strict();
 
-export const poolMachineSchema = z.object({
+export const unitMachineSchema = z.object({
   id: z.string(),
   cpu: z.number(),
   memory: z.number(),
-  pool_name: z.string(),
+  pool: z.string(),
   provider_name: z.string(),
   readiness_phase: machineReadinessPhaseSchema,
   readiness_message: z.string(),
@@ -205,11 +223,11 @@ export const poolMachineSchema = z.object({
   remediation: z.array(z.string()),
   last_seen_at: z.string().nullable(),
 });
-export type PoolMachine = z.infer<typeof poolMachineSchema>;
+export type UnitMachine = z.infer<typeof unitMachineSchema>;
 
-export const poolMachineListSchema = z
+export const unitMachineListSchema = z
   .object({
-    data: z.array(poolMachineSchema),
+    data: z.array(unitMachineSchema),
     next: z.string(),
   })
   .strict();
@@ -278,7 +296,7 @@ const workerContainerSchema = z.object({
 export const workerSchema = z.object({
   id: z.string(),
   status: z.string(),
-  pool_name: z.string(),
+  pool: z.string(),
   machine_id: z.string().default(""),
   gpu: z.string().default(""),
   runtime: z.string().default(""),

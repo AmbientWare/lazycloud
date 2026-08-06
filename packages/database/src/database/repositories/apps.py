@@ -25,7 +25,6 @@ from database.tables.apps import (
     DeploymentTable,
     StubTable,
 )
-from database.tables.compute import ComputeCapacityRequestTable
 from database.tables.execution import TaskTable
 from database.tables.images import CheckpointTable
 from database.tables.orchestration import ContainerTable
@@ -512,9 +511,6 @@ class StubRepository:
             select(TaskTable.id).where(TaskTable.stub_id == stub_id).limit(1),
             select(ContainerTable.id).where(ContainerTable.stub_id == stub_id).limit(1),
             select(CheckpointTable.id).where(CheckpointTable.stub_id == stub_id).limit(1),
-            select(ComputeCapacityRequestTable.id)
-            .where(ComputeCapacityRequestTable.stub_id == stub_id)
-            .limit(1),
         )
         return any(self.session.scalar(statement) is not None for statement in statements)
 

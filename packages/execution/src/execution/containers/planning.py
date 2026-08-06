@@ -5,7 +5,6 @@ from pathlib import Path
 
 from foundation.resources import parse_memory_mib
 from pydantic import Field
-from shared.compute_policy import ComputePlacementTarget
 from shared.container_requests import (
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
     OciRuntimeName,
@@ -52,7 +51,6 @@ class ContainerSchedulingOptions(ContractModel):
     gpu_request: list[str] | None = None
     gpu_count: int = 0
     pool_selector: str = ""
-    requested_placement: ComputePlacementTarget | None = None
     runtime: OciRuntimeName | str = OciRuntimeName.Runc
     runtime_class: str = ""
     docker_enabled: bool = False

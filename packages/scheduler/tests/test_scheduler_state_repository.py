@@ -81,7 +81,7 @@ from scheduler.state import (
     reserve_concurrency,
 )
 from scheduler.workers import SchedulerWorkerAdminService
-from shared.compute_policy import ComputePlacementSource, ComputePlacementTarget
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -698,7 +698,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -726,8 +726,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
         memory_mib=100,
         gpu_type="T4",
         gpu_count=1,
-        requested_placement=ComputePlacementTarget.Aws,
-        placement_source=ComputePlacementSource.WorkspaceDefault,
+        pool_selector="aws",
         payload=request_payload,
         timestamp=now,
     )
@@ -753,8 +752,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
     requeued = _backlog_request(redis, repo)
     assert requeued.retry_count == 1
     assert requeued.container_id == "container-1"
-    assert requeued.requested_placement is ComputePlacementTarget.Aws
-    assert requeued.placement_source is ComputePlacementSource.WorkspaceDefault
+    assert requeued.pool_selector == "aws"
     assert requeued.payload == request_payload
 
     add_plan = plan_worker_capacity_change(
@@ -779,7 +777,7 @@ def test_scheduler_worker_repository_requeues_expired_worker_requests(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -829,7 +827,7 @@ def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_loc
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Pending,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -970,7 +968,7 @@ def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_delive
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -1059,7 +1057,7 @@ def test_scheduler_worker_admin_service_lists_cordons_drains_and_removes_workers
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             machine_id="machine-1",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
@@ -1241,7 +1239,7 @@ def test_scheduler_container_repository_state_indexes_and_concurrency_release(
     route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
-        pool_name="default",
+        pool=MachinePool("default"),
         machine_id="machine-1",
         worker_id="worker-1",
         port=8080,
@@ -1301,7 +1299,7 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool_name="gpu-pool",
+            pool=MachinePool("gpu-pool"),
             status=SchedulerWorkerStatus.Available,
             gpu_type="T4",
             runtime_class="runsc",
@@ -1321,7 +1319,7 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-2",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Unavailable,
             free_cpu_millicores=4000,
             free_memory_mib=4096,
@@ -1423,7 +1421,7 @@ def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -1480,7 +1478,7 @@ def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -1622,7 +1620,7 @@ def test_scheduler_dispatch_skips_durable_assignment_for_ephemeral_request(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -1668,7 +1666,7 @@ def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -1859,7 +1857,7 @@ def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -1958,7 +1956,7 @@ def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -2016,7 +2014,7 @@ def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -2223,7 +2221,7 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -2273,7 +2271,7 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
@@ -2437,7 +2435,7 @@ def test_scheduler_container_request_service_waits_for_pending_worker_without_re
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool_name="default",
+            pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Pending,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -2727,9 +2725,10 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
 
     compute.save_agent_token_state(
         ComputeAgentTokenState(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
             workspace_id="ws-1",
-            pool_name="gpu",
+            pool=MachinePool("gpu"),
             machine_id=machine_id,
             executor=DEFAULT_PRIVATE_EXECUTOR,
             cpu_millicores=4000,
@@ -2745,7 +2744,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool_name="gpu",
+            pool=MachinePool("gpu"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -2791,7 +2790,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
         agent_pool_configs=[
             AgentPoolConfig(
                 workspace_id="ws-1",
-                pool_name="gpu",
+                pool=MachinePool("gpu"),
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
             )
         ],
@@ -2825,7 +2824,7 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-one",
-            pool_name="shared-name",
+            pool=MachinePool("shared-name"),
             capacity_owner_id=owner_one,
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
@@ -2838,7 +2837,7 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-two",
-            pool_name="shared-name",
+            pool=MachinePool("shared-name"),
             capacity_owner_id=owner_two,
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=3000,
@@ -2864,12 +2863,12 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
         agent_pool_configs=[
             AgentPoolConfig(
                 workspace_id="ws-1",
-                pool_name="shared-name",
+                pool=MachinePool("shared-name"),
                 capacity_owner_id=owner_one,
             ),
             AgentPoolConfig(
                 workspace_id="ws-2",
-                pool_name="shared-name",
+                pool=MachinePool("shared-name"),
                 capacity_owner_id=owner_two,
             ),
         ],
@@ -2877,10 +2876,10 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
     )
 
     assert set(states) == {owner_one, owner_two}
-    assert states[owner_one].pool_name == "shared-name"
+    assert states[owner_one].pool == "shared-name"
     assert states[owner_one].running_containers == 1
     assert states[owner_one].free_cpu == 1
-    assert states[owner_two].pool_name == "shared-name"
+    assert states[owner_two].pool == "shared-name"
     assert states[owner_two].running_containers == 0
     assert states[owner_two].free_cpu == 3
     assert pool_states.get_state(owner_one) == states[owner_one]

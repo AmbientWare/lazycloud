@@ -17,7 +17,6 @@ from typing import (
 )
 
 from pydantic import ValidationError
-from shared.compute_fleet import Pool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
@@ -48,7 +47,6 @@ from shared.tasks import RetryPolicy, TaskPolicy
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PlacementInput,
     PoolInput,
     RetryPolicyInput,
     SchemaInput,
@@ -146,7 +144,6 @@ class FunctionOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
     metadata: dict[str, Any] | None
 
@@ -186,7 +183,6 @@ class Function(Generic[P, R]):
     docker_enabled: bool = False
     preemptible: bool = False
     pool: PoolInput = None
-    placement: PlacementInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -239,7 +235,6 @@ class Function(Generic[P, R]):
         env: Mapping[str, str] | None = None,
         secrets: Iterable[str] | None = None,
         pool: PoolInput = None,
-        placement: PlacementInput = None,
         preemptible: bool | None = None,
     ) -> Function[P, R]:
         """Apply explicit authoring overrides before preparation or invocation."""
@@ -259,8 +254,6 @@ class Function(Generic[P, R]):
             self.secrets.extend(secret for secret in secrets if secret not in self.secrets)
         if pool is not None:
             self.pool = pool
-        if placement is not None:
-            self.placement = placement
         if preemptible is not None:
             self.preemptible = preemptible
         return self
@@ -289,7 +282,6 @@ class Function(Generic[P, R]):
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
-            placement=self.placement,
             retry_policy=retry_policy_config(
                 self.retry_policy,
                 retries=self.retries,
@@ -751,8 +743,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Function[P, R]: ...
@@ -793,8 +784,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
@@ -834,8 +824,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]] | Function[P, R]:
@@ -874,7 +863,6 @@ def _function(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata or {},
         )
@@ -957,8 +945,7 @@ def _cron(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], CronJob[P, R]]:
@@ -1004,7 +991,6 @@ def _cron(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata or {},
             cron=cron,

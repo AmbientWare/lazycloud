@@ -1,6 +1,6 @@
 # Gateway Package
 
-Gateway control, backend dialing and prewarming, view projection, private-pool
+Gateway control, backend dialing and prewarming, view projection, private-unit
 gateway state, and request-event middleware, all behind explicit protocols.
 
 Broad HTTP routing and process wiring stay in apps. RPC contracts live in

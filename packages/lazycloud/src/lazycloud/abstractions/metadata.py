@@ -6,8 +6,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import JsonValue
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_fleet import Pool
-from shared.compute_policy import ComputePlacementTarget
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy, TaskPolicy, normalize_retry_policy
 
@@ -32,8 +30,13 @@ class CallableWrapper(Protocol):
 LifecycleHookReference = str | Callable[..., Any] | CallableWrapper
 LifecycleHookInput = LifecycleHookReference | Iterable[LifecycleHookReference] | None
 SchemaInput = Mapping[str, JsonValue] | DictExportable | ModelDumpable | None
-PoolInput = str | Pool | Mapping[str, JsonValue] | None
-PlacementInput = ComputePlacementTarget | None
+PoolInput = str | None
+"""A scheduling group is a label, so naming one is naming a string.
+
+There is no pool object to pass: the durable row a workload lands on is a
+provisioning unit the control plane owns and chooses, and several units may
+feed one group.
+"""
 RetryPolicyInput = RetryPolicy | Mapping[str, JsonValue] | None
 
 
@@ -139,17 +142,10 @@ def autoscaler_metadata(
 
 
 def pool_metadata(value: PoolInput, *, provider: str | None = None) -> dict[str, JsonValue]:
-    if value is None:
-        payload: dict[str, JsonValue] = {}
-    elif isinstance(value, str):
-        payload = {"name": value}
-    elif isinstance(value, ModelDumpable):
-        payload = _json_object(value.model_dump(mode="json"), field="pool")
-    else:
-        payload = _json_object(value, field="pool")
+    payload: dict[str, JsonValue] = {} if value is None else {"name": value}
     if provider:
         payload["provider"] = provider
-    return _json_object(payload, field="pool")
+    return payload
 
 
 def build_resource_metadata(

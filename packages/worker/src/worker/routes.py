@@ -4,6 +4,7 @@ import ipaddress
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.routing import (
     BACKEND_ROUTE_ADDRESS_SCHEME,
@@ -27,7 +28,7 @@ class WorkerRouteRegistrationPlan(ContractModel):
 
 class WorkerRouteContext(ContractModel):
     workspace_id: str
-    pool_name: str
+    pool: MachinePool
     machine_id: str
     worker_id: str
     container_id: str
@@ -98,7 +99,7 @@ def build_agent_backend_route(
             port=port,
         ),
         workspace_id=context.workspace_id,
-        pool_name=context.pool_name,
+        pool=MachinePool(context.pool),
         machine_id=context.machine_id,
         worker_id=context.worker_id,
         container_id=context.container_id,

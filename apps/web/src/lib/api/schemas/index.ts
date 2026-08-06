@@ -2,7 +2,6 @@ export * from "./apps";
 export * from "./aws_connections";
 export * from "./client_manifests";
 export * from "./compute";
-export * from "./compute_placement";
 export * from "./concurrency";
 export * from "./cron";
 export * from "./events";

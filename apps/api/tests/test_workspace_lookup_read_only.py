@@ -30,7 +30,7 @@ def test_authenticated_missing_workspace_requests_return_404_without_creating_ro
         headers=headers,
     )
     resource_response = client.get(
-        "/api/v1/pools",
+        "/api/v1/units",
         params={"workspace": "missing-workspace"},
         headers=headers,
     )

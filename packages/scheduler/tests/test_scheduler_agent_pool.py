@@ -12,6 +12,7 @@ from scheduler.agent_pool import (
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import SchedulerWorkerRecord
 from shared.compute_enrollment import ComputePreflightCheck
+from shared.compute_policy import MachinePool
 from shared.scheduling import WorkerUnavailableReason
 
 
@@ -30,7 +31,7 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool_name="gpu",
+            pool=MachinePool("gpu"),
             gpu_type="A4000",
         ),
         _MachineRepo([machine]),
@@ -44,7 +45,7 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
     worker = workers.get_worker(worker_id)
     assert worker is not None
     assert worker.status is SchedulerWorkerStatus.Pending
-    assert worker.pool_name == "gpu"
+    assert worker.pool == "gpu"
     assert worker.machine_id == "machine-one"
     assert worker.total_cpu_millicores == 4000
     assert worker.total_memory_mib == 8192
@@ -73,7 +74,7 @@ def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight() -> Non
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool_name="gpu",
+            pool=MachinePool("gpu"),
         ),
         _MachineRepo([machine]),
         workers,
@@ -96,7 +97,7 @@ def test_agent_worker_pool_disables_stale_machine_worker() -> None:
     worker = SchedulerWorkerRecord(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         worker_id=agent_machine_worker_id("machine-one"),
-        pool_name="gpu",
+        pool=MachinePool("gpu"),
         machine_id="machine-one",
         status=SchedulerWorkerStatus.Available,
         total_cpu_millicores=4000,
@@ -111,7 +112,7 @@ def test_agent_worker_pool_disables_stale_machine_worker() -> None:
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool_name="gpu",
+            pool=MachinePool("gpu"),
         ),
         _MachineRepo([machine]),
         workers,
@@ -132,12 +133,13 @@ class _MachineRepo:
     def list_agent_token_states(
         self,
         workspace_id: str,
-        pool_name: str,
+        capacity_owner_id: str,
     ) -> list[ComputeAgentTokenState]:
         return [
             machine
             for machine in self.machines
-            if machine.workspace_id == workspace_id and machine.pool_name == pool_name
+            if machine.workspace_id == workspace_id
+            and machine.capacity_owner_id == capacity_owner_id
         ]
 
 
@@ -188,9 +190,10 @@ def _agent_machine(
     last_heartbeat_at: datetime,
 ) -> ComputeAgentTokenState:
     return ComputeAgentTokenState(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=f"token-{machine_id}",
         workspace_id="ws-1",
-        pool_name="gpu",
+        pool=MachinePool("gpu"),
         machine_id=machine_id,
         executor=DEFAULT_PRIVATE_EXECUTOR,
         cpu_millicores=cpu_millicores,

@@ -11,9 +11,7 @@ from agent.binary import AgentBinarySettings
 from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
-from compute.billing import managed_billing_client
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
-from compute.provider_config import ProviderConfigService
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -104,7 +102,6 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    ManagedBillingClientSettings,
     UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
@@ -124,7 +121,6 @@ from provider_clients import (
     AwsProviderNodeIdentityAdapter,
     ProductionRegistryCredentialResolver,
     configured_aws_compute_catalog,
-    configured_compute_provider_registry,
     workspace_compute_provider_resolver,
 )
 from provider_clients.settings import (
@@ -276,7 +272,7 @@ class SchedulerAgentCapacityInterruptionSink:
                 enrollment_id=state.credential_id,
                 credential_generation=state.credential_generation,
                 workspace_id=state.workspace_id,
-                pool_name=state.pool_name,
+                pool=state.pool,
                 machine_id=state.machine_id,
                 state=state.capacity_state,
                 reason=state.capacity_reason,
@@ -486,7 +482,6 @@ class ApiServiceCore:
     scheduler_pool_states: RedisWorkerPoolStateRepository
     capacity_reservation_repository: RedisCapacityReservationRepository
     scheduler_workloads: SchedulerWorkloadDirectory
-    providers: ProviderConfigService
     images: ImageBuildService
     agents: AgentService
     object_storage: ObjectStorage
@@ -575,7 +570,6 @@ class ApiServices(ApiServiceCore):
         retention_settings: RetentionSettings | None = None,
         usage_metrics_settings: UsageMetricsSettings | None = None,
         usage_pricing_settings: UsagePricingSettings | None = None,
-        managed_billing_settings: ManagedBillingClientSettings | None = None,
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
         volume_filesystem: VolumeFilesystem | None = None,
@@ -642,7 +636,6 @@ class ApiServices(ApiServiceCore):
         retention_config = retention_settings or RetentionSettings()
         usage_metrics_config = usage_metrics_settings or UsageMetricsSettings()
         usage_pricing_config = usage_pricing_settings or UsagePricingSettings()
-        managed_billing_config = managed_billing_settings or ManagedBillingClientSettings()
         volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
         redis = redis_client
         stream_events = RedisEventStreamRepository(redis)
@@ -763,10 +756,6 @@ class ApiServices(ApiServiceCore):
                 interval_seconds=volume_metering_config.interval_seconds,
             )
         )
-        provider_service = ProviderConfigService(
-            context,
-            workspace_changes=workspace_changes,
-        )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
         # Connected AWS is an optional deployment shape. When it is unconfigured there is
         # no connection to resolve, and building the resolver would demand the remote
@@ -812,18 +801,8 @@ class ApiServices(ApiServiceCore):
         )
         compute = ComputeService(
             context,
-            provider_registry=configured_compute_provider_registry(
-                provider_service,
-                gateway_origin=gateway_config.public_http_url,
-                internal_origin=gateway_config.runtime_callback_http_url,
-                presigned_origin=object_store_config.presigned_endpoint_url or "",
-                tailnet_runtime=resolved_tailnet_runtime_settings,
-                tailnet_control=resolved_tailnet_control_settings,
-                backend_route=resolved_backend_route_settings,
-            ),
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap,
-            billing=managed_billing_client(managed_billing_config.to_runtime_settings()),
             usage_exporter=usage_exporter,
             scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
@@ -842,6 +821,7 @@ class ApiServices(ApiServiceCore):
             tailnet_control=resolved_tailnet_control_settings,
             backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
+            capacity_baseline=compute_policies,
         )
         placement_resources = (
             aws_composition.deployment_bucket_access if aws_composition is not None else None
@@ -1010,7 +990,6 @@ class ApiServices(ApiServiceCore):
             scheduler_pool_states=pool_state_repository,
             capacity_reservation_repository=capacity_reservation_repository,
             scheduler_workloads=scheduler_workloads,
-            providers=provider_service,
             images=images,
             agents=agents,
             object_storage=object_storage_service,
@@ -1327,7 +1306,6 @@ def _compose_api_services(
         scheduler_pool_states=core.scheduler_pool_states,
         capacity_reservation_repository=core.capacity_reservation_repository,
         scheduler_workloads=core.scheduler_workloads,
-        providers=core.providers,
         images=core.images,
         agents=core.agents,
         object_storage=core.object_storage,

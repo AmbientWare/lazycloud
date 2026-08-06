@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -9,7 +10,6 @@ from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from pydantic import BaseModel, ConfigDict
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
-from shared.compute_policy import ComputePlacementTarget
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.mounts import MountAuthMode, normalize_mount_prefix
@@ -107,12 +107,9 @@ class AwsDeploymentBucketAccessService:
                 workspace_id=workspace_id,
                 active=True,
             )
-        aws_deployments = tuple(
-            deployment
-            for deployment in deployments
-            if deployment.resolved_placement.target is ComputePlacementTarget.Aws
+        grants = _deployment_bucket_access_grants(
+            _deployments_on_connection(deployments, connection)
         )
-        grants = _deployment_bucket_access_grants(aws_deployments)
         return workspace_id, connection, grants
 
     def _mark_pending(self, connection_id: str) -> None:
@@ -151,11 +148,7 @@ class AwsDeploymentBucketAccessService:
                 active=True,
             )
             current_grants = _deployment_bucket_access_grants(
-                tuple(
-                    deployment
-                    for deployment in deployments
-                    if deployment.resolved_placement.target is ComputePlacementTarget.Aws
-                )
+                _deployments_on_connection(deployments, repository.get(connection_id))
             )
             still_current = _grants_digest(current_grants) == applied_digest
             repository.save(
@@ -172,6 +165,21 @@ class AwsDeploymentBucketAccessService:
                     }
                 )
             )
+
+
+def _deployments_on_connection(
+    deployments: Sequence[Deployment],
+    connection: AwsAccountConnection | None,
+) -> tuple[Deployment, ...]:
+    """Deployments whose pool this connection provisions into.
+
+    The pool is what ties a workload to an account now: a deployment running
+    in the pool a connection stamps on its units needs that account's bucket
+    grants, and one in any other pool does not.
+    """
+    if connection is None:
+        return ()
+    return tuple(deployment for deployment in deployments if deployment.pool == connection.pool)
 
 
 def _deployment_bucket_access_grants(

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from shared.compute_enrollment import TailnetCleanupTombstone
+from shared.compute_policy import MachinePool
 
 from database.context import ServiceContext
 from database.repositories.compute import TailnetCleanupTombstoneRepository
@@ -17,7 +18,7 @@ class DatabaseTailnetCleanupStore:
         self,
         *,
         workspace_id: str,
-        pool_name: str,
+        pool: MachinePool,
         machine_id: str,
         generations: list[int],
         auth_key_ids: list[str],
@@ -28,7 +29,7 @@ class DatabaseTailnetCleanupStore:
         with self.context.database.session() as session:
             return TailnetCleanupTombstoneRepository(session).schedule(
                 workspace_id=workspace_id,
-                pool_name=pool_name,
+                pool=pool,
                 machine_id=machine_id,
                 generations=generations,
                 auth_key_ids=auth_key_ids,

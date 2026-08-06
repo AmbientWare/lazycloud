@@ -13,7 +13,6 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from api.server.worker_repository_service import WorkerRepositoryService
 from compute.offers import ComputeOffer
-from compute.projection import PoolConfig
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import AwsAccountConnectionRepository
@@ -534,45 +533,6 @@ def test_workspace_deletion_api_requires_admin_and_returns_no_content(
     workspaces = workspace_payload["workspaces"]
     assert isinstance(workspaces, list)
     assert [item["name"] for item in workspaces if isinstance(item, dict)] == ["default"]
-
-
-def test_workspace_deletion_terminates_managed_provider_capacity(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
-) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
-    workspace = control.upsert_workspace("tenant")
-    auth = AuthService(isolated_services.context)
-    admin_token, _ = auth.create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
-    provider = _configure_workspace_provider(isolated_services, workspace=workspace.id)
-    isolated_services.compute.launch_pool_capacity(
-        PoolConfig(
-            name="tenant-pool",
-            providers=["workspace-delete"],
-            nodes=1,
-            ttl="10m",
-            max_spend=1.0,
-        ),
-        workspace=workspace.id,
-    )
-
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-
-    response = client.delete(
-        f"/api/v1/workspaces/{workspace.id}",
-        headers=_auth(admin_token),
-    )
-
-    assert response.status_code == 204
-    with isolated_services.context.database.session() as session:
-        deleted = WorkspaceRepository(session).get(workspace.id)
-    assert deleted is not None and deleted.status is WorkspaceStatus.Deleted
-    assert provider.list_machines("tenant-pool") == []
 
 
 def test_workspace_deletion_requires_aws_account_disconnect(

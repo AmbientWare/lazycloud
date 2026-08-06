@@ -14,14 +14,18 @@ from shared.http.compute import (
     ContainerRunRequest,
     ContainerWithAppPageResponse,
     MachineCreateRequest,
+    MachineJoinCommandRequest,
+    MachineJoinTokenResponse,
     MachineListResponse,
     MachineResponse,
-    PoolCreateRequest,
-    PoolJoinCommandRequest,
-    PoolJoinCommandResponse,
-    PoolListResponse,
-    PoolResponse,
-    PoolScaleResponse,
+    UnitCreateRequest,
+    UnitJoinCommandRequest,
+    UnitJoinCommandResponse,
+    UnitJoinTokenRequest,
+    UnitJoinTokenResponse,
+    UnitListResponse,
+    UnitResponse,
+    UnitScaleResponse,
     WorkerListResponse,
 )
 from shared.http.concurrency import (
@@ -53,9 +57,6 @@ from shared.http.operations import (
     ImageBuildListResponse,
     ImageBuildRequest,
     ImageBuildResponse,
-    ProviderListResponse,
-    ProviderResponse,
-    ProviderSetRequest,
     SchedulerContainerDispatchListResponse,
 )
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
@@ -264,37 +265,60 @@ class AdminApiClient:
             self._workspace_path(f"/api/v1/containers/{url_path_segment(container_id)}")
         )
 
-    def list_pools(self) -> PoolListResponse:
-        return PoolListResponse.model_validate(
-            self.channel.get(self._workspace_path("/api/v1/pools"))
+    def list_units(self) -> UnitListResponse:
+        return UnitListResponse.model_validate(
+            self.channel.get(self._workspace_path("/api/v1/units"))
         )
 
-    def create_pool(self, request: PoolCreateRequest) -> PoolResponse:
-        return PoolResponse.model_validate(
+    def create_unit(self, request: UnitCreateRequest) -> UnitResponse:
+        return UnitResponse.model_validate(
             self.channel.post(
-                self._workspace_path("/api/v1/pools"),
+                self._workspace_path("/api/v1/units"),
                 request.model_dump(mode="json"),
             )
         )
 
-    def delete_pool(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}"))
+    def delete_unit(self, unit_id: str) -> None:
+        self.channel.delete(self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}"))
 
-    def clear_pool_degradation(self, name: str) -> PoolScaleResponse:
-        return PoolScaleResponse.model_validate(
+    def clear_unit_degradation(self, unit_id: str) -> UnitScaleResponse:
+        return UnitScaleResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/clear-degradation")
+                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/clear-degradation")
             )
         )
 
-    def pool_join_command(
+    def create_pool_join_token(
         self,
-        name: str,
-        request: PoolJoinCommandRequest,
-    ) -> PoolJoinCommandResponse:
-        return PoolJoinCommandResponse.model_validate(
+        request: MachineJoinCommandRequest,
+    ) -> MachineJoinTokenResponse:
+        return MachineJoinTokenResponse.model_validate(
             self.channel.post(
-                self._workspace_path(f"/api/v1/pools/{url_path_segment(name)}/join-command"),
+                self._workspace_path("/api/v1/machines/join-token"),
+                request.model_dump(mode="json"),
+            )
+        )
+
+    def create_unit_join_token(
+        self,
+        unit_id: str,
+        request: UnitJoinTokenRequest,
+    ) -> UnitJoinTokenResponse:
+        return UnitJoinTokenResponse.model_validate(
+            self.channel.post(
+                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/join-token"),
+                request.model_dump(mode="json"),
+            )
+        )
+
+    def unit_join_command(
+        self,
+        unit_id: str,
+        request: UnitJoinCommandRequest,
+    ) -> UnitJoinCommandResponse:
+        return UnitJoinCommandResponse.model_validate(
+            self.channel.post(
+                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/join-command"),
                 request.model_dump(mode="json"),
             )
         )
@@ -396,22 +420,6 @@ class AdminApiClient:
                 )
             )
         )
-
-    def list_providers(self) -> ProviderListResponse:
-        return ProviderListResponse.model_validate(
-            self.channel.get(self._workspace_path("/api/v1/providers"))
-        )
-
-    def set_provider(self, request: ProviderSetRequest) -> ProviderResponse:
-        return ProviderResponse.model_validate(
-            self.channel.post(
-                self._workspace_path("/api/v1/providers"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def delete_provider(self, name: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/providers/{url_path_segment(name)}"))
 
     def create_image_build(self, request: ImageBuildRequest) -> ImageBuildResponse:
         return ImageBuildResponse.model_validate(

@@ -12,14 +12,14 @@ from compute.offers import ComputeOffer
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
-    ProviderPoolBootstrap,
-    ProviderPoolRequest,
-    ProviderPoolSnapshot,
+    ProviderUnitBootstrap,
+    ProviderUnitRequest,
+    ProviderUnitSnapshot,
     ResolvedComputeProvider,
 )
 from compute.service import ComputeService
 from control.service import ControlPlaneService
-from database.repositories.compute import AwsAccountConnectionRepository, ComputePoolRepository
+from database.repositories.compute import AwsAccountConnectionRepository, ComputeUnitRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.aws_connections import (
@@ -31,12 +31,12 @@ from shared.aws_connections import (
 )
 from shared.compute_policy import (
     ComputeCapacityMode,
-    ComputePoolPhase,
-    ComputePoolProviderState,
-    ComputePoolRecord,
     ComputeResourceRequirements,
+    ComputeUnitPhase,
+    ComputeUnitProviderState,
+    ComputeUnitRecord,
 )
-from shared.http.compute import PoolScaleResponse
+from shared.http.compute import UnitScaleResponse
 from shared.identity import TokenKind
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
@@ -86,46 +86,46 @@ class _PooledProvider:
             ),
         )
 
-    def ensure_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
-        return self.describe_pool(request)
+    def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return self.describe_unit(request)
 
-    def describe_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
-        return ProviderPoolSnapshot(
+    def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return ProviderUnitSnapshot(
             phase=ProviderCapacityPhase.Ready,
             resource_id="asg-pool-scale",
             desired_machines=self.desired_machines,
             max_machines=request.max_machines,
             observed_machines=self.desired_machines,
-            provider_state=ComputePoolProviderState(resource_id="asg-pool-scale"),
+            provider_state=ComputeUnitProviderState(resource_id="asg-pool-scale"),
         )
 
-    def set_pool_capacity(
+    def set_unit_capacity(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         self.capacity_calls.append((desired_machines, max_machines))
         self.desired_machines = desired_machines
-        return self.describe_pool(request.model_copy(update={"max_machines": max_machines}))
+        return self.describe_unit(request.model_copy(update={"max_machines": max_machines}))
 
     def release_machine(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
-    ) -> ProviderPoolSnapshot:
+    ) -> ProviderUnitSnapshot:
         del provider_instance_id
-        return self.describe_pool(request)
+        return self.describe_unit(request)
 
-    def delete_pool(self, request: ProviderPoolRequest) -> ProviderPoolSnapshot:
-        return self.describe_pool(request).model_copy(
+    def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return self.describe_unit(request).model_copy(
             update={"phase": ProviderCapacityPhase.Deleted}
         )
 
     def machine_storage_destroyed(
         self,
-        request: ProviderPoolRequest,
+        request: ProviderUnitRequest,
         provider_instance_id: str,
         storage_volume_ids: tuple[str, ...],
     ) -> bool:
@@ -190,7 +190,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     )
     client = client_stack.enter_context(TestClient(create_app(services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
-    path = f"/api/v1/pools/{pool.name}/scale"
+    path = f"/api/v1/units/{pool.id}/scale"
     ControlPlaneService(isolated_services.context).upsert_workspace("other")
 
     cross_workspace = client.put(
@@ -220,9 +220,9 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         headers=headers,
         json={"desired_machines": 0},
     )
-    state = client.get(f"/api/v1/pools/{pool.name}/state", headers=headers)
+    state = client.get(f"/api/v1/units/{pool.id}/state", headers=headers)
     cross_workspace_state = client.get(
-        f"/api/v1/pools/{pool.name}/state?workspace=other",
+        f"/api/v1/units/{pool.id}/state?workspace=other",
         headers=headers,
     )
 
@@ -237,20 +237,20 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     assert repeated.status_code == 200, repeated.text
     assert state.status_code == 200, state.text
     assert cross_workspace_state.status_code == 404
-    expected = PoolScaleResponse(
+    expected = UnitScaleResponse(
         name=pool.name,
         desired_machines=0,
         max_machines=10,
         observed_machines=0,
-        phase=ComputePoolPhase.Ready,
-        status=ComputePoolPhase.Ready.value,
+        phase=ComputeUnitPhase.Ready,
+        status=ComputeUnitPhase.Ready.value,
     )
-    assert PoolScaleResponse.model_validate_json(first.content) == expected
-    assert PoolScaleResponse.model_validate_json(repeated.content) == expected
-    assert PoolScaleResponse.model_validate_json(state.content) == expected
+    assert UnitScaleResponse.model_validate_json(first.content) == expected
+    assert UnitScaleResponse.model_validate_json(repeated.content) == expected
+    assert UnitScaleResponse.model_validate_json(state.content) == expected
     assert provider.capacity_calls == [(0, 10)]
     with isolated_services.context.database.session() as session:
-        stored = ComputePoolRepository(session).get_by_name(workspace_id, pool.name)
+        stored = ComputeUnitRepository(session).get_by_name(workspace_id, pool.name)
     assert stored is not None
     assert stored.desired_machines == 0
     assert stored.observed_machines == 0
@@ -297,11 +297,11 @@ class _Bootstrap:
 
     def bootstrap(
         self,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         offer: ComputeOffer,
-    ) -> ProviderPoolBootstrap:
+    ) -> ProviderUnitBootstrap:
         del offer
-        return ProviderPoolBootstrap(
+        return ProviderUnitBootstrap(
             control_plane_url="https://control.example.com",
             enrollment_request_id=pool.id,
             agent_version="0.1.0",
@@ -313,7 +313,7 @@ class _Bootstrap:
             worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         )
 
-    def release(self, pool: ComputePoolRecord) -> None:
+    def release(self, pool: ComputeUnitRecord) -> None:
         self.released.append(pool.id)
 
 

@@ -1,22 +1,12 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Protocol, Self, TypeGuard, TypeVar, overload, runtime_checkable
-from uuid import uuid4
 
 from boto3.session import Session
-from botocore.exceptions import ClientError
-from compute.offers import ComputeOffer
-from compute.providers import (
-    DirectMachineLaunchRequest,
-    ProviderMachineReference,
-    ProviderMachineStatus,
-    ProviderReconcileResult,
-)
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from shared.app_identity import NAME
 from shared.image_building.credentials import (
@@ -26,27 +16,6 @@ from shared.image_building.credentials import (
 )
 from storage.backends import ObjectBackendKind, ObjectLocation, RangeRequest
 
-from .ec2 import (
-    DEFAULT_EC2_INSTANCE_OFFERS,
-    AwsComputeRequest,
-    AwsEc2Client,
-    AwsEc2MachineDiscoveryPlan,
-    AwsEc2MachineProvisionPlan,
-    AwsEc2MachineReference,
-    AwsEc2MachineTerminationPlan,
-    AwsEc2TagKey,
-    AwsInstanceOffer,
-    AwsMachineUserData,
-    describe_instance_pages,
-    encode_machine_user_data,
-    extract_first_instance_id,
-    extract_first_instance_reference,
-    instance_states_from_describe,
-    instance_volume_ids_from_describe,
-    machine_references_from_describe,
-    select_instance_offer,
-)
-
 
 class AwsCredentialSource(StrEnum):
     Default = "default"
@@ -55,14 +24,8 @@ class AwsCredentialSource(StrEnum):
 
 
 class AwsService(StrEnum):
-    Ec2 = "ec2"
     Ecr = "ecr"
     S3 = "s3"
-
-
-class AwsProviderHealthStatus(StrEnum):
-    Ready = "ready"
-    Degraded = "degraded"
 
 
 class AwsModel(BaseModel):
@@ -174,11 +137,6 @@ class _EcrAuthorizationResponse(AwsModel):
 @runtime_checkable
 class EcrAuthorizationClient(Protocol):
     def get_authorization_token(self, *, registryIds: list[str]) -> object: ...
-
-
-class AwsProviderHealth(AwsModel):
-    status: AwsProviderHealthStatus
-    detail: str = ""
 
 
 class AwsS3Body(Protocol):
@@ -307,14 +265,6 @@ class AwsProvider:
     @overload
     def client(
         self,
-        service: Literal[AwsService.Ec2],
-        *,
-        session: None = None,
-    ) -> AwsEc2Client: ...
-
-    @overload
-    def client(
-        self,
         service: Literal[AwsService.Ecr],
         *,
         session: None = None,
@@ -333,7 +283,7 @@ class AwsProvider:
         service: AwsService,
         *,
         session: AwsClientSession[_ClientT] | None = None,
-    ) -> _ClientT | AwsEc2Client | EcrAuthorizationClient | AwsS3Client:
+    ) -> _ClientT | EcrAuthorizationClient | AwsS3Client:
         options = self.client_options(service)
         if session is not None:
             return session.client(options.service.value, **options.boto3_kwargs())
@@ -341,8 +291,6 @@ class AwsProvider:
         if not _is_runtime_client_factory(source):
             raise RuntimeError("boto3 session lacks the client factory operation")
         candidate = source.client(options.service.value, **options.boto3_kwargs())
-        if service is AwsService.Ec2 and isinstance(candidate, AwsEc2Client):
-            return candidate
         if service is AwsService.Ecr and isinstance(candidate, EcrAuthorizationClient):
             return candidate
         if service is AwsService.S3 and isinstance(candidate, AwsS3Client):
@@ -361,247 +309,6 @@ class AwsProvider:
             region=self.settings.region,
             worker_count=worker_count,
             object_buckets=object_buckets or [f"{name}-objects", f"{name}-images"],
-        )
-
-    def available_ec2_instances(self) -> list[AwsInstanceOffer]:
-        return list(DEFAULT_EC2_INSTANCE_OFFERS)
-
-    def list_offers(self) -> list[ComputeOffer]:
-        return [
-            ComputeOffer(
-                id=offer.instance_type,
-                provider="aws",
-                cloud="aws",
-                instance_type=offer.instance_type,
-                region=self.settings.region,
-                cpu_millicores=offer.spec.cpu_millicores,
-                memory_mb=offer.spec.memory_mb,
-                gpu=offer.spec.gpu or None,
-                gpu_count=offer.spec.gpu_count,
-                node_count=1,
-                available=1,
-            )
-            for offer in self.available_ec2_instances()
-        ]
-
-    def select_ec2_instance(
-        self,
-        request: AwsComputeRequest,
-        *,
-        offers: Sequence[AwsInstanceOffer] | None = None,
-    ) -> AwsInstanceOffer:
-        return select_instance_offer(request, offers=offers)
-
-    def user_data_base64(self, config: AwsMachineUserData) -> str:
-        return encode_machine_user_data(config)
-
-    def provision_machine_plan(
-        self,
-        *,
-        pool_name: str,
-        registration_token: str,
-        compute: AwsComputeRequest,
-        machine_id: str | None = None,
-        idempotency_key: str | None = None,
-        image_id: str | None = None,
-        subnet_id: str | None = None,
-    ) -> AwsEc2MachineProvisionPlan:
-        selected = self.select_ec2_instance(compute)
-        resolved_machine_id = machine_id or uuid4().hex[:8]
-        resolved_image_id = image_id or self.settings.ec2_ami
-        if not resolved_image_id:
-            msg = "AWS EC2 provisioning requires an AMI image id"
-            raise ValueError(msg)
-        if not self.settings.gateway_url:
-            msg = "AWS EC2 provisioning requires a gateway URL"
-            raise ValueError(msg)
-        tags = {
-            AwsEc2TagKey.Name.value: (
-                f"{self.settings.cluster_name}-{pool_name}-{resolved_machine_id}"
-            ),
-            AwsEc2TagKey.ClusterName.value: self.settings.cluster_name,
-            AwsEc2TagKey.PoolName.value: pool_name,
-            AwsEc2TagKey.MachineId.value: resolved_machine_id,
-            **self.settings.tags,
-        }
-        user_data = self.user_data_base64(
-            AwsMachineUserData(
-                registration_token=registration_token,
-                machine_id=resolved_machine_id,
-                gateway_url=self.settings.gateway_url,
-                install_nvidia_runtime=bool(selected.spec.gpu),
-            )
-        )
-        return AwsEc2MachineProvisionPlan(
-            machine_id=resolved_machine_id,
-            idempotency_key=idempotency_key or resolved_machine_id,
-            pool_name=pool_name,
-            instance_type=selected.instance_type,
-            image_id=resolved_image_id,
-            subnet_id=subnet_id if subnet_id is not None else self.settings.ec2_subnet_id,
-            user_data_base64=user_data,
-            tags=tags,
-            root_volume_gib=self.settings.ec2_root_volume_gib,
-        )
-
-    def _launch_plan(self, request: DirectMachineLaunchRequest) -> AwsEc2MachineProvisionPlan:
-        return self.provision_machine_plan(
-            pool_name=request.pool_name,
-            registration_token=request.registration_token,
-            compute=AwsComputeRequest(
-                cpu_millicores=request.offer.cpu_millicores,
-                memory_mb=request.offer.memory_mb,
-                gpu=request.offer.gpu or "",
-                gpu_count=request.offer.gpu_count,
-            ),
-            machine_id=request.machine_id,
-            idempotency_key=request.idempotency_key,
-        )
-
-    def provision_machine(
-        self,
-        plan: AwsEc2MachineProvisionPlan,
-        *,
-        ec2_client: AwsEc2Client | None = None,
-    ) -> str:
-        client = ec2_client if ec2_client is not None else self.client(AwsService.Ec2)
-        result = client.run_instances(**plan.run_instances_kwargs())
-        return extract_first_instance_id(result)
-
-    def launch_machine(
-        self,
-        request: DirectMachineLaunchRequest,
-        *,
-        ec2_client: AwsEc2Client | None = None,
-    ) -> ProviderMachineReference:
-        plan = self._launch_plan(request)
-        client = ec2_client if ec2_client is not None else self.client(AwsService.Ec2)
-        result = client.run_instances(**plan.run_instances_kwargs())
-        instance_id, storage_volume_ids = extract_first_instance_reference(result)
-        if not storage_volume_ids:
-            storage_volume_ids = instance_volume_ids_from_describe(
-                client.describe_instances(InstanceIds=[instance_id]),
-                instance_id,
-            )
-        if not storage_volume_ids:
-            raise RuntimeError("EC2 did not expose authoritative instance storage identities")
-        return ProviderMachineReference(
-            provider_instance_id=instance_id,
-            machine_id=plan.machine_id,
-            status=ProviderMachineStatus.Pending,
-            storage_volume_ids=storage_volume_ids,
-        )
-
-    def machine_discovery_plan(self, pool_name: str) -> AwsEc2MachineDiscoveryPlan:
-        return AwsEc2MachineDiscoveryPlan(
-            cluster_name=self.settings.cluster_name,
-            pool_name=pool_name,
-        )
-
-    def list_machines(
-        self,
-        pool_name: str,
-        *,
-        ec2_client: AwsEc2Client | None = None,
-    ) -> list[AwsEc2MachineReference]:
-        client = ec2_client if ec2_client is not None else self.client(AwsService.Ec2)
-        kwargs = self.machine_discovery_plan(pool_name).describe_instances_kwargs()
-        return machine_references_from_describe(describe_instance_pages(client, kwargs))
-
-    def terminate_machine(
-        self,
-        instance_id: str,
-        *,
-        ec2_client: AwsEc2Client | None = None,
-    ) -> None:
-        client = ec2_client if ec2_client is not None else self.client(AwsService.Ec2)
-        plan = AwsEc2MachineTerminationPlan(instance_id=instance_id)
-        client.terminate_instances(**plan.terminate_instances_kwargs())
-
-    def machine_storage_destroyed(
-        self,
-        instance_id: str,
-        storage_volume_ids: tuple[str, ...],
-        *,
-        ec2_client: AwsEc2Client | None = None,
-    ) -> bool:
-        if not storage_volume_ids:
-            return False
-        client = ec2_client if ec2_client is not None else self.client(AwsService.Ec2)
-        try:
-            response = client.describe_instances(InstanceIds=[instance_id])
-        except ClientError as exc:
-            error = exc.response.get("Error")
-            code = str(error.get("Code") or "") if isinstance(error, dict) else ""
-            if code != "InvalidInstanceID.NotFound":
-                raise
-        else:
-            states = instance_states_from_describe(response)
-            if states and any(state != "terminated" for state in states):
-                return False
-        for volume_id in storage_volume_ids:
-            try:
-                volume_response = client.describe_volumes(VolumeIds=[volume_id])
-            except ClientError as exc:
-                error = exc.response.get("Error")
-                code = str(error.get("Code") or "") if isinstance(error, dict) else ""
-                if code == "InvalidVolume.NotFound":
-                    continue
-                raise
-            volumes = volume_response.get("Volumes")
-            if isinstance(volumes, list) and volumes:
-                return False
-            return False
-        return True
-
-    def health(self, *, ec2_client: AwsEc2Client | None = None) -> AwsProviderHealth:
-        client = ec2_client if ec2_client is not None else self.client(AwsService.Ec2)
-        try:
-            client.describe_regions(AllRegions=False)
-        except Exception as exc:
-            return AwsProviderHealth(
-                status=AwsProviderHealthStatus.Degraded,
-                detail=f"{type(exc).__name__}: {exc}",
-            )
-        return AwsProviderHealth(status=AwsProviderHealthStatus.Ready)
-
-    def reconcile_machines(
-        self,
-        pool_name: str,
-        expected_machine_ids: set[str],
-        *,
-        terminate_stale: bool = False,
-        ec2_client: AwsEc2Client | None = None,
-    ) -> ProviderReconcileResult:
-        machines = self.list_machines(pool_name, ec2_client=ec2_client)
-        remote_ids = {machine.machine_id for machine in machines}
-        stale = sorted(remote_ids - expected_machine_ids)
-        terminated: list[str] = []
-        if terminate_stale:
-            by_machine_id = {machine.machine_id: machine for machine in machines}
-            for machine_id in stale:
-                self.terminate_machine(
-                    by_machine_id[machine_id].instance_id,
-                    ec2_client=ec2_client,
-                )
-                if self.machine_storage_destroyed(
-                    by_machine_id[machine_id].instance_id,
-                    by_machine_id[machine_id].storage_volume_ids,
-                    ec2_client=ec2_client,
-                ):
-                    terminated.append(machine_id)
-        return ProviderReconcileResult(
-            observed_machines=[
-                ProviderMachineReference(
-                    provider_instance_id=machine.instance_id,
-                    machine_id=machine.machine_id,
-                    storage_volume_ids=machine.storage_volume_ids,
-                )
-                for machine in machines
-            ],
-            missing_machine_ids=sorted(expected_machine_ids - remote_ids),
-            stale_machine_ids=stale,
-            terminated_machine_ids=terminated,
         )
 
     def s3_location(self, bucket: str, key: str) -> AwsS3Location:
@@ -667,8 +374,6 @@ __all__ = [
     "AwsCredentialSource",
     "AwsK3sClusterPlan",
     "AwsProvider",
-    "AwsProviderHealth",
-    "AwsProviderHealthStatus",
     "AwsProviderSettings",
     "AwsS3Location",
     "AwsS3ObjectBackend",

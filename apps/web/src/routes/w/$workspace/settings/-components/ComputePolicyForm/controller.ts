@@ -335,7 +335,7 @@ function updateRequest(
 ): WorkspaceComputePolicyUpdateRequest {
   return {
     expected_revision: base.revision,
-    default_placement: base.default_placement,
+    default_pool: base.default_pool,
     aws: {
       default_region: draft.defaultRegion,
       default_instance_type: draft.defaultInstanceType,
@@ -480,7 +480,7 @@ function applyDraftUpdate(
 function policiesEqual(left: WorkspaceComputePolicy, right: WorkspaceComputePolicy): boolean {
   return (
     left.revision === right.revision &&
-    left.default_placement === right.default_placement &&
+    left.default_pool === right.default_pool &&
     left.created_at === right.created_at &&
     left.updated_at === right.updated_at &&
     left.aws.default_region === right.aws.default_region &&

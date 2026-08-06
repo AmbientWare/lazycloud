@@ -23,7 +23,7 @@ from provider_aws import (
 )
 from pydantic import SecretStr
 from shared.aws_connections import AwsAccountConnection
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputeUnitRecord
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.provider_config import ProviderKind
 from shared.timestamps import utc_now
@@ -157,7 +157,7 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
         self,
         proof: ProviderNodeIdentityProof,
         *,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         connection: AwsAccountConnection,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity:

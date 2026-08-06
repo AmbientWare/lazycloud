@@ -5,7 +5,7 @@ from typing import Protocol
 
 from pydantic import SecretStr
 from shared.aws_connections import AwsAccountConnection
-from shared.compute_policy import ComputePoolRecord
+from shared.compute_policy import ComputeUnitRecord
 from shared.contracts import ContractModel
 from shared.provider_config import ProviderKind
 
@@ -33,7 +33,7 @@ class ProviderNodeIdentityVerifier(Protocol):
         self,
         proof: ProviderNodeIdentityProof,
         *,
-        pool: ComputePoolRecord,
+        pool: ComputeUnitRecord,
         connection: AwsAccountConnection,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity: ...

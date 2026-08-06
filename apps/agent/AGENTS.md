@@ -1,6 +1,6 @@
 # Agent App
 
-The entrypoint for the agent that runs on customer and private-pool machines:
+The entrypoint for the agent that runs on customer and private-unit machines:
 arguments, settings, daemon startup, and route-proxy wiring.
 
 Reusable agent behavior belongs in `packages/agent`; this app only assembles it

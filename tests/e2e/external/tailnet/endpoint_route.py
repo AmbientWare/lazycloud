@@ -32,7 +32,7 @@ def main() -> int:
     deadline = _support.Deadline(args.timeout)
     app_name = f"e2e_tailnet_route_{uuid4().hex[:8]}"
     os.environ["LAZYCLOUD_E2E_TAILNET_APP"] = app_name
-    os.environ["LAZYCLOUD_E2E_TAILNET_POOL"] = args.pool_name
+    os.environ["LAZYCLOUD_E2E_TAILNET_POOL"] = args.pool
     from tests.e2e.external.tailnet.workloads import tailnet_route
 
     client = ResourceControlClient.from_endpoint(

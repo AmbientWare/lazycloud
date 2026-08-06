@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field, JsonValue, model_validator
+from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
 
@@ -56,7 +57,7 @@ class BatchPlan(ContractModel):
 
 class Reservation(ContractModel):
     id: str
-    pool: str
+    pool: MachinePool
     task_id: str
     worker_id: str | None = None
     expires_at: datetime
@@ -68,7 +69,7 @@ class Reservation(ContractModel):
 
 
 class PoolHealth(ContractModel):
-    pool: str
+    pool: MachinePool
     status: PoolHealthStatus
     ready_workers: int = 0
     desired_workers: int = 0
@@ -128,7 +129,7 @@ class SchedulingRequest(ContractModel):
 
 class WorkerCapacity(ContractModel):
     worker_id: str
-    pool: str = "default"
+    pool: MachinePool = MachinePool("default")
     capacity_owner_id: str = ""
     gpu_type: str = ""
     runtime_class: str = ""
@@ -225,7 +226,7 @@ class WorkerCapacity(ContractModel):
 class PlannedDispatch(ContractModel):
     worker_id: str
     request_id: str
-    pool: str
+    pool: MachinePool
 
 
 class WorkerCapacityReservation(ContractModel):
@@ -346,7 +347,7 @@ def evaluate_pool_health(pool: str, *, ready_workers: int, desired_workers: int)
         status = PoolHealthStatus.Healthy
         reason = "ready workers meet desired count"
     return PoolHealth(
-        pool=pool,
+        pool=MachinePool(pool),
         status=status,
         ready_workers=ready_workers,
         desired_workers=desired_workers,

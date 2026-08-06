@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Generic, ParamSpec, Protocol, TypedDict, TypeVar, overload
 
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_fleet import Pool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_TASK_QUEUE_CPU,
@@ -36,7 +35,6 @@ from lazycloud.abstractions.invocation import (
 )
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PlacementInput,
     PoolInput,
     RetryPolicyInput,
     SchemaInput,
@@ -125,7 +123,6 @@ class TaskQueueOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     pool: PoolInput
-    placement: PlacementInput
     provider: str | None
     metadata: dict[str, Any] | None
 
@@ -176,8 +173,7 @@ class TaskQueueFunction(Generic[P, R]):
     outputs: SchemaInput = None
     docker_enabled: bool = False
     preemptible: bool = False
-    pool: str | Pool | Mapping[str, Any] | None = None
-    placement: PlacementInput = None
+    pool: PoolInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -256,7 +252,6 @@ class TaskQueueFunction(Generic[P, R]):
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
-            placement=self.placement,
             retry_policy=self.effective_retry_policy,
             lifecycle_hooks=lifecycle_hooks(
                 on_start=self.on_start,
@@ -626,8 +621,7 @@ def _task_queue(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TaskQueueFunction[P, R]: ...
@@ -674,8 +668,7 @@ def _task_queue(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], TaskQueueFunction[P, R]]: ...
@@ -721,8 +714,7 @@ def _task_queue(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
-    pool: str | Pool | Mapping[str, Any] | None = None,
-    placement: PlacementInput = None,
+    pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], TaskQueueFunction[P, R]] | TaskQueueFunction[P, R]:
@@ -767,7 +759,6 @@ def _task_queue(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             pool=pool,
-            placement=placement,
             provider=provider,
             metadata=metadata or {},
         )

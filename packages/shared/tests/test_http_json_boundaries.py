@@ -6,12 +6,13 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 from shared.bytes_transport import EncodedBytesBody
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
+from shared.compute_policy import MachinePool
 from shared.function_payloads import (
     FunctionJsonResult,
     FunctionPayloadEncoding,
     FunctionResultPayload,
 )
-from shared.http.compute import PoolResponse, WorkerListResponse
+from shared.http.compute import UnitResponse, WorkerListResponse
 from shared.http.gateway import (
     GetOrCreateStubRequest,
     SyncContainerWorkspaceBody,
@@ -108,7 +109,7 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
                 {
                     "id": "worker-1",
                     "status": "available",
-                    "pool_name": "default",
+                    "pool": "default",
                     "machine_id": "machine-1",
                     "created_at": NOW,
                     "updated_at": NOW,
@@ -116,8 +117,9 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
             ]
         }
     )
-    pool = PoolResponse(
+    pool = UnitResponse(
         name="default",
+        pool=MachinePool("lazycloud"),
         provider="agent",
         capacity_owner_id="6fb19db5-ddd0-478d-8f4a-cdf422ad438c",
         capacity_owner_kind=CapacityOwnerKind.WorkspaceAgent,
@@ -127,4 +129,4 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
     )
 
     assert WorkerListResponse.model_validate_json(response.model_dump_json()) == response
-    assert PoolResponse.model_validate_json(pool.model_dump_json()) == pool
+    assert UnitResponse.model_validate_json(pool.model_dump_json()) == pool

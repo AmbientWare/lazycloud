@@ -63,7 +63,7 @@ instance.terminate()
 | `block_network` / `allow_list` | Outbound network policy. |
 | `docker_enabled` | Give the pod an isolated Docker daemon. |
 | `checkpoint_enabled` | Checkpoint/restore support; `checkpoint_readiness_path` and `checkpoint_readiness_port` define an HTTP readiness probe checked before checkpointing. |
-| `pool`, `placement`, `provider`, `metadata` | Placement and custom metadata. |
+| `pool`, `provider`, `metadata` | Pool and custom metadata. |
 
 `web.configure(...)` returns the pod with updated settings for reuse, and
 `web.shell()` opens an interactive shell in a pod container.
