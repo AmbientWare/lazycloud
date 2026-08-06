@@ -46,6 +46,7 @@ from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.settings import ContainerServiceSettings
 
+from api.server.provider_compute import require_connected_aws_deployment_credentials
 from api.server.services import (
     ApiOwnedResource,
     ApiServices,
@@ -219,6 +220,8 @@ def _production_api_services() -> ApiServices:
     agent_binary_settings = release.agent_binaries
     aws_account_connection_settings = release.aws_connections
     aws_capacity_settings = release.aws_capacity
+    # Ahead of the ExitStack so this fails before anything is opened.
+    require_connected_aws_deployment_credentials(aws_account_connection_settings)
     aws_capacity_reconciliation_settings = AwsCapacityReconciliationSettings()
     redis_settings = RedisSettings()
     object_store_settings = S3ObjectStoreSettings()
