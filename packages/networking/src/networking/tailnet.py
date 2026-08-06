@@ -375,7 +375,12 @@ class TailnetRuntime:
         Forwarding is raw TCP rather than TLS-terminating on purpose. The control
         plane routes one of these ports by SNI itself, and a proxy that decrypted
         on the way through would leave nothing to route on.
+
+        A disabled tailnet answers with no address, as it does for its own device
+        name, and the caller falls back to the origin it was configured with.
         """
+        if self.options.mode is TailnetRuntimeMode.Disabled:
+            return ""
         name = _required_service_name(service)
         for port in ports:
             result = self.runner.run(
