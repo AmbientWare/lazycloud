@@ -11,12 +11,11 @@ from compute.state import (
 )
 from coordination.redis_client import RedisClient
 from shared.compute_policy import MachinePool, UnitName
+from shared.routing import AgentBackendRoute
+from tests.redis_fakes import FakeRedis
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 ORPHAN_OWNER_ID = "33333333-3333-4333-8333-333333333333"
-
-from shared.routing import AgentBackendRoute
-from tests.redis_fakes import FakeRedis
 
 
 def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:

@@ -63,6 +63,8 @@ from shared.scheduling import (
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 OTHER_OWNER_ID = "22222222-2222-4222-8222-222222222222"
+DEFAULT_UNIT_NAME = UnitName("default")
+DEFAULT_POOL = MachinePool("default")
 
 
 def _request(container_id: str, *, cpu: int = 1_000) -> SchedulerWorkerRequest:
@@ -105,8 +107,8 @@ def _repository(real_redis_actors: _RealRedisActors) -> RedisCapacityReservation
 class _Controller:
     capacity_owner_id: str = OWNER_ID
     owner_kind: CapacityOwnerKind = CapacityOwnerKind.PooledProvider
-    unit_name: UnitName = UnitName("default")
-    pool: MachinePool = MachinePool("default")
+    unit_name: UnitName = DEFAULT_UNIT_NAME
+    pool: MachinePool = DEFAULT_POOL
     registration_timeout: timedelta = timedelta(minutes=10)
     ensure_calls: list[str] = field(default_factory=list)
     release_calls: list[str] = field(default_factory=list)
