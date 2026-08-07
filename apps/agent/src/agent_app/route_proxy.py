@@ -24,6 +24,7 @@ from networking.routing import (
 from pydantic import TypeAdapter, field_validator
 from shared.app_identity import AGENT_NAME
 from shared.contracts import ContractModel
+from shared.http.errors import HttpApiError
 from shared.routing import BackendRouteState
 
 from agent_app.telemetry import (
@@ -353,7 +354,7 @@ class AgentRouteProxyService:
         }
         if dial_latency_ms > 0:
             attrs["local_dial_ms"] = str(dial_latency_ms)
-        self.client.update_agent_route_status(
+        self._report_route_status(
             UpdateAgentRouteStatusRequest(
                 agent_token=self.agent_token,
                 route_id=route_id,
@@ -460,13 +461,37 @@ class AgentRouteProxyService:
             connection.sendall(f"{address}\n".encode())
         return RouteProxyConnectionResult(local_target=address, proxied=False)
 
+    def _report_route_status(self, request: UpdateAgentRouteStatusRequest) -> bool:
+        """Report one route's status, surviving a refusal.
+
+        Reporting is how the agent converges on the control plane's view, so a
+        refusal is about that one route and never about the daemon. Letting it
+        propagate exited the process, and every restart replayed the same report
+        against the same route: one route the control plane would not accept
+        stopped the agent from serving any of them.
+        """
+        try:
+            self.client.update_agent_route_status(request)
+        except HttpApiError as exc:
+            with self._lock:
+                self._routes.pop(request.route_id, None)
+                self._failure_counts.pop(request.route_id, None)
+            self._enqueue_route_event(
+                RouteProxyEventAction.Degraded,
+                status=BackendRouteState.Degraded.value,
+                message=str(exc),
+                attrs={"route_id": request.route_id, "reason": "status update refused"},
+            )
+            return False
+        return True
+
     def _update_route_ready(self, route_id: str, local_target: str, latency_ms: int) -> None:
         attrs = {
             "local_target": local_target,
             "proxy_target": self.proxy_target,
             "local_dial_ms": str(latency_ms),
         }
-        self.client.update_agent_route_status(
+        if not self._report_route_status(
             UpdateAgentRouteStatusRequest(
                 agent_token=self.agent_token,
                 route_id=route_id,
@@ -474,7 +499,8 @@ class AgentRouteProxyService:
                 proxy_target=self.proxy_target,
                 attrs=attrs,
             )
-        )
+        ):
+            return
         self._enqueue_route_event(
             RouteProxyEventAction.Ready,
             status=BackendRouteState.Ready.value,

@@ -256,6 +256,10 @@ class AgentRouteStatusRequest(ContractModel):
 
 class AgentRouteStatusPlan(ContractModel):
     accepted: bool
+    # The route is already gone, so the report and the record agree and there is
+    # nothing to write. Distinct from a refusal: the agent is telling the truth
+    # about a route that outlived its container, which is ordinary, not an error.
+    already_gone: bool = False
     err_msg: str = ""
     previous: AgentBackendRoute | None = None
     updated: AgentBackendRoute | None = None
@@ -1085,7 +1089,12 @@ def plan_route_status_update(
     now: datetime | None = None,
 ) -> AgentRouteStatusPlan:
     if route is None:
-        return AgentRouteStatusPlan(accepted=False, err_msg="route not found")
+        # A container exits, its route is deleted, and the agent reports on it a
+        # moment later from the route set it was streamed. Refusing that made a
+        # normal race fatal: the agent raised, exited, and every restart replayed
+        # the same report. Ownership is not checked because there is no route to
+        # check it against, and nothing is read or written in reply.
+        return AgentRouteStatusPlan(accepted=True, already_gone=True)
     if (
         route.workspace_id != agent_state.workspace_id
         or route.pool != agent_state.pool
