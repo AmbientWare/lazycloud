@@ -46,14 +46,14 @@ def _print_dns_record(domain: CustomDomainResponse) -> None:
     # A wildcard is entered as the `*` label; spelling out `*.acme.com` in a form
     # that already appends the zone produces `*.acme.com.acme.com`.
     name = "*" if domain.hostname.startswith("*.") else domain.hostname
-    console.print("\nAdd this record at your DNS provider:")
+    console.print("\nAdd this record where you manage DNS for this domain:")
     console.print(
         table("DNS record", ["type", "name", "target"], [["CNAME", name, domain.cname_target]])
     )
     if domain.required_records:
         console.print(
             table(
-                "Also add",
+                "Also add these, to prove you own the domain",
                 ["type", "name", "value"],
                 [[r.type, r.name, r.value] for r in domain.required_records],
             )

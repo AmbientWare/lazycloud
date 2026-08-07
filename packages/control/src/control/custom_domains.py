@@ -154,7 +154,10 @@ class CustomDomainService:
                 domain,
                 phase=CustomDomainPhase.ActionRequired,
                 error_code=CustomDomainErrorCode.HostnameRejected,
-                error_message="the edge no longer holds this hostname",
+                error_message=(
+                    "this domain is no longer registered with the certificate provider; "
+                    "remove it here and add it again"
+                ),
             )
         return self._apply(domain, state)
 

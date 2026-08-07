@@ -84,8 +84,8 @@ export function DomainSettings({ workspaceId }: { workspaceId: string }) {
         </div>
       ) : rows.length === 0 ? (
         <p className="p-4 text-[11px] text-muted-foreground">
-          No domains yet. Every deployment already answers on a {""}
-          <code>lazycloud.dev</code> hostname; add a domain here to serve one of your own.
+          No domains yet. Every deployment already has a hostname on this platform — add a domain
+          here to serve one from a name you own.
         </p>
       ) : (
         <ul className="divide-y divide-border/80">
@@ -150,7 +150,8 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
   return (
     <div className="mt-1.5 space-y-1.5">
       <p className="text-[11px] text-muted-foreground">
-        Add this record at your DNS provider, then this row turns ready on its own.
+        Add this record where you manage DNS for this domain. It can take a few minutes to take
+        effect; nothing else is needed here.
       </p>
       <dl className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
         <dt className="text-[11px] text-muted-foreground">Type</dt>
@@ -167,7 +168,9 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
       {domain.required_records.length > 0 ? (
         <div className="space-y-1">
           <p className="text-[11px] text-muted-foreground">
-            The edge is also waiting on {domain.required_records.length === 1 ? "this" : "these"}:
+            {domain.required_records.length === 1
+              ? "Add this record too — it proves you own the domain, so a certificate can be issued for it:"
+              : "Add these records too — they prove you own the domain, so a certificate can be issued for it:"}
           </p>
           {domain.required_records.map((record) => (
             <dl
