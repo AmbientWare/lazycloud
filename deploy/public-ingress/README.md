@@ -56,6 +56,21 @@ the platform reports, and claims a hostname under it with `domain=` on the
 resource. Without the two variables the stack still serves every platform
 hostname; only the domain operations fail, and they name what is missing.
 
+The customer's CNAME has to be **DNS-only**. If their domain is also on
+Cloudflare it is easy to leave the record proxied, and a proxied record is served
+from their own zone and never reaches the custom hostname here, so verification
+sits pending with nothing on this side to see. Cloudflare reports the cause on the
+custom hostname itself:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$ZONE/custom_hostnames" \
+  | jq '.result[] | {hostname, status, verification_errors, ssl: .ssl.status}'
+```
+
+`fallback origin is not active yet` means the zone setting above is missing, not
+that the customer did anything wrong.
+
 ## Minting a tunnel
 
 Requires a Cloudflare API token with Account → Cloudflare Tunnel → Edit, Zone →
