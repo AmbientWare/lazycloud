@@ -17,6 +17,7 @@ from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
     BackendRouteResolver,
+    BackendRouteUnavailable,
     TailnetPeerResolver,
     TailnetPeerWaiter,
 )
@@ -43,6 +44,21 @@ class EndpointDispatchUnavailable(RuntimeError):
 
 class EndpointDispatchError(RuntimeError):
     pass
+
+
+class EndpointBackendUnreachable(RuntimeError):
+    """No request byte reached the backend, so another target may still be tried.
+
+    What this carries is not which error occurred but how far the exchange got.
+    Only the window before the request is written can raise it, which is why it is
+    raised where the connection is established and nowhere above: once the body has
+    left this process a second attempt would replay it, and whether the application
+    already acted on it is no longer knowable from here.
+
+    A status the application itself returned is a response, not a failure, and comes
+    back through the ordinary return. Retry policy for those belongs to the caller
+    that owns it, never to the transport.
+    """
 
 
 class EndpointDispatchStatus(StrEnum):
@@ -446,6 +462,25 @@ class EndpointHttpClient:
         return EndpointHttpResponseStream(connection=connection, response=response)
 
     def _connection(
+        self,
+        target: EndpointDispatchTarget,
+        timeout_seconds: float,
+    ) -> http.client.HTTPConnection:
+        try:
+            connection = self._unconnected(target, timeout_seconds)
+        except (OSError, BackendRouteUnavailable) as exc:
+            raise EndpointBackendUnreachable(str(exc)) from exc
+        # Connect here rather than leaving it to the first write: the handshake is
+        # the last moment at which nothing has been sent, so it is the only place a
+        # failure can still be told apart from one that may have been acted on.
+        try:
+            connection.connect()
+        except OSError as exc:
+            connection.close()
+            raise EndpointBackendUnreachable(str(exc)) from exc
+        return connection
+
+    def _unconnected(
         self,
         target: EndpointDispatchTarget,
         timeout_seconds: float,

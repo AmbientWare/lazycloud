@@ -259,7 +259,9 @@ class TaskService:
         dispatcher had already recorded.
         """
         if status is TaskStatus.Running:
-            return self._start_task(task, container_id=container_id or task.container_id)
+            return self._start_task(
+                task, container_id=container_id or task.container_id, claim=True
+            )
         with self.context.database.session() as session:
             task_repository = TaskRepository(session)
             current = task_repository.get_for_update_across_workspaces(task.id)
@@ -303,7 +305,7 @@ class TaskService:
         self._deliver_callback(updated)
         return updated
 
-    def _start_task(self, task: Task, *, container_id: str | None = None) -> Task:
+    def _start_task(self, task: Task, *, container_id: str | None = None, claim: bool) -> Task:
         resolved_container_id = optional_uuid(container_id, field="container_id")
         attempt_started = False
         with self.context.database.session() as session:
@@ -317,7 +319,8 @@ class TaskService:
                 raise ConflictError(msg)
             assigned_container_id = current.container_id or ""
             if (
-                resolved_container_id
+                claim
+                and resolved_container_id
                 and assigned_container_id
                 and assigned_container_id != resolved_container_id
             ):
@@ -552,8 +555,23 @@ class TaskService:
         tasks.sort(key=lambda item: item.created_at, reverse=True)
         return tasks
 
+    def assign(self, task: Task, *, container_id: str) -> Task:
+        """Bind a task to the container the control plane picked to serve it.
+
+        The control plane is the only party choosing, so a previous choice it has
+        moved on from is not a competing claim and does not fence this one.
+        """
+
+        return self._start_task(task, container_id=container_id, claim=False)
+
     def start(self, task_id: str, *, container_id: str | None = None) -> Task:
-        return self._start_task(self.get(task_id), container_id=container_id)
+        """Record a container's own claim on a task it was handed.
+
+        Two containers believing they own one task is what the container binding
+        refuses here, and only a claim can be the second of those two.
+        """
+
+        return self._start_task(self.get(task_id), container_id=container_id, claim=True)
 
     def finish(
         self,
