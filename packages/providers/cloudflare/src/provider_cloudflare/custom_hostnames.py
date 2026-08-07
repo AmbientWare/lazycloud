@@ -9,6 +9,7 @@ from shared.custom_domains import (
     WILDCARD_PREFIX,
     CustomDomainErrorCode,
     CustomDomainPhase,
+    DnsRecord,
     ProviderCustomHostname,
 )
 from shared.errors import InvalidInputError, UpstreamUnavailableError
@@ -129,7 +130,7 @@ def _hostname_state(result: dict[str, Any]) -> ProviderCustomHostname:
     return ProviderCustomHostname(
         provider_hostname_id=str(result.get("id") or ""),
         phase=phase,
-        verification_target=_verification_target(result),
+        required_records=_required_records(result),
         error_code=error_code,
         error_message="; ".join(errors)[:512] or None,
     )
@@ -149,10 +150,30 @@ def _phase(
     return CustomDomainPhase.ActionRequired, CustomDomainErrorCode.CertificateFailed
 
 
-def _verification_target(result: dict[str, Any]) -> str:
+def _required_records(result: dict[str, Any]) -> tuple[DnsRecord, ...]:
+    """Records still outstanding, each complete enough to be typed into a DNS form.
+
+    Only what is genuinely pending: an issued certificate leaves nothing to add, and
+    listing a satisfied record as outstanding sends a customer looking for a problem
+    that is not there.
+    """
+
+    records: list[DnsRecord] = []
+    ssl = result.get("ssl") or {}
+    for record in ssl.get("validation_records") or []:
+        name, value = record.get("txt_name"), record.get("txt_value")
+        if name and value and record.get("status") != "active":
+            records.append(DnsRecord(type="TXT", name=str(name), value=str(value)))
     ownership = result.get("ownership_verification") or {}
-    value = ownership.get("value") or ownership.get("name") or ""
-    return str(value)[:512]
+    if result.get("status") == "pending" and ownership.get("name") and ownership.get("value"):
+        records.append(
+            DnsRecord(
+                type=str(ownership.get("type") or "TXT").upper(),
+                name=str(ownership["name"]),
+                value=str(ownership["value"]),
+            )
+        )
+    return tuple(records)
 
 
 __all__ = ["API_BASE_URL", "CloudflareCustomHostnames", "build_client"]

@@ -9,6 +9,7 @@ from shared.custom_domains import (
     CustomDomain,
     CustomDomainErrorCode,
     CustomDomainPhase,
+    DnsRecord,
 )
 from shared.http.base import HttpModel
 
@@ -25,8 +26,8 @@ class CustomDomainResponse(HttpModel):
     cname_target: str = ""
     """Hostname the customer points their DNS at. The platform's own public host."""
 
-    verification_target: str = ""
-    """An extra record the edge asked for, on the rare occasion it wants one."""
+    required_records: tuple[DnsRecord, ...] = ()
+    """Anything the edge is still waiting on beyond the CNAME, ready to be created."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -47,7 +48,7 @@ def custom_domain_response(domain: CustomDomain, *, cname_target: str) -> Custom
         hostname=domain.hostname,
         phase=domain.phase,
         cname_target=cname_target,
-        verification_target=domain.verification_target,
+        required_records=domain.required_records,
         error_code=domain.error_code,
         error_message=domain.error_message,
         verified_at=domain.verified_at,

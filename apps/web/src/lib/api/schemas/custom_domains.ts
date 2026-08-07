@@ -16,14 +16,21 @@ export const customDomainErrorCodeSchema = z.enum([
 ]);
 export type CustomDomainErrorCode = z.infer<typeof customDomainErrorCodeSchema>;
 
+export const dnsRecordSchema = z.object({
+  type: z.string(),
+  name: z.string(),
+  value: z.string(),
+});
+export type DnsRecord = z.infer<typeof dnsRecordSchema>;
+
 export const customDomainSchema = z.object({
   id: z.string(),
   hostname: z.string(),
   phase: customDomainPhaseSchema,
   // The hostname the customer points their DNS at.
   cname_target: z.string().default(""),
-  // An extra record the edge asked for, on the rare occasion it wants one.
-  verification_target: z.string().default(""),
+  // Anything the edge is still waiting on beyond the CNAME.
+  required_records: z.array(dnsRecordSchema).default([]),
   error_code: customDomainErrorCodeSchema.nullable().default(null),
   error_message: z.string().nullable().default(null),
   verified_at: z.string().datetime().nullable().default(null),

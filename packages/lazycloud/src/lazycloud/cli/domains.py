@@ -17,7 +17,7 @@ def _payload(domain: CustomDomainResponse) -> dict[str, object]:
         "hostname": domain.hostname,
         "phase": domain.phase.value,
         "cname_target": domain.cname_target,
-        "verification_target": domain.verification_target,
+        "required_records": [r.model_dump() for r in domain.required_records],
         "error": domain.error_message,
         "verified_at": domain.verified_at.isoformat() if domain.verified_at else None,
     }
@@ -50,8 +50,14 @@ def _print_dns_record(domain: CustomDomainResponse) -> None:
     console.print(
         table("DNS record", ["type", "name", "target"], [["CNAME", name, domain.cname_target]])
     )
-    if domain.verification_target:
-        console.print(f"Verification record: {domain.verification_target}")
+    if domain.required_records:
+        console.print(
+            table(
+                "Also add",
+                ["type", "name", "value"],
+                [[r.type, r.name, r.value] for r in domain.required_records],
+            )
+        )
 
 
 @domain_app.command("add")

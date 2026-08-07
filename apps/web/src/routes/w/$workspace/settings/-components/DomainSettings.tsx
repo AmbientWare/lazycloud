@@ -164,11 +164,29 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
           <CopyValue value={domain.cname_target} label="record target" />
         </dd>
       </dl>
-      {domain.verification_target ? (
-        <p className="text-[11px] text-muted-foreground">
-          Also add the verification record your provider shows:{" "}
-          <code>{domain.verification_target}</code>
-        </p>
+      {domain.required_records.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-[11px] text-muted-foreground">
+            The edge is also waiting on {domain.required_records.length === 1 ? "this" : "these"}:
+          </p>
+          {domain.required_records.map((record) => (
+            <dl
+              key={`${record.type}:${record.name}:${record.value}`}
+              className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1"
+            >
+              <dt className="text-[11px] text-muted-foreground">Type</dt>
+              <dd className="mono text-[11px] text-foreground">{record.type}</dd>
+              <dt className="text-[11px] text-muted-foreground">Name</dt>
+              <dd>
+                <CopyValue value={record.name} label="record name" />
+              </dd>
+              <dt className="text-[11px] text-muted-foreground">Value</dt>
+              <dd>
+                <CopyValue value={record.value} label="record value" />
+              </dd>
+            </dl>
+          ))}
+        </div>
       ) : null}
     </div>
   );

@@ -37,6 +37,18 @@ class CustomDomainErrorCode(StringEnum):
     UpstreamUnavailable = "upstream_unavailable"
 
 
+class DnsRecord(ContractModel):
+    """One record a customer has to create, complete enough to create it.
+
+    A value on its own cannot be entered into any DNS form, so the type and the name
+    travel with it rather than being described in prose beside it.
+    """
+
+    type: str = Field(min_length=1, max_length=16)
+    name: str = Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)
+    value: str = Field(min_length=1, max_length=2048)
+
+
 class CustomDomain(ContractModel):
     """A domain a workspace has registered and may serve resources under.
 
@@ -50,8 +62,8 @@ class CustomDomain(ContractModel):
     hostname: str = Field(min_length=3, max_length=MAX_HOSTNAME_LENGTH)
     phase: CustomDomainPhase = CustomDomainPhase.AwaitingVerification
     provider_hostname_id: str | None = Field(default=None, min_length=1, max_length=128)
-    verification_target: str = ""
-    """The CNAME value the customer publishes, as the provider reported it."""
+    required_records: tuple[DnsRecord, ...] = ()
+    """Records the provider is still waiting on, beyond the routing CNAME."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -88,7 +100,9 @@ class ProviderCustomHostname(ContractModel):
 
     provider_hostname_id: str = Field(min_length=1, max_length=128)
     phase: CustomDomainPhase
-    verification_target: str = ""
+    required_records: tuple[DnsRecord, ...] = ()
+    """Records the provider is still waiting on, beyond the routing CNAME."""
+
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
 
@@ -145,6 +159,7 @@ __all__ = [
     "CustomDomainErrorCode",
     "CustomDomainPhase",
     "CustomDomainProvider",
+    "DnsRecord",
     "ProviderCustomHostname",
     "normalize_assignable_hostname",
     "normalize_registrable_domain",

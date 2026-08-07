@@ -12,6 +12,7 @@ from shared.custom_domains import (
     CustomDomainErrorCode,
     CustomDomainPhase,
     CustomDomainProvider,
+    DnsRecord,
     ProviderCustomHostname,
     normalize_registrable_domain,
 )
@@ -83,7 +84,7 @@ class CustomDomainService:
             hostname=hostname,
             phase=state.phase,
             provider_hostname_id=state.provider_hostname_id,
-            verification_target=state.verification_target,
+            required_records=state.required_records,
             error_code=state.error_code,
             error_message=state.error_message,
             last_checked_at=now,
@@ -178,7 +179,7 @@ class CustomDomainService:
         return self._settle(
             domain,
             phase=state.phase,
-            verification_target=state.verification_target,
+            required_records=state.required_records,
             error_code=state.error_code,
             error_message=state.error_message,
         )
@@ -188,7 +189,7 @@ class CustomDomainService:
         domain: CustomDomain,
         *,
         phase: CustomDomainPhase,
-        verification_target: str | None = None,
+        required_records: tuple[DnsRecord, ...] | None = None,
         error_code: CustomDomainErrorCode | None = None,
         error_message: str | None = None,
     ) -> CustomDomain:
@@ -196,10 +197,8 @@ class CustomDomainService:
         updated = domain.model_copy(
             update={
                 "phase": phase,
-                "verification_target": (
-                    domain.verification_target
-                    if verification_target is None
-                    else verification_target
+                "required_records": (
+                    domain.required_records if required_records is None else required_records
                 ),
                 "error_code": error_code,
                 "error_message": error_message,
