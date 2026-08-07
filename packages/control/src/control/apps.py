@@ -28,7 +28,12 @@ from shared.app_lifecycle import (
 )
 from shared.app_slug import validate_app_slug
 from shared.container_requests import ContainerShutdownTarget
-from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.errors import (
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+    UpstreamUnavailableError,
+)
 from shared.events import Event
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import utc_now
@@ -123,7 +128,10 @@ class AppService:
         public: bool = False,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> AppRecord:
-        app_name = validate_app_slug(name)
+        try:
+            app_name = validate_app_slug(name)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
             stub = (
