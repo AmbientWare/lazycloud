@@ -111,10 +111,51 @@ straight to a pull request. Ordered — networking first, agent artifact last.
 
 ## Release
 
-- [ ] **Publish a new agent artifact.** The shipped agent still carries the 2s
-      route-proxy timeout fixed in `bf6fd292`: `dial_local_target` passed its dial
-      budget to `socket.create_connection`, which leaves the timeout on the socket
-      for its whole life, so any proxied route quiet for two seconds was torn
-      down mid-session. Connected-AWS nodes have broken terminals and streaming
-      until a new artifact ships. Deliberately last, so it is built after the work
-      above in case any of it touches the agent.
+- [x] **Publish a new agent artifact.** Published as `branch-73aae0df`, agent
+      `9961f930`, carrying the route-proxy fix along with the first GPU AMI any
+      release has offered (`ami-06ebc2953600c9cc6`). Original entry: the shipped
+      agent still carried the 2s route-proxy timeout fixed in `bf6fd292`, so any
+      proxied route quiet for two seconds was torn down mid-session and
+      connected-AWS nodes had broken terminals and streaming.
+
+      One premise was wrong: `bf6fd292` is a commit on `feat/68-pool-split`, not
+      on `main`. The fix itself was already here — `_connect_within` clears the
+      socket timeout after the dial — so what shipped was a fix `main` had held
+      for some time with no artifact carrying it.
+
+      Publishing the GPU AMI alongside it meant baking one, and `bake.py` had
+      never successfully run. Three faults, each hidden behind the one before it,
+      are fixed in `99d8e362`:
+
+      1. **No bake could launch at all**, CPU or GPU. User data embeds the agent
+         installer, which has grown to 20.6 KB, putting the payload at 29220
+         bytes encoded against EC2's 25600 limit. Gzipping it keeps the embedded
+         installer — the property the entry above wanted — because cloud-init
+         decompresses before dispatch.
+      2. **`nvidia-driver:580` names no stream.** Amazon Linux 2023's CUDA repo
+         uses `<branch>-open` and `<branch>-dkms`, so the bake died with
+         "missing groups or modules" right after installing Docker.
+      3. **A branch is not a pin**, exactly as the constant's own comment warned.
+         `580-open` resolves today to 580.178.04, which nvproxy does not know, so
+         the bake would have paid for the whole driver install and then failed its
+         own ABI check. It now installs one exact build.
+
+      The pinned driver is **590.48.01**, the newest carried by both the CUDA repo
+      and the gVisor in `docker/Dockerfile.worker`: the repo goes on to 610.57.04
+      and nvproxy to 620.06.00, but they share nothing above it. That is a newer
+      branch than the 580 the code targeted. `_NVPROXY_SUPPORTED_DRIVERS` is now
+      what `runsc nvproxy list-supported-drivers` reports rather than a subset
+      that had drifted from it.
+
+      Two things outside the repository blocked the run and are worth knowing.
+      Publishing needs an AWS CLI new enough for S3 conditional writes, since
+      every release object is written with `--if-none-match '*'`; the host's
+      2.15.59 failed before uploading anything, and `deploy/README.md` now says
+      so. And the account's default VPC had been stripped — internet gateway
+      deleted, default route blackholed, every subnet gone — so no bake could
+      reach the network until it was restored.
+
+      Left undone deliberately: the CPU AMI is still the July 24 bake. Nodes
+      re-download the agent from the release manifest at boot rather than trusting
+      the baked copy, so a stale CPU image costs boot time and nothing else — but
+      now that `bake.py` works, a fresh one would be cheap.
