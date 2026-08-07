@@ -41,7 +41,6 @@ from sqlalchemy.orm import Session
 
 from control.context import ControlContext
 from control.deployment_cleanup import AppDeploymentLifecycleService
-from control.sandbox_urls import rewrite_persisted_sandbox_url_visibility
 
 LOGGER = logging.getLogger(__name__)
 
@@ -180,15 +179,6 @@ class AppService:
                 stub.public = public or stub.public
                 stub.updated_at = now
                 stub_repository.upsert(stub)
-            for app_stub in stub_repository.list_for_app(
-                workspace_id=record.workspace_id,
-                app_id=record.id,
-            ):
-                rewrite_persisted_sandbox_url_visibility(
-                    session,
-                    stub=app_stub,
-                    app_public=record.public,
-                )
         self._publish_change(record, change)
         if stub is not None:
             self._publish_workload_change(stub, WorkspaceChangeType.Updated)

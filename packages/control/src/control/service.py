@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from database.records.apps import StubKind, StubRecord
-from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
+from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
     GlobalTableRepository,
@@ -72,7 +72,6 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
-from control.sandbox_urls import rewrite_persisted_sandbox_url_visibility
 
 
 class WorkspaceStorageError(RuntimeError):
@@ -626,16 +625,6 @@ class ControlPlaneService:
                     name=name,
                 )
                 change = WorkspaceChangeType.Updated
-            app = (
-                AppRepository(session).get(record.app_id, workspace_id=record.workspace_id)
-                if record.app_id is not None
-                else None
-            )
-            rewrite_persisted_sandbox_url_visibility(
-                session,
-                stub=record,
-                app_public=bool(app and app.public),
-            )
         self._publish_stub_change(record, change)
         return record
 
