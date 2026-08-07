@@ -58,6 +58,11 @@ from worker.configuration import (
     WorkerPathConfiguration,
 )
 from worker.events import WorkerPoolMode
+from worker.execution import (
+    DEFAULT_CONTAINER_BRIDGE_NAME,
+    DEFAULT_CONTAINER_IPV6_SUBNET,
+    DEFAULT_CONTAINER_SUBNET,
+)
 from worker.runtime_config import OciRuntimeName
 
 from agent.binary import normalize_agent_artifact_config, normalize_agent_binary_name
@@ -95,6 +100,15 @@ class AgentInstallArch(StrEnum):
 
 class AgentWorkerNetwork(ContractModel):
     name: str = Field(default="host", pattern=DOCKER_NETWORK_NAME_PATTERN)
+    bridge_name: str = DEFAULT_CONTAINER_BRIDGE_NAME
+    bridge_subnet: str = DEFAULT_CONTAINER_SUBNET
+    bridge_ipv6_subnet: str = DEFAULT_CONTAINER_IPV6_SUBNET
+    """The container bridge this agent's workers build on the host.
+
+    A local fact about the machine rather than something the control plane assigns,
+    which is why it is not carried on the bootstrap: two agents sharing a host must be
+    told apart here, and nothing upstream knows they share one.
+    """
 
 
 class AgentJoinRequest(ContractModel):
@@ -1439,7 +1453,10 @@ def agent_gateway_http_parts(gateway_public_http_url: str) -> tuple[str, int, bo
 def build_agent_worker_config(
     bootstrap: AgentBootstrap,
     slot: AgentWorkerSlot,
+    *,
+    network: AgentWorkerNetwork | None = None,
 ) -> WorkerConfiguration:
+    selected_network = network or AgentWorkerNetwork()
     return WorkerConfiguration(
         execution=WorkerExecutionConfiguration(
             runtime=OciRuntimeName.Runsc,
@@ -1457,6 +1474,9 @@ def build_agent_worker_config(
         network=WorkerNetworkConfiguration(
             route_transport=_agent_worker_route_transport(bootstrap.transport),
             agent_bridge_network=bool(slot.network_prefix),
+            bridge_name=selected_network.bridge_name,
+            bridge_subnet=selected_network.bridge_subnet,
+            bridge_ipv6_subnet=selected_network.bridge_ipv6_subnet,
         ),
         paths=WorkerPathConfiguration(
             bundle_root=Path(AGENT_CONTAINER_TMP_PATH) / "bundles",
@@ -1574,7 +1594,7 @@ def plan_worker_container(
         env=env,
         volumes=volumes,
         docker_args=docker_args,
-        config=build_agent_worker_config(bootstrap, slot),
+        config=build_agent_worker_config(bootstrap, slot, network=selected_network),
     )
 
 

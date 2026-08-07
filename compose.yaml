@@ -494,6 +494,9 @@ services:
           --worker-route-target "$$compose_gateway" \
           --worker-runtime-http-url "$$gateway_url" \
           --worker-network "host" \
+          --worker-bridge-name "${LAZYCLOUD_COMPOSE_AGENT_WORKER_BRIDGE:-rt_br0}" \
+          --worker-bridge-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_SUBNET:-192.168.0.0/20}" \
+          --worker-bridge-ipv6-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_IPV6_SUBNET:-fd00:abcd::/64}" \
           --worker-host-alias "object-store.localhost:host-gateway" \
           --max-cpu "${LAZYCLOUD_COMPOSE_AGENT_MAX_CPU_CORES:-4}" \
           --max-memory "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}MiB" \
@@ -528,6 +531,155 @@ services:
           "test",
           "-s",
           "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}/runtime-ready.json",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  workspace-bootstrap:
+    # The second tenant. `administrator-bootstrap` creates `default` and cannot run
+    # twice, and `workspace set` records a storage document without creating the
+    # bucket it describes, so this is the only route to a workspace that can run
+    # anything.
+    image: cli:local
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
+        name="${LAZYCLOUD_COMPOSE_AGENT_2_WORKSPACE:-tenant-b}"
+        pool="${LAZYCLOUD_COMPOSE_AGENT_2_POOL:-lazycloud-b}"
+        lazycloud-admin --json workspace show "$$name" >/dev/null 2>&1 \
+          || lazycloud-admin --json workspace create "$$name" >/dev/null
+        # Every workspace defaults to the same pool name, which is the first agent's.
+        # Left alone this tenant's work is placed on the other tenant's machine, and
+        # the worker that owns it refuses the request on arrival.
+        lazycloud-admin --json compute policy update \
+          --workspace "$$name" --default-pool "$$pool" >/dev/null
+        echo "compose second workspace ready: $$name in pool $$pool"
+    environment:
+      GATEWAY_HTTP_URL: "http://control-plane:9000"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    secrets:
+      - source: lazycloud-bootstrap-administrator-token
+        target: lazycloud-administrator-token
+        mode: 0400
+
+  agent-join-token-2:
+    image: cli:local
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        state_dir="${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}"
+        token_path="$$state_dir/join-token"
+        mkdir -p "$$state_dir"
+        chmod 0700 "$$state_dir"
+        export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
+        temporary="$${token_path}.tmp"
+        rm -f "$$temporary"
+        attempt=1
+        until lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_AGENT_2_POOL:-lazycloud-b}" --ttl 15m \
+          | python -c \
+              'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.load(sys.stdin)["token"], encoding="utf-8")' \
+              "$$temporary"
+        do
+          if [ "$$attempt" -ge 30 ]; then
+            echo "no control plane issued a join credential after $$attempt attempts" >&2
+            exit 1
+          fi
+          attempt=$$((attempt + 1))
+          sleep 2
+        done
+        chmod 0600 "$$temporary"
+        mv "$$temporary" "$$token_path"
+        echo "compose second-tenant agent one-use join credential initialized"
+    environment:
+      GATEWAY_HTTP_URL: "http://control-plane:9000"
+      # The workspace this credential is minted in, and so the workspace the machine
+      # joining with it belongs to. Read from the environment by the admin client and
+      # sent as a query parameter; the bootstrap administrator token is the one
+      # credential authorized to mint across workspaces.
+      WORKSPACE_ID: "${LAZYCLOUD_COMPOSE_AGENT_2_WORKSPACE:-tenant-b}"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      workspace-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - "${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}:${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}"
+    secrets:
+      - source: lazycloud-bootstrap-administrator-token
+        target: lazycloud-administrator-token
+        mode: 0400
+
+  agent-2:
+    # The second tenant's capacity, so multi-tenant behaviour is exercised by the
+    # ordinary stack rather than assembled by hand for one test. Same image and same
+    # flags as `agent`; what differs is the five values that must, because nothing
+    # coordinates two agents sharing a host. The fingerprint decides the machine id,
+    # so a shared one makes the agents evict each other's credentials. The bridge
+    # decides which addresses its workers hand out, and each agent allocates inside
+    # its own control-plane scope, so a shared bridge is two allocators issuing one
+    # address with no lock between them.
+    image: agent:local
+    restart: unless-stopped
+    init: true
+    privileged: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
+        if [ -z "$$compose_gateway" ]; then
+          echo "Docker gateway is required for the agent-managed worker" >&2
+          exit 2
+        fi
+        gateway_url="http://$${compose_gateway}:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
+        exec lazycloud-agent join \
+          --gateway "$$gateway_url" \
+          --join-token-file "${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}/join-token" \
+          --state-dir "${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}" \
+          --hostname "${LAZYCLOUD_COMPOSE_AGENT_2_HOSTNAME:-compose-agent-2}" \
+          --machine-fingerprint "${LAZYCLOUD_COMPOSE_AGENT_2_MACHINE_FINGERPRINT:-compose-agent-2}" \
+          --worker-image "container-worker:local" \
+          --worker-route-target "$$compose_gateway" \
+          --worker-runtime-http-url "$$gateway_url" \
+          --worker-network "host" \
+          --worker-bridge-name "${LAZYCLOUD_COMPOSE_AGENT_2_WORKER_BRIDGE:-rt_br1}" \
+          --worker-bridge-subnet "${LAZYCLOUD_COMPOSE_AGENT_2_WORKER_SUBNET:-192.168.16.0/20}" \
+          --worker-bridge-ipv6-subnet "${LAZYCLOUD_COMPOSE_AGENT_2_WORKER_IPV6_SUBNET:-fd00:abce::/64}" \
+          --worker-host-alias "object-store.localhost:host-gateway" \
+          --max-cpu "${LAZYCLOUD_COMPOSE_AGENT_2_MAX_CPU_CORES:-4}" \
+          --max-memory "${LAZYCLOUD_COMPOSE_AGENT_2_MEMORY_MIB:-8192}MiB" \
+          --stream-interval-seconds "${LAZYCLOUD_COMPOSE_AGENT_STREAM_INTERVAL_SECONDS:-1}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    devices:
+      - /dev/fuse:/dev/fuse
+    environment:
+      DATA_STORAGE_BUCKET: "lazycloud-data"
+      DATA_STORAGE_ENDPOINT_URL: "http://object-store:9000"
+      DATA_STORAGE_REGION_NAME: "us-east-1"
+      DATA_STORAGE_ACCESS_KEY_ID: "lazycloud-local"
+      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
+      DATA_STORAGE_FORCE_PATH_STYLE: "true"
+    depends_on:
+      agent-join-token-2:
+        condition: service_completed_successfully
+      cache-server:
+        condition: service_healthy
+    volumes:
+      - "${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}:${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}"
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/netns:/var/run/netns
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "test",
+          "-s",
+          "${LAZYCLOUD_COMPOSE_AGENT_2_STATE_DIR:-/var/lib/lazycloud/agent-2}/runtime-ready.json",
         ]
       interval: 5s
       timeout: 3s

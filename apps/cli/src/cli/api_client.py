@@ -80,6 +80,7 @@ from shared.http.system import (
 from shared.http.usage import UsageRecordListResponse, UsageSummaryResponse
 from shared.http.workspaces import (
     WorkspaceConfigExportResponse,
+    WorkspaceCreateRequest,
     WorkspaceListResponse,
     WorkspaceResponse,
     WorkspaceSetRequest,
@@ -116,6 +117,11 @@ class AdminApiClient:
     def list_maps(self) -> MapCollectionListResponse:
         return MapCollectionListResponse.model_validate(
             self.channel.get(self._workspace_path("/api/v1/maps"))
+        )
+
+    def create_workspace(self, request: WorkspaceCreateRequest) -> WorkspaceResponse:
+        return WorkspaceResponse.model_validate(
+            self.channel.post("/api/v1/workspaces", request.model_dump(mode="json"))
         )
 
     def upsert_workspace(self, name: str, request: WorkspaceSetRequest) -> WorkspaceResponse:

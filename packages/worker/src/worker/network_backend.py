@@ -26,6 +26,7 @@ from worker.container_execution import (
 )
 from worker.events import ContainerRequestContext
 from worker.execution import (
+    DEFAULT_CONTAINER_BRIDGE_NAME,
     DEFAULT_CONTAINER_IPV6_SUBNET,
     DEFAULT_CONTAINER_SUBNET,
     TAILNET_IPV6_SUBNET,
@@ -57,9 +58,6 @@ from worker.network_slots import (
     plan_network_restriction,
 )
 
-DEFAULT_CONTAINER_BRIDGE_NAME = "rt_br0"
-DEFAULT_CONTAINER_GATEWAY_ADDRESS = "192.168.0.1"
-DEFAULT_CONTAINER_GATEWAY_ADDRESS_IPV6 = "fd00:abcd::1"
 DEFAULT_HOST_NETNS_PATH = "/var/run/netns"
 DEFAULT_NETNS_CONFIG_ROOT = "/etc/netns"
 DEFAULT_GATEWAY_EGRESS_TIMEOUT_SECONDS = 10
@@ -116,8 +114,6 @@ class AgentBridgeNetworkConfig(ContractModel):
     bridge_name: str = DEFAULT_CONTAINER_BRIDGE_NAME
     subnet: str = DEFAULT_CONTAINER_SUBNET
     ipv6_subnet: str = DEFAULT_CONTAINER_IPV6_SUBNET
-    gateway: str = DEFAULT_CONTAINER_GATEWAY_ADDRESS
-    gateway_ipv6: str = DEFAULT_CONTAINER_GATEWAY_ADDRESS_IPV6
     host_netns_path: str = DEFAULT_HOST_NETNS_PATH
     netns_config_root: str = DEFAULT_NETNS_CONFIG_ROOT
     host_resolv_conf_path: str = HOST_RESOLV_CONF_PATH
@@ -133,6 +129,17 @@ class AgentBridgeNetworkConfig(ContractModel):
         ge=1,
         le=60,
     )
+
+    @property
+    def gateway(self) -> str:
+        # Derived rather than configured: a gateway carried separately can be set
+        # outside the subnet it is supposed to front, and a second bridge makes that
+        # two values to keep in step instead of one.
+        return str(next(ipaddress.ip_network(self.subnet, strict=False).hosts()))
+
+    @property
+    def gateway_ipv6(self) -> str:
+        return str(next(ipaddress.ip_network(self.ipv6_subnet, strict=False).hosts()))
 
     @property
     def gateway_cidr(self) -> str:
@@ -214,11 +221,16 @@ class SchedulerNetworkIpAllocator:
     repository: SchedulerNetworkIpRepository
     network_prefix: str
     subnet: str = DEFAULT_CONTAINER_SUBNET
-    gateway: str = DEFAULT_CONTAINER_GATEWAY_ADDRESS
     lock_ttl_seconds: int = DEFAULT_NETWORK_LOCK_TTL_SECONDS
     lock_retries: int = DEFAULT_NETWORK_LOCK_RETRIES
     worker_id: str = ""
     _next_offset: int = 0
+
+    @property
+    def gateway(self) -> str:
+        """The address the bridge itself holds, and so the one no container may take."""
+
+        return str(next(ipaddress.ip_network(self.subnet, strict=False).hosts()))
 
     def acquire_network_lock(self) -> str:
         lock = self.repository.set_network_lock(
@@ -420,7 +432,10 @@ class AgentBridgeNetworkBackend:
         if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
             raise RuntimeError("worker public gateway URL must be an HTTP origin")
         origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-        probe_id = f"netcheck-{self.config.bridge_name}"
+        # The worker, not just the bridge: the veth pair this name derives is created
+        # and unconditionally deleted in the host namespace, so two workers probing
+        # under one name tear down each other's in-flight check.
+        probe_id = f"netcheck-{self.config.bridge_name}-{self.ip_allocator.worker_id}".rstrip("-")
         reservation = self.ip_allocator.reserve_probe_ip()
         context = ContainerExecutionContext(
             request=ContainerRequestContext(container_id=probe_id),
@@ -634,6 +649,8 @@ class AgentBridgeNetworkBackend:
             container_id,
             ip_address,
             ipv6_enabled=capabilities.ipv6_enabled,
+            ipv4_subnet=self.config.subnet,
+            ipv6_subnet=self.config.ipv6_subnet,
         )
         with self._policy_lock:
             commands = [
@@ -817,7 +834,43 @@ class AgentBridgeNetworkBackend:
             )
             self.system.run(create)
             commands.append(create)
+            return commands
+        commands.append(self._require_bridge_owns_subnet())
         return commands
+
+    def _require_bridge_owns_subnet(self) -> NetworkCommand:
+        """Refuse a bridge that is already fronting a different network.
+
+        Two agents on one host each address containers inside their own control-plane
+        scope, so a bridge name used twice is two allocators issuing the same address
+        with nothing between them. The gateway assignment would otherwise be taken over
+        in silence, by whichever agent restarted last.
+        """
+
+        addresses = NetworkCommand(
+            operation=AgentBridgeNetworkOperation.InspectBridge,
+            argv=[self.config.ip_binary, "-4", "addr", "show", "dev", self.config.bridge_name],
+            ignore_failure=True,
+        )
+        result = self.system.run(addresses)
+        network = ipaddress.ip_network(self.config.subnet, strict=False)
+        for token in (result.stdout or "").split():
+            if "/" not in token:
+                continue
+            try:
+                existing = ipaddress.ip_interface(token)
+            except ValueError:
+                continue
+            if existing.network.version != network.version:
+                continue
+            if existing.ip not in network:
+                msg = (
+                    f"bridge {self.config.bridge_name} already carries {existing}, which is "
+                    f"outside {self.config.subnet}; another agent on this host is using the "
+                    f"same bridge name for a different network"
+                )
+                raise RuntimeError(msg)
+        return addresses
 
     def _ensure_base_firewall_rules(
         self,

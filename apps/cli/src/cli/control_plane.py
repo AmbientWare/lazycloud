@@ -11,7 +11,12 @@ from shared.deployments import StubKind
 from shared.http.concurrency import ConcurrencyLimitSetRequest
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.http.stubs import StubCreateRequest
-from shared.http.workspaces import WorkspaceResponse, WorkspaceSetRequest, WorkspaceStorageResponse
+from shared.http.workspaces import (
+    WorkspaceCreateRequest,
+    WorkspaceResponse,
+    WorkspaceSetRequest,
+    WorkspaceStorageResponse,
+)
 
 from cli.api_client import admin_api_client
 from cli.parameters import parse_key_values
@@ -33,6 +38,22 @@ def _source_cache_cleanup_payload(
     record: SourceCacheCleanupStatusResponse,
 ) -> dict[str, JsonValue]:
     return validate_json_object(record.model_dump(mode="json"))
+
+
+@workspace_app.command("create")
+def workspace_create(
+    ctx: typer.Context,
+    name: Annotated[str | None, typer.Argument()] = None,
+) -> None:
+    """Create a workspace along with the storage it needs to run anything.
+
+    `set` records a name and a storage document; this is what actually creates the
+    bucket that document describes, so a workspace made with `set` alone accepts work
+    and then cannot run it.
+    """
+
+    record = admin_api_client().create_workspace(WorkspaceCreateRequest(name=name))
+    print_payload(ctx, _workspace_payload(record))
 
 
 @workspace_app.command("set")
