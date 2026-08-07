@@ -16,6 +16,7 @@ from control.apps import (
     DatabaseAppExecutionAdmission,
     DatabaseAppImageAvailability,
 )
+from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
@@ -32,6 +33,7 @@ from execution.containers.scheduling import ContainerSchedulingPersistenceServic
 from execution.containers.service import ContainerService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
+from gateway.settings import GatewaySettings
 from networking.settings import (
     BackendRouteSettings,
     TailnetControlSettings,
@@ -60,6 +62,7 @@ from provider_clients import (
     workspace_compute_provider_resolver,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_cloudflare import CloudflareSettings
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
 from scheduler.compute_hooks import SchedulerComputeHooks
@@ -142,6 +145,7 @@ class SchedulerAppServices:
     scheduler_workloads: SchedulerWorkloadDirectory
     compute: ComputeService
     tailnet_cleanup: SchedulerTailnetCleanupService
+    custom_domains: CustomDomainService
     tasks: TaskService
     usage: UsageService
     object_storage: ObjectStorage
@@ -358,6 +362,11 @@ class SchedulerAppServices:
             scheduler_workloads=scheduler_workloads,
             compute=compute,
             tailnet_cleanup=tailnet_cleanup,
+            custom_domains=CustomDomainService(
+                context=context,
+                provider_factory=CloudflareSettings().provider,
+                platform_base_domain=GatewaySettings().public_base_domain,
+            ),
             tasks=tasks,
             usage=usage,
             object_storage=object_storage,
