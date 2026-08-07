@@ -40,7 +40,6 @@ jobs:
           control-plane
           scheduler
           container-worker
-          worker-token
           cache-server
 
       - name: Validate canonical Bake graph

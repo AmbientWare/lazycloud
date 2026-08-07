@@ -130,67 +130,6 @@ x-lazycloud-role-depends: &lazycloud-role-depends
   control-plane:
     condition: service_healthy
 
-x-container-worker-healthcheck: &container-worker-healthcheck
-  test:
-    [
-      "CMD",
-      "python",
-      "-m",
-      "shared.process_liveness",
-      "/tmp/lazycloud-container-worker.heartbeat",
-      "--max-age-seconds",
-      "45",
-    ]
-  interval: 15s
-  timeout: 5s
-  retries: 2
-  start_period: 30s
-
-x-container-worker-settings: &container-worker-settings
-  restart: unless-stopped
-  privileged: true
-  cgroup: host
-  cap_add:
-    - NET_ADMIN
-    - SYS_ADMIN
-    - SYS_PTRACE
-    - MKNOD
-  security_opt:
-    - seccomp=unconfined
-    - apparmor=unconfined
-  devices:
-    - /dev/fuse:/dev/fuse
-  tmpfs:
-    - /tmp:exec
-    - /run
-    - /run/gvisor
-    - /dev/shm:rw,exec,nosuid,nodev,size=1g
-  stop_grace_period: 90s
-  ulimits:
-    nofile:
-      soft: 1048576
-      hard: 1048576
-  entrypoint:
-    - /bin/sh
-    - -ec
-    - |
-      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane:9000" ]; then
-        compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
-        if [ -z "$$compose_gateway" ]; then
-          echo "Docker gateway is required for the public worker repository URL" >&2
-          exit 2
-        fi
-        export WORKER_REPOSITORY_URL="http://$${compose_gateway}:$${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
-      fi
-      if [ -z "$${WORKER_TOKEN:-}" ] && [ -s /var/lib/lazycloud/tokens/worker-token ]; then
-        export WORKER_TOKEN="$$(cat /var/lib/lazycloud/tokens/worker-token)"
-      fi
-      if [ -z "$${WORKER_TOKEN:-}" ]; then
-        echo "WORKER_TOKEN is required for container-worker client mode" >&2
-        exit 2
-      fi
-      exec /usr/bin/tini -- "$$0" "$$@"
-
 services:
   postgres:
     image: postgres:18-alpine
@@ -468,38 +407,6 @@ services:
     environment:
       TUNNEL_METRICS: "127.0.0.1:20241"
 
-  worker-token:
-    profiles:
-      [
-        "owner-direct-worker",
-        "owner-direct-worker-acceptance",
-        "owner-direct-worker-gpu",
-      ]
-    image: worker-bootstrap:local
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-      target: worker-bootstrap
-      args: *lazycloud-build-args
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        token_path=/var/lib/lazycloud/tokens/worker-token
-        mkdir -p "$$(dirname "$$token_path")"
-        umask 077
-        lazycloud-worker-bootstrap worker-token compose-container-worker --output "$$token_path"
-        echo "compose container worker token initialized"
-    environment:
-      <<: [*process-env, *database-env, *redis-env]
-      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_TOKEN_INIT_HOME:-/tmp/lazycloud-token-init}"
-    depends_on:
-      <<: *lazycloud-depends
-      administrator-bootstrap:
-        condition: service_completed_successfully
-    volumes:
-      - lazycloud-tokens:/var/lib/lazycloud/tokens
-
   agent-join-token:
     image: cli:local
     build:
@@ -680,224 +587,19 @@ services:
       - *platform-aws-config
 
   container-worker:
-    <<: *container-worker-settings
-    profiles: ["owner-direct-worker", "owner-direct-worker-acceptance"]
+    # Built here, run by the agent. Every worker container is created by the
+    # agent from this image with the identity, capacity, and credentials the
+    # control plane assigned that slot, so nothing here can be a second worker:
+    # a replica count of zero is what makes `up` produce the image without also
+    # starting a process that has no slot to serve.
     image: container-worker:local
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
       target: container-worker
       args: *lazycloud-build-args
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-      - "object-store.localhost:host-gateway"
-    command:
-      [
-        "lazycloud-container-worker",
-        "--worker-id",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}",
-        "--machine-id",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}",
-        "--pool",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}",
-        "--pod-address",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}",
-        "--container-service-port",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}",
-        "--interval-seconds",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_INTERVAL_SECONDS:-0.1}",
-        "--keepalive-interval-seconds",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_KEEPALIVE_INTERVAL_SECONDS:-15}",
-        "--checkpoint-bucket",
-        "${WORKER_CHECKPOINT_BUCKET:-lazycloud-objects}",
-      ]
-    environment: &container-worker-environment
-      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-      LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      WORKER_REPOSITORY_URL: "http://control-plane:9000"
-      WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
-      WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
-      BUILDAH_ISOLATION: "chroot"
-      BUILDAH_LAYERS: "true"
-      REGISTRY_AUTH_FILE: "${REGISTRY_AUTH_FILE:-/var/lib/lazycloud/registry/auth.json}"
-      WORKER_ID: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}"
-      WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
-      WORKER_POOL: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}"
-      WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
-      WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}"
-      WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
-      WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_NETWORK_PREFIX:-compose-default}"
-      WORKER_CHECKPOINT_BUCKET: "lazycloud-objects"
-      DATA_STORAGE_BUCKET: "lazycloud-data"
-      DATA_STORAGE_ENDPOINT_URL: "http://object-store:9000"
-      DATA_STORAGE_REGION_NAME: "us-east-1"
-      DATA_STORAGE_ACCESS_KEY_ID: "lazycloud-local"
-      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      DATA_STORAGE_FORCE_PATH_STYLE: "true"
-      WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
-      LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "${LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE:-/var/lib/lazycloud/cache-token/cache-service-token}"
-    depends_on:
-      <<: *lazycloud-role-depends
-      worker-token:
-        condition: service_completed_successfully
-      cache-server:
-        condition: service_healthy
-    healthcheck: *container-worker-healthcheck
-    volumes:
-      - lazycloud-files:/var/lib/lazycloud
-      - lazycloud-tokens:/var/lib/lazycloud/tokens:ro
-      - lazycloud-cache-token:/var/lib/lazycloud/cache-token:ro
-      - lazycloud-builds:${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
-      - lazycloud-images:/var/lib/lazycloud/images
-      - lazycloud-checkpoints:/var/lib/lazycloud/checkpoints
-      - lazycloud-source-cache-cpu:/var/lib/lazycloud/source-cache
-      - lazycloud-registry:/var/lib/lazycloud/registry
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - /var/run/netns:/var/run/netns
-    configs:
-      - source: container-worker-configuration
-        target: /etc/lazycloud/worker/worker.yaml
-        mode: 0444
-
-  container-worker-secondary:
-    <<: *container-worker-settings
-    profiles: ["owner-direct-worker-acceptance"]
-    image: container-worker:local
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-      - "object-store.localhost:host-gateway"
-    command:
-      [
-        "lazycloud-container-worker",
-        "--worker-id",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_ID:-compose-container-worker-secondary}",
-        "--machine-id",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_MACHINE:-compose-machine-secondary}",
-        "--pool",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}",
-        "--pod-address",
-        "container-worker-secondary",
-        "--container-service-port",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}",
-        "--interval-seconds",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_INTERVAL_SECONDS:-0.1}",
-        "--keepalive-interval-seconds",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_KEEPALIVE_INTERVAL_SECONDS:-15}",
-        "--checkpoint-bucket",
-        "${WORKER_CHECKPOINT_BUCKET:-lazycloud-objects}",
-      ]
-    environment:
-      <<: *container-worker-environment
-      WORKER_ID: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_ID:-compose-container-worker-secondary}"
-      WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_MACHINE:-compose-machine-secondary}"
-      WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_MACHINE:-compose-machine-secondary}"
-      WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_POD_ADDRESS:-container-worker-secondary}"
-      WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SECONDARY_NETWORK_PREFIX:-compose-secondary}"
-    depends_on:
-      <<: *lazycloud-role-depends
-      worker-token:
-        condition: service_completed_successfully
-      cache-server:
-        condition: service_healthy
-    healthcheck: *container-worker-healthcheck
-    volumes:
-      - lazycloud-files:/var/lib/lazycloud
-      - lazycloud-tokens:/var/lib/lazycloud/tokens:ro
-      - lazycloud-cache-token:/var/lib/lazycloud/cache-token:ro
-      - lazycloud-builds:${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
-      - lazycloud-images:/var/lib/lazycloud/images
-      - lazycloud-checkpoints:/var/lib/lazycloud/checkpoints
-      - lazycloud-source-cache-cpu-secondary:/var/lib/lazycloud/source-cache
-      - lazycloud-registry:/var/lib/lazycloud/registry
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - /var/run/netns:/var/run/netns
-    configs:
-      - source: container-worker-configuration
-        target: /etc/lazycloud/worker/worker.yaml
-        mode: 0444
-
-  container-worker-gpu:
-    <<: *container-worker-settings
-    profiles: ["owner-direct-worker-gpu"]
-    image: container-worker:local
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-      - "object-store.localhost:host-gateway"
-    runtime: nvidia
-    gpus: all
-    command:
-      [
-        "lazycloud-container-worker",
-        "--worker-id",
-        "${LAZYCLOUD_COMPOSE_GPU_WORKER_ID:-compose-gpu-container-worker}",
-        "--machine-id",
-        "${LAZYCLOUD_COMPOSE_GPU_WORKER_MACHINE:-compose-gpu-machine}",
-        "--pool",
-        "${LAZYCLOUD_COMPOSE_GPU_WORKER_POOL:-lazycloud}",
-        "--pod-address",
-        "${LAZYCLOUD_COMPOSE_GPU_WORKER_POD_ADDRESS:-container-worker-gpu}",
-        "--container-service-port",
-        "${LAZYCLOUD_COMPOSE_GPU_WORKER_SERVICE_PORT:-8910}",
-        "--interval-seconds",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_INTERVAL_SECONDS:-0.1}",
-        "--keepalive-interval-seconds",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_KEEPALIVE_INTERVAL_SECONDS:-15}",
-        "--checkpoint-bucket",
-        "${WORKER_CHECKPOINT_BUCKET:-lazycloud-objects}",
-        "--gpu-devices",
-        "${WORKER_GPU_DEVICES:-all}",
-      ]
-    environment:
-      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-      LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      WORKER_REPOSITORY_URL: "http://control-plane:9000"
-      WORKER_TOKEN: "${LAZYCLOUD_CONTAINER_WORKER_TOKEN:-}"
-      WORKER_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
-      NVIDIA_VISIBLE_DEVICES: "all"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,graphics,ngx,video"
-      BUILDAH_ISOLATION: "chroot"
-      BUILDAH_LAYERS: "true"
-      REGISTRY_AUTH_FILE: "${REGISTRY_AUTH_FILE:-/var/lib/lazycloud/registry/auth.json}"
-      WORKER_ID: "${LAZYCLOUD_COMPOSE_GPU_WORKER_ID:-compose-gpu-container-worker}"
-      WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_GPU_WORKER_MACHINE:-compose-gpu-machine}"
-      WORKER_POOL: "${LAZYCLOUD_COMPOSE_GPU_WORKER_POOL:-lazycloud}"
-      WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_GPU_WORKER_MACHINE:-compose-gpu-machine}"
-      WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_GPU_WORKER_POD_ADDRESS:-container-worker-gpu}"
-      WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_GPU_WORKER_SERVICE_PORT:-8910}"
-      WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_GPU_WORKER_NETWORK_PREFIX:-compose-gpu}"
-      WORKER_CHECKPOINT_BUCKET: "lazycloud-objects"
-      DATA_STORAGE_BUCKET: "lazycloud-data"
-      DATA_STORAGE_ENDPOINT_URL: "http://object-store:9000"
-      DATA_STORAGE_REGION_NAME: "us-east-1"
-      DATA_STORAGE_ACCESS_KEY_ID: "lazycloud-local"
-      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      DATA_STORAGE_FORCE_PATH_STYLE: "true"
-      WORKER_GPU_DEVICES: "all"
-      WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
-      LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "${LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE:-/var/lib/lazycloud/cache-token/cache-service-token}"
-    depends_on:
-      control-plane:
-        condition: service_healthy
-      worker-token:
-        condition: service_completed_successfully
-      cache-server:
-        condition: service_healthy
-    healthcheck: *container-worker-healthcheck
-    volumes:
-      - lazycloud-files:/var/lib/lazycloud
-      - lazycloud-tokens:/var/lib/lazycloud/tokens:ro
-      - lazycloud-cache-token:/var/lib/lazycloud/cache-token:ro
-      - lazycloud-builds:${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
-      - lazycloud-images:/var/lib/lazycloud/images
-      - lazycloud-checkpoints:/var/lib/lazycloud/checkpoints
-      - lazycloud-source-cache-gpu:/var/lib/lazycloud/source-cache
-      - lazycloud-registry:/var/lib/lazycloud/registry
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - /var/run/netns:/var/run/netns
-    configs:
-      - source: container-worker-gpu-configuration
-        target: /etc/lazycloud/worker/worker.yaml
-        mode: 0444
+    deploy:
+      replicas: 0
 
   cache-token:
     image: cache-server:local
@@ -958,98 +660,14 @@ services:
       retries: 12
       start_period: 5s
 
-configs:
-  container-worker-configuration:
-    content: |
-      configuration:
-        execution:
-          runtime: ${WORKER_RUNTIME:-runsc}
-          runtimes: [runsc]
-          capacity:
-            cpu_millicores: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CPU_MILLICORES:-4000}
-            memory_mib: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}
-            gpu_type: ""
-            gpu_count: 0
-          pool_mode: ${WORKER_POOL_MODE:-public}
-          requires_pool_selector: ${WORKER_REQUIRES_POOL_SELECTOR:-false}
-          preemptible: ${WORKER_PREEMPTIBLE:-false}
-          persistent: ${WORKER_PERSISTENT:-true}
-          agent_worker: ${WORKER_AGENT_WORKER:-true}
-        network:
-          route_transport: ${WORKER_ROUTE_TRANSPORT:-direct}
-          agent_bridge_network: ${WORKER_AGENT_BRIDGE_NETWORK:-true}
-        paths:
-          bundle_root: ${WORKER_BUNDLE_ROOT:-/var/lib/lazycloud/bundles}
-          image_cache_path: ${WORKER_IMAGE_CACHE_PATH:-/var/lib/lazycloud/images}
-          image_mount_root: ${WORKER_IMAGE_MOUNT_ROOT:-/var/lib/lazycloud/image-mounts}
-          image_build_root: ${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
-          source_cache_root: ${WORKER_SOURCE_CACHE_ROOT:-/var/lib/lazycloud/source-cache}
-          checkpoint_root: ${WORKER_CHECKPOINT_ROOT:-/var/lib/lazycloud/checkpoints}
-        monitoring:
-          metrics_enabled: ${WORKER_METRICS_ENABLED:-true}
-          metrics_interval_seconds: ${WORKER_METRICS_INTERVAL_SECONDS:-5}
-        source_cache:
-          max_bytes: ${WORKER_SOURCE_CACHE_MAX_BYTES:-1073741824}
-          max_entries: ${WORKER_SOURCE_CACHE_MAX_ENTRIES:-32}
-        image_build:
-          scratch_max_bytes: ${WORKER_IMAGE_BUILD_SCRATCH_MAX_BYTES:-34359738368}
-          per_build_max_bytes: ${WORKER_IMAGE_BUILD_PER_BUILD_MAX_BYTES:-17179869184}
-          minimum_free_bytes: ${WORKER_IMAGE_BUILD_MIN_FREE_BYTES:-5368709120}
-          stale_seconds: ${WORKER_IMAGE_BUILD_STALE_SECONDS:-1800}
-  container-worker-gpu-configuration:
-    content: |
-      configuration:
-        execution:
-          runtime: ${WORKER_RUNTIME:-runsc}
-          runtimes: [runsc]
-          capacity:
-            cpu_millicores: ${LAZYCLOUD_COMPOSE_GPU_WORKER_CPU_MILLICORES:-8000}
-            memory_mib: ${LAZYCLOUD_COMPOSE_GPU_WORKER_MEMORY_MIB:-16384}
-            gpu_type: ${LAZYCLOUD_COMPOSE_GPU_TYPE:-nvidia}
-            gpu_count: ${LAZYCLOUD_COMPOSE_GPU_COUNT:-1}
-          pool_mode: ${WORKER_POOL_MODE:-public}
-          requires_pool_selector: ${WORKER_REQUIRES_POOL_SELECTOR:-false}
-          preemptible: ${WORKER_PREEMPTIBLE:-false}
-          persistent: ${WORKER_PERSISTENT:-true}
-          agent_worker: ${WORKER_AGENT_WORKER:-true}
-        network:
-          route_transport: ${WORKER_ROUTE_TRANSPORT:-direct}
-          agent_bridge_network: ${WORKER_AGENT_BRIDGE_NETWORK:-true}
-        paths:
-          bundle_root: ${WORKER_BUNDLE_ROOT:-/var/lib/lazycloud/bundles}
-          image_cache_path: ${WORKER_IMAGE_CACHE_PATH:-/var/lib/lazycloud/images}
-          image_mount_root: ${WORKER_IMAGE_MOUNT_ROOT:-/var/lib/lazycloud/image-mounts}
-          image_build_root: ${WORKER_IMAGE_BUILD_ROOT:-/var/lib/lazycloud/builds}
-          source_cache_root: ${WORKER_SOURCE_CACHE_ROOT:-/var/lib/lazycloud/source-cache}
-          checkpoint_root: ${WORKER_CHECKPOINT_ROOT:-/var/lib/lazycloud/checkpoints}
-        monitoring:
-          metrics_enabled: ${WORKER_METRICS_ENABLED:-true}
-          metrics_interval_seconds: ${WORKER_METRICS_INTERVAL_SECONDS:-5}
-        source_cache:
-          max_bytes: ${WORKER_SOURCE_CACHE_MAX_BYTES:-1073741824}
-          max_entries: ${WORKER_SOURCE_CACHE_MAX_ENTRIES:-32}
-        image_build:
-          scratch_max_bytes: ${WORKER_IMAGE_BUILD_SCRATCH_MAX_BYTES:-34359738368}
-          per_build_max_bytes: ${WORKER_IMAGE_BUILD_PER_BUILD_MAX_BYTES:-17179869184}
-          minimum_free_bytes: ${WORKER_IMAGE_BUILD_MIN_FREE_BYTES:-5368709120}
-          stale_seconds: ${WORKER_IMAGE_BUILD_STALE_SECONDS:-1800}
-
 volumes:
   postgres-data:
   redis-data:
   object-store-data:
   lazycloud-files:
   lazycloud-administrator-token:
-  lazycloud-tokens:
   lazycloud-cache-token:
   lazycloud-cache:
-  lazycloud-builds:
-  lazycloud-images:
-  lazycloud-checkpoints:
-  lazycloud-source-cache-cpu:
-  lazycloud-source-cache-cpu-secondary:
-  lazycloud-source-cache-gpu:
-  lazycloud-registry:
   tcp-ingress-tls:
 
 secrets:
