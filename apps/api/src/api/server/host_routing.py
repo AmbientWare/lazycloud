@@ -7,6 +7,7 @@ from typing import Protocol
 from control.service import ControlPlaneService, StubKind, StubRecord
 from shared.deployment_subdomains import parse_deployment_host
 from shared.errors import NotFoundError
+from shared.urls import handler_prefix
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -219,17 +220,16 @@ def _scope_host(scope: Scope) -> str:
 
 
 def _kind_path(kind: StubKind) -> str | None:
-    if kind is StubKind.TaskQueue:
-        return "api/v1/taskqueues"
-    if kind is StubKind.Function:
-        return "api/v1/functions"
-    if kind is StubKind.Endpoint:
-        return "api/v1/endpoints"
-    if kind is StubKind.Asgi:
-        return "api/v1/asgi"
+    """The handler prefix a hostname rewrites onto, shared with the client manifest.
+
+    Kept in one place because the two have to agree: the manifest hands a caller the
+    same path this rewrite produces.
+    """
+
     if kind in PROXY_STUB_KINDS:
         return kind.value
-    return None
+    prefix = handler_prefix(kind.value)
+    return prefix if prefix != kind.value else None
 
 
 def _join_paths(base_path: str, original_path: str) -> str:

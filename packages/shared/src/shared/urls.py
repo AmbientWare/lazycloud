@@ -82,6 +82,31 @@ def build_deployment_url(
     return _replace_host(parsed, f"{label}.{parsed.netloc}")
 
 
+def deployment_handler_path(kind: str, name: str, *, version: int | None = None) -> str:
+    """Where the platform itself serves a deployed resource.
+
+    The address a public hostname is rewritten onto, and the one a first-party
+    caller uses directly. Same-origin, so a browser client the platform serves does
+    not need permission from the resource to call it.
+    """
+
+    prefix = handler_prefix(kind)
+    suffix = "latest" if version is None else f"v{version}"
+    return f"/{prefix}/{url_path_segment(name)}/{suffix}"
+
+
+def handler_prefix(kind: str) -> str:
+    if kind == "task-queue":
+        return "api/v1/taskqueues"
+    if kind == "function":
+        return "api/v1/functions"
+    if kind == "endpoint":
+        return "api/v1/endpoints"
+    if kind == "asgi":
+        return "api/v1/asgi"
+    return kind
+
+
 def build_stub_url(external_url: str, target: StubUrlTarget) -> str:
     parsed = _parse_external_url(external_url)
     return _replace_host(parsed, f"{target.stub_id}.{parsed.netloc}")

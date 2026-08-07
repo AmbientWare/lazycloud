@@ -49,6 +49,7 @@ class _FakeClientManifestGateway:
                     deployment_id="dep-health",
                     deployment_version=3,
                     invoke_url=f"{request.external_url}/endpoint/public/stub-health",
+                    invoke_path="/api/v1/endpoints/health/latest",
                     route="/health",
                     methods=["GET"],
                     inputs={"fields": {}},
@@ -95,6 +96,7 @@ class _FakeClientManifestGateway:
                     deployment_id="dep-square",
                     deployment_version=2,
                     invoke_url=f"{request.external_url}/function/stub-square",
+                    invoke_path="/api/v1/functions/square/latest",
                     inputs={"fields": {"value": {"type": "integer"}}},
                     outputs={"fields": {"result": {"type": "integer"}}},
                     client_contract=_client_contract(
@@ -116,6 +118,7 @@ class _FakeClientManifestGateway:
                     deployment_id="dep-site",
                     deployment_version=4,
                     invoke_url=f"{request.external_url}/asgi/stub-site",
+                    invoke_path="/api/v1/asgi/site/latest",
                     route="/",
                     methods=["GET", "POST"],
                     client_contract=_client_contract(
@@ -146,6 +149,7 @@ class _FakeClientManifestGateway:
                     deployment_id="dep-summarize",
                     deployment_version=5,
                     invoke_url=f"{request.external_url}/task-queue/stub-summarize",
+                    invoke_path="/api/v1/taskqueues/summarize/latest",
                     inputs={"fields": {}},
                     client_contract=_client_contract(
                         ClientOperationName.Put,
@@ -174,6 +178,7 @@ class _FakeClientManifestGateway:
                     deployment_id="dep-worker",
                     deployment_version=1,
                     invoke_url=f"{request.external_url}/pod/id/stub-worker/8080",
+                    invoke_path="/pod/id/stub-worker/8080",
                 ),
             ],
         )

@@ -8,7 +8,7 @@ from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.client_manifests import ClientManifestResource, client_manifest_schemas
-from shared.urls import StubUrlTarget, build_deployment_url
+from shared.urls import StubUrlTarget, build_deployment_url, deployment_handler_path
 
 from control.context import ControlContext
 
@@ -50,6 +50,10 @@ def client_manifest_resource(
         deployment_id=resource.deployment.id,
         deployment_version=resource.deployment.version,
         invoke_url=resource.invoke_url(external_url),
+        invoke_path=deployment_handler_path(
+            resource.deployment.kind.value,
+            resource.deployment.name,
+        ),
         route=spec.route,
         methods=list(spec.methods),
         inputs=inputs,
