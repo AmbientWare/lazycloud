@@ -93,7 +93,12 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     repo.save_agent_route_state(route)
     assert repo.list_agent_route_states("ws-1", OWNER_ID, "machine-1") == [route]
     assert fake.values[repo.keys.agent_route_revision("ws-1", OWNER_ID, "machine-1")] == "1"
-    assert repo.delete_agent_route_state("ws-1", OWNER_ID, "machine-1", "route-1")
+    assert repo.delete_agent_route_state(
+        workspace_id="ws-1",
+        capacity_owner_id=OWNER_ID,
+        machine_id="machine-1",
+        route_id="route-1",
+    )
     assert repo.list_agent_route_states("ws-1", OWNER_ID, "machine-1") == []
 
     fake.sets[repo.keys.agent_machine_index("ws-1", OWNER_ID)].add("machine-stale")

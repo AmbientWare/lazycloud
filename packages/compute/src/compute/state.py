@@ -714,11 +714,15 @@ class RedisComputeStateRepository:
 
     def delete_agent_route_state(
         self,
+        *,
         workspace_id: str,
         capacity_owner_id: str,
         machine_id: str,
         route_id: str,
     ) -> bool:
+        # Keyword-only because the owner and the pool are both plain strings, and
+        # positionally they are adjacent and interchangeable. A caller passing the
+        # pool here deleted a key that never existed, silently, for every route.
         deleted = bool(
             self.redis.delete(
                 self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id)

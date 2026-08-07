@@ -1051,11 +1051,15 @@ class WorkerRepositoryService:
                 active_routes[route.container_id] = route_ids
             if route.route_id in route_ids:
                 continue
+            # The stored record carries the owner it was saved under, so delete the
+            # key that was actually written. Passing the pool here made the orphan
+            # sweep a no-op: the delete missed, the index kept the route, and the
+            # agent went on dialing dead backends every stream iteration.
             if compute.delete_agent_route_state(
-                route.workspace_id,
-                route.pool,
-                route.machine_id,
-                route.route_id,
+                workspace_id=route.workspace_id,
+                capacity_owner_id=route.capacity_owner_id,
+                machine_id=route.machine_id,
+                route_id=route.route_id,
             ):
                 removed += 1
         return AgentRouteReconciliationResult(scanned=len(routes), removed=removed)
@@ -1144,10 +1148,10 @@ class WorkerRepositoryService:
             )
         for workspace_id, capacity_owner_id, machine_id, route_id in sorted(unique_routes):
             repository.delete_agent_route_state(
-                workspace_id,
-                capacity_owner_id,
-                machine_id,
-                route_id,
+                workspace_id=workspace_id,
+                capacity_owner_id=capacity_owner_id,
+                machine_id=machine_id,
+                route_id=route_id,
             )
 
     def _container_agent_routes(self, container_id: str) -> list[AgentBackendRoute]:
