@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Protocol
 
 from pydantic import Field
 
@@ -82,6 +83,36 @@ class CustomDomain(ContractModel):
         return bool(label) and "." not in label
 
 
+class ProviderCustomHostname(ContractModel):
+    """What a provider reports about one hostname it is terminating TLS for."""
+
+    provider_hostname_id: str = Field(min_length=1, max_length=128)
+    phase: CustomDomainPhase
+    verification_target: str = ""
+    error_code: CustomDomainErrorCode | None = None
+    error_message: str | None = Field(default=None, max_length=512)
+
+
+class CustomDomainProvider(Protocol):
+    """The edge that terminates TLS for a workspace's own hostnames.
+
+    Provider-neutral by construction: the domain package decides when a hostname
+    should exist and what its absence means, and an adapter only carries that out.
+    """
+
+    def create_hostname(self, hostname: str) -> ProviderCustomHostname:
+        """Ask the provider to serve `hostname`, including a one-level wildcard."""
+        ...
+
+    def get_hostname(self, provider_hostname_id: str) -> ProviderCustomHostname | None:
+        """Re-read one hostname, or `None` if the provider no longer holds it."""
+        ...
+
+    def delete_hostname(self, provider_hostname_id: str) -> None:
+        """Stop serving a hostname. Succeeds when the provider already forgot it."""
+        ...
+
+
 def normalize_registrable_domain(value: str) -> str:
     """Accept a domain a workspace can register: an apex or a one-level wildcard."""
 
@@ -113,6 +144,8 @@ __all__ = [
     "CustomDomain",
     "CustomDomainErrorCode",
     "CustomDomainPhase",
+    "CustomDomainProvider",
+    "ProviderCustomHostname",
     "normalize_assignable_hostname",
     "normalize_registrable_domain",
 ]
