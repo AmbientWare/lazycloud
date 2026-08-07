@@ -2033,6 +2033,11 @@ class GatewayControlService:
                     attrs=request.attrs,
                 ),
             )
+            if plan.already_gone:
+                # Nothing to save, and nothing wrong. The route the agent named
+                # no longer exists, which is the state this update was asking
+                # for; raising here bricked the agent on an ordinary race.
+                return UpdateAgentRouteStatusResponse(route_id=request.route_id)
             if not plan.accepted or plan.updated is None:
                 raise InvalidInputError(plan.err_msg or "agent route status update rejected")
             self.compute_states.save_agent_route_state(plan.updated)
