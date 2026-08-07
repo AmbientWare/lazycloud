@@ -11,6 +11,7 @@ from a baked image skip straight to enrollment.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -40,18 +41,53 @@ _AGENT_FILENAME = "lazycloud-agent-linux-amd64"
 # model. Pinned rather than "latest" because gVisor's nvproxy validates the driver
 # ABI it was built against, so the node driver, the gVisor release and this image
 # are one decision.
-_NVIDIA_DRIVER_BRANCH = "580"
-# The builds within that branch whose ABI the pinned gVisor knows. The branch
-# alone is not a pin: 580.95.05 is registered by nvproxy as explicitly
-# unsupported, so a bake that took whatever the branch offered could ship an
-# image whose sandbox refuses every GPU container. Keep in step with
-# GVISOR_VERSION in docker/Dockerfile.worker.
+#
+# The exact build, not the branch. A branch resolves to whatever the CUDA repo
+# published most recently, which is how a bake asking for "580" installed
+# 580.178.04 — a build nvproxy does not know — and failed its own ABI check after
+# paying for the whole driver install. This is the newest build carried by both
+# the repo and the pinned gVisor; the repo goes on to 610.57.04 and nvproxy to
+# 620.06.00, but they share nothing above this.
+_NVIDIA_DRIVER_VERSION = "590.48.01"
+_NVIDIA_DRIVER_RELEASE = "1.amzn2023"
+# Amazon Linux 2023 carries no `nvidia-driver:<branch>` stream: the CUDA repo
+# names its streams `<branch>-open` and `<branch>-dkms`, and asking for the bare
+# branch fails with "missing groups or modules". Open kernel modules cover Turing
+# onward, which is every card in the catalog.
+_NVIDIA_DRIVER_STREAM = "590-open"
+# Every build whose ABI the pinned gVisor knows, as `runsc nvproxy
+# list-supported-drivers` reports it. The pin above should make this unreachable;
+# it stays because the pin is a request to a repository that can stop honouring
+# it, and shipping an image whose sandbox refuses every GPU container is the
+# failure it exists to prevent. Regenerate with:
+#
+#   docker run --rm --entrypoint runsc container-worker:local \
+#     nvproxy list-supported-drivers
+#
+# Keep in step with GVISOR_VERSION in docker/Dockerfile.worker.
 _NVPROXY_SUPPORTED_DRIVERS = (
+    "535.129.03",
+    "535.183.06",
+    "535.247.01",
+    "535.261.03",
+    "535.274.02",
+    "535.288.01",
+    "535.309.01",
+    "550.90.12",
+    "570.124.06",
+    "570.133.20",
+    "570.172.08",
+    "570.195.03",
     "580.65.06",
     "580.105.08",
     "580.126.09",
+    "580.126.20",
     "580.159.03",
+    "580.159.04",
     "580.173.02",
+    "590.48.01",
+    "615.15.00",
+    "620.06.00",
 )
 # A GPU bake must run on a GPU or it cannot check its own work; this is the
 # cheapest instance that has one.
@@ -59,6 +95,8 @@ _GPU_BAKE_INSTANCE_TYPE = "g4dn.xlarge"
 # The driver and CUDA userspace do not fit in the CPU image's 16 GiB.
 _GPU_ROOT_VOLUME_GIB = 40
 _CPU_ROOT_VOLUME_GIB = 16
+# EC2 rejects a launch whose base64-encoded user data is larger than this.
+_MAX_ENCODED_USER_DATA_BYTES = 25600
 _AL2023_SSM_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 _CLI_TIMEOUT_SECONDS = 300
@@ -491,8 +529,8 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
         ],
         separators=(",", ":"),
     )
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", encoding="utf-8") as user_data:
-        user_data.write(_bake_user_data(request))
+    with tempfile.NamedTemporaryFile("wb", suffix=".sh.gz") as user_data:
+        user_data.write(_bake_user_data_blob(request))
         user_data.flush()
         command = [
             "ec2",
@@ -512,7 +550,7 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
             "--tag-specifications",
             tag_specifications,
             "--user-data",
-            f"file://{user_data.name}",
+            f"fileb://{user_data.name}",
             "--region",
             region,
             "--output",
@@ -710,7 +748,8 @@ _GPU_SETUP_FRAGMENT = """
 dnf install -y dnf-plugins-core
 dnf config-manager --add-repo \
   https://developer.download.nvidia.com/compute/cuda/repos/amzn2023/x86_64/cuda-amzn2023.repo
-dnf module install -y nvidia-driver:__NVIDIA_DRIVER_BRANCH__
+dnf module enable -y nvidia-driver:__NVIDIA_DRIVER_STREAM__
+dnf install -y nvidia-open-3:__NVIDIA_DRIVER_VERSION__-__NVIDIA_DRIVER_RELEASE__
 curl -fsSL -o /etc/yum.repos.d/nvidia-container-toolkit.repo \
   https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo
 dnf install -y nvidia-container-toolkit
@@ -745,6 +784,27 @@ def _default_bake_instance_type(variant: _BakeVariant) -> str:
     return _GPU_BAKE_INSTANCE_TYPE if variant is _BakeVariant.Gpu else "t3.small"
 
 
+def _bake_user_data_blob(request: _BakeRequest) -> bytes:
+    """Compress the bake script, which no longer fits in user data uncompressed.
+
+    cloud-init decompresses gzipped user data before dispatching it, so the
+    instance runs the same script either way. The agent installer the script
+    embeds is on its own past EC2's limit, and compressing it keeps one source
+    of truth for that installer rather than splitting it across a second fetch
+    the bake would then have to publish and verify.
+    """
+    blob = gzip.compress(_bake_user_data(request).encode("utf-8"), mtime=0)
+    encoded = len(b64encode(blob))
+    if encoded > _MAX_ENCODED_USER_DATA_BYTES:
+        msg = (
+            f"bake user data is {encoded} bytes encoded, over EC2's "
+            f"{_MAX_ENCODED_USER_DATA_BYTES}: the embedded agent installer has outgrown "
+            "user data and must move to a fetched artifact"
+        )
+        raise SystemExit(msg)
+    return blob
+
+
 def _bake_user_data(request: _BakeRequest) -> str:
     values = {
         "__TAILSCALE_VERSION__": TAILSCALE_INSTALL_VERSION,
@@ -756,9 +816,10 @@ def _bake_user_data(request: _BakeRequest) -> str:
     }
     script = _BAKE_USER_DATA_TEMPLATE
     gpu_setup = (
-        _GPU_SETUP_FRAGMENT.replace("__NVIDIA_DRIVER_BRANCH__", _NVIDIA_DRIVER_BRANCH).replace(
-            "__NVPROXY_SUPPORTED_DRIVERS__", " ".join(_NVPROXY_SUPPORTED_DRIVERS)
-        )
+        _GPU_SETUP_FRAGMENT.replace("__NVIDIA_DRIVER_STREAM__", _NVIDIA_DRIVER_STREAM)
+        .replace("__NVIDIA_DRIVER_VERSION__", _NVIDIA_DRIVER_VERSION)
+        .replace("__NVIDIA_DRIVER_RELEASE__", _NVIDIA_DRIVER_RELEASE)
+        .replace("__NVPROXY_SUPPORTED_DRIVERS__", " ".join(_NVPROXY_SUPPORTED_DRIVERS))
         if request.variant is _BakeVariant.Gpu
         else ""
     )

@@ -25,6 +25,14 @@ stack. `connected-aws/customer_stack.py` accepts it as `--execution-role-arn`.
 The acceptance host may run AWS CLI v1: never pass v2-only flags such as
 `--no-cli-pager`. Set `AWS_PAGER=""` in the subprocess environment instead.
 
+Publishing is the exception, and it needs a *newer* CLI than reading does.
+`aws-release-assets/release.py` and `ami/bake.py` write every release object with
+`s3api put-object --if-none-match '*'`, so that a retry after a dropped
+connection cannot overwrite bytes that already landed. Conditional writes reached
+the CLI well after v2.15, and an older one fails the publish with
+`Unknown options: --if-none-match` before it uploads anything. Both commands take
+`--aws-cli`, so point it at a current binary rather than upgrading the host.
+
 ### Activation
 
 `docker compose up` is the only activation path. The control plane and scheduler
