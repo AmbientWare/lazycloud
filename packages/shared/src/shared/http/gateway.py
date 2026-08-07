@@ -238,7 +238,6 @@ class DeployStubRequest(HttpModel):
     name: str = ""
     workspace: str | None = None
     external_url: str = "http://127.0.0.1:9000"
-    url_mode: str = "path"
 
 
 class DeployStubResponse(HttpModel):
@@ -256,7 +255,6 @@ class GetUrlRequest(HttpModel):
     is_shell: bool = False
     workspace: str | None = None
     external_url: str = "http://127.0.0.1:9000"
-    mode: str = "path"
     port: int | None = None
 
 

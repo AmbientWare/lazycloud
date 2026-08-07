@@ -32,7 +32,7 @@ CONFIG_DIRECTORY_MODE = 0o700
 # stored profile > this default), so plain `lazycloud login` targets the hosted
 # platform with no configuration. Swapped for the real hosted domain at first
 # publish.
-PACKAGED_DEFAULT_ENDPOINT = "https://api.lazycloud.dev"
+PACKAGED_DEFAULT_ENDPOINT = "https://lazycloud.dev"
 
 # `open(O_NOFOLLOW)` on a symlink reports `ELOOP` on Linux and macOS and
 # `EMLINK` on the BSDs; both mean the same refusal here.

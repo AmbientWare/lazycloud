@@ -15,7 +15,6 @@ from pydantic import ValidationError
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import StubKind
 from shared.urls import (
-    InvokeUrlMode,
     StubUrlTarget,
     build_deployment_url,
     build_pod_url,
@@ -25,65 +24,32 @@ from shared.urls import (
 from tests.url_constants import EXAMPLE_DOMAIN, EXAMPLE_URL
 
 
-def test_url_builders_cover_path_host_public_and_ports() -> None:
+def test_deployed_resources_are_addressed_by_hostname() -> None:
     target = StubUrlTarget(
         kind="function",
         stub_id="stub-123",
         deployment_name="hello",
         deployment_version=3,
-        deployment_subdomain="hello-prod",
+        subdomain="hello-a1b2c3d4",
     )
 
+    assert build_deployment_url(EXAMPLE_URL, target) == f"https://hello-a1b2c3d4.{EXAMPLE_DOMAIN}"
     assert (
-        build_deployment_url(EXAMPLE_URL, InvokeUrlMode.Path, target)
-        == f"{EXAMPLE_URL}/api/v1/functions/hello/v3"
+        build_deployment_url(EXAMPLE_URL, target, pin_version=True)
+        == f"https://hello-a1b2c3d4-v3.{EXAMPLE_DOMAIN}"
     )
-    assert (
-        build_deployment_url(EXAMPLE_URL, InvokeUrlMode.Host, target)
-        == f"https://hello-prod-v3.{EXAMPLE_DOMAIN}"
-    )
-    assert (
-        build_stub_url(EXAMPLE_URL, InvokeUrlMode.Path, target)
-        == f"{EXAMPLE_URL}/api/v1/functions/id/stub-123"
-    )
-
-    public_target = target.model_copy(update={"public": True})
-    assert (
-        build_deployment_url(EXAMPLE_URL, InvokeUrlMode.Path, public_target)
-        == f"{EXAMPLE_URL}/api/v1/functions/public/stub-123"
-    )
-
-    taskqueue_target = target.model_copy(update={"kind": "task-queue"})
-    assert (
-        build_deployment_url(EXAMPLE_URL, InvokeUrlMode.Path, taskqueue_target)
-        == f"{EXAMPLE_URL}/api/v1/taskqueues/hello/v3"
-    )
-    assert (
-        build_stub_url(EXAMPLE_URL, InvokeUrlMode.Path, taskqueue_target)
-        == f"{EXAMPLE_URL}/api/v1/taskqueues/id/stub-123"
-    )
-    assert (
-        build_deployment_url(
-            EXAMPLE_URL,
-            InvokeUrlMode.Path,
-            taskqueue_target.model_copy(update={"public": True}),
-        )
-        == f"{EXAMPLE_URL}/api/v1/taskqueues/public/stub-123"
-    )
+    assert build_stub_url(EXAMPLE_URL, target) == f"https://stub-123.{EXAMPLE_DOMAIN}"
 
     pod_target = target.model_copy(update={"kind": "pod", "ports": [8080]})
-    assert (
-        build_pod_url(EXAMPLE_URL, InvokeUrlMode.Path, pod_target)
-        == f"{EXAMPLE_URL}/pod/id/stub-123/8080"
-    )
-    assert (
-        build_pod_url(
+    assert build_pod_url(EXAMPLE_URL, pod_target) == f"https://stub-123-8080.{EXAMPLE_DOMAIN}"
+
+
+def test_a_deployment_without_a_subdomain_has_no_address() -> None:
+    with pytest.raises(ValueError, match="subdomain"):
+        build_deployment_url(
             EXAMPLE_URL,
-            InvokeUrlMode.Path,
-            pod_target.model_copy(update={"public": True}),
+            StubUrlTarget(kind="function", stub_id="stub-123"),
         )
-        == f"{EXAMPLE_URL}/pod/public/stub-123/8080"
-    )
 
 
 @pytest.mark.parametrize("port", [0, 65536, 8080.5, "8080", True])
@@ -92,28 +58,7 @@ def test_deployment_spec_rejects_invalid_or_coerced_ports(port: object) -> None:
         DeploymentSpec.model_validate({"name": "pod", "ports": {"http": port}})
 
 
-def test_canonical_pod_proxy_urls_cover_path_and_host_modes() -> None:
-    assert (
-        pod_proxy_url(
-            "https://lazycloud.dev/",
-            resource=StubKind.Sandbox,
-            stub_id="stub-1",
-            port=8080,
-            public=True,
-            container_id="container-1",
-        )
-        == "https://lazycloud.dev/sandbox/public/container-1/8080"
-    )
-    assert (
-        pod_proxy_url(
-            "http://127.0.0.1:9000",
-            resource=StubKind.Pod,
-            stub_id="stub-2",
-            port=9000,
-            public=False,
-        )
-        == "http://127.0.0.1:9000/pod/id/stub-2/9000"
-    )
+def test_pod_and_sandbox_ports_are_addressed_by_hostname() -> None:
     assert (
         pod_proxy_url(
             "https://lazycloud.dev",
@@ -121,8 +66,6 @@ def test_canonical_pod_proxy_urls_cover_path_and_host_modes() -> None:
             stub_id="stub-1",
             container_id="container-1",
             port=8080,
-            public=False,
-            mode=InvokeUrlMode.Host,
         )
         == "https://container-1-8080.lazycloud.dev"
     )
@@ -132,8 +75,6 @@ def test_canonical_pod_proxy_urls_cover_path_and_host_modes() -> None:
             resource=StubKind.Pod,
             stub_id="stub-2",
             port=9000,
-            public=True,
-            mode=InvokeUrlMode.Host,
         )
         == "https://stub-2-9000.lazycloud.dev"
     )
@@ -160,7 +101,6 @@ def test_pod_proxy_url_rejects_invalid_origin_and_port_matrix(
             resource=StubKind.Pod,
             stub_id="stub-1",
             port=port,
-            public=False,
         )
 
 

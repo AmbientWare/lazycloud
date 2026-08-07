@@ -8,7 +8,7 @@ from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.client_manifests import ClientManifestResource, client_manifest_schemas
-from shared.urls import InvokeUrlMode, StubUrlTarget, build_deployment_url
+from shared.urls import StubUrlTarget, build_deployment_url
 
 from control.context import ControlContext
 
@@ -19,22 +19,17 @@ class DeploymentResource:
     deployment: Deployment
     stub: StubRecord
 
-    def invoke_url(
-        self,
-        external_url: str,
-        *,
-        mode: InvokeUrlMode = InvokeUrlMode.Path,
-    ) -> str:
+    def invoke_url(self, external_url: str, *, pin_version: bool = False) -> str:
         target = StubUrlTarget(
             kind=self.stub.kind.value,
             stub_id=self.stub.id,
             deployment_name=self.deployment.name,
             deployment_version=self.deployment.version,
-            deployment_subdomain=self.app.name,
+            subdomain=self.deployment.subdomain,
             public=self.stub.public or self.app.public,
         )
         try:
-            return build_deployment_url(external_url, mode, target)
+            return build_deployment_url(external_url, target, pin_version=pin_version)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
 
@@ -152,6 +147,26 @@ class DeploymentResourceService:
             active=None,
         )
         return resources[0] if resources else None
+
+    def get_by_subdomain(
+        self,
+        subdomain: str,
+        *,
+        version: int | None = None,
+    ) -> DeploymentResource | None:
+        """Resolve the resource a public hostname addresses.
+
+        The only lookup here that is not workspace-scoped, because a request at the
+        public edge has no token to scope it by. The subdomain identifies exactly one
+        resource, and the row it finds is what says which workspace owns the traffic.
+        """
+
+        with self.context.database.session() as session:
+            row = DeploymentResourceRepository(session).get_by_subdomain(
+                subdomain,
+                version=version,
+            )
+        return _deployment_resource(row) if row is not None else None
 
 
 def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:

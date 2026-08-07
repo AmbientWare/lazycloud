@@ -1177,7 +1177,6 @@ class App:
         *,
         resource: str | None = None,
         timeout: int = 0,
-        url_type: str = "",
     ) -> object:
         """Serve one endpoint, ASGI app, or task queue resource for preview.
 
@@ -1187,10 +1186,9 @@ class App:
         Args:
             resource: Optional resource selector for the preview target.
             timeout: Serve timeout in seconds. `0` keeps serving until stopped.
-            url_type: Optional URL type requested from the gateway.
         """
         selected = self._select_one(resource=resource, method="serve", serveable=True)
-        return _invoke_method(selected.serve, {"timeout": timeout, "url_type": url_type})
+        return _invoke_method(selected.serve, {"timeout": timeout})
 
     def _register(self, resource: ResourceT) -> ResourceT:
         if not hasattr(resource, "spec"):

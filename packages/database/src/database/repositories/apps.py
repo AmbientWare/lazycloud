@@ -40,7 +40,7 @@ from shared.deployments import DeploymentKind
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
-from sqlalchemy import Integer, case, cast, delete, extract, func, or_, select
+from sqlalchemy import Integer, and_, case, cast, delete, extract, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -537,6 +537,41 @@ class DeploymentRepository:
             status="active" if deployment.active else "inactive",
         )
 
+    def assert_subdomain_unclaimed(
+        self,
+        subdomain: str,
+        *,
+        workspace_id: str,
+        app_id: str | None,
+        name: str,
+        kind: DeploymentKind,
+    ) -> None:
+        """Refuse a subdomain another resource already answers on.
+
+        `uq_deployments_subdomain_version_active` only catches a digest collision when
+        both resources reach the same version number. Two colliding resources sitting at
+        different versions would otherwise share a hostname, and the edge would hand one
+        tenant's traffic to the other's resource.
+        """
+        same_resource = and_(
+            DeploymentTable.workspace_id == workspace_id,
+            DeploymentTable.app_id.is_not_distinct_from(app_id),
+            DeploymentTable.name == name,
+            DeploymentTable.kind == kind.value,
+        )
+        conflict = self.session.execute(
+            select(DeploymentTable.id)
+            .where(DeploymentTable.subdomain == subdomain)
+            .where(DeploymentTable.deleted_at.is_(None))
+            .where(~same_resource)
+            .limit(1)
+        ).first()
+        if conflict is not None:
+            raise ConflictError(
+                f"subdomain {subdomain} already belongs to another resource; "
+                f"rename {name} to claim a different one"
+            )
+
     def deactivate_for_workspace_deletion(
         self,
         deployment_id: str,
@@ -714,15 +749,17 @@ class DeploymentResourceRepository:
         self,
         subdomain: str,
         *,
-        version: int | None,
+        version: int | None = None,
     ) -> DeploymentResourceRow | None:
         """Resolve the resource a public hostname addresses.
+
+        `version=None` answers with the latest, which is what a bare hostname means.
 
         Deliberately not workspace-scoped, unlike every other lookup here: a request
         arriving at the edge carries no token, so the subdomain is the only routing key
         available and the row it finds is what establishes which workspace answers.
-        That is safe only because the subdomain is unique across workspaces by
-        construction and by `uq_deployments_subdomain_version_active`.
+        That is safe only because a subdomain belongs to exactly one resource, which
+        `assert_subdomain_unclaimed` establishes when the subdomain is minted.
         """
         statement = (
             select(AppTable, DeploymentTable, StubTable)

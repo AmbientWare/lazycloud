@@ -35,7 +35,6 @@ class ConcurrencyAcquireResult(ContractModel):
 class StubUrlPlan(ContractModel):
     stub: StubRecord
     url: str
-    mode: str
     external_url: str
     route_kind: StubKind
     deployment: Deployment | None = None

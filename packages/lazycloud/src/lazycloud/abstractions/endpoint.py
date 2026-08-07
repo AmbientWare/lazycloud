@@ -335,11 +335,10 @@ class Endpoint(Generic[P, R]):
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0, url_type: str = "") -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
-            url_type=url_type,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
             container_id=None,
@@ -694,11 +693,10 @@ class ASGI:
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0, url_type: str = "") -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
-            url_type=url_type,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
             container_id=None,
@@ -1217,7 +1215,6 @@ def _serve_endpoint(
     owner: Endpoint[..., Any] | ASGI,
     *,
     timeout: int,
-    url_type: str,
     workspace: str | None,
     sync_dir: str | None,
     container_id: str | None,
@@ -1247,7 +1244,6 @@ def _serve_endpoint(
     serve_url = resolve_serve_url(
         gateway_client,
         stub_id=stub_id,
-        url_type=url_type,
         workspace=workspace,
         external_url=config.endpoint,
     )

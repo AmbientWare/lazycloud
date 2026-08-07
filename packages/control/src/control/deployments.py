@@ -127,6 +127,19 @@ class DeploymentService:
                         name=prior.name,
                         status="inactive",
                     )
+            subdomain = deployment_subdomain(
+                workspace_id=workspace_record.id,
+                app_name=app_resolution.app_name,
+                name=normalized_spec.name,
+                kind=normalized_spec.kind,
+            )
+            repository.assert_subdomain_unclaimed(
+                subdomain,
+                workspace_id=workspace_record.id,
+                app_id=app_id,
+                name=normalized_spec.name,
+                kind=normalized_spec.kind,
+            )
             deployment = repository.records.create(
                 {
                     "name": normalized_spec.name,
@@ -135,12 +148,7 @@ class DeploymentService:
                     "stub_id": None,
                     "version": version,
                     "spec": normalized_spec.model_dump(mode="json"),
-                    "subdomain": deployment_subdomain(
-                        workspace_id=workspace_record.id,
-                        app_name=app_resolution.app_name,
-                        name=normalized_spec.name,
-                        kind=normalized_spec.kind,
-                    ),
+                    "subdomain": subdomain,
                     "pool": resolved_pool,
                     "active": deployment_active,
                 },

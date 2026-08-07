@@ -8,7 +8,6 @@ from shared.contracts import ContractModel
 from shared.deployments import StubKind
 from shared.http.base import HttpModel
 from shared.serialization import to_json_value
-from shared.urls import InvokeUrlMode
 from shared.workload_config import StubTaskPolicy, StubVolumeConfig
 
 
@@ -145,7 +144,6 @@ class StubCloneRequest(HttpModel):
 class StubUrlResponse(HttpModel):
     stub: StubResponse
     url: str
-    mode: InvokeUrlMode
     external_url: str
     route_kind: StubKind
     deployment_id: str | None = None

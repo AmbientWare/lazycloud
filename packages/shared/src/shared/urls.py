@@ -5,13 +5,8 @@ from urllib.parse import ParseResult, quote, urlparse, urlsplit, urlunparse
 from pydantic import Field
 
 from shared.contracts import ContractModel
+from shared.deployment_subdomains import deployment_host_label
 from shared.deployments import StubKind
-from shared.enums import StringEnum
-
-
-class InvokeUrlMode(StringEnum):
-    Path = "path"
-    Host = "host"
 
 
 class StubUrlTarget(ContractModel):
@@ -19,7 +14,7 @@ class StubUrlTarget(ContractModel):
     stub_id: str
     deployment_name: str = ""
     deployment_version: int = 1
-    deployment_subdomain: str = ""
+    subdomain: str = ""
     public: bool = False
     ports: list[int] = Field(default_factory=list)
 
@@ -63,37 +58,39 @@ def normalize_http_origin(value: str, *, field_name: str = "HTTP origin") -> str
 
 def build_deployment_url(
     external_url: str,
-    mode: InvokeUrlMode,
     target: StubUrlTarget,
+    *,
+    pin_version: bool = False,
 ) -> str:
+    """The hostname a deployed resource answers on.
+
+    A hostname rather than a path under the origin because an application has to own
+    the root to work: a page served beneath `/api/v1/asgi/<name>/` still emits its own
+    absolute links and asset paths against `/`, and nothing on the server can rewrite
+    what a bundler already baked into the files.
+
+    Unpinned by default, so the URL a caller publishes keeps working across redeploys.
+    """
+
     parsed = _parse_external_url(external_url)
-    if mode == InvokeUrlMode.Host:
-        subdomain = target.deployment_subdomain or target.deployment_name or target.stub_id
-        return _replace_host(parsed, f"{subdomain}-v{target.deployment_version}.{parsed.netloc}")
-    path_kind = _deployed_path_kind(target.kind)
-    if target.public:
-        return _replace_path(parsed, f"/{path_kind}/public/{target.stub_id}")
-    return _replace_path(
-        parsed,
-        f"/{path_kind}/{target.deployment_name}/v{target.deployment_version}",
+    if not target.subdomain:
+        raise ValueError("deployment URL requires the deployment's subdomain")
+    label = deployment_host_label(
+        target.subdomain,
+        version=target.deployment_version if pin_version else None,
     )
+    return _replace_host(parsed, f"{label}.{parsed.netloc}")
 
 
-def build_stub_url(external_url: str, mode: InvokeUrlMode, target: StubUrlTarget) -> str:
+def build_stub_url(external_url: str, target: StubUrlTarget) -> str:
     parsed = _parse_external_url(external_url)
-    if mode == InvokeUrlMode.Host:
-        return _replace_host(parsed, f"{target.stub_id}.{parsed.netloc}")
-    return _replace_path(parsed, f"/{_deployed_path_kind(target.kind)}/id/{target.stub_id}")
+    return _replace_host(parsed, f"{target.stub_id}.{parsed.netloc}")
 
 
-def build_pod_url(external_url: str, mode: InvokeUrlMode, target: StubUrlTarget) -> str:
+def build_pod_url(external_url: str, target: StubUrlTarget) -> str:
     parsed = _parse_external_url(external_url)
     port = str(target.ports[0]) if len(target.ports) == 1 else "<PORT>"
-    if mode == InvokeUrlMode.Host:
-        return _replace_host(parsed, f"{target.stub_id}-{port}.{parsed.netloc}")
-    if target.public:
-        return _replace_path(parsed, f"/{target.kind}/public/{target.stub_id}/{port}")
-    return _replace_path(parsed, f"/{target.kind}/id/{target.stub_id}/{port}")
+    return _replace_host(parsed, f"{target.stub_id}-{port}.{parsed.netloc}")
 
 
 def pod_proxy_url(
@@ -102,9 +99,7 @@ def pod_proxy_url(
     resource: StubKind,
     stub_id: str,
     port: int,
-    public: bool,
     container_id: str | None = None,
-    mode: InvokeUrlMode = InvokeUrlMode.Path,
 ) -> str:
     if gateway_http_url != gateway_http_url.strip():
         raise ValueError("gateway HTTP URL must not contain surrounding whitespace")
@@ -123,17 +118,11 @@ def pod_proxy_url(
         if not container_id:
             msg = "container id is required for sandbox proxy URLs"
             raise ValueError(msg)
-        if mode is InvokeUrlMode.Host:
-            return _replace_host(parsed, f"{container_id}-{port}.{parsed.netloc}")
-        access = "public" if public else "id"
-        return f"{origin}/{StubKind.Sandbox.value}/{access}/{container_id}/{port}"
+        return _replace_host(parsed, f"{container_id}-{port}.{parsed.netloc}")
     if container_id is not None:
         msg = "container id is supported only for sandbox proxy URLs"
         raise ValueError(msg)
-    if mode is InvokeUrlMode.Host:
-        return _replace_host(parsed, f"{stub_id}-{port}.{parsed.netloc}")
-    access = "public" if public else "id"
-    return f"{origin}/{resource.value}/{access}/{stub_id}/{port}"
+    return _replace_host(parsed, f"{stub_id}-{port}.{parsed.netloc}")
 
 
 def parse_container_address(address: str, *, resource: str) -> ParseResult:
@@ -155,21 +144,5 @@ def _parse_external_url(external_url: str) -> ParseResult:
     return parsed
 
 
-def _replace_path(parsed: ParseResult, path: str) -> str:
-    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
-
-
 def _replace_host(parsed: ParseResult, host: str) -> str:
     return urlunparse((parsed.scheme, host, "", "", "", ""))
-
-
-def _deployed_path_kind(kind: str) -> str:
-    if kind == "task-queue":
-        return "api/v1/taskqueues"
-    if kind == "function":
-        return "api/v1/functions"
-    if kind == "endpoint":
-        return "api/v1/endpoints"
-    if kind == "asgi":
-        return "api/v1/asgi"
-    return kind

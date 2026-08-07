@@ -385,7 +385,6 @@ def resolve_serve_url(
     client: ServeUrlClient,
     *,
     stub_id: str,
-    url_type: str = "",
     workspace: str | None = None,
     external_url: str,
 ) -> ServePreviewUrl:
@@ -395,7 +394,6 @@ def resolve_serve_url(
             url_type=GatewayUrlKind.Stub,
             workspace=workspace,
             external_url=external_url,
-            mode=_url_mode(url_type),
         )
     )
     if not response.url:
@@ -547,13 +545,6 @@ def _snapshot(local_dir: str) -> dict[str, FileState]:
 def _is_retryable_initial_sync_error(exc: Exception) -> bool:
     message = str(exc)
     return "worker address not published" in message or "Container not found" in message
-
-
-def _url_mode(url_type: str) -> str:
-    value = url_type.strip().lower()
-    if value in {"host", "subdomain"}:
-        return "host"
-    return "path"
 
 
 def _preview_record_path(

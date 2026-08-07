@@ -51,7 +51,6 @@ from shared.identity import (
 from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.urls import (
-    InvokeUrlMode,
     StubUrlTarget,
     build_deployment_url,
     build_pod_url,
@@ -962,7 +961,6 @@ class ControlPlaneService:
         apps: AppReader,
         workspace: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
-        mode: InvokeUrlMode = InvokeUrlMode.Path,
         deployment_id: str | None = None,
         port: int | None = None,
     ) -> StubUrlPlan:
@@ -970,31 +968,29 @@ class ControlPlaneService:
         deployment = self._deployment(deployment_id or stub.deployment_id or "")
         app = apps.get(stub.app_id, workspace=workspace) if stub.app_id else None
         ports = _stub_ports(stub, port=port)
-        deployment_subdomain = app.name if app is not None else ""
         target = StubUrlTarget(
             kind=stub.kind.value,
             stub_id=stub.id,
             deployment_name=deployment.name if deployment else stub.name,
             deployment_version=deployment.version if deployment else 1,
-            deployment_subdomain=deployment_subdomain,
+            subdomain=deployment.subdomain if deployment else "",
             public=stub.public or bool(app and app.public),
             ports=ports,
         )
         try:
             if stub.kind is StubKind.Pod:
-                url = build_pod_url(external_url, mode, target)
+                url = build_pod_url(external_url, target)
             elif stub.kind is StubKind.Sandbox:
                 raise InvalidInputError("sandbox URLs require a container-specific exposure")
             elif deployment is not None:
-                url = build_deployment_url(external_url, mode, target)
+                url = build_deployment_url(external_url, target)
             else:
-                url = build_stub_url(external_url, mode, target)
+                url = build_stub_url(external_url, target)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         return StubUrlPlan(
             stub=stub,
             url=url,
-            mode=mode,
             external_url=external_url,
             route_kind=stub.kind,
             deployment=deployment,
