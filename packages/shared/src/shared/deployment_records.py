@@ -276,6 +276,13 @@ class Deployment(ContractModel):
     stub_id: str | None = None
     version: int = 1
     spec: DeploymentSpec
+    subdomain: str
+    """DNS label this resource answers on, shared by every one of its versions.
+
+    Minted from the resource's identity at deploy time and never recomputed: it is
+    published in URLs, so deriving it per request would let a later rename move a
+    hostname a customer already handed out.
+    """
     pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     """Pool this deployment was pinned to when it was created.
 

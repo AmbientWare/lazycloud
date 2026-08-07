@@ -19,6 +19,7 @@ from shared.deployment_records import (
     resolve_retries,
     resolve_timeout_seconds,
 )
+from shared.deployment_subdomains import deployment_subdomain
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -42,6 +43,12 @@ class DeploymentRegistration:
 @dataclass(frozen=True, slots=True)
 class DeploymentAppResolution:
     app_id: str | None
+    app_name: str
+    """Name the deployment's app has or will be created under.
+
+    Known even when `app_id` is not, which is what lets the subdomain be minted on the
+    same deploy that creates the app.
+    """
 
 
 class DeploymentRegistrar(Protocol):
@@ -128,6 +135,12 @@ class DeploymentService:
                     "stub_id": None,
                     "version": version,
                     "spec": normalized_spec.model_dump(mode="json"),
+                    "subdomain": deployment_subdomain(
+                        workspace_id=workspace_record.id,
+                        app_name=app_resolution.app_name,
+                        name=normalized_spec.name,
+                        kind=normalized_spec.kind,
+                    ),
                     "pool": resolved_pool,
                     "active": deployment_active,
                 },

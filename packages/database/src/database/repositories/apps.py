@@ -710,6 +710,47 @@ class DeploymentResourceRepository:
             for app_row, deployment_row, stub_row in self.session.execute(statement).tuples()
         ]
 
+    def get_by_subdomain(
+        self,
+        subdomain: str,
+        *,
+        version: int | None,
+    ) -> DeploymentResourceRow | None:
+        """Resolve the resource a public hostname addresses.
+
+        Deliberately not workspace-scoped, unlike every other lookup here: a request
+        arriving at the edge carries no token, so the subdomain is the only routing key
+        available and the row it finds is what establishes which workspace answers.
+        That is safe only because the subdomain is unique across workspaces by
+        construction and by `uq_deployments_subdomain_version_active`.
+        """
+        statement = (
+            select(AppTable, DeploymentTable, StubTable)
+            .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
+            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
+            .where(AppTable.deleted_at.is_(None))
+            .where(DeploymentTable.deleted_at.is_(None))
+            .where(DeploymentTable.active.is_(True))
+            .where(DeploymentTable.subdomain == subdomain)
+        )
+        if version is not None:
+            statement = statement.where(DeploymentTable.version == version)
+        row = (
+            self.session.execute(statement.order_by(DeploymentTable.version.desc()).limit(1))
+            .tuples()
+            .first()
+        )
+        if row is None:
+            return None
+        app_row, deployment_row, stub_row = row
+        return DeploymentResourceRow(
+            app=app_record_from_table(app_row),
+            deployment_payload=deployment_row.payload,
+            deployment_app_id=str(deployment_row.app_id) if deployment_row.app_id else None,
+            deployment_stub_id=str(deployment_row.stub_id) if deployment_row.stub_id else None,
+            stub_payload=stub_row.payload,
+        )
+
 
 @dataclass(slots=True)
 class CronJobRepository:

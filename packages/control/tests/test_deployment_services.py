@@ -119,7 +119,7 @@ class _FailingDeploymentRegistrar:
         workspace: str = "default",
     ) -> DeploymentAppResolution:
         del spec, workspace
-        return DeploymentAppResolution(app_id=None)
+        return DeploymentAppResolution(app_id=None, app_name="failing")
 
     def register_deployment(
         self,

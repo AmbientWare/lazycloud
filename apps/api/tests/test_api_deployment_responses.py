@@ -11,6 +11,7 @@ def test_deployment_response_exposes_safe_workload_configuration() -> None:
         kind=DeploymentKind.Endpoint,
         app_id="app-1",
         stub_id="stub-1",
+        subdomain="predict-a1b2c3d4",
         spec=DeploymentSpec(
             name="predict",
             kind=DeploymentKind.Endpoint,
