@@ -116,6 +116,7 @@ class EndpointOptions(TypedDict, total=False):
     image: Image | None
     name: str | None
     route: str
+    domain: str | None
     methods: list[str] | None
     cpu: float | None
     memory: str | None
@@ -152,6 +153,7 @@ class ASGIOptions(TypedDict, total=False):
     name: str
     image: Image | None
     route: str
+    domain: str | None
     cpu: float | None
     memory: str | None
     disk: str | None
@@ -197,6 +199,7 @@ class Endpoint(Generic[P, R]):
     image: Image = field(default_factory=Image)
     name: str | None = None
     route: str = "/"
+    domain: str | None = None
     methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
     cpu: float | None = DEFAULT_HTTP_CPU
     memory: str | None = DEFAULT_HTTP_MEMORY
@@ -281,6 +284,7 @@ class Endpoint(Generic[P, R]):
                 preemptible=self.preemptible,
             ),
             route=self.route,
+            domain=self.domain,
             methods=list(self.methods),
             env=self.env,
             secrets=self.secrets,
@@ -424,6 +428,7 @@ def _endpoint(
     image: Image | None = None,
     name: str | None = None,
     route: str = "/",
+    domain: str | None = None,
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -465,6 +470,7 @@ def _endpoint(
     image: Image | None = None,
     name: str | None = None,
     route: str = "/",
+    domain: str | None = None,
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -505,6 +511,7 @@ def _endpoint(
     image: Image | None = None,
     name: str | None = None,
     route: str = "/",
+    domain: str | None = None,
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -572,6 +579,7 @@ def _endpoint(
             provider=provider,
             metadata=metadata or {},
             route=route,
+            domain=domain,
             methods=methods or ["GET", "POST"],
         )
 
@@ -587,6 +595,7 @@ class ASGI:
     name: str = "asgi"
     image: Image = field(default_factory=Image)
     route: str = "/"
+    domain: str | None = None
     cpu: float | None = DEFAULT_HTTP_CPU
     memory: str | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
@@ -659,6 +668,7 @@ class ASGI:
                 keep_warm=self.keep_warm_seconds,
             ),
             route=self.route,
+            domain=self.domain,
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
@@ -783,6 +793,7 @@ def _asgi(
     name: str = "asgi",
     image: Image | None = None,
     route: str = "/",
+    domain: str | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
@@ -812,6 +823,7 @@ def _asgi(
             name=name,
             image=image or Image(),
             route=route,
+            domain=domain,
             cpu=cpu,
             memory=memory,
             disk=disk,
@@ -844,6 +856,7 @@ def _realtime(
     name: str = "realtime",
     image: Image | None = None,
     route: str = "/",
+    domain: str | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
@@ -873,6 +886,7 @@ def _realtime(
             name=name,
             image=image or Image(),
             route=route,
+            domain=domain,
             cpu=cpu,
             memory=memory,
             disk=disk,
