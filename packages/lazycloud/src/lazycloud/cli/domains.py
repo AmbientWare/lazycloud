@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from shared.custom_domains import CustomDomainPhase
 from shared.http.custom_domains import CustomDomainResponse
 
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
@@ -15,6 +16,7 @@ def _payload(domain: CustomDomainResponse) -> dict[str, object]:
     return {
         "hostname": domain.hostname,
         "phase": domain.phase.value,
+        "cname_target": domain.cname_target,
         "verification_target": domain.verification_target,
         "error": domain.error_message,
         "verified_at": domain.verified_at.isoformat() if domain.verified_at else None,
@@ -28,12 +30,28 @@ def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
     console.print(
         table(
             "Domain",
-            ["hostname", "status", "cname target"],
-            [[domain.hostname, domain.phase.value, domain.verification_target or "-"]],
+            ["hostname", "status"],
+            [[domain.hostname, domain.phase.value]],
         )
     )
     if domain.error_message:
         console.print(f"[red]{domain.error_message}[/red]")
+    if domain.phase is not CustomDomainPhase.Ready and domain.cname_target:
+        _print_dns_record(domain)
+
+
+def _print_dns_record(domain: CustomDomainResponse) -> None:
+    """Print the record to create, named the way a DNS form asks for it."""
+
+    # A wildcard is entered as the `*` label; spelling out `*.acme.com` in a form
+    # that already appends the zone produces `*.acme.com.acme.com`.
+    name = "*" if domain.hostname.startswith("*.") else domain.hostname
+    console.print("\nAdd this record at your DNS provider:")
+    console.print(
+        table("DNS record", ["type", "name", "target"], [["CNAME", name, domain.cname_target]])
+    )
+    if domain.verification_target:
+        console.print(f"Verification record: {domain.verification_target}")
 
 
 @domain_app.command("add")
@@ -46,12 +64,8 @@ def domain_add(
 
     registered = domain_client(workspace=workspace).register(domain)
     _print(ctx, registered)
-    if not json_output_enabled(ctx) and registered.verification_target:
-        console.print(
-            f"\nAdd a CNAME for [bold]{registered.hostname}[/bold] pointing at "
-            f"[bold]{registered.verification_target}[/bold], then run "
-            f"`lazycloud domain status {registered.hostname}`."
-        )
+    if not json_output_enabled(ctx):
+        console.print(f"Then run `lazycloud domain status {registered.hostname}`.")
 
 
 @domain_app.command("list")

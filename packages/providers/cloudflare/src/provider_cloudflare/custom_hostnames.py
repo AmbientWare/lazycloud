@@ -41,7 +41,11 @@ class CloudflareCustomHostnames:
         payload: dict[str, Any] = {
             "hostname": hostname.removeprefix(WILDCARD_PREFIX),
             "ssl": {
-                "method": "txt",
+                # The CNAME the customer publishes to route traffic here also proves
+                # they control the name, so one record does both. Asking for a TXT as
+                # well would add a second record that answers a question the first
+                # already answered.
+                "method": "http",
                 "type": "dv",
                 # One label, matching what the domain model promises a wildcard covers.
                 "wildcard": hostname.startswith(WILDCARD_PREFIX),

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
@@ -119,11 +119,11 @@ function DomainRow({
           <span className="truncate text-sm text-foreground">{domain.hostname}</span>
           <StatusChip status={domain.phase} />
         </div>
-        {/* The one thing the customer has to act on, so it is shown until it stops mattering. */}
-        {domain.verification_target && domain.phase !== "ready" ? (
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Add a CNAME pointing at <code>{domain.verification_target}</code>
-          </p>
+        {/* The one thing the customer has to act on, so it is shown until it stops
+            mattering, and shown as the record they have to create rather than as prose
+            they would have to translate into one. */}
+        {domain.phase !== "ready" && domain.cname_target ? (
+          <DnsInstructions domain={domain} />
         ) : null}
         {domain.error_message ? (
           <p className="mt-0.5 text-[11px] text-destructive">{domain.error_message}</p>
@@ -139,5 +139,62 @@ function DomainRow({
         <Trash2 />
       </Button>
     </li>
+  );
+}
+
+/** The record to create, laid out the way a DNS form asks for it. */
+function DnsInstructions({ domain }: { domain: CustomDomain }) {
+  // A wildcard registration is entered as the `*` label, which is how every DNS
+  // form names it; spelling out `*.acme.com` there produces `*.acme.com.acme.com`.
+  const recordName = domain.hostname.startsWith("*.") ? "*" : domain.hostname;
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      <p className="text-[11px] text-muted-foreground">
+        Add this record at your DNS provider, then this row turns ready on its own.
+      </p>
+      <dl className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
+        <dt className="text-[11px] text-muted-foreground">Type</dt>
+        <dd className="mono text-[11px] text-foreground">CNAME</dd>
+        <dt className="text-[11px] text-muted-foreground">Name</dt>
+        <dd>
+          <CopyValue value={recordName} label="record name" />
+        </dd>
+        <dt className="text-[11px] text-muted-foreground">Target</dt>
+        <dd>
+          <CopyValue value={domain.cname_target} label="record target" />
+        </dd>
+      </dl>
+      {domain.verification_target ? (
+        <p className="text-[11px] text-muted-foreground">
+          Also add the verification record your provider shows:{" "}
+          <code>{domain.verification_target}</code>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function CopyValue({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={`Copy ${label}`}
+      title={`Copy ${label}`}
+      onClick={() => {
+        void navigator.clipboard.writeText(value).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="mono inline-flex max-w-full items-center gap-1.5 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted"
+    >
+      <span className="truncate">{value}</span>
+      {copied ? (
+        <Check className="size-3 shrink-0 text-positive" />
+      ) : (
+        <Copy className="size-3 shrink-0 opacity-60" />
+      )}
+    </button>
   );
 }

@@ -20,7 +20,9 @@ export const customDomainSchema = z.object({
   id: z.string(),
   hostname: z.string(),
   phase: customDomainPhaseSchema,
-  // Empty until the edge reports the record the customer has to publish.
+  // The hostname the customer points their DNS at.
+  cname_target: z.string().default(""),
+  // An extra record the edge asked for, on the rare occasion it wants one.
   verification_target: z.string().default(""),
   error_code: customDomainErrorCodeSchema.nullable().default(null),
   error_message: z.string().nullable().default(null),

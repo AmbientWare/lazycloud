@@ -19,6 +19,16 @@ router = APIRouter()
 _UNSETTLED = {CustomDomainPhase.AwaitingVerification, CustomDomainPhase.Validating}
 
 
+def _cname_target(services: ApiServices) -> str:
+    """What the customer points DNS at: this platform's own public hostname.
+
+    The same value for every domain, but returned per domain so the dashboard and
+    the CLI can show a record a customer copies without assembling it themselves.
+    """
+
+    return services.gateway_settings.public_base_domain
+
+
 def _refreshed(services: ApiServices, domain: CustomDomain) -> CustomDomain:
     """Re-read a domain still waiting on the edge, because reading is when it matters.
 
@@ -47,7 +57,7 @@ def register_custom_domain(
     services: ApiServices = Depends(current_services),
 ) -> CustomDomainResponse:
     domain = services.custom_domains.register(request.domain, workspace=workspace_id)
-    return custom_domain_response(domain)
+    return custom_domain_response(domain, cname_target=_cname_target(services))
 
 
 @router.get(
@@ -60,8 +70,12 @@ def list_custom_domains(
     services: ApiServices = Depends(current_services),
 ) -> CustomDomainListResponse:
     domains = services.custom_domains.list(workspace=workspace_id)
+    target = _cname_target(services)
     return CustomDomainListResponse(
-        data=[custom_domain_response(_refreshed(services, domain)) for domain in domains]
+        data=[
+            custom_domain_response(_refreshed(services, domain), cname_target=target)
+            for domain in domains
+        ]
     )
 
 
@@ -76,7 +90,10 @@ def get_custom_domain(
     services: ApiServices = Depends(current_services),
 ) -> CustomDomainResponse:
     domain = services.custom_domains.get(hostname, workspace=workspace_id)
-    return custom_domain_response(_refreshed(services, domain))
+    return custom_domain_response(
+        _refreshed(services, domain),
+        cname_target=_cname_target(services),
+    )
 
 
 @router.delete(

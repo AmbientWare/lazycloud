@@ -22,8 +22,11 @@ class CustomDomainResponse(HttpModel):
     id: str
     hostname: str
     phase: CustomDomainPhase
+    cname_target: str = ""
+    """Hostname the customer points their DNS at. The platform's own public host."""
+
     verification_target: str = ""
-    """The CNAME value to publish for this domain, once the edge has reported one."""
+    """An extra record the edge asked for, on the rare occasion it wants one."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -38,11 +41,12 @@ class CustomDomainListResponse(HttpModel):
     next: str = ""
 
 
-def custom_domain_response(domain: CustomDomain) -> CustomDomainResponse:
+def custom_domain_response(domain: CustomDomain, *, cname_target: str) -> CustomDomainResponse:
     return CustomDomainResponse(
         id=domain.id,
         hostname=domain.hostname,
         phase=domain.phase,
+        cname_target=cname_target,
         verification_target=domain.verification_target,
         error_code=domain.error_code,
         error_message=domain.error_message,
