@@ -8,7 +8,13 @@ and rotating it.
 - A change to this file is a change to what the internet can reach. Review it as
   one, and keep it small enough to review that way.
 - The ingress list is ordered and first match wins, so a rule placed after the
-  catch-all is dead.
+  final catch-all is dead.
+- The final rule forwards rather than refusing, because customer-owned hostnames
+  arrive carrying their own `Host` header and cannot be enumerated here. What the
+  platform serves is still decided at the origin, which resolves that header
+  against the domains a workspace registered. Narrowing this rule would break
+  custom domains; relaxing the origin check because traffic reached it would
+  serve any hostname pointed at the tunnel.
 - Refusing something at the edge removes a surface; it never replaces the
   origin's own authorization. Do not relax an origin check because a prefix is
   blocked here.

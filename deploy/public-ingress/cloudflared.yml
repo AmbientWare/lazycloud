@@ -27,4 +27,9 @@ ingress:
   - hostname: "*.lazycloud.dev"
     service: http://control-plane:9000
 
-  - service: http_status:404
+  # Hostnames a customer owns. Cloudflare for SaaS proxies them here carrying
+  # their own Host header, so they match no rule above and there is no pattern
+  # that would enumerate them. The origin resolves the header against the
+  # domains a workspace registered and refuses every name it does not know, so
+  # this widens what reaches the origin rather than what the platform serves.
+  - service: http://control-plane:9000
