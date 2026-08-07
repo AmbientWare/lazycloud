@@ -91,14 +91,23 @@ straight to a pull request. Ordered — networking first, agent artifact last.
       only works while it is unset — the reason `.env.example` documents it as
       absent rather than as an override.
 
-- [ ] **GPU AMI location — decision needed, not obviously work.** Flagged
-      earlier as "should move to the release manifest", but
-      `AwsCapacityEnvironmentSettings`
-      (`packages/provider-clients/src/provider_clients/settings.py:125`)
-      deliberately keeps it out: which AMIs carry GPU drivers is the deployment's
-      decision, while the worker image, agent URL, and CPU AMIs are facts of the
-      release. `deploy/release.py` accepts only `--cpu-ami`. Moving it means
-      revisiting that decision, so decide before doing.
+- [x] **GPU AMI location.** Decided: **a fact of the release, like the CPU AMIs.**
+      The original entry's premise was that which AMIs carry GPU drivers is the
+      deployment's choice. It is not, once the repository bakes them: a GPU AMI is
+      only usable by the gVisor build that ships in the same release, because
+      nvproxy proxies driver ABIs it was compiled against. Leaving the AMI to the
+      deployment means a deployment can pair a driver with a sandbox that cannot
+      talk to it, and the failure appears as GPU containers that will not start.
+
+      So `deploy/release.py` takes `--gpu-ami` alongside `--cpu-ami`,
+      `capacity_gpu_ami_ids` rides the release manifest, and
+      `AwsCapacityEnvironmentSettings` no longer owns it — `gpu_ami_ids` now lives
+      on `AwsCapacitySettings`, resolved from the manifest the same way the CPU
+      AMIs are. `deploy/ami/bake.py --variant gpu` produces the image and refuses
+      to register one whose installed driver the pinned gVisor does not proxy.
+
+      Fixed on the way past: `AwsCapacitySettings.configured` required a non-empty
+      GPU catalog, so a CPU-only deployment advertised no AWS regions at all.
 
 ## Release
 
