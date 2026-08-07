@@ -254,6 +254,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
             },
             "env": dict(spec.env),
             "route": spec.route,
+            "domain": spec.domain,
             "methods": list(spec.methods),
             "command": list(spec.command),
             "ports": {str(name): port for name, port in spec.ports.items()},

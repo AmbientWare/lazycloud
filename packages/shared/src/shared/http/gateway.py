@@ -181,6 +181,7 @@ class GetOrCreateStubRequest(HttpModel):
     gpu: str = ""
     handler: str = ""
     route: str | None = None
+    domain: str | None = None
     methods: list[str] = Field(default_factory=list)
     retries: int = 0
     retry_policy: RetryPolicy | None = None
