@@ -24,7 +24,6 @@ DEFAULT_FUNCTION_MAX_PENDING_TASKS = 100
 DEFAULT_FUNCTION_MEMORY = "128Mi"
 DEFAULT_FUNCTION_RETRIES = 3
 DEFAULT_FUNCTION_TIMEOUT_SECONDS = 3600
-DEFAULT_FUNCTION_KEEP_WARM_SECONDS = 10
 DEFAULT_HTTP_CPU = 1.0
 DEFAULT_HTTP_KEEP_WARM_SECONDS = 180
 DEFAULT_HTTP_MEMORY = "128Mi"
@@ -96,9 +95,13 @@ class Resources(ContractModel):
 
 
 def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
+    """Idle seconds a workload's container survives for, by kind.
+
+    Functions and cron jobs fall through to zero: each invocation is scheduled as
+    an independent task against a container addressed by that task's id, so there
+    is no warm container a later invocation could reach.
+    """
     deployment_kind = _deployment_kind(kind)
-    if deployment_kind is DeploymentKind.Function:
-        return DEFAULT_FUNCTION_KEEP_WARM_SECONDS
     if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
         return DEFAULT_HTTP_KEEP_WARM_SECONDS
     if deployment_kind is DeploymentKind.Pod:
@@ -289,7 +292,6 @@ __all__ = [
     "DEFAULT_DISK",
     "DEFAULT_FUNCTION_AUTHORIZED",
     "DEFAULT_FUNCTION_CPU",
-    "DEFAULT_FUNCTION_KEEP_WARM_SECONDS",
     "DEFAULT_FUNCTION_MAX_PENDING_TASKS",
     "DEFAULT_FUNCTION_MEMORY",
     "DEFAULT_FUNCTION_RETRIES",
