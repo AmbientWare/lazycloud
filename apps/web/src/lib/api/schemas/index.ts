@@ -4,6 +4,7 @@ export * from "./client_manifests";
 export * from "./compute";
 export * from "./concurrency";
 export * from "./cron";
+export * from "./custom_domains";
 export * from "./events";
 export * from "./errors";
 export * from "./functions";
