@@ -19,6 +19,13 @@ x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://localhost:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
   LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane:9000}"
 
+# Credentials for the edge that terminates TLS on customer-owned hostnames. Empty
+# by default: a deployment without them serves every platform hostname exactly as
+# before, and only the domain operations fail, naming what is missing.
+x-cloudflare-env: &cloudflare-env
+  LAZYCLOUD_CLOUDFLARE_API_TOKEN: "${LAZYCLOUD_CLOUDFLARE_API_TOKEN:-}"
+  LAZYCLOUD_CLOUDFLARE_ZONE_ID: "${LAZYCLOUD_CLOUDFLARE_ZONE_ID:-}"
+
 x-api-env: &api-env
   LAZYCLOUD_TCP_INGRESS_ENABLED: "true"
   LAZYCLOUD_TCP_INGRESS_CERTIFICATE_FILE: "/var/lib/lazycloud/tcp-ingress/tls.crt"
@@ -284,6 +291,7 @@ services:
           *database-env,
           *redis-env,
           *gateway-env,
+          *cloudflare-env,
           *api-env,
           *object-store-env,
           *image-build-env,
@@ -369,6 +377,7 @@ services:
           *database-env,
           *redis-env,
           *gateway-env,
+          *cloudflare-env,
           *object-store-env,
           *image-build-env,
           *agent-binary-env,
@@ -554,6 +563,7 @@ services:
           *database-env,
           *redis-env,
           *gateway-env,
+          *cloudflare-env,
           *object-store-env,
           *release-env,
           *agent-binary-env,

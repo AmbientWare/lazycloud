@@ -31,6 +31,28 @@ curl -s -o /dev/null -w '%{http_code}\n' https://lazycloud.dev/metrics   # 404 a
 middleware rewrites generated invoke hosts to the stub's handler path, so a
 path filter there would break user applications.
 
+The final rule forwards every remaining hostname, because a customer-owned
+domain arrives carrying its own `Host` header and cannot be enumerated here.
+The origin resolves that header against the domains a workspace registered and
+refuses the rest, including the two prefixes above.
+
+## Customer-owned domains
+
+Cloudflare for SaaS issues a certificate per registered domain and proxies it to
+this tunnel. One-time setup on the zone:
+
+1. SSL/TLS → Custom Hostnames: enable it, and set the fallback origin to
+   `lazycloud.dev`. Cloudflare forbids a *custom hostname* equal to the zone
+   name; an apex fallback origin is fine.
+2. Mint an API token scoped to Zone → SSL and Certificates → Edit, and set
+   `LAZYCLOUD_CLOUDFLARE_API_TOKEN` and `LAZYCLOUD_CLOUDFLARE_ZONE_ID` in the
+   deployment `.env`. Compose passes both to the control plane and the scheduler.
+
+A workspace then registers `example.com` or `*.example.com`, publishes the CNAME
+the platform reports, and claims a hostname under it with `domain=` on the
+resource. Without the two variables the stack still serves every platform
+hostname; only the domain operations fail, and they name what is missing.
+
 ## Minting a tunnel
 
 Requires a Cloudflare API token with Account → Cloudflare Tunnel → Edit, Zone →
