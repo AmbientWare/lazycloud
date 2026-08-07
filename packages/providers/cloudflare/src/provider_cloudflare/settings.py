@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from shared.app_identity import ENV_PREFIX
 
 from provider_cloudflare.custom_hostnames import CloudflareCustomHostnames, build_client
-from shared.app_identity import ENV_PREFIX
 
 
 class CloudflareSettings(BaseSettings):

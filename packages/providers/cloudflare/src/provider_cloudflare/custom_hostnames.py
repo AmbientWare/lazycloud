@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-
 from shared.custom_domains import (
     WILDCARD_PREFIX,
     CustomDomainErrorCode,

@@ -746,6 +746,22 @@ class DeploymentResourceRepository:
             for app_row, deployment_row, stub_row in self.session.execute(statement).tuples()
         ]
 
+    def hostnames_claimed_under(self, *, workspace_id: str) -> list[str]:
+        """Every hostname a live deployment in this workspace currently answers on.
+
+        Read before retiring a registration, so discarding a certificate cannot take
+        a serving deployment offline as a side effect.
+        """
+        rows = self.session.execute(
+            select(DeploymentTable.custom_hostname)
+            .where(DeploymentTable.workspace_id == workspace_id)
+            .where(DeploymentTable.deleted_at.is_(None))
+            .where(DeploymentTable.active.is_(True))
+            .where(DeploymentTable.custom_hostname.is_not(None))
+            .distinct()
+        ).scalars()
+        return [hostname for hostname in rows if hostname]
+
     def get_by_custom_hostname(self, hostname: str) -> DeploymentResourceRow | None:
         """Resolve the resource that claimed a registered hostname, at its latest version.
 
