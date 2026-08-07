@@ -33,8 +33,11 @@ path filter there would break user applications.
 
 The final rule forwards every remaining hostname, because a customer-owned
 domain arrives carrying its own `Host` header and cannot be enumerated here.
-The origin resolves that header against the domains a workspace registered and
-refuses the rest, including the two prefixes above.
+The two prefixes above are refused at the edge only for `lazycloud.dev`; both
+also require authorization at the origin, which is what actually protects them.
+The origin cannot refuse by hostname, because internal callers reach the control
+plane by service name and so arrive on a host that is not the public domain
+either.
 
 ## Customer-owned domains
 

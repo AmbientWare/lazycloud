@@ -11,10 +11,13 @@ and rotating it.
   final catch-all is dead.
 - The final rule forwards rather than refusing, because customer-owned hostnames
   arrive carrying their own `Host` header and cannot be enumerated here. What the
-  platform serves is still decided at the origin, which resolves that header
-  against the domains a workspace registered. Narrowing this rule would break
-  custom domains; relaxing the origin check because traffic reached it would
-  serve any hostname pointed at the tunnel.
+  platform serves is still decided at the origin, which routes a known hostname to
+  its resource and authorizes everything else for itself. Narrowing this rule
+  breaks custom domains.
+- The origin cannot refuse by hostname on the edge's behalf. Internal callers
+  reach the control plane by service name, so "not the public domain" describes
+  the worker registering itself exactly as well as it describes a stranger.
+  Anything that must not be public is authorized, not hidden.
 - Refusing something at the edge removes a surface; it never replaces the
   origin's own authorization. Do not relax an origin check because a prefix is
   blocked here.

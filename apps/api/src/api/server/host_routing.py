@@ -55,45 +55,17 @@ class GeneratedInvokeHostRoutingMiddleware:
             original_path=str(scope.get("path") or "/"),
         )
         if handler_path is None:
-            if _is_internal_only(scope) and host and host != base_host:
-                # The edge refuses these prefixes on the platform's own host, but a
-                # customer hostname reaches the origin unenumerated and a path rule
-                # broad enough to catch it there would also catch a user application
-                # serving the same path. A host that resolved to a resource never gets
-                # here, so this only refuses hosts that named nothing.
-                await _refuse(scope, send)
-                return
+            # A host that names nothing falls through to the platform's own routes,
+            # which authorize for themselves. Refusing here by hostname is not
+            # available: internal callers reach the control plane by service name, so
+            # "not the public domain" describes the worker registering itself just as
+            # well as it describes a stranger.
             await self.app(scope, receive, send)
             return
         rewritten = dict(scope)
         rewritten["path"] = handler_path
         rewritten["raw_path"] = handler_path.encode("utf-8")
         await self.app(rewritten, receive, send)
-
-
-def _is_internal_only(scope: Scope) -> bool:
-    path = str(scope.get("path") or "/")
-    return (
-        path == "/metrics" or path == "/worker-repository" or path.startswith("/worker-repository/")
-    )
-
-
-async def _refuse(scope: Scope, send: Send) -> None:
-    if scope["type"] == "websocket":
-        await send({"type": "websocket.close", "code": 1008})
-        return
-    body = b'{"detail":"unknown host"}'
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 404,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": body})
 
 
 def _host_label(host: str, *, base_host: str) -> str:
