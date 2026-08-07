@@ -255,6 +255,16 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        # Same reasoning for a claimed hostname. Nulls do not collide, so resources
+        # that claimed nothing are not treated as claiming the same thing.
+        Index(
+            "uq_deployments_custom_hostname_version_active",
+            "custom_hostname",
+            "version",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -277,6 +287,7 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     subdomain: Mapped[str] = mapped_column(String(63), nullable=False)
+    custom_hostname: Mapped[str | None] = mapped_column(String(253), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

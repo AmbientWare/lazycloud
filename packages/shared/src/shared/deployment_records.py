@@ -8,6 +8,7 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
+from shared.custom_domains import normalize_assignable_hostname
 from shared.deployments import DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
@@ -239,6 +240,13 @@ class DeploymentSpec(ContractModel):
     volumes: list[VolumeMount] = Field(default_factory=list)
     route: str | None = None
     methods: list[str] = Field(default_factory=lambda: ["GET", "POST"])
+    domain: str | None = None
+    """Hostname this resource should serve, under a domain the workspace registered.
+
+    Declared beside the resource because that is where every other deployed fact
+    lives, and because it says which resource the hostname reaches without a
+    second place to look.
+    """
     cron: str | None = None
     command: list[str] = Field(default_factory=list)
     ports: dict[str, Annotated[int, Field(strict=True, ge=1, le=65535)]] = Field(
@@ -253,6 +261,11 @@ class DeploymentSpec(ContractModel):
     @classmethod
     def normalize_methods(cls, values: list[str]) -> list[str]:
         return [value.upper() for value in values]
+
+    @field_validator("domain")
+    @classmethod
+    def normalize_domain(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_assignable_hostname(value)
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> DeploymentSpec:
@@ -282,6 +295,13 @@ class Deployment(ContractModel):
     Minted from the resource's identity at deploy time and never recomputed: it is
     published in URLs, so deriving it per request would let a later rename move a
     hostname a customer already handed out.
+    """
+    custom_hostname: str | None = None
+    """Registered hostname this resource also answers on, if the spec claimed one.
+
+    Null rather than empty when unclaimed, so the unique index that stops two
+    resources sharing a hostname does not treat every unclaimed resource as sharing
+    one.
     """
     pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     """Pool this deployment was pinned to when it was created.

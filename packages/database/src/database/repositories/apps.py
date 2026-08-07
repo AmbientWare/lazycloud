@@ -43,6 +43,7 @@ from shared.tasks import TaskStatus
 from sqlalchemy import Integer, and_, case, cast, delete, extract, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.sql.elements import ColumnElement
 
 
 class DeploymentResourceRow(BaseModel):
@@ -745,6 +746,16 @@ class DeploymentResourceRepository:
             for app_row, deployment_row, stub_row in self.session.execute(statement).tuples()
         ]
 
+    def get_by_custom_hostname(self, hostname: str) -> DeploymentResourceRow | None:
+        """Resolve the resource that claimed a registered hostname, at its latest version.
+
+        Not workspace-scoped, for the same reason `get_by_subdomain` is not: the edge
+        has only the hostname. Safe because a deployment may claim a hostname only
+        under a domain its own workspace registered, and the registration is unique
+        across workspaces.
+        """
+        return self._resolve_host_row(DeploymentTable.custom_hostname == hostname)
+
     def get_by_subdomain(
         self,
         subdomain: str,
@@ -761,19 +772,24 @@ class DeploymentResourceRepository:
         That is safe only because a subdomain belongs to exactly one resource, which
         `assert_subdomain_unclaimed` establishes when the subdomain is minted.
         """
-        statement = (
-            select(AppTable, DeploymentTable, StubTable)
-            .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
-            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
-            .where(AppTable.deleted_at.is_(None))
-            .where(DeploymentTable.deleted_at.is_(None))
-            .where(DeploymentTable.active.is_(True))
-            .where(DeploymentTable.subdomain == subdomain)
-        )
+        match = DeploymentTable.subdomain == subdomain
         if version is not None:
-            statement = statement.where(DeploymentTable.version == version)
+            match = and_(match, DeploymentTable.version == version)
+        return self._resolve_host_row(match)
+
+    def _resolve_host_row(self, match: ColumnElement[bool]) -> DeploymentResourceRow | None:
         row = (
-            self.session.execute(statement.order_by(DeploymentTable.version.desc()).limit(1))
+            self.session.execute(
+                select(AppTable, DeploymentTable, StubTable)
+                .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
+                .join(StubTable, StubTable.id == DeploymentTable.stub_id)
+                .where(AppTable.deleted_at.is_(None))
+                .where(DeploymentTable.deleted_at.is_(None))
+                .where(DeploymentTable.active.is_(True))
+                .where(match)
+                .order_by(DeploymentTable.version.desc())
+                .limit(1)
+            )
             .tuples()
             .first()
         )

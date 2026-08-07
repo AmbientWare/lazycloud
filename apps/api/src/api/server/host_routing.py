@@ -47,13 +47,11 @@ class GeneratedInvokeHostRoutingMiddleware:
         if not base_host:
             await self.app(scope, receive, send)
             return
-        label = self._host_label(scope, base_host=base_host)
-        if not label:
-            await self.app(scope, receive, send)
-            return
+        host = _scope_host(scope).split(":", 1)[0].strip(".").lower()
         handler_path = _resolve_handler_path(
             services,
-            label,
+            host,
+            base_host=base_host,
             original_path=str(scope.get("path") or "/"),
         )
         if handler_path is None:
@@ -64,15 +62,14 @@ class GeneratedInvokeHostRoutingMiddleware:
         rewritten["raw_path"] = handler_path.encode("utf-8")
         await self.app(rewritten, receive, send)
 
-    @staticmethod
-    def _host_label(scope: Scope, *, base_host: str) -> str:
-        host = _scope_host(scope).split(":", 1)[0].strip(".").lower()
-        if not host or host == base_host:
-            return ""
-        suffix = f".{base_host}"
-        if not host.endswith(suffix):
-            return ""
-        return host[: -len(suffix)]
+
+def _host_label(host: str, *, base_host: str) -> str:
+    if not host or host == base_host:
+        return ""
+    suffix = f".{base_host}"
+    if not host.endswith(suffix):
+        return ""
+    return host[: -len(suffix)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,12 +84,12 @@ class _HostTarget:
 
 def _resolve_handler_path(
     services: ApiServices,
-    label: str,
+    host: str,
     *,
+    base_host: str,
     original_path: str,
 ) -> str | None:
-    control_plane = ControlPlaneService(services.context)
-    target = _resolve_host_target(services, control_plane, label)
+    target = _resolve_host_target(services, host, base_host=base_host)
     if target is None:
         return None
     prefix = _kind_path(target.stub.kind)
@@ -116,9 +113,21 @@ def _resolve_handler_path(
 
 def _resolve_host_target(
     services: ApiServices,
-    control_plane: ControlPlaneService,
-    label: str,
+    host: str,
+    *,
+    base_host: str,
 ) -> _HostTarget | None:
+    """Find what a host names, whether the platform issued it or a customer owns it.
+
+    A hostname outside the platform's own domain can only be one a workspace
+    registered, so it is tried there and nowhere else.
+    """
+
+    label = _host_label(host, base_host=base_host)
+    if not label:
+        return _custom_hostname_target(services, host) if host else None
+
+    control_plane = ControlPlaneService(services.context)
     try:
         stub = control_plane.get_stub(label)
     except NotFoundError:
@@ -131,6 +140,13 @@ def _resolve_host_target(
         return port_target
 
     return _deployment_host_target(services, label)
+
+
+def _custom_hostname_target(services: ApiServices, host: str) -> _HostTarget | None:
+    resource = services.deployment_resources.get_by_custom_hostname(host)
+    if resource is None:
+        return None
+    return _HostTarget(stub=resource.stub, deployment_name=resource.deployment.name)
 
 
 def _port_host_target(

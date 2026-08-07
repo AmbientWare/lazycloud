@@ -168,6 +168,18 @@ class DeploymentResourceService:
             )
         return _deployment_resource(row) if row is not None else None
 
+    def get_by_custom_hostname(self, hostname: str) -> DeploymentResource | None:
+        """Resolve the resource that claimed a registered hostname.
+
+        Unscoped for the same reason as `get_by_subdomain`, and safe for the same
+        reason: a hostname can only be claimed under a domain the claiming workspace
+        registered, and a registration belongs to one workspace.
+        """
+
+        with self.context.database.session() as session:
+            row = DeploymentResourceRepository(session).get_by_custom_hostname(hostname)
+        return _deployment_resource(row) if row is not None else None
+
 
 def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:
     deployment = Deployment.model_validate(row.deployment_payload).model_copy(
