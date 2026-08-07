@@ -595,6 +595,14 @@ class SchedulerContainerRequestService:
             if worker is None or worker.status is not SchedulerWorkerStatus.Available:
                 remaining.append(claim)
                 continue
+            # This path never consults can_fit, so the tenancy rule is restated rather
+            # than inherited. Reservations are acquired per workspace already, which is
+            # what should make this unreachable—stating it is what keeps that true by
+            # construction instead of by coincidence. Falling through to the planner
+            # refuses it there, with a reason.
+            if not worker.serves_workspace(claim.request.workspace_id):
+                remaining.append(claim)
+                continue
             results.append(self._dispatch(claim, worker, now=now))
         return remaining, results
 
@@ -1087,6 +1095,7 @@ def _scheduling_request(
     )
     return SchedulingRequest(
         id=request.container_id,
+        workspace_id=request.workspace_id,
         queue=request.stub_id or "containers",
         payload=request.payload,
         cpu=cpu,
@@ -1137,7 +1146,8 @@ def _worker_capacity(
     return WorkerCapacity(
         worker_id=worker.worker_id,
         pool=worker.pool,
-        capacity_owner_id=worker.capacity_owner_id,
+        workspace_id=worker.workspace_id,
+        private_worker=worker.private_worker,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,
         runtime_classes=list(worker.runtime_classes),

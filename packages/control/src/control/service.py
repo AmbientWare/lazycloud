@@ -312,12 +312,18 @@ class ControlPlaneService:
     ) -> WorkspaceCreateResult:
         workspace_name = name or f"workspace-{uuid4()}"
         workspace = self.upsert_workspace(workspace_name, storage=storage)
-        raw_token, token_record = AuthService(self.context).create_token(
-            f"{workspace.name}-primary",
-            kind=TokenKind.WorkspacePrimary,
-            workspace_id=workspace.id,
-        )
-        workspace = self.upsert_workspace(workspace.name, primary_token_id=token_record.id)
+        # Adopting an existing workspace keeps the credential it already has. Minting
+        # unconditionally repointed `primary_token_id` at a new token on every call, so
+        # asking for a workspace that was already there re-keyed it and left the
+        # previous primary behind as a durable credential nobody issued deliberately.
+        raw_token = ""
+        if not workspace.primary_token_id:
+            raw_token, token_record = AuthService(self.context).create_token(
+                f"{workspace.name}-primary",
+                kind=TokenKind.WorkspacePrimary,
+                workspace_id=workspace.id,
+            )
+            workspace = self.upsert_workspace(workspace.name, primary_token_id=token_record.id)
         if storage is None:
             workspace = self.ensure_workspace_storage(workspace.id)
         return WorkspaceCreateResult(
