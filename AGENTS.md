@@ -110,13 +110,9 @@ narrow run is evidence for the owner it covered and nothing more. Reuse healthy
 infrastructure and clean up every process, port, and resource created for
 acceptance.
 
-Give a test run a short timeout and extend it only when a real result needs the
-time. Unit suites finish in seconds, so a generous limit does not make a slow
-run succeed—it turns a test blocked on an unreachable dependency into a wait
-instead of a finding, and hides that the test reached outside its owner at all.
-Keep the output observable rather than piping a long run to `tail`, and prefer
-fail-fast (`pytest -x`) with narrow owner scopes so the first real failure
-surfaces immediately.
+Run tests directly and let them finish. Keep the output observable rather than
+piping a long run to `tail`, and prefer fail-fast (`pytest -x`) with narrow owner
+scopes so the first real failure surfaces immediately.
 
 ### Never Wait On A State, Always Poll
 
