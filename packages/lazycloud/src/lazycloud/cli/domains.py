@@ -83,9 +83,7 @@ def domain_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [_payload(item) for item in response.data])
         return
-    rows = [
-        [item.hostname, item.phase.value, item.verification_target or "-"] for item in response.data
-    ]
+    rows = [[item.hostname, item.phase.value, item.cname_target or "-"] for item in response.data]
     console.print(table("Domains", ["hostname", "status", "cname target"], rows))
 
 
