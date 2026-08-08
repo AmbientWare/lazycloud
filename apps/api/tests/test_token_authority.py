@@ -5,12 +5,14 @@ from contextlib import ExitStack
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from identity.auth import AuthService
 from shared.http.errors import ErrorResponse
 from shared.http.system import TokenCreateResponse, TokenListResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
+from tests.service_fixtures import administrator_credential
 
 
 def test_workspace_writer_can_issue_an_ordinary_workspace_token(
@@ -43,7 +45,6 @@ def test_workspace_writer_can_issue_an_ordinary_workspace_token(
 @pytest.mark.parametrize(
     "requested_kind",
     [
-        TokenKind.Admin,
         TokenKind.WorkspacePrimary,
         TokenKind.WorkspaceRestricted,
         TokenKind.Worker,
@@ -79,32 +80,44 @@ def test_workspace_writer_cannot_issue_a_privileged_token_kind(
     ]
 
 
-def test_admin_can_explicitly_issue_an_admin_token(
+@pytest.mark.parametrize("requested_kind", [TokenKind.Admin, TokenKind.User, TokenKind.Session])
+def test_no_one_can_mint_an_account_credential_from_the_workspace_token_route(
+    requested_kind: TokenKind,
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
+    """Not even an administrator, because the result would belong to nobody.
+
+    These kinds mean "this names a person", and this route writes a row that names a
+    workspace. The token that came out passed every administrator check while having
+    no account to attribute, revoke, or disable it through.
+    """
+    admin_token, _record = administrator_credential(isolated_services, "token-authority-admin")
     auth = AuthService(isolated_services.context)
-    admin_token, admin = auth.create_token(
-        "operator",
-        scopes=[AuthScope.Admin.value],
-        kind=TokenKind.Admin,
-    )
+    workspace_id = ControlPlaneService(isolated_services.context).get_workspace("default").id
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.post(
         "/api/v1/tokens",
         headers=_auth(admin_token),
         json={
-            "name": "second-operator",
-            "kind": TokenKind.Admin.value,
-            "workspace_id": admin.workspace_id,
+            "name": f"forbidden-{requested_kind.value}",
+            "kind": requested_kind.value,
+            "workspace_id": workspace_id,
         },
     )
 
-    assert response.status_code == 201
-    created = TokenCreateResponse.model_validate_json(response.content)
-    assert created.record.kind is TokenKind.Admin
-    assert created.record.workspace_id == admin.workspace_id
+    _assert_error(
+        response,
+        400,
+        f"{requested_kind.value} credentials name an account, not a workspace; "
+        f"they come from signing in or from the offline administrator bootstrap",
+    )
+    assert not [
+        record
+        for record in auth.list_workspace_tokens(workspace_id)
+        if record.name.startswith("forbidden-")
+    ]
 
 
 @pytest.mark.parametrize(

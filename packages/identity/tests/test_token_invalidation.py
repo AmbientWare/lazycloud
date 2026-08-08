@@ -14,6 +14,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from shared.errors import NotFoundError
 from shared.identity import TokenKind
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 
 
 def _replica_context(services: ApiServices) -> ServiceContext:
@@ -103,11 +104,7 @@ def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServic
         auth.authenticate(expired_raw)
     assert generation() > before_expiry, "expiry-driven auto-revoke must emit"
 
-    _admin_raw, audit_actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=record.workspace_id,
-    )
+    _admin_raw, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
     doomed_workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
         "doomed-workspace"
     )

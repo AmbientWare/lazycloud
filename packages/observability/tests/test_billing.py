@@ -35,7 +35,6 @@ from shared.compute_policy import MachinePool, UnitName
 from shared.deployments import StubKind
 from shared.http.usage import UsageBillingPeriod
 from shared.http_transport import HttpChannel
-from shared.identity import TokenKind
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -47,6 +46,7 @@ from shared.usage import (
 )
 from shared.usage_query import UsageQuery
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 
 cli = build_admin_cli()
 
@@ -899,8 +899,5 @@ def _auth_headers(services: ApiServices, *, workspace_id: str = "default") -> di
 
 
 def _admin_auth_headers(services: ApiServices) -> dict[str, str]:
-    raw_token, _record = AuthService(services.context).create_token(
-        "usage-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _record = administrator_credential(services, "usage-admin")
     return {"Authorization": f"Bearer {raw_token}"}

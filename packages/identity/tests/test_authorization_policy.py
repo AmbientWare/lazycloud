@@ -22,6 +22,7 @@ from identity.authz import (
 )
 from shared.errors import ConflictError
 from shared.identity import AuthScope, AuthTokenRecord, TokenKind
+from tests.service_fixtures import administrator_credential
 
 
 def test_auth_service_records_token_kind_and_checks_scopes(
@@ -167,7 +168,6 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
     control = ControlPlaneService(isolated_services.context)
     workspace_a = control.upsert_workspace("workspace-a")
     workspace_b = control.upsert_workspace("workspace-b")
-    platform = control.upsert_workspace("platform")
     auth = AuthService(isolated_services.context)
     _, restricted = auth.create_token(
         "reader",
@@ -175,12 +175,7 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
         kind=TokenKind.WorkspaceRestricted,
         workspace_id=workspace_a.id,
     )
-    _, admin = auth.create_token(
-        "admin",
-        scopes=[],
-        kind=TokenKind.Admin,
-        workspace_id=platform.id,
-    )
+    _, admin = administrator_credential(isolated_services, "policy-admin")
 
     workspace_read = workspace_requirement(workspace_a.id, action=AuthScope.Read)
     assert decide_authorization(restricted, workspace_read).allowed

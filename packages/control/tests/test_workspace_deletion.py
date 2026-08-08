@@ -46,7 +46,6 @@ from shared.errors import ConflictError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     AuthTokenRecord,
-    TokenKind,
     TokenStatus,
     WorkspaceRecord,
     WorkspaceRole,
@@ -59,6 +58,7 @@ from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
 from tests.fakes import FakeObjectClient
 from tests.provider_fixtures import configure_test_provider
+from tests.service_fixtures import administrator_credential
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -67,17 +67,15 @@ def test_workspace_deletion_tombstones_identity_and_invalidates_tokens(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace(
         "tenant",
         labels={"team": "data"},
         metadata={"owner": "platform"},
     )
     auth = AuthService(isolated_services.context)
-    _admin_token, audit_actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
+    _admin_token, audit_actor = administrator_credential(
+        isolated_services, "workspace-delete-admin"
     )
     raw_token, _ = auth.create_token(
         "tenant-primary",
@@ -153,14 +151,10 @@ def test_workspace_deleting_transition_atomically_revokes_workspace_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
     auth = AuthService(isolated_services.context)
-    _admin_raw, actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    _admin_raw, actor = administrator_credential(isolated_services, "workspace-delete-admin")
     _workspace_raw, workspace_token = auth.create_token(
         "tenant-token",
         workspace_id=workspace.id,
@@ -237,13 +231,11 @@ def test_workspace_deletion_rolls_back_when_audit_append_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
     auth = AuthService(isolated_services.context)
-    _admin_token, audit_actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
+    _admin_token, audit_actor = administrator_credential(
+        isolated_services, "workspace-delete-admin"
     )
     workspace_token, workspace_actor = auth.create_token(
         "tenant-primary",
@@ -319,10 +311,8 @@ def test_workspace_deletion_purges_owned_resources_and_protects_identity_scopes(
     workspace = control.upsert_workspace("tenant")
     app = isolated_services.apps.create("predict", workspace=workspace.id)
     auth = AuthService(isolated_services.context)
-    _admin_token, audit_actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
+    _admin_token, audit_actor = administrator_credential(
+        isolated_services, "workspace-delete-admin"
     )
 
     with isolated_services.context.database.session() as session:
@@ -342,10 +332,13 @@ def test_workspace_deletion_purges_owned_resources_and_protects_identity_scopes(
         assert repository.deletion_blockers(workspace.id) == ()
         assert repository.owned_resource_ids(workspace.id) == ()
 
+    # A workspace-scoped credential is revoked by the deletion of its own workspace,
+    # so deleting it with that credential would end the operation midway holding a
+    # token that no longer exists. An account credential names no workspace and is
+    # not exposed to that, which is why the actor here is a workspace one.
     protected = control.upsert_workspace("protected")
     _protected_token, protected_actor = auth.create_token(
-        "protected-admin",
-        kind=TokenKind.Admin,
+        "protected-writer",
         workspace_id=protected.id,
     )
     with pytest.raises(ConflictError, match="current admin token"):
@@ -354,11 +347,12 @@ def test_workspace_deletion_purges_owned_resources_and_protects_identity_scopes(
             protected.id,
             audit_actor=protected_actor,
         )
+    _admin_raw, admin_actor = administrator_credential(isolated_services, "protection-admin")
     with pytest.raises(ConflictError, match="default workspace"):
         _delete_identity_workspace(
             isolated_services,
             default.id,
-            audit_actor=protected_actor,
+            audit_actor=admin_actor,
         )
 
 
@@ -366,14 +360,12 @@ def test_workspace_deletion_purges_autoscaler_state_and_fences_stale_reconciliat
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
     peer = control.upsert_workspace("peer")
-    auth = AuthService(isolated_services.context)
-    _admin_token, audit_actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
+    AuthService(isolated_services.context)
+    _admin_token, audit_actor = administrator_credential(
+        isolated_services, "workspace-delete-admin"
     )
     owned_state = _autoscaler_state(workspace.id, "owned-endpoint")
     peer_state = _autoscaler_state(peer.id, "peer-endpoint")
@@ -429,13 +421,11 @@ def test_workspace_deletion_preserves_historical_events_after_resource_cleanup(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
-    auth = AuthService(isolated_services.context)
-    _admin_token, audit_actor = auth.create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
+    AuthService(isolated_services.context)
+    _admin_token, audit_actor = administrator_credential(
+        isolated_services, "workspace-delete-admin"
     )
 
     isolated_services.secrets.set("temporary", "value", workspace=workspace.id)
@@ -480,14 +470,10 @@ def test_workspace_deletion_api_requires_admin_and_returns_no_content(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
     auth = AuthService(isolated_services.context)
-    admin_token, _ = auth.create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    admin_token, _ = administrator_credential(isolated_services, "admin")
     workspace_token, _ = auth.create_token("tenant", workspace_id=workspace.id)
     isolated_services.apps.create("predict", workspace=workspace.id)
     isolated_services.deployments.deploy(
@@ -555,11 +541,7 @@ def test_deleting_one_workspace_leaves_the_accounts_aws_connection_intact(
     control = ControlPlaneService(isolated_services.context)
     default = control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
-    admin_token, _actor = AuthService(isolated_services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    admin_token, _actor = administrator_credential(isolated_services, "admin")
     users = UserService(isolated_services.context)
     owner = users.create(username="account-owner", password="account-owner-password")
     for owned in (default, workspace):
@@ -597,14 +579,10 @@ def test_workspace_deletion_aborts_when_object_removal_is_not_confirmed(
     request: pytest.FixtureRequest,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
     auth = AuthService(isolated_services.context)
-    admin_token, _ = auth.create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    admin_token, _ = administrator_credential(isolated_services, "admin")
     workspace_token, _ = auth.create_token("tenant", workspace_id=workspace.id)
     object_client = _StickyDeleteObjectClient()
     services = _services_with_object_storage(
@@ -666,13 +644,9 @@ def test_workspace_deletion_keeps_durable_source_cleanup_when_wake_delivery_fail
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
-    admin_token, _actor = AuthService(isolated_services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    admin_token, _actor = administrator_credential(isolated_services, "admin")
     source = isolated_services.object_storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=SOURCE_PACKAGE_BUCKET,
@@ -727,13 +701,9 @@ def test_concurrent_upload_and_workspace_deletion_converges_without_orphan(
         request,
     )
     control = ControlPlaneService(services.context)
-    default = control.upsert_workspace("default")
+    control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
-    admin_token, _actor = AuthService(services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    admin_token, _actor = administrator_credential(isolated_services, "admin")
     source = tmp_path / "concurrent-upload.bin"
     source.write_bytes(b"upload admitted before workspace deletion")
     client = client_stack.enter_context(TestClient(create_app(services)))

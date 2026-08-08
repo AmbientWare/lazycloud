@@ -10,7 +10,7 @@ from fastapi.responses import PlainTextResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import AuthzRequirement, AuthzResourceKind
 from identity.device_auth import DeviceAuthorizationService
-from shared.errors import ConflictError
+from shared.errors import ConflictError, InvalidInputError
 from shared.http.device_auth import (
     DEVICE_AUTHORIZATION_VERIFICATION_PATH,
     DeviceCodeCreateRequest,
@@ -35,7 +35,7 @@ from shared.http.system import (
     TokenListResponse,
     WorkspaceSigningKeyResponse,
 )
-from shared.identity import AuthScope, AuthTokenRecord, TokenKind
+from shared.identity import USER_PRINCIPAL_TOKEN_KINDS, AuthScope, AuthTokenRecord, TokenKind
 from shared.usage import usage_to_prometheus
 
 from api.server.auth import (
@@ -66,6 +66,19 @@ def _public_token(record: AuthTokenRecord) -> AuthTokenResponse:
 
 
 def _authorize_token_issuance(issuer: AuthTokenRecord, requested_kind: TokenKind) -> None:
+    """This route mints workspace credentials, and only those.
+
+    A credential that names a person comes from signing in or from the offline
+    administrator bootstrap, both of which mint it against an account. Minting one
+    here would produce a token whose kind claims a person and whose row names a
+    workspace — administrator everywhere, owned by nobody, revocable with no account
+    to revoke it from. An account is made an administrator by its role instead.
+    """
+    if requested_kind in USER_PRINCIPAL_TOKEN_KINDS:
+        raise InvalidInputError(
+            f"{requested_kind.value} credentials name an account, not a workspace; "
+            f"they come from signing in or from the offline administrator bootstrap"
+        )
     if requested_kind is not TokenKind.Workspace and issuer.kind is not TokenKind.Admin:
         raise AuthorizationDeniedError("admin token required to issue non-workspace tokens")
 

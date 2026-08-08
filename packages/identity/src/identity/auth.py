@@ -215,6 +215,15 @@ class TokenIssuer:
         reusable: bool = True,
         audit_actor: AuthTokenRecord | None = None,
     ) -> tuple[str, AuthTokenRecord]:
+        """Mint a credential scoped to one workspace.
+
+        The mirror of the guard in ``issue_for_user``. Without it a kind that means
+        "this names a person" could be stamped on a row that names a workspace, and
+        the result reads as a platform administrator with no account behind it —
+        authorized everywhere, attributable to nobody.
+        """
+        if TokenKind(kind) in USER_PRINCIPAL_TOKEN_KINDS:
+            raise ValueError(f"not a workspace principal token kind: {TokenKind(kind).value}")
         return self._issue(
             session,
             name,

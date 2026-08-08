@@ -30,10 +30,7 @@ def require_admissible_worker_request(
     """
 
     if request.pool_selector and request.pool_selector != worker.pool:
-        msg = (
-            f"worker {worker.worker_id} does not belong to requested pool "
-            f"{request.pool_selector}"
-        )
+        msg = f"worker {worker.worker_id} does not belong to requested pool {request.pool_selector}"
         raise WorkerRequestNotAdmissibleError(msg)
     if (
         principal is not None

@@ -9,15 +9,14 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from observability.stream_state import RedisEventStreamRepository, log_record_from_redis
 from pydantic import JsonValue
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ExpiredCursorError
-from shared.identity import TokenKind
 from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 from shared.realtime.streams import LogStreamQuery
 from tests.real_redis import RealRedisActors
+from tests.service_fixtures import administrator_credential
 
 
 def test_redis_log_repository_applies_filter_combinations(
@@ -179,10 +178,7 @@ def test_task_append_log_fans_out_to_app_scoped_live_stream(
     assert [log_record_from_redis(record).message for record in direct] == ["live line"]
 
     client = client_stack.enter_context(TestClient(create_app(services)))
-    admin_token, _record = AuthService(services.context).create_token(
-        "root",
-        kind=TokenKind.Admin,
-    )
+    admin_token, _record = administrator_credential(isolated_services, "root")
     stream = client.get(
         f"/api/v1/logs/stream?workspace_id={workspace_id}&app_id={app.id}&follow=true&max_events=1&wait=2",
         headers=_auth(admin_token) | {"Last-Event-ID": "0"},
@@ -207,10 +203,7 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
     _append_container_log(repo, message="needle second", workspace_id=workspace_id)
     second_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
     client = client_stack.enter_context(TestClient(create_app(services)))
-    admin_token, _record = AuthService(services.context).create_token(
-        "root",
-        kind=TokenKind.Admin,
-    )
+    admin_token, _record = administrator_credential(isolated_services, "root")
 
     history = client.get(
         f"/api/v1/logs"
@@ -258,10 +251,7 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
         app_id=deployment.app_id,
     )
     client = client_stack.enter_context(TestClient(create_app(services)))
-    admin_token, _record = AuthService(services.context).create_token(
-        "root",
-        kind=TokenKind.Admin,
-    )
+    admin_token, _record = administrator_credential(isolated_services, "root")
 
     response = client.get(
         "/api/v1/logs",

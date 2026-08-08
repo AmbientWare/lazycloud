@@ -27,7 +27,6 @@ from gateway.http import (
     StreamAgentRequest,
 )
 from gateway.service import GatewayControlService
-from identity.auth import AuthService
 from networking.tailnet_cleanup import TailnetCleanupCoordinator
 from networking.tailnet_control import (
     TailnetAuthKey,
@@ -52,11 +51,12 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import MachinePool, UnitName
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
-from shared.identity import TokenKind, WorkspaceStatus
+from shared.identity import WorkspaceStatus
 from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 
 
 @pytest.fixture
@@ -163,11 +163,7 @@ def _gateway(
 
 
 def _operator_auth(services: ApiServices, *, workspace_id: str = "default") -> dict[str, str]:
-    token, _ = AuthService(services.context).create_token(
-        "tailnet-operator-delete",
-        kind=TokenKind.Admin,
-        workspace_id=workspace_id,
-    )
+    token, _ = administrator_credential(services, "tailnet-operator-delete")
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -350,12 +346,8 @@ def test_workspace_deletion_conflicts_before_self_hosted_tailnet_authority_chang
     real_redis_actors: RealRedisActors,
 ) -> None:
     control_plane = ControlPlaneService(isolated_services.context)
-    actor = control_plane.upsert_workspace("default")
-    _raw_token, audit_actor = AuthService(isolated_services.context).create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=actor.id,
-    )
+    control_plane.upsert_workspace("default")
+    _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
     workspace = control_plane.upsert_workspace("tailnet-workspace-delete")
     control = _RecordingTailnetControl()
     gateway = _gateway(

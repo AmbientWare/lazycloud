@@ -28,7 +28,6 @@ from gateway.http import (
     StreamAgentRequest,
 )
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
-from identity.auth import AuthService
 from networking.tailnet_control import TailnetAuthKey, TailnetDevice
 from observability.usage import UsageService
 from pydantic import SecretStr
@@ -62,6 +61,7 @@ from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
@@ -536,12 +536,8 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
     redis = real_redis_actors.client()
     services = _services_with_redis(isolated_services, redis, request)
     control = ControlPlaneService(services.context)
-    default_workspace = control.upsert_workspace("default")
-    _raw_token, audit_actor = AuthService(services.context).create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default_workspace.id,
-    )
+    control.upsert_workspace("default")
+    _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
     workspace = control.upsert_workspace("enrolled-customer")
     unit = services.compute.create_unit(
         UnitName("workspace-machine-pool"),

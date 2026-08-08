@@ -504,9 +504,7 @@ class WorkerRepositoryService:
                 self.workers.enqueue_worker_request(request.worker_id, container_request)
                 raise
             try:
-                require_admissible_worker_request(
-                    worker, container_request, principal=principal
-                )
+                require_admissible_worker_request(worker, container_request, principal=principal)
             except WorkerRequestNotAdmissibleError as exc:
                 self._return_request_to_scheduler(
                     container_request,

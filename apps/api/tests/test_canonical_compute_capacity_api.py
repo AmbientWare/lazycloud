@@ -9,6 +9,7 @@ from identity.auth import AuthService
 from shared.compute_policy import MachinePool, UnitName
 from shared.http.compute import UnitMachineListResponse
 from shared.identity import TokenKind
+from tests.service_fixtures import administrator_credential
 
 
 def test_self_hosted_collection_is_static_workspace_scoped_and_excludes_managed_pools(
@@ -50,10 +51,7 @@ def test_canonical_capacity_routes_enforce_workspace_and_admin_authority(
         "capacity-workspace",
         kind=TokenKind.Workspace,
     )
-    admin_token, _admin_record = auth.create_token(
-        "capacity-admin",
-        kind=TokenKind.Admin,
-    )
+    admin_token, _admin_record = administrator_credential(isolated_services, "capacity-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     workspace_headers = {"Authorization": f"Bearer {workspace_token}"}
     admin_headers = {"Authorization": f"Bearer {admin_token}"}

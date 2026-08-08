@@ -21,7 +21,6 @@ from compute.service import ComputeService
 from control.service import ControlPlaneService
 from database.repositories.compute import AwsAccountConnectionRepository, ComputeUnitRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -38,7 +37,8 @@ from shared.compute_policy import (
     ComputeUnitRecord,
 )
 from shared.http.compute import UnitScaleResponse
-from shared.identity import TokenKind, WorkspaceRole
+from shared.identity import WorkspaceRole
+from tests.service_fixtures import administrator_credential
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 _OFFER_ID = "us-east-1:i4i.xlarge"
@@ -185,10 +185,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         capacity_reservations=mutations,
     )
     services = replace(services_with_compute, gateway_service=gateway)
-    raw_token, _record = AuthService(isolated_services.context).create_token(
-        "pool-scale",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _record = administrator_credential(isolated_services, "pool-scale")
     client = client_stack.enter_context(TestClient(create_app(services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
     path = f"/api/v1/units/{pool.id}/scale"
