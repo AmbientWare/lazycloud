@@ -838,6 +838,20 @@ class AgentBridgeNetworkBackend:
         commands.append(self._require_bridge_owns_subnet())
         return commands
 
+    def _container_ipv6(self, ip_address: str) -> str:
+        """The v6 address matching a v4 one, on this backend's own bridge.
+
+        Both subnets have to come from the same place: the v6 address is the v4 host
+        offset rebased, so pairing a configured v4 subnet with the default v6 one
+        rejects every address the allocator issues.
+        """
+
+        return container_ipv6_address(
+            ip_address,
+            ipv4_subnet=self.config.subnet,
+            ipv6_subnet=self.config.ipv6_subnet,
+        )
+
     def _require_bridge_owns_subnet(self) -> NetworkCommand:
         """Refuse a bridge that is already fronting a different network.
 
@@ -1146,7 +1160,7 @@ class AgentBridgeNetworkBackend:
                             "-6",
                             "addr",
                             "replace",
-                            f"{container_ipv6_address(ip_address)}/64",
+                            f"{self._container_ipv6(ip_address)}/64",
                             "dev",
                             veth_container,
                         ],
@@ -1252,7 +1266,7 @@ class AgentBridgeNetworkBackend:
             commands.append(
                 self._sandbox_control_isolation_command(
                     self.config.ip6tables_binary,
-                    container_ipv6_address(ip_address),
+                    self._container_ipv6(ip_address),
                     comment,
                 )
             )
