@@ -94,6 +94,7 @@ class ProviderNodeEnrollmentService:
             pool.workspace_id,
             pool.pool,
             pool.capacity_owner_id,
+            owner_user_id=connection.user_id,
         )
         joined = self.gateway.join_agent(
             JoinAgentRequest(
@@ -379,7 +380,12 @@ class ProviderNodeEnrollmentService:
         workspace_id: str,
         pool: MachinePool,
         capacity_owner_id: str,
+        *,
+        owner_user_id: str,
     ) -> SecretStr:
+        # The account is the connection's, which `_enrollment_target` has already
+        # proved is the owner of this unit's workspace. An instance the customer's
+        # own account launched belongs to that customer, exactly as a joined host does.
         plan = plan_join_token_creation(
             ComputePrincipal(
                 workspace_id=workspace_id,
@@ -387,6 +393,7 @@ class ProviderNodeEnrollmentService:
             ),
             pool,
             capacity_owner_id=capacity_owner_id,
+            owner_user_id=owner_user_id,
             ttl="2m",
             max_uses=1,
         )
@@ -403,6 +410,7 @@ class ProviderNodeEnrollmentService:
             credentials = ComputeJoinCredentialRepository(session)
             durable = credentials.create(
                 token_hash=plan.token_hash,
+                user_id=owner_user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 pool=unit.pool,

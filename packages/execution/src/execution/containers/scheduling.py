@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from database.repositories.execution import TaskRepository
+from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -68,12 +69,26 @@ class ContainerSchedulingPersistenceService:
                 machine = machines.get_across_workspaces(compute_machine_id)
                 if worker is None or machine is None:
                     raise NotFoundError("compute worker or machine assignment is unavailable")
+                machine_workspace_id = machines.workspace_id(compute_machine_id)
+                if workers.workspace_id(compute_worker_id) != machine_workspace_id:
+                    raise ConflictError("compute worker and machine belong to different workspaces")
+                # Compared by account, not by workspace. A joined machine belongs to
+                # the customer and serves every workspace they own, so its own
+                # workspace is where its rows live rather than who it may run for.
+                # Requiring the two to match refused the account's other workspaces
+                # from the hardware they connected it for.
+                members = WorkspaceMemberRepository(session)
+                machine_owner = (
+                    members.owner(machine_workspace_id) if machine_workspace_id else None
+                )
+                container_owner = members.owner(workspace_id)
                 if (
-                    workers.workspace_id(compute_worker_id) != workspace_id
-                    or machines.workspace_id(compute_machine_id) != workspace_id
+                    machine_owner is None
+                    or container_owner is None
+                    or machine_owner.user_id != container_owner.user_id
                 ):
                     raise ConflictError(
-                        "compute worker or machine does not belong to assignment workspace"
+                        "compute worker or machine does not belong to the assignment's account"
                     )
                 if worker.machine_id != compute_machine_id:
                     raise ConflictError("compute worker does not belong to assignment machine")

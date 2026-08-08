@@ -15,9 +15,10 @@ import {
   type WorkspaceComputePolicy,
   type WorkspaceComputePolicyUpdateRequest,
 } from "@/lib/api/schemas";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 export const computeQueryKeys = workspaceQueryKeys.compute;
+export const accountComputeQueryKeys = accountQueryKeys.compute;
 export const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 
 /**
@@ -41,42 +42,31 @@ export function adminAccessQueryOptions(workspaceId: string) {
   });
 }
 
-export function machinesQueryOptions(workspaceId: string) {
+/** Machines this account connected. They serve every workspace it owns. */
+export function machinesQueryOptions() {
   return queryOptions({
-    queryKey: computeQueryKeys.machines(workspaceId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace("/api/v1/machines/pool?pool=self-hosted&limit=250", workspaceId),
-        unitMachineListSchema,
-      ),
+    queryKey: accountComputeQueryKeys.machines(),
+    queryFn: () => apiRequest("/api/v1/machines/self-hosted?limit=250", unitMachineListSchema),
     refetchInterval: 5_000,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function computeInstancesQueryOptions(workspaceId: string, enabled = true) {
+export function computeInstancesQueryOptions(enabled = true) {
   return queryOptions({
-    queryKey: computeQueryKeys.instances(workspaceId),
+    queryKey: accountComputeQueryKeys.instances(),
     enabled,
-    queryFn: () =>
-      apiRequest(
-        withWorkspace("/api/v1/compute/instances", workspaceId),
-        customerComputeInstanceListSchema,
-      ),
+    queryFn: () => apiRequest("/api/v1/compute/instances", customerComputeInstanceListSchema),
     refetchInterval: 5_000,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function computeCatalogQueryOptions(workspaceId: string, enabled = true) {
+export function computeCatalogQueryOptions(enabled = true) {
   return queryOptions({
-    queryKey: computeQueryKeys.catalog(workspaceId),
+    queryKey: accountComputeQueryKeys.catalog(),
     enabled,
-    queryFn: () =>
-      apiRequest(
-        withWorkspace("/api/v1/compute/catalog", workspaceId),
-        customerComputeCatalogSchema,
-      ),
+    queryFn: () => apiRequest("/api/v1/compute/catalog", customerComputeCatalogSchema),
     staleTime: 5 * 60_000,
   });
 }
@@ -119,15 +109,12 @@ export function updateComputePolicy(
   );
 }
 
-export function awsConnectionQueryOptions(workspaceId: string, enabled = true) {
+export function awsConnectionQueryOptions(enabled = true) {
   return queryOptions({
-    queryKey: computeQueryKeys.awsConnection(workspaceId),
+    queryKey: accountComputeQueryKeys.awsConnection(),
     enabled,
     queryFn: async () => {
-      const response = await apiRequest(
-        withWorkspace("/api/v1/aws-connection", workspaceId),
-        awsConnectionEnvelopeSchema,
-      );
+      const response = await apiRequest("/api/v1/aws-connection", awsConnectionEnvelopeSchema);
       return response.connection;
     },
     refetchInterval: AWS_CONNECTION_POLL_INTERVAL_MS,
@@ -145,34 +132,24 @@ export type AwsConnectionAuthorizationResult = {
 };
 
 export async function createAwsConnection(
-  workspaceId: string,
   input: CreateAwsConnectionInput,
 ): Promise<AwsConnectionAuthorizationResult> {
-  const response = await postJson(
-    withWorkspace("/api/v1/aws-connection", workspaceId),
-    awsConnectionAuthorizationSchema,
-    {
-      account_id: input.accountId,
-    },
-  );
+  const response = await postJson("/api/v1/aws-connection", awsConnectionAuthorizationSchema, {
+    account_id: input.accountId,
+  });
   return {
     connection: response.connection,
     authorization: { url: response.authorization.url },
   };
 }
 
-export function validateAwsConnection(workspaceId: string) {
-  return postJson(
-    withWorkspace("/api/v1/aws-connection/validate", workspaceId),
-    awsConnectionSchema,
-  );
+export function validateAwsConnection() {
+  return postJson("/api/v1/aws-connection/validate", awsConnectionSchema);
 }
 
-export async function reconnectAwsConnection(
-  workspaceId: string,
-): Promise<AwsConnectionAuthorizationResult> {
+export async function reconnectAwsConnection(): Promise<AwsConnectionAuthorizationResult> {
   const response = await postJson(
-    withWorkspace("/api/v1/aws-connection/reconnect", workspaceId),
+    "/api/v1/aws-connection/reconnect",
     awsConnectionAuthorizationSchema,
   );
   return {
@@ -181,30 +158,23 @@ export async function reconnectAwsConnection(
   };
 }
 
-export async function removeAwsConnection(workspaceId: string): Promise<AwsConnection | null> {
-  const response = await apiRequest(
-    withWorkspace("/api/v1/aws-connection", workspaceId),
-    awsConnectionEnvelopeSchema,
-    { method: "DELETE" },
-  );
+export async function removeAwsConnection(): Promise<AwsConnection | null> {
+  const response = await apiRequest("/api/v1/aws-connection", awsConnectionEnvelopeSchema, {
+    method: "DELETE",
+  });
   return response.connection;
 }
 
-export function cancelAwsConnectionReconnect(workspaceId: string) {
-  return apiRequest(
-    withWorkspace("/api/v1/aws-connection/reconnect", workspaceId),
-    awsConnectionSchema,
-    { method: "DELETE" },
-  );
+export function cancelAwsConnectionReconnect() {
+  return apiRequest("/api/v1/aws-connection/reconnect", awsConnectionSchema, {
+    method: "DELETE",
+  });
 }
 
-export function retryAwsConnection(workspaceId: string) {
-  return postJson(withWorkspace("/api/v1/aws-connection/retry", workspaceId), awsConnectionSchema);
+export function retryAwsConnection() {
+  return postJson("/api/v1/aws-connection/retry", awsConnectionSchema);
 }
 
-export function createMachineJoinCommand(workspaceId: string) {
-  return postJson(
-    withWorkspace("/api/v1/machines/join-command", workspaceId),
-    poolJoinCommandResponseSchema,
-  );
+export function createMachineJoinCommand() {
+  return postJson("/api/v1/machines/join-command", poolJoinCommandResponseSchema);
 }

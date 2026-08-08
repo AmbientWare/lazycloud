@@ -121,6 +121,12 @@ class ComputeProviderInstanceRecord(ContractModel):
 class ComputeJoinCredentialRecord(ContractModel):
     id: str
     token_hash: str
+    user_id: str
+    """Account the machine joining with this credential will belong to.
+
+    Resolved from the owner of the minting workspace, and the only thing placement
+    compares. A machine serves every workspace this account owns.
+    """
     workspace_id: str
     capacity_owner_id: str
     """Provisioning unit that issued this credential.
@@ -141,44 +147,22 @@ class ComputeJoinCredentialRecord(ContractModel):
     updated_at: datetime
 
     def revoke(self, *, now: datetime) -> ComputeJoinCredentialRecord:
-        return ComputeJoinCredentialRecord(
-            id=self.id,
-            token_hash=self.token_hash,
-            workspace_id=self.workspace_id,
-            capacity_owner_id=self.capacity_owner_id,
-            pool=self.pool,
-            machine_id=self.machine_id,
-            created_by_token_id=self.created_by_token_id,
-            status=ComputeCredentialStatus.Revoked,
-            max_uses=self.max_uses,
-            use_count=self.use_count,
-            expires_at=self.expires_at,
-            revoked_at=now,
-            created_at=self.created_at,
-            updated_at=now,
+        return self.model_copy(
+            update={
+                "status": ComputeCredentialStatus.Revoked,
+                "revoked_at": now,
+                "updated_at": now,
+            }
         )
 
     def with_use_count(self, use_count: int, *, now: datetime) -> ComputeJoinCredentialRecord:
-        return ComputeJoinCredentialRecord(
-            id=self.id,
-            token_hash=self.token_hash,
-            workspace_id=self.workspace_id,
-            capacity_owner_id=self.capacity_owner_id,
-            pool=self.pool,
-            machine_id=self.machine_id,
-            created_by_token_id=self.created_by_token_id,
-            status=self.status,
-            max_uses=self.max_uses,
-            use_count=use_count,
-            expires_at=self.expires_at,
-            revoked_at=self.revoked_at,
-            created_at=self.created_at,
-            updated_at=now,
-        )
+        return self.model_copy(update={"use_count": use_count, "updated_at": now})
 
 
 class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
+    user_id: str
+    """Account this machine belongs to, stamped from the credential that enrolled it."""
     workspace_id: str
     capacity_owner_id: str
     pool: MachinePool
@@ -227,6 +211,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
 
 
 class ComputeMachineEnrollmentCreate(ContractModel):
+    user_id: str
     workspace_id: str
     capacity_owner_id: str
     pool: MachinePool
@@ -277,53 +262,22 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         *,
         updated_at: datetime,
     ) -> ComputeMachineEnrollmentRecord:
-        return ComputeMachineEnrollmentRecord(
-            id=existing.id,
-            workspace_id=self.workspace_id,
-            capacity_owner_id=self.capacity_owner_id,
-            pool=self.pool,
-            machine_id=self.machine_id,
-            machine_fingerprint_hash=self.machine_fingerprint_hash,
-            join_credential_id=self.join_credential_id,
-            credential_hash=self.credential_hash,
-            credential_generation=self.credential_generation,
-            status=self.status,
-            preflight_passed=self.preflight_passed,
-            heartbeat_confirmed=self.heartbeat_confirmed,
-            schedulable=self.schedulable,
-            capacity_state=self.capacity_state,
-            capacity_reason=self.capacity_reason,
-            capacity_observed_at=self.capacity_observed_at,
-            capacity_notice_at=self.capacity_notice_at,
-            readiness_phase=self.readiness_phase,
-            hostname=self.hostname,
-            os=self.os,
-            arch=self.arch,
-            cpu_count=self.cpu_count,
-            cpu_millicores=self.cpu_millicores,
-            memory_mb=self.memory_mb,
-            gpus=self.gpus,
-            gpu_ids=self.gpu_ids,
-            gpu_count=self.gpu_count,
-            executor=self.executor,
-            preflight=self.preflight,
-            agent_version=self.agent_version,
-            tailnet_generation=existing.tailnet_generation,
-            tailnet_phase=existing.tailnet_phase,
-            tailnet_auth_key_id=existing.tailnet_auth_key_id,
-            tailnet_auth_key_expires_at=existing.tailnet_auth_key_expires_at,
-            tailnet_device_id=existing.tailnet_device_id,
-            tailnet_hostname=existing.tailnet_hostname,
-            tailnet_ips=existing.tailnet_ips,
-            tailnet_verified_at=existing.tailnet_verified_at,
-            tailnet_cleanup_auth_key_ids=existing.tailnet_cleanup_auth_key_ids,
-            tailnet_cleanup_device_ids=existing.tailnet_cleanup_device_ids,
-            last_join_at=self.last_join_at,
-            last_heartbeat_at=self.last_heartbeat_at,
-            last_disconnect_at=self.last_disconnect_at,
-            revoked_at=self.revoked_at,
-            created_at=existing.created_at,
-            updated_at=updated_at,
+        """Re-state the row from a fresh join, keeping the row's own tailnet identity.
+
+        A join reports what the machine is; the tailnet device, its auth keys, and
+        the generation that owns them are rotated by the gateway on their own
+        schedule. Letting a join carry its defaults over them would strand a live
+        device with nothing left naming it.
+        """
+        return existing.model_copy(
+            update={
+                **{
+                    field: value
+                    for field, value in dict(self).items()
+                    if not field.startswith("tailnet_")
+                },
+                "updated_at": updated_at,
+            }
         )
 
 
@@ -969,6 +923,7 @@ class ComputeJoinCredentialRepository:
         self,
         *,
         token_hash: str,
+        user_id: str,
         workspace_id: str,
         capacity_owner_id: str,
         pool: MachinePool,
@@ -980,6 +935,7 @@ class ComputeJoinCredentialRepository:
         return self.records.create(
             {
                 "token_hash": token_hash,
+                "user_id": user_id,
                 "workspace_id": workspace_id,
                 "capacity_owner_id": capacity_owner_id,
                 "pool": pool,
@@ -1190,24 +1146,36 @@ class ComputeMachineEnrollmentRepository:
 
     def by_fingerprint(
         self,
-        workspace_id: str,
+        user_id: str,
         machine_fingerprint_hash: str,
         *,
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
-        """The one enrollment a physical host holds in this workspace.
+        """The one enrollment a physical host holds in this account.
 
-        The group is not part of the key: a host that re-joins naming a
-        different group is the same machine, and admitting it twice would
-        double-count its capacity.
+        Neither the group nor the workspace is part of the key: a host that
+        re-joins naming either differently is the same machine, and admitting it
+        twice would advertise the same CPUs as two workers.
         """
         return self._one(
             select(ComputeMachineEnrollmentTable).where(
-                ComputeMachineEnrollmentTable.workspace_id == workspace_id,
+                ComputeMachineEnrollmentTable.user_id == user_id,
                 ComputeMachineEnrollmentTable.machine_fingerprint_hash == machine_fingerprint_hash,
             ),
             for_update=for_update,
         )
+
+    def list_for_user(self, user_id: str) -> list[ComputeMachineEnrollmentRecord]:
+        """Every machine this account owns, across the workspaces it holds."""
+        statement = (
+            select(ComputeMachineEnrollmentTable)
+            .where(ComputeMachineEnrollmentTable.user_id == user_id)
+            .order_by(ComputeMachineEnrollmentTable.created_at.asc())
+        )
+        return [
+            ComputeMachineEnrollmentRecord.model_validate(row.payload)
+            for row in self.session.scalars(statement)
+        ]
 
     def by_machine(
         self,

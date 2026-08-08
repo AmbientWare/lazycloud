@@ -24,6 +24,7 @@ from coordination.redis_client import RedisClient, redis_text
 from database.context import ServiceContext
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.execution import TaskRepository
+from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -72,6 +73,7 @@ from shared.scheduling import (
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
     WorkerUnavailableReason,
+    worker_serves_owner,
 )
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
@@ -332,16 +334,13 @@ def _scheduler_domain_error(exc: SchedulerRepositoryError) -> DomainError:
     return ConflictError(str(exc))
 
 
-def _authorize_worker_workspace(
+def _require_worker_principal(
     principal: WorkerRepositoryPrincipal,
-    workspace_id: str,
     *,
     operation: str,
 ) -> None:
     if not (principal.is_managed_worker or principal.is_private_worker):
         raise AuthorizationDeniedError(f"{operation} requires a worker principal")
-    if principal.is_private_worker and principal.workspace_id != workspace_id:
-        raise AuthorizationDeniedError(f"{operation} workspace does not match worker")
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +367,49 @@ class WorkerRepositoryService:
     @property
     def services(self) -> WorkerRepositoryDependencies | None:
         return self.dependencies
+
+    def _authorize_worker_tenancy(
+        self,
+        principal: WorkerRepositoryPrincipal,
+        workspace_id: str,
+        *,
+        operation: str,
+    ) -> None:
+        """Refuse an operation for a workspace this worker's account does not own.
+
+        A private worker is one customer's machine and serves every workspace that
+        customer owns, so the comparison is by account. Comparing the worker's own
+        enrolling workspace refused its owner's other workspaces, which is exactly
+        the capacity they connected the hardware for.
+
+        The worker's account is read from its scheduler record, which the platform
+        stamps from the machine's enrollment; the workspace's account is read from
+        membership. Neither is anything the worker reports about itself.
+        """
+        _require_worker_principal(principal, operation=operation)
+        if not principal.is_private_worker:
+            return
+        worker = self.workers.get_worker(principal.worker_id) if principal.worker_id else None
+        if worker is None:
+            raise AuthorizationDeniedError(f"{operation} worker is no longer registered")
+        if not worker_serves_owner(
+            private_worker=True,
+            worker_owner_user_id=worker.owner_user_id,
+            request_owner_user_id=self._workspace_owner_user_id(workspace_id),
+        ):
+            raise AuthorizationDeniedError(
+                f"{operation} workspace does not belong to the worker's account"
+            )
+
+    def _workspace_owner_user_id(self, workspace_id: str) -> str:
+        if self.services is None:
+            raise UpstreamUnavailableError(
+                "service dependencies are required to resolve workspace ownership"
+            )
+        with self.services.context.database.session() as session:
+            owner = WorkspaceMemberRepository(session).owner(workspace_id)
+        # A workspace with no owner answers empty, which no private worker matches.
+        return owner.user_id if owner is not None else ""
 
     def _validate_worker_stream(
         self,
@@ -504,7 +546,14 @@ class WorkerRepositoryService:
                 self.workers.enqueue_worker_request(request.worker_id, container_request)
                 raise
             try:
-                require_admissible_worker_request(worker, container_request, principal=principal)
+                require_admissible_worker_request(
+                    worker,
+                    container_request,
+                    principal=principal,
+                    request_owner_user_id=self._workspace_owner_user_id(
+                        container_request.workspace_id
+                    ),
+                )
             except WorkerRequestNotAdmissibleError as exc:
                 self._return_request_to_scheduler(
                     container_request,
@@ -1124,14 +1173,22 @@ class WorkerRepositoryService:
         for route in routes:
             if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
                 continue
-            # The owner is stamped from the worker record rather than taken from
-            # the request: hot state is keyed by it, and a worker declaring which
-            # unit owns it could write into another unit's namespace.
+            # Keyed by the machine, from its worker record, rather than by the
+            # container's workspace: a backend route is a port on one host, and the
+            # agent reads its routes under the workspace and unit that enrolled it.
+            # Keying by the container's workspace filed a route the owning agent
+            # could never see, so a workload from another of the account's
+            # workspaces waited for a route nothing would ever open.
             worker = self.workers.get_worker(route.worker_id)
-            if worker is None or not worker.capacity_owner_id:
+            if worker is None or not (worker.capacity_owner_id and worker.workspace_id):
                 continue
             repository.save_agent_route_state(
-                route.model_copy(update={"capacity_owner_id": worker.capacity_owner_id})
+                route.model_copy(
+                    update={
+                        "workspace_id": worker.workspace_id,
+                        "capacity_owner_id": worker.capacity_owner_id,
+                    }
+                )
             )
 
     def _unpublish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
@@ -1145,10 +1202,10 @@ class WorkerRepositoryService:
             if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
                 continue
             worker = self.workers.get_worker(route.worker_id)
-            if worker is None or not worker.capacity_owner_id:
+            if worker is None or not (worker.capacity_owner_id and worker.workspace_id):
                 continue
             unique_routes.add(
-                (route.workspace_id, worker.capacity_owner_id, route.machine_id, route.route_id)
+                (worker.workspace_id, worker.capacity_owner_id, route.machine_id, route.route_id)
             )
         for workspace_id, capacity_owner_id, machine_id, route_id in sorted(unique_routes):
             repository.delete_agent_route_state(
@@ -1189,7 +1246,7 @@ class WorkerRepositoryService:
     ) -> GetCacheOriginCredentialsResponse:
         if not principal.worker_id:
             raise AuthorizationDeniedError("image archive download requires a worker principal")
-        _authorize_worker_workspace(
+        self._authorize_worker_tenancy(
             principal,
             request.workspace_id,
             operation="image archive download",
@@ -1228,7 +1285,7 @@ class WorkerRepositoryService:
     ) -> GetImageArchiveUploadCredentialsResponse:
         if not principal.worker_id:
             raise AuthorizationDeniedError("image archive upload requires a worker principal")
-        _authorize_worker_workspace(
+        self._authorize_worker_tenancy(
             principal,
             request.workspace_id,
             operation="image archive upload",
@@ -1301,7 +1358,7 @@ class WorkerRepositoryService:
     ) -> GetImageBuildCredentialsResponse:
         if not principal.worker_id:
             raise AuthorizationDeniedError("image build credentials require a worker principal")
-        _authorize_worker_workspace(
+        self._authorize_worker_tenancy(
             principal,
             request.workspace_id,
             operation="image build credential",
@@ -1338,7 +1395,7 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 "image build context download requires a worker principal"
             )
-        _authorize_worker_workspace(
+        self._authorize_worker_tenancy(
             principal,
             request.workspace_id,
             operation="image build context download",
@@ -1398,7 +1455,7 @@ class WorkerRepositoryService:
     ) -> GetContainerCredentialsResponse:
         if not principal.worker_id:
             raise AuthorizationDeniedError("container credentials require a worker principal")
-        _authorize_worker_workspace(
+        self._authorize_worker_tenancy(
             principal,
             request.workspace_id,
             operation="container credential",
@@ -1471,7 +1528,7 @@ class WorkerRepositoryService:
     ) -> None:
         if not principal.worker_id:
             raise AuthorizationDeniedError("automatic checkpoint lease requires a worker principal")
-        _authorize_worker_workspace(
+        self._authorize_worker_tenancy(
             principal,
             request.workspace_id,
             operation="automatic checkpoint lease",
@@ -1741,9 +1798,6 @@ class WorkerRepositoryService:
                 capture_id=request.capture_id,
                 entries=request.entries,
                 expected_worker_id=principal.worker_id,
-                expected_workspace_id=(
-                    principal.workspace_id if principal.is_private_worker else None
-                ),
             )
         return AppendContainerLogsResponse(
             accepted_through=result.accepted_through,
@@ -1893,7 +1947,7 @@ class WorkerRepositoryService:
         if state is not None:
             if state.worker_id != worker.worker_id:
                 raise AuthorizationDeniedError("network mutation is bound to the assigned worker")
-            _authorize_worker_workspace(
+            self._authorize_worker_tenancy(
                 principal,
                 state.workspace_id,
                 operation="network mutation",
@@ -1907,7 +1961,7 @@ class WorkerRepositoryService:
                 and container.runtime_worker_id == worker.worker_id
                 and container.runtime_machine_id == worker.machine_id
             ):
-                _authorize_worker_workspace(
+                self._authorize_worker_tenancy(
                     principal,
                     container.workspace_id,
                     operation="network mutation",

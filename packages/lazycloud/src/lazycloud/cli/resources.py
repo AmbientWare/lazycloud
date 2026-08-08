@@ -720,13 +720,16 @@ def machine_join(
         bool,
         typer.Option("--print-only", help="Only print the generated join command."),
     ] = False,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    """Join this machine to a machine pool in the workspace."""
+    """Join this machine to your account, in the pool you name.
+
+    No workspace: the host belongs to the account that connected it and serves every
+    workspace that account owns.
+    """
     if gpu_ids and max_gpus:
         raise typer.BadParameter("--gpu-ids and --max-gpus cannot both be set")
 
-    response = compute_client(workspace=workspace).machine_join_command(
+    response = compute_client().machine_join_command(
         MachineJoinCommandRequest(
             ttl=ttl,
             pool=MachinePool(pool),

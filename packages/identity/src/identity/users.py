@@ -181,6 +181,11 @@ class UserService:
         with self.context.database.session() as session:
             return WorkspaceMemberRepository(session).owner_user_id(workspace_id)
 
+    def owned_workspace_ids(self, user_id: str) -> list[str]:
+        """The workspaces an account's compute and domains apply to, in creation order."""
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+
 
 class SessionService:
     """Password sign-in, and the short-lived credential it hands back."""

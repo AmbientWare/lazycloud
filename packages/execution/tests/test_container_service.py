@@ -15,7 +15,7 @@ from coordination.event_bus import (
     event_id_for_event,
     event_key,
 )
-from database.repositories.identity import WorkspaceRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -41,6 +41,7 @@ from shared.workload_keys import (
     pod_total_connections_key,
 )
 from tests.real_redis import RealRedisActors
+from tests.service_fixtures import workspace_owner_user_id
 
 
 class _Scheduler:
@@ -104,6 +105,7 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+        sibling_workspace = WorkspaceRepository(session).create(name=f"sibling-{uuid4()}")
         other_workspace = WorkspaceRepository(session).create(name=f"other-{uuid4()}")
         machine = MachineRepository(session).upsert(
             Machine(id=str(uuid4())),
@@ -117,6 +119,10 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
             Machine(id=str(uuid4())),
             workspace_id=other_workspace.id,
         )
+        foreign_worker = WorkerRepository(session).upsert(
+            Worker(id=str(uuid4()), machine_id=foreign_machine.id),
+            workspace_id=other_workspace.id,
+        )
         container = ContainerRepository(session).upsert(
             ContainerRecord(
                 id=str(uuid4()),
@@ -124,6 +130,25 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
                 image="",
                 command=[],
                 workspace_id=workspace_id,
+            )
+        )
+    # The machine's own workspace and the container's differ on purpose: a joined
+    # machine belongs to an account, so the account is what the assignment compares.
+    owner_user_id = workspace_owner_user_id(isolated_services, workspace_id)
+    with isolated_services.context.database.session() as session:
+        WorkspaceMemberRepository(session).ensure_owner(
+            workspace_id=sibling_workspace.id,
+            user_id=owner_user_id,
+        )
+    workspace_owner_user_id(isolated_services, other_workspace.id)
+    with isolated_services.context.database.session() as session:
+        sibling_container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="sibling-runtime-assignment",
+                image="",
+                command=[],
+                workspace_id=sibling_workspace.id,
             )
         )
 
@@ -156,13 +181,27 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
     assert private.worker_id == worker.id
     assert private.machine_id == machine.id
 
-    with pytest.raises(ConflictError, match="assignment workspace"):
+    # The same account's other workspace places on the same machine: that is what
+    # connecting the hardware bought, and it is the whole of the ownership rule.
+    persistence.assign_runtime(
+        container_id=sibling_container.id,
+        workspace_id=sibling_workspace.id,
+        runtime_worker_id=worker.id,
+        runtime_machine_id=machine.id,
+        compute_worker_id=worker.id,
+        compute_machine_id=machine.id,
+    )
+    sibling = isolated_services.containers.get(sibling_container.id)
+    assert sibling.worker_id == worker.id
+    assert sibling.machine_id == machine.id
+
+    with pytest.raises(ConflictError, match="assignment's account"):
         persistence.assign_runtime(
             container_id=container.id,
             workspace_id=workspace_id,
-            runtime_worker_id=worker.id,
+            runtime_worker_id=foreign_worker.id,
             runtime_machine_id=foreign_machine.id,
-            compute_worker_id=worker.id,
+            compute_worker_id=foreign_worker.id,
             compute_machine_id=foreign_machine.id,
         )
 

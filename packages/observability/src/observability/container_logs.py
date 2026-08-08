@@ -52,10 +52,6 @@ class ContainerLogMachineAssignmentError(ConflictError):
     pass
 
 
-class ContainerLogWorkspaceAssignmentError(ConflictError):
-    pass
-
-
 @dataclass(frozen=True, slots=True)
 class ContainerLogRuntimeAttribution:
     worker_id: str
@@ -93,7 +89,6 @@ class ContainerLogIngestionService:
         capture_id: str,
         entries: Sequence[ContainerLogIngestionEntry],
         expected_worker_id: str | None = None,
-        expected_workspace_id: str | None = None,
     ) -> ContainerLogIngestionResult:
         if not entries:
             raise ValueError("container log batch must not be empty")
@@ -104,13 +99,6 @@ class ContainerLogIngestionService:
             if expected_worker_id is not None and worker_id != expected_worker_id:
                 raise ContainerLogWorkerAssignmentError(
                     "container log ingestion does not match the assigned worker"
-                )
-            if (
-                expected_workspace_id is not None
-                and container.workspace_id != expected_workspace_id
-            ):
-                raise ContainerLogWorkspaceAssignmentError(
-                    "container log ingestion does not match the worker workspace"
                 )
         return self._append_owned_batch(
             ownership=ownership,

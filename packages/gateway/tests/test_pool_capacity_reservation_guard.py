@@ -16,6 +16,7 @@ from database.repositories.compute import ComputeMachineEnrollmentRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from gateway.http import JoinAgentRequest
 from gateway.service import GatewayControlService
+from identity.users import UserService
 from scheduler.fleet import WorkerPoolStateSnapshot
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -39,6 +40,7 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord
 from shared.errors import ConflictError
+from shared.identity import WorkspaceRole
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -96,6 +98,18 @@ def _gateway(
 def _default_workspace_id(services: ApiServices) -> str:
     with services.context.database.session() as session:
         return services.context.default_workspace_id(session)
+
+
+def _own_default_workspace(services: ApiServices, *, username: str) -> str:
+    """Give the workspace the account a joined machine will belong to."""
+    users = UserService(services.context)
+    user = users.create(username=username, password="reservation-guard-owner-password")
+    users.add_member(
+        workspace_id=_default_workspace_id(services),
+        user_id=user.id,
+        role=WorkspaceRole.Owner,
+    )
+    return user.id
 
 
 def _join_request(join_token: str) -> JoinAgentRequest:
@@ -523,6 +537,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
+    _own_default_workspace(isolated_services, username="reservation-guard-owner")
     unit_name = "reservation-guarded-pool"
     capacity_owner_id = "dfd9f90a-f4af-41ee-8873-991a9fa860fe"
     isolated_services.compute.create_unit(

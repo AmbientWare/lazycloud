@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { useQueryClient, type Query, type QueryKey } from "@tanstack/react-query";
 
 import { useEventStream } from "@/hooks/useEventStream";
 import { withWorkspace } from "@/lib/api/client";
 import { workspaceChangeEventSchema } from "@/lib/api/schemas";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import {
   WorkspaceLiveUpdatesContext,
   type WorkspaceLiveUpdatesContextValue,
@@ -71,14 +71,19 @@ export function WorkspaceLiveUpdatesProvider({
   );
 
   const reconcileCriticalQueries = useCallback(() => {
-    void queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.root(workspaceId),
-      refetchType: "active",
-      predicate: (query) =>
-        query.meta?.workspaceLiveEnabled === true &&
-        query.meta.workspaceLiveCritical === true &&
-        (query.state.status !== "error" || query.meta.workspaceLiveRecoverErrors !== false),
-    });
+    const critical = (query: Query) =>
+      query.meta?.workspaceLiveEnabled === true &&
+      query.meta.workspaceLiveCritical === true &&
+      (query.state.status !== "error" || query.meta.workspaceLiveRecoverErrors !== false);
+    // Both roots: capacity is read per account now, so a stream that missed events
+    // has to catch up records that no longer live under this workspace's key.
+    for (const queryKey of [workspaceQueryKeys.root(workspaceId), accountQueryKeys.root()]) {
+      void queryClient.invalidateQueries({
+        queryKey,
+        refetchType: "active",
+        predicate: critical,
+      });
+    }
   }, [queryClient, workspaceId]);
 
   const onEvent = useCallback(

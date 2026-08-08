@@ -28,7 +28,7 @@ from database.repositories.compute import (
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from gateway.settings import GatewaySettings
-from identity.auth import AuthService
+from identity.auth import AuthService, TokenIssuer
 from identity.users import UserService
 from networking.settings import (
     BackendRouteSettings,
@@ -85,6 +85,27 @@ def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
         workspace_id = services.context.default_workspace_id(session)
     users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
     return user.id
+
+
+def _account_client(
+    services: ApiServices,
+    request: pytest.FixtureRequest,
+    *,
+    user_id: str,
+) -> TestClient:
+    """A client signed in as a person: cloud capacity is read per account, not per workspace."""
+    issuer = TokenIssuer(services.context)
+    with services.context.database.session() as session:
+        raw_token, _record = issuer.issue_for_user(session, "compute-account", user_id=user_id)
+    issuer.committed()
+    client_stack = ExitStack()
+    request.addfinalizer(client_stack.close)
+    return client_stack.enter_context(
+        TestClient(
+            create_app(services),
+            headers={"Authorization": f"Bearer {raw_token}"},
+        )
+    )
 
 
 def _client(
@@ -266,7 +287,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     request: pytest.FixtureRequest,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    _seed_ready_aws_connection(isolated_services)
+    owner_id = _seed_ready_aws_connection(isolated_services)
     with isolated_services.context.database.session() as session:
         connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(workspace_id)
     assert connection is not None
@@ -306,6 +327,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         )
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
+                user_id=owner_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
                 pool=MachinePool("aws"),
@@ -367,7 +389,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             status=SchedulerWorkerStatus.Available,
         )
     )
-    client = _client(isolated_services, request)
+    client = _account_client(isolated_services, request, user_id=owner_id)
     summary_response = client.get("/api/v1/compute/summary")
     instances_response = client.get("/api/v1/compute/instances")
 
@@ -631,7 +653,7 @@ def _workspace_id(isolated_services: ApiServices) -> str:
 
 def _seed_ready_aws_connection(
     isolated_services: ApiServices, *, reconnecting: bool = False
-) -> None:
+) -> str:
     now = datetime.now(UTC)
     account_id = "123456789012"
     authorization = AwsAccountAuthorizationGeneration(
@@ -680,3 +702,4 @@ def _seed_ready_aws_connection(
                 updated_at=now,
             )
         )
+    return owner_id

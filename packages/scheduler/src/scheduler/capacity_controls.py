@@ -23,7 +23,6 @@ from scheduler.pool_drain import (
     managed_compute_drain_controllers,
 )
 from scheduler.services import SchedulerServices
-from scheduler.workspace_owners import DatabaseWorkspaceOwners
 
 
 class SchedulerCapacityWorkerRepository(
@@ -55,15 +54,8 @@ class SchedulerCapacityControllerProvider:
         for state in self.compute_states.list_all_pool_states():
             config = agent_pool_config_from_compute_state(state)
             configs[config.capacity_owner_id] = config
-        # Stamped here, once per pass and once per distinct workspace, so a worker
-        # record always carries the account that owns its workspace right now.
-        owners = DatabaseWorkspaceOwners(self.services.context)
-        owner_ids = {
-            workspace_id: owners.owner_user_id(workspace_id)
-            for workspace_id in {config.workspace_id for config in configs.values()}
-        }
         return [
-            configs[key].model_copy(update={"owner_user_id": owner_ids[configs[key].workspace_id]})
+            configs[key]
             for key in sorted(
                 configs,
                 key=lambda item: (configs[item].workspace_id, configs[item].pool, item),

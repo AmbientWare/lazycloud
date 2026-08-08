@@ -9,6 +9,7 @@ import pytest
 from agent.binary import AgentBinarySettings
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
+from database.repositories.identity import WorkspaceMemberRepository
 from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
@@ -103,6 +104,29 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         yield services
     finally:
         services.close()
+
+
+def workspace_owner_user_id(services: ApiServices, workspace_id: str) -> str:
+    """The account that owns a workspace, created on first ask.
+
+    Production writes the owner row with the workspace, so anything resolving compute
+    or domains through the account finds one. Tests that build a workspace through a
+    lower-level path need the same row before they can join a machine to it.
+    """
+    with services.context.database.session() as session:
+        existing = WorkspaceMemberRepository(session).owner(workspace_id)
+    if existing is not None:
+        return existing.user_id
+    user = UserService(services.context).create(
+        username=f"owner-{uuid4().hex[:12]}",
+        password="workspace-owner-fixture-password",
+    )
+    with services.context.database.session() as session:
+        WorkspaceMemberRepository(session).ensure_owner(
+            workspace_id=workspace_id,
+            user_id=user.id,
+        )
+    return user.id
 
 
 def administrator_credential(

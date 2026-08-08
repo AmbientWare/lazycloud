@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AwsConnection } from "@/lib/api/schemas";
 import {
-  computeQueryKeys,
+  accountComputeQueryKeys,
   createAwsConnection,
   reconnectAwsConnection,
   removeAwsConnection,
@@ -110,9 +110,9 @@ describe("AWS connection controller", () => {
     const queryClient = testQueryClient();
     const onClose = vi.fn();
     const projections = [
-      computeQueryKeys.awsConnection("workspace-1"),
-      computeQueryKeys.policy("workspace-1"),
-      computeQueryKeys.instances("workspace-1"),
+      accountComputeQueryKeys.awsConnection(),
+      accountComputeQueryKeys.instances(),
+      accountComputeQueryKeys.machines(),
     ];
     for (const queryKey of projections) {
       queryClient.setQueryData(queryKey, { stale: true });
@@ -142,7 +142,6 @@ function renderController(
   return renderHook(
     () =>
       useAwsConnectionController({
-        workspaceId: "workspace-1",
         onClose,
         openAuthorizationPopup,
       }),

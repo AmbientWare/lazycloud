@@ -73,7 +73,7 @@ function SettingsPage() {
           <ComputeSettings workspaceId={workspace.id} workspaceName={workspace.name} />
         </TabsContent>
         <TabsContent value="domains" className="mt-3 min-h-0 flex-1 overflow-y-auto">
-          <DomainSettings workspaceId={workspace.id} />
+          <DomainSettings />
         </TabsContent>
       </Tabs>
     </WorkspacePage>

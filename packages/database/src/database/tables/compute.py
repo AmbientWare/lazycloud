@@ -231,6 +231,14 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
 
 
 class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
+    """Authority to enroll one machine into an account's capacity.
+
+    `user_id` is the account the machine will belong to, resolved from the owner of
+    the workspace the credential was minted in. `workspace_id` records which of that
+    account's workspaces minted it and holds the unit the machine lands in; it is
+    provenance, not who the machine serves.
+    """
+
     __tablename__ = "compute_join_credentials"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("token_hash", name="uq_compute_join_credentials_token_hash"),
@@ -244,8 +252,14 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
             "capacity_owner_id",
             "status",
         ),
+        Index("ix_compute_join_credentials_user_status", "user_id", "status"),
     )
 
+    user_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),
@@ -267,6 +281,14 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
 
 
 class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
+    """A joined machine, owned by the account whose credential enrolled it.
+
+    The fingerprint is unique per account, not per workspace: one physical host is
+    one machine however many workspaces its owner holds, and admitting it twice
+    would advertise the same CPUs as two workers that then fight over them.
+    `workspace_id` is where the machine's unit and its durable machine row live.
+    """
+
     __tablename__ = "compute_machine_enrollments"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
@@ -275,7 +297,7 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="uq_compute_machine_enrollments_machine",
         ),
         UniqueConstraint(
-            "workspace_id",
+            "user_id",
             "machine_fingerprint_hash",
             name="uq_compute_machine_enrollments_fingerprint",
         ),
@@ -297,8 +319,14 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             "capacity_owner_id",
             "status",
         ),
+        Index("ix_compute_machine_enrollments_user_status", "user_id", "status"),
     )
 
+    user_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),

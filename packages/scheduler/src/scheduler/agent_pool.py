@@ -36,14 +36,6 @@ class AgentPoolWorkerAction(StrEnum):
 
 class AgentPoolConfig(ContractModel):
     workspace_id: str
-    owner_user_id: str = ""
-    """Account that owns the enrolling workspace, and so owns these machines.
-
-    Resolved by whoever builds the config for each reconcile pass rather than stored
-    on the machine, so transferring a workspace cannot leave capacity still serving
-    the previous owner.
-    """
-
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
@@ -96,6 +88,15 @@ class AgentWorkerRepository(Protocol):
         reason: WorkerUnavailableReason,
         detail: str = "",
         ttl_seconds: int = 0,
+        now: datetime | None = None,
+    ) -> SchedulerWorkerRecord: ...
+
+    def update_worker_tenancy(
+        self,
+        worker_id: str,
+        *,
+        workspace_id: str,
+        owner_user_id: str,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
@@ -164,12 +165,7 @@ class AgentWorkerPoolController:
                 reason="agent machine is not schedulable",
             )
         if worker is not None and worker.status is not SchedulerWorkerStatus.Unavailable:
-            return AgentPoolWorkerResult(
-                action=AgentPoolWorkerAction.Existing,
-                machine_id=machine.machine_id,
-                worker_id=worker.worker_id,
-                reason="agent machine worker already exists",
-            )
+            return self.reconcile_worker_tenancy(machine, worker, now=current_time)
         ensured = self.workers.add_worker(
             agent_machine_worker_record(machine, self.config, now=current_time),
             now=current_time,
@@ -179,6 +175,43 @@ class AgentWorkerPoolController:
             machine_id=machine.machine_id,
             worker_id=ensured.worker_id,
             reason="agent machine worker ensured",
+        )
+
+    def reconcile_worker_tenancy(
+        self,
+        machine: ComputeAgentTokenState,
+        worker: SchedulerWorkerRecord,
+        *,
+        now: datetime | None = None,
+    ) -> AgentPoolWorkerResult:
+        """Bring a live worker's tenancy back in step with its machine's enrollment.
+
+        Tenancy was written once, at worker creation, so a record from before the
+        machine had an account kept an empty owner and was refused by every
+        placement forever. A narrow field update rather than a rewrite: the record
+        also carries capacity and status a running worker is still changing.
+        """
+        if (
+            worker.owner_user_id == machine.owner_user_id
+            and worker.workspace_id == machine.workspace_id
+        ):
+            return AgentPoolWorkerResult(
+                action=AgentPoolWorkerAction.Existing,
+                machine_id=machine.machine_id,
+                worker_id=worker.worker_id,
+                reason="agent machine worker already exists",
+            )
+        updated = self.workers.update_worker_tenancy(
+            worker.worker_id,
+            workspace_id=machine.workspace_id,
+            owner_user_id=machine.owner_user_id,
+            now=now,
+        )
+        return AgentPoolWorkerResult(
+            action=AgentPoolWorkerAction.Ensured,
+            machine_id=machine.machine_id,
+            worker_id=updated.worker_id,
+            reason="agent machine worker tenancy reconciled",
         )
 
     def machine_schedulable(
@@ -262,7 +295,7 @@ def agent_machine_worker_record(
         # credential, which is what keeps that unit's drain from terminating it.
         capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
         workspace_id=machine.workspace_id,
-        owner_user_id=config.owner_user_id,
+        owner_user_id=machine.owner_user_id,
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",

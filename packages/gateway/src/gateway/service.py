@@ -65,6 +65,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.tailnet_cleanup import DatabaseTailnetCleanupStore
 from execution.containers.service import ContainerService
@@ -1117,30 +1118,17 @@ class GatewayControlService:
         self,
         request: MachineJoinCommandRequest,
         *,
-        workspace_id: str,
+        user_id: str,
         owner_token_id: str,
     ) -> MachineJoinCommandResponse:
-        """Mint the join command for the pool the caller names.
+        """Mint the join command for the account's fleet in the pool it names.
 
         The self-hosted fleet is created on first join and owned server-side.
         A caller may name any group, including one a connected account also
         feeds — that is how a fleet mixes joined and provisioned machines.
         Requested GPU types extend the fleet's accepted set.
         """
-        try:
-            fleet = self._resolve_joined_fleet(
-                workspace_id,
-                gpu=list(request.gpu),
-                pool=MachinePool(request.pool.strip()),
-            )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        plan = self.unit_state_coordinator.create_unit_join_token(
-            fleet,
-            workspace_id=workspace_id,
-            owner_token_id=owner_token_id,
-            ttl=request.ttl,
-        )
+        plan = self._mint_account_join_credential(request, user_id=user_id, token_id=owner_token_id)
         return MachineJoinCommandResponse(
             command=agent_install_command(
                 self.gateway_endpoint.http_url,
@@ -1155,14 +1143,25 @@ class GatewayControlService:
         self,
         request: MachineJoinCommandRequest,
         *,
-        workspace_id: str,
+        user_id: str,
         owner_token_id: str,
     ) -> MachineJoinTokenResponse:
-        """Mint the bare join credential for the pool the caller names.
+        """Mint the bare join credential for the account's fleet.
 
         Same fleet resolution and same mint as `machine_join_command`; only the
         rendering differs.
         """
+        plan = self._mint_account_join_credential(request, user_id=user_id, token_id=owner_token_id)
+        return MachineJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
+
+    def _mint_account_join_credential(
+        self,
+        request: MachineJoinCommandRequest,
+        *,
+        user_id: str,
+        token_id: str,
+    ) -> JoinTokenCreationPlan:
+        workspace_id = self.account_fleet_workspace_id(user_id)
         try:
             fleet = self._resolve_joined_fleet(
                 workspace_id,
@@ -1171,13 +1170,27 @@ class GatewayControlService:
             )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
-        plan = self.unit_state_coordinator.create_unit_join_token(
+        return self.unit_state_coordinator.create_unit_join_token(
             fleet,
             workspace_id=workspace_id,
-            owner_token_id=owner_token_id,
+            owner_token_id=token_id,
             ttl=request.ttl,
         )
-        return MachineJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
+
+    def account_fleet_workspace_id(self, user_id: str) -> str:
+        """The workspace that anchors an account's joined machines.
+
+        A machine serves every workspace its account owns, but the unit that buys
+        it and the durable machine row still live in one workspace, so the account's
+        first workspace anchors them. Deriving it from the account rather than from
+        wherever the caller happens to be is what keeps joining twice from producing
+        two fleets for one account.
+        """
+        with self.services.context.database.session() as session:
+            owned = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+        if not owned:
+            raise ConflictError("this account owns no workspace to join a machine into")
+        return owned[0]
 
     def _resolve_joined_fleet(
         self,
@@ -1296,6 +1309,32 @@ class GatewayControlService:
             data=selected,
             next=selected[-1].id if len(machines) > limit else "",
         )
+
+    def account_machine_views(self, user_id: str) -> list[UnitMachineResponse]:
+        """Every joined machine this account owns, across the workspaces it holds.
+
+        Read from the enrollments rather than from any one workspace's machines:
+        the enrollment is what names the account, and a caller asking for their own
+        hardware should not have to know which of their workspaces anchors it.
+        """
+        with self.services.context.database.session() as session:
+            enrollments = [
+                enrollment
+                for enrollment in ComputeMachineEnrollmentRepository(session).list_for_user(user_id)
+                if enrollment.status is ComputeMachineEnrollmentStatus.Active
+            ]
+        owned_machine_ids = {enrollment.machine_id for enrollment in enrollments}
+        views = [
+            view
+            for workspace_id in sorted({enrollment.workspace_id for enrollment in enrollments})
+            for view in self.machine_views(workspace_id)
+            # Provider-launched nodes enroll through the same path, so they hold
+            # enrollments too. They are the connected account's capacity and are
+            # reported there; this answer is hardware the customer connected.
+            if view.id in owned_machine_ids and view.provider_name == "agent"
+        ]
+        views.sort(key=lambda item: item.id)
+        return views
 
     def machine_views(self, workspace_id: str) -> list[UnitMachineResponse]:
         machines = self.services.compute.list_machines(workspace=workspace_id)
@@ -1606,11 +1645,11 @@ class GatewayControlService:
                 pool_state = self.unit_state_coordinator.private_unit_for_join_token(token_state)
                 existing = (
                     enrollments.by_fingerprint(
-                        token_state.workspace_id,
+                        token_state.owner_user_id,
                         fingerprint_hash,
                         for_update=True,
                     )
-                    if token_state is not None
+                    if token_state is not None and token_state.owner_user_id
                     else None
                 )
                 if (
@@ -1618,6 +1657,19 @@ class GatewayControlService:
                     and existing.status is not ComputeMachineEnrollmentStatus.Active
                 ):
                     existing = None
+                if (
+                    existing is not None
+                    and token_state is not None
+                    and existing.workspace_id != token_state.workspace_id
+                ):
+                    # One host is one machine per account, so re-joining it under a
+                    # second workspace would have to move its unit, its durable
+                    # machine row, and whatever is running on it. Say which
+                    # workspace holds it instead of silently re-homing the host.
+                    raise ConflictError(
+                        "this host is already joined to your account under another "
+                        "workspace; run 'lazycloud-agent leave' on it first"
+                    )
                 existing_agent = _agent_state_from_enrollment(existing)
                 existing_agents = (
                     [
@@ -2584,6 +2636,10 @@ class GatewayControlService:
         ):
             authoritative = state.model_copy(
                 update={
+                    # The enrollment owns tenancy, so a hot record that predates the
+                    # machine having an account converges here rather than staying
+                    # unschedulable until the agent re-joins.
+                    "owner_user_id": enrollment.user_id,
                     "schedulable": enrollment.schedulable,
                     "capacity_state": enrollment.capacity_state,
                     "capacity_reason": enrollment.capacity_reason,
@@ -2620,6 +2676,7 @@ class GatewayControlService:
                 raise ValueError("agent credential is no longer current")
             state = state.model_copy(
                 update={
+                    "owner_user_id": enrollment.user_id,
                     "capacity_state": enrollment.capacity_state,
                     "capacity_reason": enrollment.capacity_reason,
                     "capacity_observed_at": enrollment.capacity_observed_at,
@@ -2981,6 +3038,7 @@ def _join_token_state(
         return None
     return ComputeJoinTokenState(
         token_hash=credential.token_hash,
+        owner_user_id=credential.user_id,
         workspace_id=credential.workspace_id,
         capacity_owner_id=credential.capacity_owner_id,
         pool=credential.pool,
@@ -3002,6 +3060,7 @@ def _agent_state_from_enrollment(
         return None
     return ComputeAgentTokenState(
         token_hash=enrollment.credential_hash,
+        owner_user_id=enrollment.user_id,
         workspace_id=enrollment.workspace_id,
         capacity_owner_id=enrollment.capacity_owner_id,
         pool=enrollment.pool,
@@ -3075,6 +3134,7 @@ def _machine_enrollment_snapshot(
     readiness_phase: MachineReadinessPhase,
 ) -> ComputeMachineEnrollmentCreate:
     return ComputeMachineEnrollmentCreate(
+        user_id=state.owner_user_id,
         workspace_id=state.workspace_id,
         capacity_owner_id=state.capacity_owner_id,
         pool=state.pool,

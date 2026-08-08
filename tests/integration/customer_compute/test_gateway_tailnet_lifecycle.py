@@ -56,7 +56,7 @@ from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, workspace_owner_user_id
 
 
 @pytest.fixture
@@ -179,6 +179,9 @@ def _enroll(
         with services.context.database.session() as session:
             workspace_id = services.context.default_workspace_id(session)
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
+    # The credential names the account the machine will belong to, so the workspace
+    # has to have the owner row production writes with it.
+    workspace_owner_user_id(services, workspace_id)
     bootstrap = gateway.unit_state_coordinator.create_unit_join_token(
         gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,

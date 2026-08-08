@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from math import ceil
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -15,7 +11,6 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
-    ComputeJoinCredentialRecord,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
@@ -46,7 +41,6 @@ from shared.capacity import (
     capacity_owner_for_provider,
 )
 from shared.compute_enrollment import (
-    ComputeCredentialStatus,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
@@ -77,11 +71,6 @@ from shared.identity import WorkspaceStatus
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import utc_now
 
-from compute.agent_control import (
-    ComputePrincipal,
-    JoinTokenCreationPlan,
-    plan_join_token_creation,
-)
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
 from compute.offers import (
@@ -2618,86 +2607,6 @@ def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:
         "priority": str(config.priority),
     }
     return {key: value for key, value in labels.items() if value}
-
-
-class _CapacityJoinReuse(Enum):
-    """Whether an existing provider-launch credential can still serve this operation."""
-
-    Usable = "usable"
-    Renew = "renew"
-    Rejected = "rejected"
-
-
-def _capacity_join_credential_reuse(
-    credential: ComputeJoinCredentialRecord | None,
-    *,
-    workspace_id: str,
-    pool: MachinePool,
-    machine_id: str,
-    now: datetime,
-) -> _CapacityJoinReuse:
-    if credential is None:
-        return _CapacityJoinReuse.Usable
-    scoped_to_operation = (
-        credential.workspace_id == workspace_id
-        and credential.pool == pool
-        and credential.machine_id == machine_id
-    )
-    if not scoped_to_operation or credential.use_count != 0:
-        # A consumed credential means a machine already enrolled on this authority;
-        # minting another would admit a second enrollment for the same machine.
-        return _CapacityJoinReuse.Rejected
-    if credential.status is not ComputeCredentialStatus.Active or credential.expires_at <= now:
-        return _CapacityJoinReuse.Renew
-    return _CapacityJoinReuse.Usable
-
-
-def _capacity_launch_idempotency_key(*, operation_id: str, join_attempt: int) -> str:
-    """Provider idempotency key for one launch attempt of a capacity operation.
-
-    Separate from the operation's logical identity: retries inside an attempt reuse
-    the key so the provider treats them as replays, while a compensated attempt
-    advances it so the next launch is a genuinely new side effect.
-    """
-    return f"{operation_id}\0{join_attempt}"
-
-
-def _plan_capacity_join_token(
-    signing_key: str,
-    *,
-    principal: ComputePrincipal,
-    pool: MachinePool,
-    capacity_owner_id: str,
-    operation_id: str,
-    machine_id: str,
-    join_attempt: int,
-) -> JoinTokenCreationPlan:
-    return plan_join_token_creation(
-        principal,
-        pool,
-        capacity_owner_id=capacity_owner_id,
-        machine_id=machine_id,
-        token=_capacity_join_token(
-            signing_key,
-            operation_id=operation_id,
-            machine_id=machine_id,
-            join_attempt=join_attempt,
-        ),
-    )
-
-
-def _capacity_join_token(
-    signing_key: str,
-    *,
-    operation_id: str,
-    machine_id: str,
-    join_attempt: int,
-) -> str:
-    payload = "\0".join(
-        ("capacity-provider-join-v1", operation_id, machine_id, str(join_attempt))
-    ).encode()
-    digest = hmac.new(signing_key.encode(), payload, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputeUnitRecord) -> bool:

@@ -47,7 +47,6 @@ import { cn } from "@/lib/utils";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
-import { WorkspaceSection } from "./WorkspaceSection";
 import { useComputePolicyController } from "./ComputePolicyForm/controller";
 import { regionOptions, toggleAllowedRegion } from "./region-selection";
 
@@ -58,13 +57,13 @@ export function ComputeSettings({
   workspaceId: string;
   workspaceName: string;
 }) {
-  const connection = useQuery(awsConnectionQueryOptions(workspaceId));
-  const instances = useQuery(computeInstancesQueryOptions(workspaceId));
-  const machines = useQuery(machinesQueryOptions(workspaceId));
+  const connection = useQuery(awsConnectionQueryOptions());
+  const instances = useQuery(computeInstancesQueryOptions());
+  const machines = useQuery(machinesQueryOptions());
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
-  const catalog = useQuery(computeCatalogQueryOptions(workspaceId, expandedProvider === "aws"));
+  const catalog = useQuery(computeCatalogQueryOptions(expandedProvider === "aws"));
   const loadError = connection.error ?? instances.error;
 
   if (connection.isPending || instances.isPending) {
@@ -89,9 +88,13 @@ export function ComputeSettings({
   );
 
   return (
+    // Everything here belongs to the account, so nothing is collapsed into a
+    // workspace section. The one exception is the AWS policy, which is per
+    // workspace and says so where it is rendered.
     <div className="flex min-h-full flex-col gap-5 pb-1">
       <ConnectedCloudsPanel
         workspaceId={workspaceId}
+        workspaceName={workspaceName}
         connection={connection.data ?? null}
         instances={awsInstances}
         expanded={expandedProvider === "aws"}
@@ -101,31 +104,25 @@ export function ComputeSettings({
         onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
       />
-      <WorkspaceSection workspaceName={workspaceName}>
-        <SelfHostedPanel
-          machines={selfHostedMachines}
-          loading={machines.isPending}
-          error={machines.error}
-          onJoin={() => setJoinDialogOpen(true)}
-        />
-      </WorkspaceSection>
+      <SelfHostedPanel
+        machines={selfHostedMachines}
+        loading={machines.isPending}
+        error={machines.error}
+        onJoin={() => setJoinDialogOpen(true)}
+      />
       <AwsConnectionDialog
-        workspaceId={workspaceId}
         connection={connection.data ?? null}
         open={awsDialogOpen}
         onOpenChange={setAwsDialogOpen}
       />
-      <JoinMachineDialog
-        workspaceId={workspaceId}
-        open={joinDialogOpen}
-        onOpenChange={setJoinDialogOpen}
-      />
+      <JoinMachineDialog open={joinDialogOpen} onOpenChange={setJoinDialogOpen} />
     </div>
   );
 }
 
 function ConnectedCloudsPanel({
   workspaceId,
+  workspaceName,
   connection,
   instances,
   expanded,
@@ -136,6 +133,7 @@ function ConnectedCloudsPanel({
   onManageAws,
 }: {
   workspaceId: string;
+  workspaceName: string;
   connection: AwsConnection | null;
   instances: CustomerComputeInstance[];
   expanded: boolean;
@@ -183,8 +181,12 @@ function ConnectedCloudsPanel({
                   <div className="mb-4">
                     <div>
                       <h3 className="text-sm font-medium">AWS policy</h3>
+                      {/* The one thing on this tab that is not the account's. Limits
+                          and defaults are set per workspace, so the workspace is
+                          named rather than left to be inferred from the URL. */}
                       <p className="mt-0.5 text-xs text-muted-foreground">
-                        Instance limits and provisioning defaults
+                        Instance limits and provisioning defaults for{" "}
+                        <span className="text-foreground">{workspaceName}</span>
                       </p>
                     </div>
                   </div>
@@ -668,7 +670,7 @@ function SelfHostedPanel({
   return (
     <Panel
       title="Self-hosted machines"
-      description="Advanced hosts joined directly to this workspace"
+      description="Hosts you connected, available to every workspace you own"
       action={
         <Button size="sm" variant="outline" onClick={onJoin}>
           <Server />

@@ -206,17 +206,31 @@ export const workspaceQueryKeys = {
   compute: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "compute"] as const,
     policy: (workspaceId: string) => [...workspaceRoot(workspaceId), "compute", "policy"] as const,
-    catalog: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "catalog"] as const,
-    awsConnection: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "aws-connection"] as const,
-    instances: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "instances"] as const,
-    machines: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "machines"] as const,
     adminAccess: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "compute", "admin-access"] as const,
   },
+} as const;
+
+const accountRoot = ["account"] as const;
+
+/**
+ * Keys for records a person owns rather than a workspace.
+ *
+ * Deliberately outside `workspaceRoot`: the connected cloud, its instances, the
+ * joined machines, and the registered domains answer the same in every workspace
+ * the account holds, so keying them per workspace cached one answer N times and
+ * refetched all of it on a workspace switch that could not have changed it.
+ */
+export const accountQueryKeys = {
+  root: () => accountRoot,
+  compute: {
+    root: () => [...accountRoot, "compute"] as const,
+    catalog: () => [...accountRoot, "compute", "catalog"] as const,
+    awsConnection: () => [...accountRoot, "compute", "aws-connection"] as const,
+    instances: () => [...accountRoot, "compute", "instances"] as const,
+    machines: () => [...accountRoot, "compute", "machines"] as const,
+  },
+  domains: () => [...accountRoot, "custom-domains"] as const,
 } as const;
 
 export type WorkspaceLiveQueryMeta = {

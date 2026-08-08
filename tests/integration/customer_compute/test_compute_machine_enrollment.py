@@ -61,7 +61,7 @@ from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, workspace_owner_user_id
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
@@ -130,6 +130,9 @@ def _create_join_token(
     pool: MachinePool,
     workspace_id: str,
 ):
+    # The credential names the account the machine will belong to, so the workspace
+    # has to have the owner row production writes with it.
+    workspace_owner_user_id(gateway.services, workspace_id)
     return gateway.unit_state_coordinator.create_unit_join_token(
         gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,
@@ -710,15 +713,26 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
     assert gateway.join_agent(_join_request(current.token)).machine_id
 
 
-def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
+def test_machine_join_command_owns_the_account_self_hosted_fleet(
     isolated_services: ApiServices,
 ) -> None:
+    """A joined host belongs to the account, and one account has one fleet.
+
+    The credential is minted for a person, not for wherever they happened to be, so
+    a second workspace the same account owns resolves the same fleet and the same
+    machine rather than a second copy of both.
+    """
     workspace_id = _workspace_id(isolated_services)
+    user_id = workspace_owner_user_id(isolated_services, workspace_id)
+    isolated_services.control_plane_service.set_workspace(
+        "second-workspace",
+        owner_user_id=user_id,
+    )
     gateway = _gateway(isolated_services, key_prefix="machine-join")
 
     first = gateway.machine_join_command(
         MachineJoinCommandRequest(),
-        workspace_id=workspace_id,
+        user_id=user_id,
         owner_token_id="token-one",
     )
 
@@ -734,12 +748,18 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
     command_words = shlex.split(first.command)
     join_token = command_words[command_words.index("--join-token") + 1]
     joined = gateway.join_agent(_join_request(join_token))
-    machines = _pool_machines(gateway, MachinePool(SELF_HOSTED_FLEET_POOL_NAME), workspace_id)
-    assert [machine.id for machine in machines] == [joined.machine_id]
+    assert [machine.id for machine in gateway.account_machine_views(user_id)] == [joined.machine_id]
+    with isolated_services.context.database.session() as session:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id,
+            joined.machine_id,
+        )
+    assert enrollment is not None
+    assert enrollment.user_id == user_id
 
     second = gateway.machine_join_command(
         MachineJoinCommandRequest(gpu=["A10G"]),
-        workspace_id=workspace_id,
+        user_id=user_id,
         owner_token_id="token-two",
     )
 
@@ -760,3 +780,4 @@ def test_machine_join_command_owns_the_workspace_self_hosted_fleet(
     used, active = sorted(credentials, key=lambda credential: credential.created_at)
     assert used.status is ComputeCredentialStatus.Revoked
     assert active.status is ComputeCredentialStatus.Active
+    assert {credential.user_id for credential in credentials} == {user_id}

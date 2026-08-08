@@ -1,7 +1,7 @@
 import type { QueryKey } from "@tanstack/react-query";
 
 import type { WorkspaceChangeEvent } from "@/lib/api/schemas";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export type WorkspaceInvalidationTarget = {
   queryKey: QueryKey;
@@ -74,25 +74,23 @@ export function workspaceInvalidationTargets(
         { queryKey: workspaceQueryKeys.sandboxes.root(workspaceId) },
         { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
       ]);
+    // Capacity belongs to the account, so the change one workspace's stream
+    // reports is a change to what every workspace of that account reads.
     case "compute.units":
-      return [{ queryKey: workspaceQueryKeys.compute.instances(workspaceId) }];
+      return [{ queryKey: accountQueryKeys.compute.instances() }];
     case "compute.machines":
-      return [
-        { queryKey: workspaceQueryKeys.compute.machines(workspaceId) },
-        { queryKey: workspaceQueryKeys.compute.instances(workspaceId) },
-      ];
     case "compute.workers":
       return [
-        { queryKey: workspaceQueryKeys.compute.machines(workspaceId) },
-        { queryKey: workspaceQueryKeys.compute.instances(workspaceId) },
+        { queryKey: accountQueryKeys.compute.machines() },
+        { queryKey: accountQueryKeys.compute.instances() },
       ];
     case "compute.agents":
     case "compute.providers":
       return [];
     case "compute.connections":
       return [
-        { queryKey: workspaceQueryKeys.compute.awsConnection(workspaceId) },
-        { queryKey: workspaceQueryKeys.compute.instances(workspaceId) },
+        { queryKey: accountQueryKeys.compute.awsConnection() },
+        { queryKey: accountQueryKeys.compute.instances() },
         { queryKey: workspaceQueryKeys.compute.policy(workspaceId) },
       ];
     case "storage.secrets":

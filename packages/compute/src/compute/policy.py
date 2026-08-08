@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -341,13 +342,26 @@ class WorkspaceComputePolicyService:
             for name, members in sorted(grouped.items())
         )
 
-    def catalog(
+    def catalog(self) -> tuple[tuple[str, tuple[ComputeCatalogInstance, ...]], ...]:
+        """Provider inventory: what may be launched, independent of who is asking."""
+        return tuple((item.region, item.instances) for item in self.available_catalog)
+
+    def instances_for_account(
         self,
         *,
-        workspace: str,
-    ) -> tuple[tuple[str, tuple[ComputeCatalogInstance, ...]], ...]:
-        self.get_policy(workspace=workspace)
-        return tuple((item.region, item.instances) for item in self.available_catalog)
+        workspace_ids: Sequence[str],
+    ) -> tuple[ComputeInstanceView, ...]:
+        """Provider capacity running in one account's connected cloud.
+
+        Gathered across every workspace the account owns, because the connection is
+        the account's and a customer looking at their own cloud spend should see all
+        of it rather than the slice one workspace happens to have provisioned.
+        """
+        views = [
+            view for workspace in workspace_ids for view in self.instances(workspace=workspace)
+        ]
+        views.sort(key=lambda item: (item.record.status, item.record.id))
+        return tuple(views)
 
     def instances(self, *, workspace: str) -> tuple[ComputeInstanceView, ...]:
         with self.context.database.session() as session:

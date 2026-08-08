@@ -1215,6 +1215,9 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     worker_id = agent_machine_worker_id(machine_id)
     now = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
+        connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id or "")
+        assert connection is not None
+        owner_user_id = connection.user_id
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
@@ -1235,6 +1238,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         )
         credential = ComputeJoinCredentialRepository(session).create(
             token_hash="a" * 64,
+            user_id=owner_user_id,
             workspace_id=pool.workspace_id,
             capacity_owner_id=pool.capacity_owner_id,
             pool=pool.pool,
@@ -1244,6 +1248,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         )
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
+                user_id=owner_user_id,
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
                 pool=pool.pool,
