@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { adminAccessQueryOptions } from "@/lib/queries/compute";
 import { appQueryOptions } from "@/lib/queries/apps";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
@@ -491,7 +492,13 @@ function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   const create = useMutation({
     mutationFn: () => createWorkspace(name.trim()),
     onSuccess: async (created) => {
-      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      // The shell resolves a workspace out of the session, so that is what has to
+      // know about the new one before the route changes. Navigating first showed
+      // "workspace not found" for a workspace that had just been created.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey }),
+        queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+      ]);
       onClose();
       router.history.push(`/w/${encodeURIComponent(created.name)}/apps`);
     },
