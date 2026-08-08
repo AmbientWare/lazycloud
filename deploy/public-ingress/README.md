@@ -31,6 +31,46 @@ curl -s -o /dev/null -w '%{http_code}\n' https://lazycloud.dev/metrics   # 404 a
 middleware rewrites generated invoke hosts to the stub's handler path, so a
 path filter there would break user applications.
 
+The final rule forwards every remaining hostname, because a customer-owned
+domain arrives carrying its own `Host` header and cannot be enumerated here.
+The two prefixes above are refused at the edge only for `lazycloud.dev`; both
+also require authorization at the origin, which is what actually protects them.
+The origin cannot refuse by hostname, because internal callers reach the control
+plane by service name and so arrive on a host that is not the public domain
+either.
+
+## Customer-owned domains
+
+Cloudflare for SaaS issues a certificate per registered domain and proxies it to
+this tunnel. One-time setup on the zone:
+
+1. SSL/TLS → Custom Hostnames: enable it, and set the fallback origin to
+   `lazycloud.dev`. Cloudflare forbids a *custom hostname* equal to the zone
+   name; an apex fallback origin is fine.
+2. Mint an API token scoped to Zone → SSL and Certificates → Edit, and set
+   `LAZYCLOUD_CLOUDFLARE_API_TOKEN` and `LAZYCLOUD_CLOUDFLARE_ZONE_ID` in the
+   deployment `.env`. Compose passes both to the control plane and the scheduler.
+
+A workspace then registers `example.com` or `*.example.com`, publishes the CNAME
+the platform reports, and claims a hostname under it with `domain=` on the
+resource. Without the two variables the stack still serves every platform
+hostname; only the domain operations fail, and they name what is missing.
+
+The customer's CNAME has to be **DNS-only**. If their domain is also on
+Cloudflare it is easy to leave the record proxied, and a proxied record is served
+from their own zone and never reaches the custom hostname here, so verification
+sits pending with nothing on this side to see. Cloudflare reports the cause on the
+custom hostname itself:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$ZONE/custom_hostnames" \
+  | jq '.result[] | {hostname, status, verification_errors, ssl: .ssl.status}'
+```
+
+`fallback origin is not active yet` means the zone setting above is missing, not
+that the customer did anything wrong.
+
 ## Minting a tunnel
 
 Requires a Cloudflare API token with Account → Cloudflare Tunnel → Edit, Zone →

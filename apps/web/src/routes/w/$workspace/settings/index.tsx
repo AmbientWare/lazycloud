@@ -9,12 +9,18 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { ComputeSettings } from "./-components/ComputeSettings";
+import { DomainSettings } from "./-components/DomainSettings";
 import { WorkspaceIdentity } from "./-components/WorkspaceIdentity";
 import { WorkspaceTokens } from "./-components/WorkspaceTokens";
 
 export const Route = createFileRoute("/w/$workspace/settings/")({
   validateSearch: (search: Record<string, unknown>) => ({
-    view: search.view === "compute" ? ("compute" as const) : ("general" as const),
+    view:
+      search.view === "compute"
+        ? ("compute" as const)
+        : search.view === "domains"
+          ? ("domains" as const)
+          : ("general" as const),
   }),
   component: SettingsPage,
   errorComponent: RouteErrorFallback,
@@ -32,7 +38,9 @@ function SettingsPage() {
         value={search.view}
         onValueChange={(view) => {
           void navigate({
-            search: { view: view === "compute" ? "compute" : "general" },
+            search: {
+              view: view === "compute" ? "compute" : view === "domains" ? "domains" : "general",
+            },
             replace: true,
           });
         }}
@@ -41,6 +49,7 @@ function SettingsPage() {
         <LinearTabsList ariaLabel="Settings sections">
           <LinearTab value="general">General</LinearTab>
           <LinearTab value="compute">Compute</LinearTab>
+          <LinearTab value="domains">Domains</LinearTab>
         </LinearTabsList>
         <TabsContent
           value="general"
@@ -57,6 +66,12 @@ function SettingsPage() {
           className="mt-3 min-h-0 flex-1 overflow-visible lg:overflow-hidden"
         >
           <ComputeSettings workspaceId={workspace.id} />
+        </TabsContent>
+        <TabsContent
+          value="domains"
+          className="mt-3 min-h-0 flex-1 overflow-visible lg:overflow-hidden"
+        >
+          <DomainSettings workspaceId={workspace.id} />
         </TabsContent>
       </Tabs>
     </WorkspacePage>

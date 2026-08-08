@@ -3,18 +3,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Protocol
-from urllib.parse import urlparse
 
 from control.service import ControlPlaneService, StubKind, StubRecord
-from shared.deployment_records import Deployment
+from shared.deployment_subdomains import parse_deployment_host
 from shared.errors import NotFoundError
+from shared.urls import handler_prefix
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from api.server.deployed_stubs import stub_is_public
 from api.server.services import ApiServices
 
-VERSIONED_HOST_PATTERN = re.compile(r"^(?P<name>.+)-v(?P<version>[1-9][0-9]*)$")
 PORT_HOST_PATTERN = re.compile(r"^(?P<target>.+)-(?P<port>[1-9][0-9]{0,4})$")
 PROXY_STUB_KINDS = {StubKind.Pod, StubKind.Sandbox}
 
@@ -24,6 +23,13 @@ class ApiServicesProvider(Protocol):
 
 
 class GeneratedInvokeHostRoutingMiddleware:
+    """Route a public request by the hostname it arrived on.
+
+    The one place a hostname becomes a resource. A request here carries no token, so
+    the host is the only routing key there is, and the workspace comes from whatever
+    row the host resolves to rather than from the caller.
+    """
+
     def __init__(
         self,
         app: ASGIApp,
@@ -38,20 +44,23 @@ class GeneratedInvokeHostRoutingMiddleware:
             await self.app(scope, receive, send)
             return
         services = self.services_provider.current()
-        base_host = (urlparse(services.gateway_settings.public_http_url).hostname or "").lower()
+        base_host = services.gateway_settings.public_base_domain
         if not base_host:
             await self.app(scope, receive, send)
             return
-        subdomain = self._subdomain(scope, base_host=base_host)
-        if not subdomain:
-            await self.app(scope, receive, send)
-            return
+        host = _scope_host(scope).split(":", 1)[0].strip(".").lower()
         handler_path = _resolve_handler_path(
             services,
-            subdomain,
+            host,
+            base_host=base_host,
             original_path=str(scope.get("path") or "/"),
         )
         if handler_path is None:
+            # A host that names nothing falls through to the platform's own routes,
+            # which authorize for themselves. Refusing here by hostname is not
+            # available: internal callers reach the control plane by service name, so
+            # "not the public domain" describes the worker registering itself just as
+            # well as it describes a stranger.
             await self.app(scope, receive, send)
             return
         rewritten = dict(scope)
@@ -59,15 +68,14 @@ class GeneratedInvokeHostRoutingMiddleware:
         rewritten["raw_path"] = handler_path.encode("utf-8")
         await self.app(rewritten, receive, send)
 
-    @staticmethod
-    def _subdomain(scope: Scope, *, base_host: str) -> str:
-        host = _scope_host(scope).split(":", 1)[0].strip(".").lower()
-        if not host or host == base_host:
-            return ""
-        suffix = f".{base_host}"
-        if not host.endswith(suffix):
-            return ""
-        return host[: -len(suffix)]
+
+def _host_label(host: str, *, base_host: str) -> str:
+    if not host or host == base_host:
+        return ""
+    suffix = f".{base_host}"
+    if not host.endswith(suffix):
+        return ""
+    return host[: -len(suffix)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,18 +85,17 @@ class _HostTarget:
     container_id: str | None = None
     deployment_name: str = ""
     deployment_version: int | None = None
-    latest: bool = False
     stub_id_route: bool = False
 
 
 def _resolve_handler_path(
     services: ApiServices,
-    subdomain: str,
+    host: str,
     *,
+    base_host: str,
     original_path: str,
 ) -> str | None:
-    control_plane = ControlPlaneService(services.context)
-    target = _resolve_host_target(services, control_plane, subdomain)
+    target = _resolve_host_target(services, host, base_host=base_host)
     if target is None:
         return None
     prefix = _kind_path(target.stub.kind)
@@ -103,10 +110,8 @@ def _resolve_handler_path(
         base_path = f"/{prefix}/id/{route_id}"
     elif target.deployment_version is not None:
         base_path = f"/{prefix}/{target.deployment_name}/v{target.deployment_version}"
-    elif target.latest:
-        base_path = f"/{prefix}/{target.deployment_name}/latest"
     else:
-        base_path = f"/{prefix}/id/{target.stub.id}"
+        base_path = f"/{prefix}/{target.deployment_name}/latest"
     if target.port is not None:
         base_path = f"{base_path}/{target.port}"
     return _join_paths(base_path, original_path)
@@ -114,126 +119,100 @@ def _resolve_handler_path(
 
 def _resolve_host_target(
     services: ApiServices,
-    control_plane: ControlPlaneService,
-    subdomain: str,
+    host: str,
+    *,
+    base_host: str,
 ) -> _HostTarget | None:
+    """Find what a host names, whether the platform issued it or a customer owns it.
+
+    A hostname outside the platform's own domain can only be one a workspace
+    registered, so it is tried there and nowhere else.
+    """
+
+    label = _host_label(host, base_host=base_host)
+    if not label:
+        return _custom_hostname_target(services, host) if host else None
+
+    control_plane = ControlPlaneService(services.context)
     try:
-        stub = control_plane.get_stub(subdomain)
+        stub = control_plane.get_stub(label)
     except NotFoundError:
         stub = None
     if stub is not None:
         return _HostTarget(stub=stub, stub_id_route=True)
 
-    port_match = PORT_HOST_PATTERN.match(subdomain)
-    if port_match is not None:
-        maybe_port = int(port_match.group("port"))
-        if maybe_port <= 65535:
-            routed_name = port_match.group("target")
-            try:
-                container = services.containers.get(routed_name)
-            except NotFoundError:
-                container = None
-            if container is not None and container.stub_id is not None:
-                try:
-                    stub = control_plane.get_stub(
-                        container.stub_id,
-                        workspace=container.workspace_id,
-                    )
-                except NotFoundError:
-                    stub = None
-                if (
-                    stub is not None
-                    and stub.kind is StubKind.Sandbox
-                    and stub.workspace_id == container.workspace_id
-                ):
-                    return _HostTarget(
-                        stub=stub,
-                        port=maybe_port,
-                        container_id=container.id,
-                        stub_id_route=True,
-                    )
-            try:
-                stub = control_plane.get_stub(routed_name)
-            except NotFoundError:
-                stub = None
-            if stub is not None and stub.kind is StubKind.Pod:
-                return _HostTarget(stub=stub, port=maybe_port, stub_id_route=True)
-            target = _deployment_host_target_from_name(
-                services,
-                control_plane,
-                routed_name,
-                port=maybe_port,
+    port_target = _port_host_target(services, control_plane, label)
+    if port_target is not None:
+        return port_target
+
+    return _deployment_host_target(services, label)
+
+
+def _custom_hostname_target(services: ApiServices, host: str) -> _HostTarget | None:
+    resource = services.deployment_resources.get_by_custom_hostname(host)
+    if resource is None:
+        return None
+    return _HostTarget(stub=resource.stub, deployment_name=resource.deployment.name)
+
+
+def _port_host_target(
+    services: ApiServices,
+    control_plane: ControlPlaneService,
+    label: str,
+) -> _HostTarget | None:
+    """Resolve `<container-or-stub>-<port>`, whose ids are already globally unique."""
+
+    port_match = PORT_HOST_PATTERN.match(label)
+    if port_match is None:
+        return None
+    port = int(port_match.group("port"))
+    if port > 65535:
+        return None
+    routed_name = port_match.group("target")
+    try:
+        container = services.containers.get(routed_name)
+    except NotFoundError:
+        container = None
+    if container is not None and container.stub_id is not None:
+        try:
+            stub = control_plane.get_stub(container.stub_id, workspace=container.workspace_id)
+        except NotFoundError:
+            stub = None
+        if (
+            stub is not None
+            and stub.kind is StubKind.Sandbox
+            and stub.workspace_id == container.workspace_id
+        ):
+            return _HostTarget(
+                stub=stub,
+                port=port,
+                container_id=container.id,
+                stub_id_route=True,
             )
-            if target is not None and target.stub.kind in PROXY_STUB_KINDS:
-                return target
-
-    return _deployment_host_target_from_name(services, control_plane, subdomain, port=None)
-
-
-def _deployment_host_target_from_name(
-    services: ApiServices,
-    control_plane: ControlPlaneService,
-    routed_name: str,
-    *,
-    port: int | None,
-) -> _HostTarget | None:
-    latest = False
-    version: int | None = None
-    name = routed_name
-    if routed_name.endswith("-latest"):
-        latest = True
-        name = routed_name.removesuffix("-latest")
-    else:
-        match = VERSIONED_HOST_PATTERN.match(routed_name)
-        if match is not None:
-            name = match.group("name")
-            version = int(match.group("version"))
-    return _deployment_host_target(
-        services,
-        control_plane,
-        name,
-        version=version,
-        latest=latest,
-        port=port,
-    )
-
-
-def _deployment_host_target(
-    services: ApiServices,
-    control_plane: ControlPlaneService,
-    name_or_route: str,
-    *,
-    version: int | None,
-    latest: bool,
-    port: int | None,
-) -> _HostTarget | None:
-    resources = services.deployment_resources.list(
-        workspace=None,
-        version=version,
-        active=True,
-    )
-    resources.sort(key=lambda item: item.deployment.version, reverse=True)
-    for resource in resources:
-        deployment = resource.deployment
-        if name_or_route not in _deployment_host_names(deployment, app_name=resource.app.name):
-            continue
-        return _HostTarget(
-            stub=resource.stub,
-            port=port,
-            deployment_name=deployment.name,
-            deployment_version=deployment.version if version is not None else None,
-            latest=latest or version is None,
-        )
+    try:
+        stub = control_plane.get_stub(routed_name)
+    except NotFoundError:
+        stub = None
+    if stub is not None and stub.kind is StubKind.Pod:
+        return _HostTarget(stub=stub, port=port, stub_id_route=True)
     return None
 
 
-def _deployment_host_names(deployment: Deployment, *, app_name: str = "") -> set[str]:
-    names = {deployment.name, app_name}
-    for key in ("subdomain", "deployment_subdomain"):
-        value = deployment.spec.metadata.get(key)
-        if isinstance(value, str) and value:
-            names.add(value)
-    return {name for name in names if name}
+def _deployment_host_target(services: ApiServices, label: str) -> _HostTarget | None:
+    parsed = parse_deployment_host(label)
+    if parsed is None:
+        return None
+    resource = services.deployment_resources.get_by_subdomain(
+        parsed.subdomain,
+        version=parsed.version,
+    )
+    if resource is None:
+        return None
+    return _HostTarget(
+        stub=resource.stub,
+        deployment_name=resource.deployment.name,
+        deployment_version=parsed.version,
+    )
 
 
 def _scope_host(scope: Scope) -> str:
@@ -241,17 +220,16 @@ def _scope_host(scope: Scope) -> str:
 
 
 def _kind_path(kind: StubKind) -> str | None:
-    if kind is StubKind.TaskQueue:
-        return "api/v1/taskqueues"
-    if kind is StubKind.Function:
-        return "api/v1/functions"
-    if kind is StubKind.Endpoint:
-        return "api/v1/endpoints"
-    if kind is StubKind.Asgi:
-        return "api/v1/asgi"
+    """The handler prefix a hostname rewrites onto, shared with the client manifest.
+
+    Kept in one place because the two have to agree: the manifest hands a caller the
+    same path this rewrite produces.
+    """
+
     if kind in PROXY_STUB_KINDS:
         return kind.value
-    return None
+    prefix = handler_prefix(kind.value)
+    return prefix if prefix != kind.value else None
 
 
 def _join_paths(base_path: str, original_path: str) -> str:

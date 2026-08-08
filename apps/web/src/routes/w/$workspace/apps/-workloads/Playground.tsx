@@ -80,7 +80,9 @@ function PlaygroundForm({
   const [inputError, setInputError] = useState<string | null>(null);
 
   const invoke = useMutation({
-    mutationFn: (body: JsonValue) => invokeDeployment(manifest.invoke_url, body),
+    // Same-origin: the published hostname is a different origin to the dashboard,
+    // and a deployed resource owes the dashboard no CORS permission.
+    mutationFn: (body: JsonValue) => invokeDeployment(manifest.invoke_path, body),
   });
 
   type BodyResult = { ok: true; body: JsonValue } | { ok: false; message: string };

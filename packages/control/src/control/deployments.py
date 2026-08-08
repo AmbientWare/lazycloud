@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from database.repositories.apps import AppRepository, CronJobRepository, DeploymentRepository
+from database.repositories.custom_domains import CustomDomainRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
@@ -19,11 +20,13 @@ from shared.deployment_records import (
     resolve_retries,
     resolve_timeout_seconds,
 )
+from shared.deployment_subdomains import deployment_subdomain
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
+from sqlalchemy.orm import Session
 
 from control.context import ControlContext
 from control.deployment_cleanup import (
@@ -42,6 +45,12 @@ class DeploymentRegistration:
 @dataclass(frozen=True, slots=True)
 class DeploymentAppResolution:
     app_id: str | None
+    app_name: str
+    """Name the deployment's app has or will be created under.
+
+    Known even when `app_id` is not, which is what lets the subdomain be minted on the
+    same deploy that creates the app.
+    """
 
 
 class DeploymentRegistrar(Protocol):
@@ -120,6 +129,24 @@ class DeploymentService:
                         name=prior.name,
                         status="inactive",
                     )
+            subdomain = deployment_subdomain(
+                workspace_id=workspace_record.id,
+                app_name=app_resolution.app_name,
+                name=normalized_spec.name,
+                kind=normalized_spec.kind,
+            )
+            repository.assert_subdomain_unclaimed(
+                subdomain,
+                workspace_id=workspace_record.id,
+                app_id=app_id,
+                name=normalized_spec.name,
+                kind=normalized_spec.kind,
+            )
+            custom_hostname = _claimed_hostname(
+                session,
+                normalized_spec.domain,
+                workspace_id=workspace_record.id,
+            )
             deployment = repository.records.create(
                 {
                     "name": normalized_spec.name,
@@ -128,6 +155,8 @@ class DeploymentService:
                     "stub_id": None,
                     "version": version,
                     "spec": normalized_spec.model_dump(mode="json"),
+                    "subdomain": subdomain,
+                    "custom_hostname": custom_hostname,
                     "pool": resolved_pool,
                     "active": deployment_active,
                 },
@@ -308,6 +337,32 @@ class DeploymentService:
             deployment_id=deployment.id,
             stub_id=deployment.stub_id,
         )
+
+
+def _claimed_hostname(
+    session: Session,
+    domain: str | None,
+    *,
+    workspace_id: str,
+) -> str | None:
+    """Resolve the hostname a spec claims, refusing one the workspace cannot serve.
+
+    Checked against the workspace's own registrations, so a spec cannot claim a name
+    under a domain another tenant proved it owns. A registration still short of
+    `ready` is accepted: the certificate arrives on the provider's schedule, and a
+    deploy that failed until it did would make an ordinary redeploy depend on DNS
+    propagation.
+    """
+
+    if domain is None:
+        return None
+    covering = CustomDomainRepository(session).covering(domain, workspace_id=workspace_id)
+    if covering is None:
+        raise InvalidInputError(
+            f"no registered domain in this workspace covers {domain}; "
+            f"register it before a deployment can serve it"
+        )
+    return domain
 
 
 def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:

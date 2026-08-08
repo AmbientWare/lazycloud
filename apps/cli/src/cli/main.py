@@ -59,6 +59,7 @@ _ADMIN_GROUP_ORDER = (
     "queue",
     "map",
     "secret",
+    "domain",
     "volume",
     "container",
     "unit",

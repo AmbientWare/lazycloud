@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from database.records.apps import StubKind, StubRecord
-from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
+from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
     GlobalTableRepository,
@@ -51,7 +51,6 @@ from shared.identity import (
 from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.urls import (
-    InvokeUrlMode,
     StubUrlTarget,
     build_deployment_url,
     build_pod_url,
@@ -73,7 +72,6 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
-from control.sandbox_urls import rewrite_persisted_sandbox_url_visibility
 
 
 class WorkspaceStorageError(RuntimeError):
@@ -314,12 +312,18 @@ class ControlPlaneService:
     ) -> WorkspaceCreateResult:
         workspace_name = name or f"workspace-{uuid4()}"
         workspace = self.upsert_workspace(workspace_name, storage=storage)
-        raw_token, token_record = AuthService(self.context).create_token(
-            f"{workspace.name}-primary",
-            kind=TokenKind.WorkspacePrimary,
-            workspace_id=workspace.id,
-        )
-        workspace = self.upsert_workspace(workspace.name, primary_token_id=token_record.id)
+        # Adopting an existing workspace keeps the credential it already has. Minting
+        # unconditionally repointed `primary_token_id` at a new token on every call, so
+        # asking for a workspace that was already there re-keyed it and left the
+        # previous primary behind as a durable credential nobody issued deliberately.
+        raw_token = ""
+        if not workspace.primary_token_id:
+            raw_token, token_record = AuthService(self.context).create_token(
+                f"{workspace.name}-primary",
+                kind=TokenKind.WorkspacePrimary,
+                workspace_id=workspace.id,
+            )
+            workspace = self.upsert_workspace(workspace.name, primary_token_id=token_record.id)
         if storage is None:
             workspace = self.ensure_workspace_storage(workspace.id)
         return WorkspaceCreateResult(
@@ -627,16 +631,6 @@ class ControlPlaneService:
                     name=name,
                 )
                 change = WorkspaceChangeType.Updated
-            app = (
-                AppRepository(session).get(record.app_id, workspace_id=record.workspace_id)
-                if record.app_id is not None
-                else None
-            )
-            rewrite_persisted_sandbox_url_visibility(
-                session,
-                stub=record,
-                app_public=bool(app and app.public),
-            )
         self._publish_stub_change(record, change)
         return record
 
@@ -962,7 +956,6 @@ class ControlPlaneService:
         apps: AppReader,
         workspace: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
-        mode: InvokeUrlMode = InvokeUrlMode.Path,
         deployment_id: str | None = None,
         port: int | None = None,
     ) -> StubUrlPlan:
@@ -970,31 +963,29 @@ class ControlPlaneService:
         deployment = self._deployment(deployment_id or stub.deployment_id or "")
         app = apps.get(stub.app_id, workspace=workspace) if stub.app_id else None
         ports = _stub_ports(stub, port=port)
-        deployment_subdomain = app.name if app is not None else ""
         target = StubUrlTarget(
             kind=stub.kind.value,
             stub_id=stub.id,
             deployment_name=deployment.name if deployment else stub.name,
             deployment_version=deployment.version if deployment else 1,
-            deployment_subdomain=deployment_subdomain,
+            subdomain=deployment.subdomain if deployment else "",
             public=stub.public or bool(app and app.public),
             ports=ports,
         )
         try:
             if stub.kind is StubKind.Pod:
-                url = build_pod_url(external_url, mode, target)
+                url = build_pod_url(external_url, target)
             elif stub.kind is StubKind.Sandbox:
                 raise InvalidInputError("sandbox URLs require a container-specific exposure")
             elif deployment is not None:
-                url = build_deployment_url(external_url, mode, target)
+                url = build_deployment_url(external_url, target)
             else:
-                url = build_stub_url(external_url, mode, target)
+                url = build_stub_url(external_url, target)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         return StubUrlPlan(
             stub=stub,
             url=url,
-            mode=mode,
             external_url=external_url,
             route_kind=stub.kind,
             deployment=deployment,

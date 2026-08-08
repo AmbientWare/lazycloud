@@ -52,7 +52,6 @@ from shared.http.taskqueues import (
     TaskQueuePutResponse,
     TaskQueueStateResponse,
 )
-from shared.urls import InvokeUrlMode, StubUrlTarget, build_stub_url
 from starlette.routing import BaseRoute, Mount, Route
 from tests.url_constants import TEST_URL
 
@@ -315,7 +314,7 @@ def test_private_function_deployed_routes_use_token_workspace(
         DeploymentKind.Function,
         workspace="route-owner",
     )
-    public_deployment, public_stub = _deploy(
+    _public_deployment, public_stub = _deploy(
         isolated_services,
         "owner-public-fn",
         DeploymentKind.Function,
@@ -329,7 +328,6 @@ def test_private_function_deployed_routes_use_token_workspace(
     )
     owner_headers = _auth_headers(isolated_services, workspace="route-owner")
     other_headers = _auth_headers(isolated_services, workspace="route-other")
-    control = ControlPlaneService(isolated_services.context)
 
     private_paths = [
         f"/api/v1/functions/id/{stub.id}",
@@ -349,14 +347,7 @@ def test_private_function_deployed_routes_use_token_workspace(
         headers=owner_headers,
         json={"value": "owner"},
     )
-    public_path = _path(
-        control.stub_url(
-            public_stub.id,
-            apps=isolated_services.apps,
-            deployment_id=public_deployment.id,
-            external_url=BASE_URL,
-        ).url
-    )
+    public_path = f"/api/v1/functions/public/{public_stub.id}"
     public_response = client.post(public_path, json={"value": "public"})
 
     assert private_public_response.status_code == 404
@@ -428,7 +419,7 @@ def test_endpoint_host_routing_preserves_numeric_deployment_suffixes(
 
     latest_response = client.post(
         "/",
-        headers=headers | {"host": f"{deployment.name}.{_base_host(BASE_URL)}"},
+        headers=headers | {"host": f"{deployment.subdomain}.{_base_host(BASE_URL)}"},
         json={"value": "numeric-suffix"},
     )
 
@@ -479,7 +470,7 @@ def test_generated_asgi_urls_forward_subpaths_and_warmup(
     client_stack: ExitStack,
 ) -> None:
     deployment, stub = _deploy(isolated_services, "web", DeploymentKind.Asgi)
-    public_deployment, public_stub = _deploy(
+    _public_deployment, public_stub = _deploy(
         isolated_services,
         "public-web",
         DeploymentKind.Asgi,
@@ -491,25 +482,10 @@ def test_generated_asgi_urls_forward_subpaths_and_warmup(
         TestClient(create_app(isolated_services, endpoint_service=service))
     )
     headers = _auth_headers(isolated_services)
-    control = ControlPlaneService(isolated_services.context)
 
-    id_path = _path(build_stub_url(BASE_URL, InvokeUrlMode.Path, _target(stub)))
-    deployment_path = _path(
-        control.stub_url(
-            stub.id,
-            apps=isolated_services.apps,
-            deployment_id=deployment.id,
-            external_url=BASE_URL,
-        ).url
-    )
-    public_path = _path(
-        control.stub_url(
-            public_stub.id,
-            apps=isolated_services.apps,
-            deployment_id=public_deployment.id,
-            external_url=BASE_URL,
-        ).url
-    )
+    id_path = f"/api/v1/asgi/id/{stub.id}"
+    deployment_path = f"/api/v1/asgi/{deployment.name}/v{deployment.version}"
+    public_path = f"/api/v1/asgi/public/{public_stub.id}"
     latest_path = f"/api/v1/asgi/{deployment.name}/latest/api/items/3"
     version_path = f"/api/v1/asgi/{deployment.name}/v{deployment.version}/api/items/4"
 
@@ -563,7 +539,7 @@ def test_generated_task_queue_urls_forward_to_put_and_warmup(
     client_stack: ExitStack,
 ) -> None:
     deployment, stub = _deploy(isolated_services, "jobs", DeploymentKind.TaskQueue)
-    public_deployment, public_stub = _deploy(
+    _public_deployment, public_stub = _deploy(
         isolated_services,
         "public-jobs",
         DeploymentKind.TaskQueue,
@@ -575,28 +551,10 @@ def test_generated_task_queue_urls_forward_to_put_and_warmup(
         TestClient(create_app(isolated_services, taskqueue_service=service))
     )
     headers = _auth_headers(isolated_services)
-    control = ControlPlaneService(isolated_services.context)
 
-    id_path = _path(build_stub_url(BASE_URL, InvokeUrlMode.Path, _target(stub)))
-    deployment_path = _path(
-        control.stub_url(
-            stub.id,
-            apps=isolated_services.apps,
-            deployment_id=deployment.id,
-            external_url=BASE_URL,
-        ).url
-    )
-    public_path = _path(
-        control.stub_url(
-            public_stub.id,
-            apps=isolated_services.apps,
-            deployment_id=public_deployment.id,
-            external_url=BASE_URL,
-        ).url
-    )
-    assert id_path.startswith("/api/v1/taskqueues/id/")
-    assert deployment_path == f"/api/v1/taskqueues/{deployment.name}/v{deployment.version}"
-    assert public_path.startswith("/api/v1/taskqueues/public/")
+    id_path = f"/api/v1/taskqueues/id/{stub.id}"
+    deployment_path = f"/api/v1/taskqueues/{deployment.name}/v{deployment.version}"
+    public_path = f"/api/v1/taskqueues/public/{public_stub.id}"
 
     id_response = client.post(
         id_path,
@@ -690,10 +648,6 @@ def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecor
     ]
     assert len(matches) == 1
     return matches[0]
-
-
-def _target(stub: StubRecord) -> StubUrlTarget:
-    return StubUrlTarget(kind=stub.kind.value, stub_id=stub.id)
 
 
 def _path(url: str) -> str:

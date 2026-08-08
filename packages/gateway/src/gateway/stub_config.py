@@ -144,6 +144,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
         ),
         env=env,
         route=request.route,
+        domain=request.domain,
         methods=request.methods,
         command=request.command,
         ports={str(port): port for port in request.ports},
@@ -182,6 +183,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
         name=name,
         kind=kind,
         handler=stub.handler,
+        domain=config.domain,
         image=ImageSpec(
             base=image_config.base or "python:3.12-slim",
             image_id=image_config.image_id,

@@ -76,6 +76,7 @@ from worker.monitoring import (
 )
 from worker.network_backend import (
     AgentBridgeNetworkBackend,
+    AgentBridgeNetworkConfig,
     SchedulerNetworkIpAllocator,
 )
 from worker.oci_runtime import (
@@ -682,16 +683,27 @@ def _client_network_backend(
     config: WorkerSettings,
     client: WorkerRepositoryHttpClient,
 ) -> AgentBridgeNetworkBackend | None:
-    if not config.configuration.network.agent_bridge_network:
+    network = config.configuration.network
+    if not network.agent_bridge_network:
         return None
+    bridge = AgentBridgeNetworkConfig(
+        bridge_name=network.bridge_name,
+        subnet=network.bridge_subnet,
+        ipv6_subnet=network.bridge_ipv6_subnet,
+    )
     return AgentBridgeNetworkBackend(
         SchedulerNetworkIpAllocator(
             RemoteWorkerNetworkIpRepository(client),
             # The control plane scopes every network mutation by the worker's own
             # record; this prefix only names the network in local state and logs.
             network_prefix=config.network_prefix or config.pool or config.worker_id,
+            # The allocator issues addresses onto this bridge, so it has to be told
+            # which one: left on the default it would hand out addresses the bridge
+            # does not front.
+            subnet=bridge.subnet,
             worker_id=config.worker_id,
-        )
+        ),
+        config=bridge,
     )
 
 

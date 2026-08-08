@@ -253,6 +253,7 @@ def agent_machine_worker_record(
         # group an auto-scaling unit also feeds carries the unit that issued its
         # credential, which is what keeps that unit's drain from terminating it.
         capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
+        workspace_id=machine.workspace_id,
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",

@@ -119,7 +119,7 @@ class _FailingDeploymentRegistrar:
         workspace: str = "default",
     ) -> DeploymentAppResolution:
         del spec, workspace
-        return DeploymentAppResolution(app_id=None)
+        return DeploymentAppResolution(app_id=None, app_name="failing")
 
     def register_deployment(
         self,
@@ -560,7 +560,7 @@ def test_deployment_manifest_route_serves_invoke_schema(
     assert _json_path(manifest, "deployment_id") == deployment.id
     invoke_url = _json_path(manifest, "invoke_url")
     assert isinstance(invoke_url, str)
-    assert invoke_url.startswith("https://ui.example/api/v1/functions/")
+    assert invoke_url == f"https://{deployment.subdomain}.ui.example"
     assert _json_path(manifest, "inputs", "fields", "value", "type") == "integer"
     assert _json_path(manifest, "client_contract", "operation", "name") == "remote"
     assert _json_path(manifest, "client_contract", "operation", "parameters", 0, "name") == "value"

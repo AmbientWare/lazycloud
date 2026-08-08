@@ -27,6 +27,7 @@ from database.tables.compute import (
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
+from database.tables.custom_domains import CustomDomainTable
 from database.tables.execution import (
     CronJobRunTable,
     EventTable,
@@ -97,6 +98,7 @@ __all__ = [
     "CredentialTable",
     "CronJobRunTable",
     "CronJobTable",
+    "CustomDomainTable",
     "DatabaseBase",
     "DeploymentTable",
     "EventTable",

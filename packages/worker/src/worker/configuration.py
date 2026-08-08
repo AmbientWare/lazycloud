@@ -11,6 +11,11 @@ from shared.routing import BackendRouteTransport
 
 from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
 from worker.events import WorkerPoolMode
+from worker.execution import (
+    DEFAULT_CONTAINER_BRIDGE_NAME,
+    DEFAULT_CONTAINER_IPV6_SUBNET,
+    DEFAULT_CONTAINER_SUBNET,
+)
 from worker.image_build_scratch import (
     DEFAULT_IMAGE_BUILD_MIN_FREE_BYTES,
     DEFAULT_IMAGE_BUILD_PER_BUILD_MAX_BYTES,
@@ -71,6 +76,15 @@ class WorkerExecutionConfiguration(ContractModel):
 class WorkerNetworkConfiguration(ContractModel):
     route_transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     agent_bridge_network: bool = False
+    bridge_name: str = DEFAULT_CONTAINER_BRIDGE_NAME
+    bridge_subnet: str = DEFAULT_CONTAINER_SUBNET
+    bridge_ipv6_subnet: str = DEFAULT_CONTAINER_IPV6_SUBNET
+    """The bridge this worker's containers hang off, and the addresses it may issue.
+
+    One fixed name and subnet is safe only while one agent owns the host. Each agent
+    allocates inside its own control-plane scope, so a name reused by a second agent
+    is two allocators handing out the same address onto one segment.
+    """
 
 
 class WorkerPathConfiguration(ContractModel):

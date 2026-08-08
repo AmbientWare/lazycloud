@@ -132,7 +132,6 @@ def test_serve_preview_resolves_stub_url_and_stops_container_on_interrupt() -> N
     url = resolve_serve_url(
         gateway,
         stub_id="stub-endpoint",
-        url_type="host",
         external_url="https://example.test",
     )
     session = ServePreviewSession(
@@ -148,7 +147,6 @@ def test_serve_preview_resolves_stub_url_and_stops_container_on_interrupt() -> N
     session.run()
 
     assert url.url == "https://example.test/endpoint/id/stub-endpoint"
-    assert gateway.urls[0].mode == "host"
     assert gateway.stopped == ["ctr-serve"]
 
 

@@ -196,6 +196,7 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
                 "gpu": "T4",
                 "gpu_count": 1,
                 "keep_warm": 60,
+                "runtime_class": "runsc",
                 "docker_enabled": True,
                 "block_network": False,
                 "allow_list": ["10.0.0.0/8"],

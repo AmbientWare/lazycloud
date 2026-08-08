@@ -188,6 +188,10 @@ from worker.repository_payloads import (
     WorkerRepositoryPrincipal,
 )
 from worker.tools import ContainerCredentialRequest
+from worker_repository.admission import (
+    WorkerRequestNotAdmissibleError,
+    require_admissible_worker_request,
+)
 from worker_repository.checkpoint_records import (
     AutomaticCheckpointCreationLeaseService,
     CheckpointService,
@@ -365,34 +369,6 @@ class WorkerRepositoryService:
     def services(self) -> WorkerRepositoryDependencies | None:
         return self.dependencies
 
-    def get_next_container_request(
-        self,
-        request: GetNextContainerRequestRequest,
-        *,
-        principal: WorkerRepositoryPrincipal | None = None,
-    ) -> GetNextContainerRequestResponse:
-        worker = self._validate_worker_stream(request.worker_id, principal=principal)
-        self._require_source_cache_available(request, principal=principal)
-        container_request = self.workers.get_next_container_request(request.worker_id)
-        if container_request is None:
-            return GetNextContainerRequestResponse()
-        try:
-            self._require_source_cache_available(request, principal=principal)
-        except Exception:
-            self.workers.enqueue_worker_request(request.worker_id, container_request)
-            raise
-        try:
-            self._validate_worker_request(
-                worker,
-                container_request,
-                principal=principal,
-            )
-        except Exception:
-            self.workers.enqueue_worker_request(request.worker_id, container_request)
-            raise
-        self._record_worker_queue_lifecycle(container_request, worker_id=request.worker_id)
-        return GetNextContainerRequestResponse(container_request=container_request)
-
     def _validate_worker_stream(
         self,
         worker_id: str,
@@ -431,24 +407,6 @@ class WorkerRepositoryService:
                     )
         return worker
 
-    @staticmethod
-    def _validate_worker_request(
-        worker: SchedulerWorkerRecord,
-        request: SchedulerWorkerRequest,
-        *,
-        principal: WorkerRepositoryPrincipal | None,
-    ) -> None:
-        if request.pool_selector and request.pool_selector != worker.pool:
-            raise ConflictError(
-                f"worker {worker.worker_id} does not belong to requested pool "
-                f"{request.pool_selector}"
-            )
-        private_principal = (
-            principal if principal is not None and principal.is_private_worker else None
-        )
-        if private_principal is not None and private_principal.workspace_id != request.workspace_id:
-            raise ConflictError(f"worker {worker.worker_id} does not belong to request workspace")
-
     def _record_worker_queue_lifecycle(
         self,
         request: SchedulerWorkerRequest,
@@ -484,6 +442,36 @@ class WorkerRepositoryService:
                 extra={"container_id": request.container_id, "worker_id": worker_id},
             )
 
+    def _return_request_to_scheduler(
+        self,
+        request: SchedulerWorkerRequest,
+        *,
+        worker_id: str,
+        reason: str,
+    ) -> None:
+        """Give a request this worker can never run back to the scheduler.
+
+        The worker queue is the one place it must not go: this worker already refused
+        it, and the claim on the ready queue was acked when it was dispatched, so the
+        scheduler is the only party that can place it elsewhere or fail it with a
+        reason. The retry count is what bounds that—a request refused repeatedly
+        reaches the retry limit and fails naming the mismatch, rather than circulating
+        forever.
+        """
+
+        self.workers.enqueue_container_request(
+            request.model_copy(update={"retry_count": request.retry_count + 1}),
+            ready_at=utc_now(),
+        )
+        LOGGER.warning(
+            "worker refused a container request it can never run; returned to the scheduler",
+            extra={
+                "worker_id": worker_id,
+                "container_id": request.container_id,
+                "reason": reason,
+            },
+        )
+
     def stream_next_container_requests(
         self,
         request: GetNextContainerRequestRequest,
@@ -512,10 +500,22 @@ class WorkerRepositoryService:
                 continue
             try:
                 self._require_source_cache_available(request, principal=principal)
-                self._validate_worker_request(worker, container_request, principal=principal)
             except Exception:
                 self.workers.enqueue_worker_request(request.worker_id, container_request)
                 raise
+            try:
+                require_admissible_worker_request(
+                    worker, container_request, principal=principal
+                )
+            except WorkerRequestNotAdmissibleError as exc:
+                self._return_request_to_scheduler(
+                    container_request,
+                    worker_id=request.worker_id,
+                    reason=str(exc),
+                )
+                # Ending the stream rather than raising, for the reason recorded above:
+                # the response has already started, so a raise escapes unmapped.
+                return
             self._record_worker_queue_lifecycle(container_request, worker_id=request.worker_id)
             response = GetNextContainerRequestResponse(container_request=container_request)
             emitted += 1
@@ -651,7 +651,13 @@ class WorkerRepositoryService:
             storage_id=request.cache_storage_id,
         )
         initializing_worker = request.worker.model_copy(
-            update={"status": SchedulerWorkerStatus.Pending}
+            update={
+                "status": SchedulerWorkerStatus.Pending,
+                # The token decides which tenant a worker serves. Taking the
+                # registration's own value would let a worker name any workspace and
+                # be scheduled that workspace's work.
+                "workspace_id": principal.workspace_id,
+            }
         )
         try:
             if request.ttl_seconds > 0:

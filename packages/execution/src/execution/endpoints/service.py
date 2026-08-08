@@ -53,6 +53,7 @@ from execution.endpoints.dispatch import (
     DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ENDPOINT_DISPATCH_TASK_KEY,
     TERMINAL_ENDPOINT_DISPATCH_STATUSES,
+    EndpointBackendUnreachable,
     EndpointDispatchError,
     EndpointDispatchRecord,
     EndpointDispatchStatus,
@@ -676,6 +677,111 @@ class EndpointControlService:
             )
         return response
 
+    def _raise_if_capacity_is_dead(
+        self,
+        dispatcher: EndpointRequestDispatcher,
+        stub: StubRecord,
+    ) -> None:
+        """Stop waiting when every container that could serve this stub has died.
+
+        Read after a warmup has already been asked for, so a cold start still gets its
+        time: what this catches is capacity that will never arrive, such as a handler
+        that fails on import and takes every replacement down with it.
+        """
+
+        containers = self.services.containers.list(
+            workspace_id=stub.workspace_id,
+            statuses=(ContainerStatus.Pending, ContainerStatus.Running, ContainerStatus.Failed),
+            stub_ids=(stub.id,),
+        )
+        if not containers or any(item.status is not ContainerStatus.Failed for item in containers):
+            return
+        # The listing is newest first, so the most recent failure is the one to name.
+        latest = containers[0]
+        reason = self._scheduling_failure_reason(dispatcher, stub, latest.id)
+        if reason:
+            raise EndpointDispatchUnavailable(
+                f"no container could start for this endpoint: {reason}"
+            )
+        exit_code = latest.exit_code
+        detail = f" (exit code {exit_code})" if exit_code is not None else ""
+        raise EndpointDispatchUnavailable(
+            f"no container could start for this endpoint{detail}; "
+            f"check the container logs for {latest.id}"
+        )
+
+    @staticmethod
+    def _scheduling_failure_reason(
+        dispatcher: EndpointRequestDispatcher,
+        stub: StubRecord,
+        container_id: str,
+    ) -> str:
+        """The scheduler's account of a container that never reached a worker.
+
+        A container the fleet could not place has no logs to read and an exit code this
+        service invented, so pointing the caller at either sends them looking in the
+        wrong place. The scheduler holds the only real account of why.
+        """
+
+        for state in dispatcher.container_states(stub.id):
+            if state.container_id == container_id:
+                return state.failure_reason
+        return ""
+
+    def _forward_failed(self, container_id: str, exc: Exception) -> EndpointDispatchError:
+        """Name the container that dropped the request rather than the socket that noticed.
+
+        The container is read back because a handler dying mid-request looks, from the
+        transport, exactly like a network fault, and only its exit code tells the two
+        apart. Its status may not have been written yet, which is why the transport
+        error stays in the message instead of being replaced by a guess.
+        """
+
+        detail = f"container {container_id}"
+        try:
+            container = self.services.containers.get(container_id)
+        except (NotFoundError, DomainError):
+            container = None
+        if container is not None and container.exit_code is not None:
+            detail = f"{detail} exited with code {container.exit_code}"
+        return EndpointDispatchError(
+            f"the request reached {detail} and it stopped before answering ({exc}); "
+            f"check the container logs"
+        )
+
+    def _request_capacity(self, stub: StubRecord, task: Task, *, warmup_attempted: bool) -> bool:
+        """Ask for capacity once, and report that the ask has been made."""
+
+        if warmup_attempted:
+            return True
+        try:
+            warmup = self.start_endpoint_serve(StartEndpointServeRequest(stub_id=stub.id))
+        except DomainError as exc:
+            self._emit_warmup_failure(stub, task, str(exc))
+            raise EndpointDispatchUnavailable(str(exc)) from exc
+        self._emit_warmup_result(stub, task, warmup)
+        return True
+
+    def _observe_dispatch_latencies(
+        self,
+        stub: StubRecord,
+        record: EndpointDispatchRecord,
+        *,
+        started: float | None = None,
+    ) -> None:
+        labels = {"stub_id": stub.id, "kind": stub.kind.value}
+        wait_seconds = max(
+            ((record.started_at or utc_now()) - record.enqueued_at).total_seconds(),
+            0.0,
+        )
+        self.services.metrics.observe_histogram(
+            "endpoint_dispatch_queue_wait_seconds", wait_seconds, labels=labels
+        )
+        if started is not None:
+            self.services.metrics.observe_histogram(
+                "endpoint_dispatch_inflight_seconds", time.monotonic() - started, labels=labels
+            )
+
     def _wait_for_dispatch(
         self,
         dispatcher: EndpointRequestDispatcher,
@@ -694,6 +800,8 @@ class EndpointControlService:
             if remaining <= 0:
                 msg = "Timed out waiting for a backend container"
                 raise EndpointDispatchTimedOut(msg)
+            if warmup_attempted:
+                self._raise_if_capacity_is_dead(dispatcher, stub)
 
             record = repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
             self._emit_dispatch_lifecycle(stub, record, emit_event=False)
@@ -704,16 +812,9 @@ class EndpointControlService:
                 max_inflight_per_container=max_inflight_per_container,
             )
             if target is None:
-                if not warmup_attempted:
-                    warmup_attempted = True
-                    try:
-                        warmup = self.start_endpoint_serve(
-                            StartEndpointServeRequest(stub_id=stub.id)
-                        )
-                    except DomainError as exc:
-                        self._emit_warmup_failure(stub, task, str(exc))
-                        raise EndpointDispatchUnavailable(str(exc)) from exc
-                    self._emit_warmup_result(stub, task, warmup)
+                warmup_attempted = self._request_capacity(
+                    stub, task, warmup_attempted=warmup_attempted
+                )
                 time.sleep(min(ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS, max(remaining, 0)))
                 continue
 
@@ -725,33 +826,28 @@ class EndpointControlService:
             self._emit_dispatch_lifecycle(stub, record)
             # Bind the task to the container that will serve it, so its record
             # carries the same attribution every other workload kind has.
-            task = self.services.tasks.transition(
-                task,
-                TaskStatus.Running,
-                container_id=target.container_id,
-            )
+            task = self.services.tasks.assign(task, container_id=target.container_id)
             started = time.monotonic()
             try:
-                return dispatcher.forward_target(
+                response = dispatcher.forward_target(
                     target,
                     request,
                     timeout_seconds=max(remaining, 0.01),
                 )
-            finally:
-                wait_seconds = max(
-                    ((record.started_at or utc_now()) - record.enqueued_at).total_seconds(),
-                    0.0,
-                )
-                self.services.metrics.observe_histogram(
-                    "endpoint_dispatch_queue_wait_seconds",
-                    wait_seconds,
-                    labels={"stub_id": stub.id, "kind": stub.kind.value},
-                )
-                self.services.metrics.observe_histogram(
-                    "endpoint_dispatch_inflight_seconds",
-                    time.monotonic() - started,
-                    labels={"stub_id": stub.id, "kind": stub.kind.value},
-                )
+            except EndpointBackendUnreachable:
+                # Nothing was written, so this says the target was stale rather than
+                # that the endpoint is broken: a container can register a route and
+                # then die before anyone dials it. Selecting again is free of replay,
+                # and the next pass decides whether any capacity can still arrive.
+                time.sleep(min(ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS, max(remaining, 0)))
+                continue
+            except Exception as exc:
+                # The request left this process, so this attempt is final whatever
+                # went wrong and whatever the application already did with it.
+                self._observe_dispatch_latencies(stub, record, started=started)
+                raise self._forward_failed(target.container_id, exc) from exc
+            self._observe_dispatch_latencies(stub, record, started=started)
+            return response
 
     def _wait_for_websocket_target(
         self,
@@ -770,6 +866,8 @@ class EndpointControlService:
             if remaining <= 0:
                 msg = "Timed out waiting for a backend container"
                 raise EndpointDispatchTimedOut(msg)
+            if warmup_attempted:
+                self._raise_if_capacity_is_dead(dispatcher, stub)
 
             record = repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
             self._emit_dispatch_lifecycle(stub, record, emit_event=False)
@@ -780,16 +878,9 @@ class EndpointControlService:
                 max_inflight_per_container=max_inflight_per_container,
             )
             if target is None:
-                if not warmup_attempted:
-                    warmup_attempted = True
-                    try:
-                        warmup = self.start_endpoint_serve(
-                            StartEndpointServeRequest(stub_id=stub.id)
-                        )
-                    except DomainError as exc:
-                        self._emit_warmup_failure(stub, task, str(exc))
-                        raise EndpointDispatchUnavailable(str(exc)) from exc
-                    self._emit_warmup_result(stub, task, warmup)
+                warmup_attempted = self._request_capacity(
+                    stub, task, warmup_attempted=warmup_attempted
+                )
                 time.sleep(min(ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS, max(remaining, 0)))
                 continue
 
@@ -801,20 +892,8 @@ class EndpointControlService:
             self._emit_dispatch_lifecycle(stub, record)
             # Bind the task to the container that will serve it, so its record
             # carries the same attribution every other workload kind has.
-            task = self.services.tasks.transition(
-                task,
-                TaskStatus.Running,
-                container_id=target.container_id,
-            )
-            wait_seconds = max(
-                ((record.started_at or utc_now()) - record.enqueued_at).total_seconds(),
-                0.0,
-            )
-            self.services.metrics.observe_histogram(
-                "endpoint_dispatch_queue_wait_seconds",
-                wait_seconds,
-                labels={"stub_id": stub.id, "kind": stub.kind.value},
-            )
+            task = self.services.tasks.assign(task, container_id=target.container_id)
+            self._observe_dispatch_latencies(stub, record)
             return target
 
     def _raise_if_cancelled(self, task_id: str) -> None:

@@ -24,6 +24,15 @@ MIN_TAILNET_DIAL_RESERVE_SECONDS = 0.1
 MAX_TAILNET_DIAL_RESERVE_SECONDS = 2.0
 
 
+class BackendRouteUnavailable(Exception):
+    """A route id names nothing that can currently carry traffic.
+
+    Separate from a misconfigured dialer, which raises on its own and which no
+    retry fixes: this one says the route was looked up and found wanting, so a
+    caller holding other targets is free to pick another.
+    """
+
+
 class BackendConnection(Protocol):
     def sendall(self, data: bytes, /) -> None: ...
 
@@ -119,10 +128,10 @@ class BackendRouteDialer:
         state = route.state
         if state is not BackendRouteState.Ready:
             msg = f"backend route {route_id} is {state.value}"
-            raise RuntimeError(msg)
+            raise BackendRouteUnavailable(msg)
         if not route.proxy_target:
             msg = f"backend route {route_id} has no proxy target"
-            raise RuntimeError(msg)
+            raise BackendRouteUnavailable(msg)
         transport = _route_transport(route.transport)
         authenticator = (
             self._require_route_authenticator()
@@ -149,16 +158,16 @@ class BackendRouteDialer:
             route = self.resolver.get_backend_route(route_id) if self.resolver is not None else None
             if route is None:
                 msg = f"backend route {route_id} not found"
-                raise RuntimeError(msg)
+                raise BackendRouteUnavailable(msg)
             state = route.state
             if state is BackendRouteState.Ready:
                 if not route.proxy_target:
                     msg = f"backend route {route_id} has no proxy target"
-                    raise RuntimeError(msg)
+                    raise BackendRouteUnavailable(msg)
                 return route
             if state is not BackendRouteState.Opening:
                 msg = f"backend route {route_id} is {state.value}"
-                raise RuntimeError(msg)
+                raise BackendRouteUnavailable(msg)
             if time.monotonic() + self.config.ready_poll_seconds >= deadline:
                 msg = f"backend route {route_id} is {state.value}"
                 raise TimeoutError(msg)

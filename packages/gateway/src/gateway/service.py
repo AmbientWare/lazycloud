@@ -188,7 +188,6 @@ from shared.source_cache_cleanup import (
 )
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
-from shared.urls import InvokeUrlMode
 from shared.usage import UsageMetric, UsageUnit, usage_record_id
 from shared.usage_query import UsageQuery
 from storage.service import ObjectStorage
@@ -312,12 +311,6 @@ def _deployment_kind_to_stub_kind(kind: DeploymentKind) -> StubKind:
     except ValueError as exc:
         msg = f"deployment kind is not invokable: {kind}"
         raise ValueError(msg) from exc
-
-
-def _invoke_url_mode(value: InvokeUrlMode | str) -> InvokeUrlMode:
-    if isinstance(value, InvokeUrlMode):
-        return value
-    return InvokeUrlMode(value)
 
 
 def _request_with_workload_defaults(
@@ -843,7 +836,6 @@ class GatewayControlService:
             if resource is None:
                 msg = f"deployment resource not found after deploy: {deployment.id}"
                 raise ValueError(msg)
-            mode = _invoke_url_mode(request.url_mode)
             if resource.stub.kind is StubKind.Pod:
                 pod_ports = list(resource.stub.config.ports.values()) or list(
                     resource.stub.config.runtime.ports.values()
@@ -854,7 +846,6 @@ class GatewayControlService:
                         apps=self.services.apps,
                         workspace=workspace,
                         external_url=request.external_url,
-                        mode=mode,
                         deployment_id=deployment.id,
                         port=pod_ports[0],
                     ).url
@@ -862,7 +853,7 @@ class GatewayControlService:
                     else ""
                 )
             else:
-                invoke_url = resource.invoke_url(request.external_url, mode=mode)
+                invoke_url = resource.invoke_url(request.external_url)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return DeployStubResponse(
@@ -880,7 +871,6 @@ class GatewayControlService:
                     request.deployment_id,
                     workspace=request.workspace,
                     external_url=request.external_url,
-                    mode=_invoke_url_mode(request.mode),
                 ).url
             else:
                 url = self.control_plane.stub_url(
@@ -889,7 +879,6 @@ class GatewayControlService:
                     workspace=request.workspace,
                     deployment_id=request.deployment_id or None,
                     external_url=request.external_url,
-                    mode=_invoke_url_mode(request.mode),
                     port=request.port,
                 ).url
         except (KeyError, ValueError) as exc:
@@ -916,7 +905,6 @@ class GatewayControlService:
                 request.deployment_version,
                 app_id=app_id,
                 external_url=request.external_url,
-                mode=_invoke_url_mode(request.mode),
             )
             if result.stub is None:
                 raise NotFoundError(f"deployment target has no stub: {request.name}")

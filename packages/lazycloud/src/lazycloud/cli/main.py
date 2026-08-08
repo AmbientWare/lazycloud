@@ -20,6 +20,7 @@ from lazycloud.cli.components.output import (
     set_json_output,
 )
 from lazycloud.cli.development import dev
+from lazycloud.cli.domains import domain_app
 from lazycloud.cli.examples import create_app, example_app, quickstart
 from lazycloud.cli.execution import deploy, deployment_app, run, shell
 from lazycloud.cli.identity import login, profile_app, token_app
@@ -272,6 +273,7 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("container", container_app)
     registry.add_group("machine", machine_app)
     registry.add_group("secret", secret_app)
+    registry.add_group("domain", domain_app)
     registry.add_group("volume", volume_app)
     registry.add_group("example", example_app)
     registry.add_group("workspace", workspace_app)

@@ -28,7 +28,12 @@ from shared.app_lifecycle import (
 )
 from shared.app_slug import validate_app_slug
 from shared.container_requests import ContainerShutdownTarget
-from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.errors import (
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+    UpstreamUnavailableError,
+)
 from shared.events import Event
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import utc_now
@@ -36,7 +41,6 @@ from sqlalchemy.orm import Session
 
 from control.context import ControlContext
 from control.deployment_cleanup import AppDeploymentLifecycleService
-from control.sandbox_urls import rewrite_persisted_sandbox_url_visibility
 
 LOGGER = logging.getLogger(__name__)
 
@@ -123,7 +127,10 @@ class AppService:
         public: bool = False,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> AppRecord:
-        app_name = validate_app_slug(name)
+        try:
+            app_name = validate_app_slug(name)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
             stub = (
@@ -172,15 +179,6 @@ class AppService:
                 stub.public = public or stub.public
                 stub.updated_at = now
                 stub_repository.upsert(stub)
-            for app_stub in stub_repository.list_for_app(
-                workspace_id=record.workspace_id,
-                app_id=record.id,
-            ):
-                rewrite_persisted_sandbox_url_visibility(
-                    session,
-                    stub=app_stub,
-                    app_public=record.public,
-                )
         self._publish_change(record, change)
         if stub is not None:
             self._publish_workload_change(stub, WorkspaceChangeType.Updated)

@@ -8,6 +8,7 @@ from pydantic import Field, JsonValue, model_validator
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
+from shared.scheduling import worker_serves_workspace
 from shared.timestamps import utc_now
 
 
@@ -110,7 +111,7 @@ class WorkerPoolCapacity(ContractModel):
 
 class SchedulingRequest(ContractModel):
     id: str
-    capacity_owner_id: str = ""
+    workspace_id: str = ""
     queue: str = "tasks"
     payload: JsonValue = None
     cpu: float = 1
@@ -131,7 +132,8 @@ class SchedulingRequest(ContractModel):
 class WorkerCapacity(ContractModel):
     worker_id: str
     pool: MachinePool = MachinePool("default")
-    capacity_owner_id: str = ""
+    workspace_id: str = ""
+    private_worker: bool = False
     gpu_type: str = ""
     runtime_class: str = ""
     runtime_classes: list[str] = Field(default_factory=list)
@@ -155,6 +157,13 @@ class WorkerCapacity(ContractModel):
             raise ValueError("free GPU count cannot exceed total GPU count")
         return self
 
+    def serves_workspace(self, workspace_id: str) -> bool:
+        return worker_serves_workspace(
+            private_worker=self.private_worker,
+            worker_workspace_id=self.workspace_id,
+            request_workspace_id=workspace_id,
+        )
+
     def fit_rejection(self, request: SchedulingRequest) -> str:
         """Name the first reason this worker cannot take the request, else "".
 
@@ -162,8 +171,10 @@ class WorkerCapacity(ContractModel):
         retry-limit with nothing describing the mismatch. Keep the checks in the
         same order as can_fit so the reported reason is the deciding one.
         """
-        if request.capacity_owner_id and request.capacity_owner_id != self.capacity_owner_id:
-            return f"capacity owner {request.capacity_owner_id} != {self.capacity_owner_id}"
+        # Names no workspace: this reaches the requesting tenant as task error text,
+        # and which other tenant owns the worker is not theirs to learn.
+        if not self.serves_workspace(request.workspace_id):
+            return "worker is private to another workspace"
         if request.pool_selector and request.pool_selector != self.pool:
             return f"pool selector {request.pool_selector!r} != pool {self.pool!r}"
         if not request.pool_selector and self.requires_pool_selector:
@@ -185,7 +196,7 @@ class WorkerCapacity(ContractModel):
         return ""
 
     def can_fit(self, request: SchedulingRequest) -> bool:
-        if request.capacity_owner_id and request.capacity_owner_id != self.capacity_owner_id:
+        if not self.serves_workspace(request.workspace_id):
             return False
         if request.pool_selector and request.pool_selector != self.pool:
             return False
