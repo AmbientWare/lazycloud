@@ -36,17 +36,13 @@ from shared.http.storage import (
     ObjectListResponse,
     ObjectResponse,
 )
-from shared.identity import AuthScope
 
 from api.server.auth import (
     admin_access,
-    read_token,
     read_workspace,
-    write_token,
     write_workspace,
 )
 from api.server.dependencies import (
-    authorize_token_workspace,
     current_services,
 )
 from api.server.identifiers import identifier_filter
@@ -145,19 +141,12 @@ def dispatch_scheduler_containers(
     operation_id="list_autoscalers",
 )
 def list_autoscalers(
-    workspace: str | None = None,
+    workspace_id: read_workspace,
     target_kind: AutoscalerTargetKind | None = None,
     target_id: identifier_filter = None,
     *,
-    token: read_token,
-    services: ApiServices = Depends(current_services),
     service: AutoscalerOperationsService = Depends(autoscaler_operations_service),
 ) -> AutoscalerStatusListResponse:
-    workspace_id = (
-        token.workspace_id
-        if workspace is None
-        else authorize_token_workspace(services, token, workspace, AuthScope.Read)
-    )
     result = service.status(
         workspace=workspace_id,
         target_kind=target_kind,
@@ -174,19 +163,12 @@ def list_autoscalers(
     operation_id="list_autoscaler_history",
 )
 def list_autoscaler_history(
-    workspace: str | None = None,
+    workspace_id: read_workspace,
     target_id: identifier_filter = None,
     limit: int = 100,
     *,
-    token: read_token,
-    services: ApiServices = Depends(current_services),
     service: AutoscalerOperationsService = Depends(autoscaler_operations_service),
 ) -> AutoscalerHistoryResponse:
-    workspace_id = (
-        token.workspace_id
-        if workspace is None
-        else authorize_token_workspace(services, token, workspace, AuthScope.Read)
-    )
     return AutoscalerHistoryResponse.model_validate(
         service.history(workspace=workspace_id, target_id=target_id, limit=limit)
     )
@@ -199,15 +181,12 @@ def list_autoscaler_history(
     operation_id="reconcile_autoscalers",
 )
 def reconcile_autoscalers(
-    workspace: str = "default",
+    workspace_id: write_workspace,
     target_kind: AutoscalerTargetKind | None = None,
     stub_id: identifier_filter = None,
     *,
-    token: write_token,
-    services: ApiServices = Depends(current_services),
     service: AutoscalerOperationsService = Depends(autoscaler_operations_service),
 ) -> AutoscalerReconcileResponse:
-    workspace_id = authorize_token_workspace(services, token, workspace, AuthScope.Write)
     result = service.reconcile(
         workspace=workspace_id,
         target_kind=target_kind,
@@ -223,13 +202,10 @@ def reconcile_autoscalers(
 )
 def pause_autoscaler(
     stub_id_or_name: str,
-    workspace: str = "default",
+    workspace_id: write_workspace,
     *,
-    token: write_token,
-    services: ApiServices = Depends(current_services),
     service: AutoscalerOperationsService = Depends(autoscaler_operations_service),
 ) -> AutoscalerControlResponse:
-    workspace_id = authorize_token_workspace(services, token, workspace, AuthScope.Write)
     return AutoscalerControlResponse.model_validate(
         service.pause(stub_id_or_name, workspace=workspace_id)
     )
@@ -242,13 +218,10 @@ def pause_autoscaler(
 )
 def resume_autoscaler(
     stub_id_or_name: str,
-    workspace: str = "default",
+    workspace_id: write_workspace,
     *,
-    token: write_token,
-    services: ApiServices = Depends(current_services),
     service: AutoscalerOperationsService = Depends(autoscaler_operations_service),
 ) -> AutoscalerControlResponse:
-    workspace_id = authorize_token_workspace(services, token, workspace, AuthScope.Write)
     return AutoscalerControlResponse.model_validate(
         service.resume(stub_id_or_name, workspace=workspace_id)
     )

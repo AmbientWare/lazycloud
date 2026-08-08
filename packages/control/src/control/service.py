@@ -443,14 +443,10 @@ class ControlPlaneService:
         bucket_prefix: str = "workspace",
         backend: str = "s3",
         config: dict[str, JsonValue] | None = None,
-        actor_workspace_id: str | None = None,
         token_id_for_cache_invalidation: str | None = None,
     ) -> WorkspaceRecord:
         workspace_record = self.get_workspace(workspace)
-        self._validate_storage_attach_allowed(
-            workspace_record,
-            actor_workspace_id=actor_workspace_id,
-        )
+        self._validate_storage_attach_allowed(workspace_record)
         client = self._default_workspace_storage_client()
         bucket = f"{bucket_prefix}-{workspace_record.id}".replace("_", "-")
         storage = self._default_workspace_storage(
@@ -477,14 +473,10 @@ class ControlPlaneService:
         workspace: str,
         storage: WorkspaceStorageConfig,
         *,
-        actor_workspace_id: str | None = None,
         token_id_for_cache_invalidation: str | None = None,
     ) -> WorkspaceRecord:
         workspace_record = self.get_workspace(workspace)
-        self._validate_storage_attach_allowed(
-            workspace_record,
-            actor_workspace_id=actor_workspace_id,
-        )
+        self._validate_storage_attach_allowed(workspace_record)
         if not storage.bucket:
             msg = "workspace storage bucket is required"
             raise WorkspaceStorageError(msg)
@@ -517,15 +509,11 @@ class ControlPlaneService:
         self._invalidate_token_cache_if_present(token_id_for_cache_invalidation)
         return updated
 
-    def _validate_storage_attach_allowed(
-        self,
-        workspace: WorkspaceRecord,
-        *,
-        actor_workspace_id: str | None = None,
-    ) -> None:
-        if actor_workspace_id is not None and actor_workspace_id != workspace.id:
-            msg = "invalid token for workspace"
-            raise WorkspaceStorageAuthorizationError(msg)
+    def _validate_storage_attach_allowed(self, workspace: WorkspaceRecord) -> None:
+        # Who may act on this workspace is settled before the call: the route's
+        # workspace dependency resolved and authorized it. A second comparison here
+        # could only ask a narrower question, and asked it of a credential that no
+        # longer names a workspace at all.
         if _workspace_storage_available(workspace.storage):
             msg = "workspace storage already exists"
             raise WorkspaceStorageAlreadyExistsError(msg)

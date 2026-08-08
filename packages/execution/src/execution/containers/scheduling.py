@@ -75,8 +75,6 @@ class ContainerSchedulingPersistenceService:
                 # Compared by account, not by workspace. A joined machine belongs to
                 # the customer and serves every workspace they own, so its own
                 # workspace is where its rows live rather than who it may run for.
-                # Requiring the two to match refused the account's other workspaces
-                # from the hardware they connected it for.
                 members = WorkspaceMemberRepository(session)
                 machine_owner = (
                     members.owner(machine_workspace_id) if machine_workspace_id else None

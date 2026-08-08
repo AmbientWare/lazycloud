@@ -77,9 +77,7 @@ export function ComputeSettings() {
   const awsInstances = (instances.data?.data ?? []).filter(
     (instance) => instance.provider === "aws",
   );
-  const selfHostedMachines = (machines.data?.data ?? []).filter(
-    (machine) => machine.provider_name === "agent",
-  );
+  const selfHostedMachines = machines.data?.data ?? [];
 
   return (
     <div className="flex min-h-full flex-col gap-5 pb-1">

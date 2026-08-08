@@ -550,9 +550,8 @@ class WorkerRepositoryService:
                     worker,
                     container_request,
                     principal=principal,
-                    # Only the private-worker branch reads it, and resolving it
-                    # eagerly charged the shared fleet a membership query per
-                    # dispatched container for a value it never looks at.
+                    # Only the private-worker branch reads it, so the shared fleet
+                    # does not pay a membership query per dispatched container.
                     request_owner_user_id=(
                         self._workspace_owner_user_id(container_request.workspace_id)
                         if principal is not None and principal.is_private_worker
@@ -709,6 +708,14 @@ class WorkerRepositoryService:
                 # registration's own value would let a worker name any workspace and
                 # be scheduled that workspace's work.
                 "workspace_id": principal.workspace_id,
+                # Stamped with it, because placement compares accounts: a private
+                # worker whose owner is unset serves nobody, so registering without
+                # one refuses the machine every request until a reconcile repairs it.
+                "owner_user_id": (
+                    self._workspace_owner_user_id(principal.workspace_id)
+                    if principal.is_private_worker
+                    else ""
+                ),
             }
         )
         try:

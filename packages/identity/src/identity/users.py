@@ -106,7 +106,7 @@ class UserService:
                 raise NotFoundError(f"user not found: {user_id}")
             updated = repository.set_status(user_id, status=status)
             if status is UserStatus.Disabled:
-                TokenRepository(session).revoke_user_sessions(user_id, now=now)
+                TokenRepository(session).revoke_user_credentials(user_id, now=now)
         return updated
 
     def workspaces(self, user_id: str) -> list[WorkspaceRecord]:

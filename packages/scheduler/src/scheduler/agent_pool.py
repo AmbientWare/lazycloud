@@ -186,10 +186,10 @@ class AgentWorkerPoolController:
     ) -> AgentPoolWorkerResult:
         """Bring a live worker's tenancy back in step with its machine's enrollment.
 
-        Tenancy was written once, at worker creation, so a record from before the
-        machine had an account kept an empty owner and was refused by every
-        placement forever. A narrow field update rather than a rewrite: the record
-        also carries capacity and status a running worker is still changing.
+        A worker registered before its machine had an account carries an empty owner,
+        and an empty owner serves nobody, so nothing would place on it again without
+        this. A narrow field update rather than a rewrite: the record also carries
+        capacity and status a running worker is still changing.
         """
         if (
             worker.owner_user_id == machine.owner_user_id

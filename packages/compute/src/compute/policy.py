@@ -454,18 +454,6 @@ class WorkspaceComputePolicyService:
             hourly_cost_micros=sum(item.record.hourly_cost_micros for item in instances),
         )
 
-    def assert_workspace_deletable(self, *, workspace: str) -> None:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
-                workspace_id
-            )
-            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-        if connection is not None or any(
-            pool.phase is not ComputeUnitPhase.Deleted for pool in pools
-        ):
-            raise ConflictError("disconnect AWS compute before deleting this workspace")
-
     @staticmethod
     def _requirements(deployment: Deployment) -> ComputeResourceRequirements:
         return WorkspaceComputePolicyService._requirements_for_spec(deployment.spec)

@@ -226,9 +226,8 @@ class ContainerLogIngestionService:
         workers = WorkerRepository(session)
         worker = workers.get_across_workspaces(container.worker_id)
         # The container names its own worker, which is what ties the batch to it. The
-        # worker's enrolling workspace is not part of that: a private worker serves
-        # every workspace its account owns, so comparing the two dropped the logs of
-        # any container placed on its owner's other workspace.
+        # worker's enrolling workspace is not part of that, because a private worker
+        # serves every workspace its account owns.
         if worker is None:
             raise ConflictError("container log worker metadata does not match container")
         if worker.machine_id != container.machine_id:

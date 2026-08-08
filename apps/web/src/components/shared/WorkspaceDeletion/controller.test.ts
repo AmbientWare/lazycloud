@@ -28,7 +28,6 @@ describe("workspace deletion controller", () => {
     queryClient.setQueryData(["global", "health"], "healthy");
     const { result } = renderController({
       canManage: true,
-      currentWorkspaceId: sibling.id,
       deleteCommand,
       lastWorkspaceName: target.name,
       queryClient,
@@ -69,7 +68,6 @@ describe("workspace deletion controller", () => {
       .mockResolvedValueOnce(null);
     const { result } = renderController({
       canManage: true,
-      currentWorkspaceId: sibling.id,
       deleteCommand,
       lastWorkspaceName: null,
       queryClient: testQueryClient(),
@@ -99,7 +97,6 @@ describe("workspace deletion controller", () => {
     };
     const { result } = renderController({
       canManage: true,
-      currentWorkspaceId: owner.id,
       deleteCommand: vi.fn(),
       lastWorkspaceName: null,
       queryClient: testQueryClient(),

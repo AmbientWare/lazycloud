@@ -25,7 +25,6 @@ from shared.http.gateway_tasks import (
 )
 
 from api.server.auth import read_workspace, write_workspace
-from api.server.routers.gateway.common import gateway_write_token
 from api.server.service_dependencies import gateway_service
 from api.server.sse import sse_event
 
@@ -85,28 +84,28 @@ def attach_to_container_stream(
 @router.post("/tasks/start", response_model=StartTaskResponse)
 def start_task(
     request: StartTaskRequest,
-    token: gateway_write_token,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> StartTaskResponse:
-    return service.start_task(request, workspace_id=token.workspace_id)
+    return service.start_task(request, workspace_id=workspace_id)
 
 
 @router.post("/tasks/log", response_model=AppendTaskLogResponse)
 def append_task_log(
     request: AppendTaskLogRequest,
-    token: gateway_write_token,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> AppendTaskLogResponse:
-    return service.append_task_log(request, workspace_id=token.workspace_id)
+    return service.append_task_log(request, workspace_id=workspace_id)
 
 
 @router.post("/tasks/end", response_model=EndTaskResponse)
 def end_task(
     request: EndTaskRequest,
-    token: gateway_write_token,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> EndTaskResponse:
-    return service.end_task(request, workspace_id=token.workspace_id)
+    return service.end_task(request, workspace_id=workspace_id)
 
 
 async def _attach_events(

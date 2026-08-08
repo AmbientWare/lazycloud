@@ -4,10 +4,13 @@ import { Panel } from "@/components/shared/Panel";
 import { Button } from "@/components/ui/button";
 import type { Workspace } from "@/lib/api/schemas";
 
+import { useWorkspace } from "@/lib/workspace-context";
+
 import { useWorkspaceDeletion } from "./context";
 
 export function WorkspaceDeletionPanel({ workspace }: { workspace: Workspace }) {
   const deletion = useWorkspaceDeletion();
+  const { workspace: active } = useWorkspace();
   const availability = deletion.availability(workspace);
 
   if (!deletion.canManage) return null;
@@ -33,7 +36,7 @@ export function WorkspaceDeletionPanel({ workspace }: { workspace: Workspace }) 
             className="mt-3"
             disabled={!availability.allowed}
             title={availability.allowed ? undefined : availability.reason}
-            onClick={() => deletion.begin(workspace, true)}
+            onClick={() => deletion.begin(workspace, workspace.id === active.id)}
           >
             <Trash2 />
             Delete workspace

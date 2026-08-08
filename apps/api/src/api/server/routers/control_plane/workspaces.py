@@ -246,7 +246,6 @@ def api_v1_set_external_workspace_storage(
             service.attach_external_workspace_storage(
                 workspace_id,
                 request.workspace_storage(),
-                actor_workspace_id=token.workspace_id,
                 token_id_for_cache_invalidation=token.id,
             )
         )
@@ -306,7 +305,6 @@ def api_v1_create_workspace_storage(
         return workspace_response(
             service.create_workspace_storage(
                 workspace_id,
-                actor_workspace_id=token.workspace_id,
                 token_id_for_cache_invalidation=token.id,
             )
         )

@@ -89,7 +89,7 @@ function AwsConnectionFlow({
           <DialogDescription>
             {connection
               ? awsConnectionDialogDescription(connection)
-              : "Authorize this workspace to provision compute in your AWS account."}
+              : "Authorize LazyCloud to provision compute in your AWS account."}
           </DialogDescription>
         </DialogHeader>
 

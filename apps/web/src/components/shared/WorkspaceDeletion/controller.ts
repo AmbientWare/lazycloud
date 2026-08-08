@@ -14,7 +14,6 @@ export type WorkspaceDeletionTarget = {
 
 type WorkspaceDeletionControllerOptions = {
   canManage: boolean;
-  currentWorkspaceId: string | undefined;
   lastWorkspaceName: string | null;
   rememberWorkspaceName: (workspaceName: string) => void;
   replacePath: (path: string) => void;
@@ -24,7 +23,6 @@ type WorkspaceDeletionControllerOptions = {
 
 export function useWorkspaceDeletionController({
   canManage,
-  currentWorkspaceId,
   lastWorkspaceName,
   rememberWorkspaceName,
   replacePath,
@@ -87,7 +85,7 @@ export function useWorkspaceDeletionController({
       return { allowed: true as const };
     }
     const activeWorkspaceCount = workspaces.filter((item) => item.status === "active").length;
-    return workspaceDeleteAvailability(workspace, currentWorkspaceId, activeWorkspaceCount);
+    return workspaceDeleteAvailability(workspace, activeWorkspaceCount);
   };
 
   const begin = (workspace: Workspace, selected: boolean) => {

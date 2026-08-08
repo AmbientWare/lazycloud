@@ -74,7 +74,17 @@ function ResetPasswordDialog({
 }
 
 function ResetPasswordForm({ userId, onDone }: { userId: string; onDone: () => void }) {
-  const password = usePasswordChangeController({ userId, onChanged: onDone });
+  const { logout } = useSession();
+  // A password change revokes every session the account holds, and this tab is
+  // holding one of them. Signing out here is what actually happened; leaving the
+  // shell mounted would just fail the next request it makes.
+  const password = usePasswordChangeController({
+    userId,
+    onChanged: () => {
+      onDone();
+      logout();
+    },
+  });
 
   return (
     <DialogContent className="max-w-md sm:max-w-md">
@@ -84,7 +94,7 @@ function ResetPasswordForm({ userId, onDone }: { userId: string; onDone: () => v
           Reset password
         </DialogTitle>
         <DialogDescription>
-          Your current password confirms it is you. Your other sessions are signed out.
+          Your current password confirms it is you. You will be signed out everywhere.
         </DialogDescription>
       </DialogHeader>
       <form

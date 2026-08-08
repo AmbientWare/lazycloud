@@ -306,9 +306,9 @@ class UserRepository:
     def lock_active(self, user_id: str) -> UserRecord:
         """Take a share lock on the account so a concurrent disable cannot slip past.
 
-        The workspace branch of token issue fences its owner this way; reading the row
-        without the lock let a token be minted against an account another transaction
-        was in the middle of disabling.
+        The workspace branch of token issue fences its owner the same way: without the
+        lock a token can be minted against an account another transaction is in the
+        middle of disabling.
         """
         row = self.session.scalars(
             select(UserTable)
@@ -954,6 +954,28 @@ class TokenRepository:
             )
         ).first()
         return auth_token_record_from_table(row) if row is not None else None
+
+    def revoke_user_credentials(self, user_id: str, *, now: datetime) -> int:
+        """End every live credential naming a person, which is what disabling means.
+
+        Wider than ending their sessions: a device login mints a long-lived account
+        credential, so revoking only the browser's would leave the CLI authenticating
+        as an account that is no longer allowed to act.
+        """
+        result = self.session.execute(
+            update(TokenTable)
+            .where(
+                TokenTable.user_id == user_id,
+                TokenTable.status == TokenStatus.Active.value,
+            )
+            .values(
+                status=TokenStatus.Revoked.value,
+                revoked_at=now,
+                updated_at=now,
+            )
+        )
+        self.session.flush()
+        return int(result.rowcount) if isinstance(result, CursorResult) else 0
 
     def revoke_user_sessions(self, user_id: str, *, now: datetime) -> int:
         """End every live session a person holds, which is what a password change means."""

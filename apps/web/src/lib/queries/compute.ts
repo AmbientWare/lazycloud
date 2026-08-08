@@ -1,27 +1,21 @@
 import { queryOptions } from "@tanstack/react-query";
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson } from "@/lib/api/client";
 import {
   awsConnectionAuthorizationSchema,
   awsConnectionEnvelopeSchema,
   awsConnectionSchema,
   customerComputeCatalogSchema,
   customerComputeInstanceListSchema,
-  machinePoolListSchema,
   poolJoinCommandResponseSchema,
   unitMachineListSchema,
   type AwsComputeConfigurationUpdateRequest,
   type AwsConnection,
 } from "@/lib/api/schemas";
-import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
-export const computeQueryKeys = workspaceQueryKeys.compute;
 export const accountComputeQueryKeys = accountQueryKeys.compute;
 export const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 
-/**
- * Capability probe for operator-only actions. A 403 is an authorization
- * decision and must not invalidate the user's otherwise valid session.
- */
 /** Machines this account connected. They serve every workspace it owns. */
 export function machinesQueryOptions() {
   return queryOptions({
@@ -48,15 +42,6 @@ export function computeCatalogQueryOptions(enabled = true) {
     enabled,
     queryFn: () => apiRequest("/api/v1/compute/catalog", customerComputeCatalogSchema),
     staleTime: 5 * 60_000,
-  });
-}
-
-export function machinePoolsQueryOptions(workspaceId: string, enabled = true) {
-  return queryOptions({
-    queryKey: [...computeQueryKeys.root(workspaceId), "pools"] as const,
-    enabled,
-    queryFn: () =>
-      apiRequest(withWorkspace("/api/v1/compute/pools", workspaceId), machinePoolListSchema),
   });
 }
 

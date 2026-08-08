@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Loader2, Trash2 } from "lucide-react";
 
@@ -15,7 +14,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { currentWorkspaceQueryOptions } from "@/lib/queries/workspace";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
 import { useWorkspaceDeletionController, type WorkspaceDeletionController } from "./controller";
@@ -29,13 +27,8 @@ export function WorkspaceDeletionProvider({ children }: { children: ReactNode })
   // The session states the role, so nothing here has to infer it from a 403 against
   // a workspace picked arbitrarily to ask in.
   const canManage = user.role === "administrator";
-  const currentWorkspace = useQuery({
-    ...currentWorkspaceQueryOptions(),
-    enabled: canManage,
-  });
   const controller = useWorkspaceDeletionController({
     canManage,
-    currentWorkspaceId: currentWorkspace.data?.id,
     lastWorkspaceName,
     rememberWorkspaceName,
     replacePath: (path) => router.history.replace(path),

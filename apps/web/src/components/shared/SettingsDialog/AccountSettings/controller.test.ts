@@ -21,6 +21,8 @@ describe("passwordChangeBlocker", () => {
     );
   });
 
+  // Kept because no server owner proves it: the API accepts a password equal to the
+  // current one, so this is the only place the person is told.
   it("refuses a new password identical to the current one", () => {
     expect(
       passwordChangeBlocker({
@@ -29,17 +31,5 @@ describe("passwordChangeBlocker", () => {
         confirmPassword: "same-password",
       }),
     ).toContain("differ");
-  });
-
-  it("refuses one shorter than the server will accept", () => {
-    expect(
-      passwordChangeBlocker({ ...filled, newPassword: "short", confirmPassword: "short" }),
-    ).toContain("at least 8");
-  });
-
-  it("asks for the current password first", () => {
-    expect(passwordChangeBlocker({ ...filled, currentPassword: "" })).toContain(
-      "current password",
-    );
   });
 });

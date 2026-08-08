@@ -215,8 +215,8 @@ const accountRoot = ["account"] as const;
  *
  * Deliberately outside `workspaceRoot`: the connected cloud, its instances, the
  * joined machines, and the registered domains answer the same in every workspace
- * the account holds, so keying them per workspace cached one answer N times and
- * refetched all of it on a workspace switch that could not have changed it.
+ * the account holds. Keying them per workspace would cache one answer N times and
+ * refetch all of it on a switch that cannot have changed it.
  */
 export const accountQueryKeys = {
   root: () => accountRoot,

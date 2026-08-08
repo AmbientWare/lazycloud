@@ -362,6 +362,17 @@ def _workspace_scope_denial(
             requirement,
             principal,
         )
+    if not workspace_role_covers(WorkspaceRole.Member, requirement.required_role):
+        # A workspace credential is automation, not a person, so it holds no role in
+        # the workspace and carries the least authority any member has. Letting it
+        # satisfy a role gate would put every such action one self-minted token away
+        # from any member who can reach this workspace at all.
+        return _deny(
+            AuthzDecisionReason.InsufficientRole,
+            f"this action requires the {requirement.required_role.value} role",
+            requirement,
+            principal,
+        )
     return None
 
 

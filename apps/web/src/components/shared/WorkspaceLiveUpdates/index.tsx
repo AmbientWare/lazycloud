@@ -75,8 +75,8 @@ export function WorkspaceLiveUpdatesProvider({
       query.meta?.workspaceLiveEnabled === true &&
       query.meta.workspaceLiveCritical === true &&
       (query.state.status !== "error" || query.meta.workspaceLiveRecoverErrors !== false);
-    // Both roots: capacity is read per account now, so a stream that missed events
-    // has to catch up records that no longer live under this workspace's key.
+    // Both roots: capacity is keyed by account, so a stream that missed events has
+    // to catch up records that do not live under this workspace's key.
     for (const queryKey of [workspaceQueryKeys.root(workspaceId), accountQueryKeys.root()]) {
       void queryClient.invalidateQueries({
         queryKey,

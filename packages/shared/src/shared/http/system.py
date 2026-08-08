@@ -52,10 +52,9 @@ class TokenCreateRequest(HttpModel):
     workspace_id: str = ""
     """Workspace the credential is minted for; empty takes the one the request scopes to.
 
-    Empty rather than a workspace name, so that omitting it stays distinguishable from
-    asking for a particular workspace. Naming one here defaulted every request to
-    `default` and silently discarded the workspace the caller had scoped to, which
-    left every other workspace unable to mint a credential at all.
+    Empty rather than a workspace name, so omitting it stays distinguishable from
+    asking for a particular one. A name here would be the answer for every request
+    that omits the field, which silently discards the workspace the caller scoped to.
     """
 
     reusable: bool = True

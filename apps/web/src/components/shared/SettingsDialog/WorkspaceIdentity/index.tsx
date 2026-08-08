@@ -1,4 +1,4 @@
-import { useRouter } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { Check, Loader2, Pencil } from "lucide-react";
 
 import { CopyId } from "@/components/shared/CopyId";
@@ -18,10 +18,18 @@ export function WorkspaceIdentity({
   workspace: Workspace;
   fullWidth: boolean;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const identity = useWorkspaceIdentityController({
     workspace,
-    replacePath: (path) => router.history.replace(path),
+    // Swap the workspace segment of wherever you are and keep the search, so the
+    // settings dialog stays open over the page you renamed from.
+    onRenamed: (name) =>
+      void navigate({
+        to: ".",
+        params: { workspace: name },
+        search: (previous: Record<string, unknown>) => previous,
+        replace: true,
+      }),
   });
 
   return (

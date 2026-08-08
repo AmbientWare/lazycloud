@@ -36,10 +36,10 @@ export type WorkspaceIdentityController = {
 
 export function useWorkspaceIdentityController({
   workspace,
-  replacePath,
+  onRenamed,
 }: {
   workspace: Workspace;
-  replacePath: (path: string) => void;
+  onRenamed: (name: string) => void;
 }): WorkspaceIdentityController {
   const queryClient = useQueryClient();
   const [state, setState] = useState<WorkspaceIdentityState>(() => idleState(workspace));
@@ -84,7 +84,7 @@ export function useWorkspaceIdentityController({
         };
       });
       if (workspace.id === command.workspaceId) {
-        replacePath(`/w/${encodeURIComponent(updated.name)}/settings`);
+        onRenamed(updated.name);
       }
     },
     onError: (error, command) => {

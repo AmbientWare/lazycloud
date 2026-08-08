@@ -87,8 +87,6 @@ class UserTable(IdPayloadTable, DatabaseBase):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    # Authentication compares this against the token's issue time, which is what makes
-    # a password change end sessions that were already minted.
     password_changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

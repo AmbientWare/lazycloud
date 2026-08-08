@@ -515,13 +515,9 @@ function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   const create = useMutation({
     mutationFn: () => createWorkspace(name.trim()),
     onSuccess: async (created) => {
-      // The shell resolves a workspace out of the session, so that is what has to
-      // know about the new one before the route changes. Navigating first showed
-      // "workspace not found" for a workspace that had just been created.
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey }),
-        queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
-      ]);
+      // The shell resolves a workspace out of the session, so the session has to
+      // know about the new one before the route changes to it.
+      await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
       onClose();
       router.history.push(`/w/${encodeURIComponent(created.name)}/apps`);
     },

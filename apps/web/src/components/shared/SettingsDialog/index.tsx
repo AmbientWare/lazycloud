@@ -33,7 +33,6 @@ export function SettingsDialog({
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
       <DialogContent
-        aria-describedby={undefined}
         className="flex h-[calc(100dvh-3rem)] w-[calc(100vw-3rem)] max-w-[76rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[76rem]"
       >
         <header className="shrink-0 border-b border-border px-5 py-3.5 pr-12">
