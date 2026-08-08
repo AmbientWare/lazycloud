@@ -176,6 +176,8 @@ services:
         token_path=/var/lib/lazycloud/bootstrap/administrator-token
         umask 077
         lazycloud-admin --json auth bootstrap \
+          --username "$${LAZYCLOUD_ADMINISTRATOR_USERNAME:-admin}" \
+          --password-file /run/secrets/lazycloud-administrator-password \
           --token-file /run/secrets/lazycloud-administrator-token \
           --output "$$token_path"
         if test -e "$$token_path"; then
@@ -183,6 +185,7 @@ services:
         fi
     environment:
       <<: [*database-bootstrap-env, *object-store-env]
+      LAZYCLOUD_ADMINISTRATOR_USERNAME: "${LAZYCLOUD_ADMINISTRATOR_USERNAME:-admin}"
     depends_on:
       database-bootstrap:
         condition: service_completed_successfully
@@ -193,6 +196,9 @@ services:
     secrets:
       - source: lazycloud-bootstrap-administrator-token
         target: lazycloud-administrator-token
+        mode: 0400
+      - source: lazycloud-bootstrap-administrator-password
+        target: lazycloud-administrator-password
         mode: 0400
 
   redis:
@@ -835,3 +841,5 @@ volumes:
 secrets:
   lazycloud-bootstrap-administrator-token:
     environment: LAZYCLOUD_TOKEN
+  lazycloud-bootstrap-administrator-password:
+    environment: LAZYCLOUD_ADMINISTRATOR_PASSWORD
