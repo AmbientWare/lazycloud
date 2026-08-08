@@ -28,7 +28,7 @@ from shared.http.workspaces import (
 from shared.identity import PlatformRole, WorkspaceRecord
 
 from api.server.auth import admin_access, read_token, read_workspace, write_token, write_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import current_services, require_user_principal
 from api.server.service_dependencies import control_plane_service, gateway_service
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
@@ -73,11 +73,25 @@ def _workspace_list_response(records: Sequence[WorkspaceRecord]) -> WorkspaceLis
 def api_v1_create_workspace(
     request: WorkspaceCreateRequest,
     _auth: admin_access,
+    token: write_token,
+    services: ApiServices = Depends(current_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
+    """Create a workspace owned by the account that asked for it.
+
+    Ownership is the authenticated account rather than a name in the request, because
+    the owner is who the workspace's compute account and domains resolve through and
+    nothing has authenticated a name. A workspace-scoped automation credential is
+    refused here for the same reason it is refused a cloud connection: it carries no
+    authority over any account, so there would be nobody to own what it created.
+    """
     try:
         storage = workspace_storage_config(request.storage) if request.storage is not None else None
-        result = service.create_workspace(request.name, storage=storage)
+        result = service.create_workspace(
+            request.name,
+            owner_user_id=require_user_principal(services, token),
+            storage=storage,
+        )
         return _workspace_response(result.workspace)
     except (KeyError, WorkspaceStorageError) as exc:
         raise _storage_http_error(exc) from exc
@@ -123,11 +137,15 @@ def upsert_workspace(
     name: str,
     request: WorkspaceSetRequest,
     _auth: admin_access,
+    token: write_token,
+    services: ApiServices = Depends(current_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
+    """Write a workspace's settings, creating it owned by the caller if it is new."""
     return _workspace_response(
-        service.upsert_workspace(
+        service.set_workspace(
             name,
+            owner_user_id=require_user_principal(services, token),
             storage=workspace_storage_config(request.storage),
             signing_key_prefix=request.signing_key_prefix,
             primary_token_id=request.primary_token_id,

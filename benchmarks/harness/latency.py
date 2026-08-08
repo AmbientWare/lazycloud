@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -45,7 +44,6 @@ from benchmarks.harness.models import BenchmarkModel
 from benchmarks.harness.startup_report import LatencySummary, summarize_values
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8000"
-DEFAULT_COMPOSE_CLI = ("docker", "compose")
 DEFAULT_RUNS = 8
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 180.0
 DEFAULT_POLL_INTERVAL_SECONDS = 0.2
@@ -116,7 +114,6 @@ class LatencyConfig(BenchmarkModel):
     runs: int = DEFAULT_RUNS
     endpoint: str = DEFAULT_ENDPOINT
     admin_token: SecretStr | None = Field(default=None, exclude=True)
-    compose_cli: tuple[str, ...] = DEFAULT_COMPOSE_CLI
     cpu: float = 0.25
     memory: str = "128Mi"
     idle_seconds: float = DEFAULT_IDLE_SECONDS
@@ -271,8 +268,6 @@ class LatencyBenchmark:
         self.run_id = uuid.uuid4().hex[:10]
         self.workspace: WorkspaceResponse | None = None
         self.workspace_token: str = ""
-        self.minted_admin_token: str = ""
-        self.minted_admin_token_id: str = ""
         self.cleanup_notes: list[str] = []
         self.cleanup_errors: list[str] = []
 
@@ -287,7 +282,6 @@ class LatencyBenchmark:
         samples: list[LatencyPhaseSample] = []
         primary_error: BaseException | None = None
         try:
-            self._resolve_admin_token()
             self._create_workspace()
             for cycle in range(self.config.runs):
                 samples.extend(self._run_cycle(cycle))
@@ -483,36 +477,6 @@ class LatencyBenchmark:
 
     # -- auth + workspace ----------------------------------------------------
 
-    def _resolve_admin_token(self) -> None:
-        if self.config.admin_token_value:
-            return
-        payload = self._compose_tools_json(
-            "lazycloud-admin",
-            "--json",
-            "token",
-            "create",
-            f"latency-bench-{self.run_id}",
-            "--kind",
-            "admin",
-            "--workspace",
-            "default",
-            "--scope",
-            "*",
-            "--expires-in",
-            "3600",
-        )
-        token = payload.get("token")
-        record = payload.get("record")
-        if not isinstance(token, str) or not token:
-            raise LatencyBenchmarkError("compose token create omitted the raw token")
-        if not isinstance(record, dict):
-            raise LatencyBenchmarkError("compose token create omitted the token record id")
-        record_id = record.get("id")
-        if not isinstance(record_id, str):
-            raise LatencyBenchmarkError("compose token create omitted the token record id")
-        self.minted_admin_token = token
-        self.minted_admin_token_id = record_id
-
     def _create_workspace(self) -> None:
         workspace = WorkspaceResponse.model_validate(
             self._request_json(
@@ -567,21 +531,9 @@ class LatencyBenchmark:
             self._verify_workspace_absent(workspace_path)
         for name in (GATEWAY_TOKEN_ENV, WORKSPACE_ID_ENV, GATEWAY_HTTP_URL_ENV):
             os.environ.pop(name, None)
-        if self.minted_admin_token_id:
-            try:
-                self._compose_tools_json(
-                    "lazycloud-admin",
-                    "--json",
-                    "token",
-                    "revoke",
-                    self.minted_admin_token_id,
-                )
-                self.cleanup_notes.append("ephemeral compose admin token revoked")
-            except Exception as exc:
-                self.cleanup_errors.append(f"revoke admin token: {exc}")
 
     def _verify_workspace_absent(self, workspace_path: str) -> None:
-        if not self.minted_admin_token and not self.config.admin_token_value:
+        if not self.config.admin_token_value:
             return
         try:
             self._request_json(
@@ -636,24 +588,18 @@ class LatencyBenchmark:
             return {}
         return _parse_json_object(body, source=f"{method} {path}")
 
-    def _compose_tools_json(self, *args: str) -> dict[str, JsonValue]:
-        completed = subprocess.run(
-            [*self.config.compose_cli, "--profile", "tools", "run", "--rm", "cli", *args],
-            cwd=Path(__file__).resolve().parents[2],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=self.config.invoke_timeout_seconds,
-        )
-        if completed.returncode != 0:
-            raise LatencyBenchmarkError(completed.stderr or "compose tools command failed")
-        return _parse_json_object(completed.stdout, source="compose tools command")
-
     @property
     def _admin_token(self) -> str:
-        token = self.config.admin_token_value or self.minted_admin_token
+        token = self.config.admin_token_value
         if not token:
-            raise LatencyBenchmarkError("an admin token is required")
+            # The run cannot mint one for itself: a workspace is owned by the account
+            # that creates it, and the token routes mint workspace-scoped credentials,
+            # which name no account and so may not create a workspace.
+            msg = (
+                "the latency benchmark needs an administrator credential: "
+                "pass --admin-token or set BENCHMARK_ADMIN_TOKEN"
+            )
+            raise LatencyBenchmarkError(msg)
         return token
 
     @property

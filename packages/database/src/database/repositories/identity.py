@@ -398,6 +398,20 @@ class WorkspaceMemberRepository:
         ).first()
         return workspace_member_record_from_table(row) if row is not None else None
 
+    def ensure_owner(self, *, workspace_id: str, user_id: str) -> WorkspaceMemberRecord:
+        """The workspace's single owner, written for `user_id` when it has none.
+
+        A workspace whose owner row is missing is unreachable by every person and
+        resolves to no compute account, so the row is written with the workspace
+        rather than left to whoever remembers. A workspace that already has an owner
+        keeps it: adoption must not transfer the account the workspace resolves
+        through, and the partial unique index refuses a second one regardless.
+        """
+        existing = self.owner(workspace_id)
+        if existing is not None:
+            return existing
+        return self.add(workspace_id=workspace_id, user_id=user_id, role=WorkspaceRole.Owner)
+
     def owner_user_id(self, workspace_id: str) -> str:
         owner = self.owner(workspace_id)
         if owner is None:

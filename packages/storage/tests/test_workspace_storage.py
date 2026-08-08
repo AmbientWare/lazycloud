@@ -133,7 +133,9 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
         workspace_storage_client=bucket_client,
     )
 
-    created = service.create_workspace("tenant")
+    owner = isolated_services.users.create(username="tenant-owner", password="tenant-owner-pass")
+
+    created = service.create_workspace("tenant", owner_user_id=owner.id)
     workspace = service.get_workspace(created.workspace_id)
 
     assert created.workspace.storage.bucket == f"workspace-{created.workspace_id}"
