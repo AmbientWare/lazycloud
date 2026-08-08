@@ -205,7 +205,6 @@ export const workspaceQueryKeys = {
   },
   compute: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "compute"] as const,
-    policy: (workspaceId: string) => [...workspaceRoot(workspaceId), "compute", "policy"] as const,
     adminAccess: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "compute", "admin-access"] as const,
   },

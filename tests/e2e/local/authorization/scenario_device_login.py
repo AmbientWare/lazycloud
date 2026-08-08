@@ -23,7 +23,7 @@ from urllib.parse import quote, urlsplit
 
 from lazycloud.cli.identity import device_login_client_name
 from pydantic import BaseModel
-from shared.http.device_auth import DeviceCodeApproveRequest, DeviceCodeResponse
+from shared.http.device_auth import DeviceCodeResponse
 from shared.http.system import AuthTokenResponse, TokenListResponse
 from shared.http.workspaces import WorkspaceListResponse
 from shared.http_transport import HttpChannel
@@ -85,11 +85,11 @@ def _approve(
             if match is None:
                 continue
             user_code = match.group(0)
+            # Approval names no workspace: it grants the CLI the approving account's
+            # own reach, and the credential it claims covers every workspace that
+            # account belongs to.
             approved = DeviceCodeResponse.model_validate(
-                admin.post(
-                    f"/api/v1/device-codes/{quote(user_code, safe='')}/approve",
-                    DeviceCodeApproveRequest(workspace=workspace).model_dump(mode="json"),
-                )
+                admin.post(f"/api/v1/device-codes/{quote(user_code, safe='')}/approve", {})
             )
             if approved.status is not DeviceAuthorizationStatus.Approved:
                 raise RuntimeError("device login approval did not reach approved")

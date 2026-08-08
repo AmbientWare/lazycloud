@@ -181,7 +181,7 @@ def _enroll(
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
     # The credential names the account the machine will belong to, so the workspace
     # has to have the owner row production writes with it.
-    workspace_owner_user_id(services, workspace_id)
+    workspace_owner_user_id(services.context, workspace_id)
     bootstrap = gateway.unit_state_coordinator.create_unit_join_token(
         gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,

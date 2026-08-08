@@ -9,11 +9,9 @@ import {
   machinePoolListSchema,
   poolJoinCommandResponseSchema,
   unitMachineListSchema,
-  workspaceComputePolicySchema,
   workerListSchema,
+  type AwsComputeConfigurationUpdateRequest,
   type AwsConnection,
-  type WorkspaceComputePolicy,
-  type WorkspaceComputePolicyUpdateRequest,
 } from "@/lib/api/schemas";
 import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -80,45 +78,28 @@ export function machinePoolsQueryOptions(workspaceId: string, enabled = true) {
   });
 }
 
-export function computePolicyQueryOptions(workspaceId: string, enabled = true) {
-  return queryOptions({
-    queryKey: computeQueryKeys.policy(workspaceId),
-    enabled,
-    queryFn: () => getComputePolicy(workspaceId),
-  });
-}
-
-export function getComputePolicy(workspaceId: string): Promise<WorkspaceComputePolicy> {
-  return apiRequest(
-    withWorkspace("/api/v1/compute/policy", workspaceId),
-    workspaceComputePolicySchema,
-  );
-}
-
-export function updateComputePolicy(
-  workspaceId: string,
-  request: WorkspaceComputePolicyUpdateRequest,
-): Promise<WorkspaceComputePolicy> {
-  return apiRequest(
-    withWorkspace("/api/v1/compute/policy", workspaceId),
-    workspaceComputePolicySchema,
-    {
-      method: "PUT",
-      body: JSON.stringify(request),
-    },
-  );
-}
-
 export function awsConnectionQueryOptions(enabled = true) {
   return queryOptions({
     queryKey: accountComputeQueryKeys.awsConnection(),
     enabled,
-    queryFn: async () => {
-      const response = await apiRequest("/api/v1/aws-connection", awsConnectionEnvelopeSchema);
-      return response.connection;
-    },
+    queryFn: getAwsConnection,
     refetchInterval: AWS_CONNECTION_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+export async function getAwsConnection(): Promise<AwsConnection | null> {
+  const response = await apiRequest("/api/v1/aws-connection", awsConnectionEnvelopeSchema);
+  return response.connection;
+}
+
+/** Provisioning limits and defaults belong to the account, not to one workspace. */
+export function updateAwsComputeConfiguration(
+  request: AwsComputeConfigurationUpdateRequest,
+): Promise<AwsConnection> {
+  return apiRequest("/api/v1/aws-connection/compute", awsConnectionSchema, {
+    method: "PUT",
+    body: JSON.stringify(request),
   });
 }
 

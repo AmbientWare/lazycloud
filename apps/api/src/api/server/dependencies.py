@@ -194,6 +194,30 @@ def authorize_websocket(services: ApiServices, websocket: WebSocket) -> AuthToke
         ) from exc
 
 
+def authorize_websocket_workspace(services: ApiServices, websocket: WebSocket) -> str:
+    """The workspace a socket acts in, authorized the same way an HTTP request is.
+
+    A socket carries no dependency-injected workspace, so it reads the one the query
+    string names and puts it through the same check. Reading it off the credential
+    instead would answer nothing for an account credential, which names a person
+    rather than a workspace.
+    """
+    token = authorize_websocket(services, websocket)
+    named = websocket.query_params.get("workspace", "")
+    try:
+        return authorize_token_workspace(
+            services,
+            token,
+            named or token.workspace_id or DEFAULT_WORKSPACE_NAME,
+            AuthScope.Write,
+        )
+    except HTTPException as exc:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason=str(exc.detail),
+        ) from exc
+
+
 def authorize_services(
     services: ApiServices,
     credentials: HTTPAuthorizationCredentials | None,

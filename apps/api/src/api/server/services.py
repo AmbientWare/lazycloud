@@ -668,19 +668,20 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
         )
         secrets = SecretService(context, events, workspace_changes=workspace_changes)
+        # Same decision as the provider resolver below: a deployment without
+        # connected AWS advertises no AWS catalog, and building one would demand
+        # the capacity and agent-artifact configuration it has no reason to hold.
+        aws_compute_catalog = (
+            configured_aws_compute_catalog(
+                aws_capacity_config,
+                agent_artifact_config,
+            )
+            if aws_account_connection_config.configured
+            else ()
+        )
         compute_policies = WorkspaceComputePolicyService(
             context,
-            # Same decision as the provider resolver below: a deployment without
-            # connected AWS advertises no AWS catalog, and building one would demand
-            # the capacity and agent-artifact configuration it has no reason to hold.
-            available_catalog=(
-                configured_aws_compute_catalog(
-                    aws_capacity_config,
-                    agent_artifact_config,
-                )
-                if aws_account_connection_config.configured
-                else ()
-            ),
+            available_catalog=aws_compute_catalog,
         )
         routes = RouteService(context)
         cache_storage = CacheStorage(context)
@@ -837,6 +838,7 @@ class ApiServices(ApiServiceCore):
             backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
             capacity_baseline=compute_policies,
+            available_catalog=aws_compute_catalog,
         )
         placement_resources = (
             aws_composition.deployment_bucket_access if aws_composition is not None else None

@@ -91,7 +91,6 @@ export function workspaceInvalidationTargets(
       return [
         { queryKey: accountQueryKeys.compute.awsConnection() },
         { queryKey: accountQueryKeys.compute.instances() },
-        { queryKey: workspaceQueryKeys.compute.policy(workspaceId) },
       ];
     case "storage.secrets":
       return [{ queryKey: workspaceQueryKeys.storage.secrets(workspaceId) }];

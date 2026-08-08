@@ -132,7 +132,7 @@ def _create_join_token(
 ):
     # The credential names the account the machine will belong to, so the workspace
     # has to have the owner row production writes with it.
-    workspace_owner_user_id(gateway.services, workspace_id)
+    workspace_owner_user_id(gateway.services.context, workspace_id)
     return gateway.unit_state_coordinator.create_unit_join_token(
         gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
         workspace_id=workspace_id,
@@ -723,7 +723,7 @@ def test_machine_join_command_owns_the_account_self_hosted_fleet(
     machine rather than a second copy of both.
     """
     workspace_id = _workspace_id(isolated_services)
-    user_id = workspace_owner_user_id(isolated_services, workspace_id)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
     isolated_services.control_plane_service.set_workspace(
         "second-workspace",
         owner_user_id=user_id,

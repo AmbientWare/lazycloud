@@ -20,6 +20,7 @@ def stream_object_bytes(
     *,
     endpoint: str,
     token: str | None,
+    workspace: str,
     data: bytes,
     name: str,
     object_hash: str,
@@ -36,6 +37,7 @@ def stream_object_bytes(
     return _stream_object(
         endpoint=endpoint,
         token=token,
+        workspace=workspace,
         body=body,
         size=len(data),
         name=name,
@@ -52,6 +54,7 @@ def stream_object_file(
     *,
     endpoint: str,
     token: str | None,
+    workspace: str,
     source: str | Path,
     size: int,
     name: str,
@@ -71,6 +74,7 @@ def stream_object_file(
         return _stream_object(
             endpoint=endpoint,
             token=token,
+            workspace=workspace,
             body=body,
             size=size,
             name=name,
@@ -87,6 +91,7 @@ def _stream_object(
     *,
     endpoint: str,
     token: str | None,
+    workspace: str,
     body: _ProgressReader,
     size: int,
     name: str,
@@ -117,6 +122,7 @@ def _stream_object(
         data=body,
         headers=headers,
         params={
+            "workspace": workspace,
             "bucket": upload.bucket,
             "name": upload.object_metadata.name,
             "hash": upload.hash,

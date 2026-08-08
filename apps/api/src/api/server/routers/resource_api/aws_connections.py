@@ -13,6 +13,7 @@ from shared.aws_connections import (
 )
 from shared.http.aws_connections import (
     AwsAuthorizationGenerationResponse,
+    AwsComputeConfigurationUpdateRequest,
     AwsConnectionAuthorization,
     AwsConnectionAuthorizationResponse,
     AwsConnectionCreateRequest,
@@ -100,6 +101,7 @@ def _response(connection: AwsAccountConnection) -> AwsConnectionResponse:
         account_id=connection.account_id,
         phase=connection.phase,
         revision=connection.revision,
+        compute=connection.compute,
         hosts_workloads=connection.hosts_workloads,
         can_manage_existing_capacity=connection.can_manage_existing_capacity,
         available_actions=connection.available_actions,
@@ -160,6 +162,26 @@ def connect_aws_account(
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionAuthorizationResponse:
     return _authorization_response(service.connect(request, user_id=user_id))
+
+
+@router.put(
+    "/compute",
+    response_model=AwsConnectionResponse,
+    operation_id="update_aws_account_compute_configuration",
+)
+def update_aws_account_compute_configuration(
+    request: AwsComputeConfigurationUpdateRequest,
+    user_id: write_user,
+    service: AwsAccountConnectionService = Depends(aws_account_connection_service),
+) -> AwsConnectionResponse:
+    """Set how capacity is provisioned in this account, for every workspace it backs."""
+    return _response(
+        service.update_compute_configuration(
+            user_id=user_id,
+            expected_revision=request.expected_revision,
+            configuration=request.compute,
+        )
+    )
 
 
 @router.post(

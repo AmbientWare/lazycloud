@@ -21,8 +21,8 @@ def gateway_control_client(config: ControlClientConfig) -> GatewayControlClient:
     return GatewayControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
-        timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
+        timeout_seconds=config.timeout_seconds,
     )
 
 
@@ -30,8 +30,8 @@ def resource_control_client(config: ControlClientConfig) -> ResourceControlClien
     return ResourceControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
-        timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
+        timeout_seconds=config.timeout_seconds,
     )
 
 
@@ -39,8 +39,8 @@ def observability_control_client(config: ControlClientConfig) -> ObservabilityCo
     return ObservabilityControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
-        timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
+        timeout_seconds=config.timeout_seconds,
     )
 
 
@@ -48,6 +48,7 @@ def pod_control_client(config: ControlClientConfig) -> PodControlClient:
     return PodControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
 

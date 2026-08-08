@@ -5,8 +5,11 @@ from dataclasses import dataclass, field
 
 import pytest
 from lazycloud.cli.main import build_public_cli
+from shared.http.aws_connections import (
+    AwsComputeConfigurationUpdateRequest,
+    AwsConnectionResponse,
+)
 from shared.http.compute_policy import (
-    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -21,7 +24,21 @@ def _policy() -> WorkspaceComputePolicyResponse:
         {
             "revision": 4,
             "default_pool": "lazycloud",
-            "aws": {
+            "created_at": "2026-07-15T12:00:00Z",
+            "updated_at": "2026-07-15T12:00:00Z",
+        }
+    )
+
+
+def _connection() -> AwsConnectionResponse:
+    return AwsConnectionResponse.model_validate(
+        {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "account_id": "123456789012",
+            "phase": "ready",
+            "revision": 7,
+            "compute": {
+                "revision": 4,
                 "default_region": "us-east-1",
                 "max_cpu_instances": 10,
                 "max_gpu_instances": 2,
@@ -30,6 +47,15 @@ def _policy() -> WorkspaceComputePolicyResponse:
                 "idle_timeout_seconds": 300,
                 "root_volume_gib": 200,
             },
+            "hosts_workloads": True,
+            "can_manage_existing_capacity": True,
+            "available_actions": ["reconnect", "remove"],
+            "detail": "AWS compute is available for your workspaces.",
+            "customer_action": None,
+            "next_retry_at": None,
+            "active_authorization": None,
+            "pending_authorization": None,
+            "retiring_authorization": None,
             "created_at": "2026-07-15T12:00:00Z",
             "updated_at": "2026-07-15T12:00:00Z",
         }
@@ -39,7 +65,7 @@ def _policy() -> WorkspaceComputePolicyResponse:
 @dataclass(slots=True)
 class _ComputeClient:
     updates: list[WorkspaceComputePolicyUpdateRequest] = field(default_factory=list)
-    patches: list[WorkspaceComputePolicyPatchRequest] = field(default_factory=list)
+    compute_updates: list[AwsComputeConfigurationUpdateRequest] = field(default_factory=list)
 
     def summary(self) -> WorkspaceComputeSummaryResponse:
         return WorkspaceComputeSummaryResponse.model_validate(
@@ -69,22 +95,22 @@ class _ComputeClient:
             update={
                 "revision": request.expected_revision + 1,
                 "default_pool": request.default_pool,
-                "aws": request.aws,
             }
         )
 
-    def patch_policy(
+    def current_connection(self) -> AwsConnectionResponse:
+        return _connection()
+
+    def update_compute_configuration(
         self,
-        request: WorkspaceComputePolicyPatchRequest,
-    ) -> WorkspaceComputePolicyResponse:
-        self.patches.append(request)
-        base = _policy()
-        changed = request.aws.model_dump(exclude_none=True)
-        return base.model_copy(
+        request: AwsComputeConfigurationUpdateRequest,
+    ) -> AwsConnectionResponse:
+        self.compute_updates.append(request)
+        return _connection().model_copy(
             update={
-                "revision": request.expected_revision + 1,
-                "default_pool": request.default_pool or base.default_pool,
-                "aws": base.aws.model_copy(update=changed),
+                "compute": request.compute.model_copy(
+                    update={"revision": request.expected_revision + 1}
+                )
             }
         )
 
@@ -114,9 +140,15 @@ def test_compute_status_routes_workspace_and_preserves_json_contract(
     assert payload["workload_count"] == 3
 
 
-def test_compute_policy_update_sends_revisioned_guardrails(
+def test_cloud_compute_update_revises_the_account_configuration_it_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Options given change; options omitted keep what the account already carries.
+
+    The command builds the whole configuration from what it just read, so a
+    partial edit that dropped an untouched field would silently reset it, and a
+    stale revision would overwrite a concurrent edit instead of being refused.
+    """
     client = _ComputeClient()
 
     def fake_compute_client(**_kwargs: object) -> _ComputeClient:
@@ -128,11 +160,9 @@ def test_compute_policy_update_sends_revisioned_guardrails(
         cli,
         [
             "--json",
+            "cloud",
             "compute",
-            "policy",
             "update",
-            "--default-pool",
-            "aws",
             "--default-region",
             "us-west-2",
             "--default-instance-type",
@@ -153,27 +183,23 @@ def test_compute_policy_update_sends_revisioned_guardrails(
             "0",
             "--min-free-memory-mib",
             "0",
-            "--idle-timeout",
-            "600",
-            "--root-volume-gib",
-            "250",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert len(client.patches) == 1
-    request = client.patches[0]
+    assert len(client.compute_updates) == 1
+    request = client.compute_updates[0]
     assert request.expected_revision == 4
-    assert request.default_pool == "aws"
-    assert request.aws.default_region == "us-west-2"
-    assert request.aws.default_instance_type == "g6.xlarge"
-    assert request.aws.initial_cpu_workers == 2
-    assert request.aws.min_cpu_workers == 0
-    assert request.aws.allowed_regions == ("us-west-2",)
-    assert request.aws.allowed_instance_types == ("g6.xlarge",)
-    assert request.aws.max_cpu_instances == 6
-    assert request.aws.max_gpu_instances == 1
-    assert request.aws.min_free_cpu_millicores == 0
-    assert request.aws.min_free_memory_mib == 0
-    assert request.aws.idle_timeout_seconds == 600
-    assert request.aws.root_volume_gib == 250
+    assert request.compute.default_region == "us-west-2"
+    assert request.compute.default_instance_type == "g6.xlarge"
+    assert request.compute.initial_cpu_workers == 2
+    assert request.compute.min_cpu_workers == 0
+    assert request.compute.allowed_regions == ("us-west-2",)
+    assert request.compute.allowed_instance_types == ("g6.xlarge",)
+    assert request.compute.max_cpu_instances == 6
+    assert request.compute.max_gpu_instances == 1
+    assert request.compute.min_free_cpu_millicores == 0
+    assert request.compute.min_free_memory_mib == 0
+    # Untouched by the command line, so carried forward from what it read.
+    assert request.compute.idle_timeout_seconds == 300
+    assert request.compute.root_volume_gib == 200

@@ -14,7 +14,6 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
@@ -1805,13 +1804,15 @@ class ComputeService:
                     }
                 )
             stored_workspace_limit = unit.workspace_machine_limit or unit.max_machines
-            policy = WorkspaceComputePolicyRepository(session).get_for_workspace(workspace_id)
-            if policy is None:
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
+            if connection is None:
                 workspace_limit = stored_workspace_limit
             elif _pool_gpu_capacity(unit):
-                workspace_limit = policy.aws.max_gpu_instances
+                workspace_limit = connection.compute.max_gpu_instances
             else:
-                workspace_limit = policy.aws.max_cpu_instances
+                workspace_limit = connection.compute.max_cpu_instances
             other_desired = sum(
                 item.desired_machines
                 for item in units.list_internal(workspace_id=workspace_id)

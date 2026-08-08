@@ -2,8 +2,8 @@
 
 On success the stage emits the exact warm-baseline identity. On timeout it
 still emits the observed public instance state as durable recovery evidence —
-the paid capacity it requested stays owned by the workspace policy until the
-cleanup stage restores zero.
+the paid capacity it requested stays owned by the account's compute
+configuration until the cleanup stage restores zero.
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ import argparse
 from collections.abc import Sequence
 
 from lazycloud.cli.control import compute_client
-from shared.aws_connections import AwsAccountConnectionPhase
+from shared.aws_connections import AwsAccountComputeConfiguration, AwsAccountConnectionPhase
 from shared.compute_enrollment import MachineServiceState
-from shared.compute_policy import AwsWorkspaceComputePolicy
+from shared.http.aws_connections import AwsComputeConfigurationUpdateRequest
 from shared.http.compute_policy import (
     WorkspaceComputeInstanceResponse,
     WorkspaceComputePolicyUpdateRequest,
@@ -36,28 +36,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     if connection is None or connection.phase is not AwsAccountConnectionPhase.Ready:
         raise RuntimeError("the public AWS connection is not ready")
 
-    current = client.policy()
-    aws = current.aws
-    parity = AwsWorkspaceComputePolicy(
-        default_region=aws.default_region,
-        default_instance_type=aws.default_instance_type,
-        initial_cpu_workers=1,
-        min_cpu_workers=1,
-        max_cpu_instances=max(1, aws.max_cpu_instances),
-        max_gpu_instances=aws.max_gpu_instances,
-        min_free_cpu_millicores=1_000,
-        min_free_memory_mib=1_024,
-        allowed_regions=aws.allowed_regions,
-        allowed_instance_types=aws.allowed_instance_types,
-        idle_timeout_seconds=aws.idle_timeout_seconds,
-        root_volume_gib=aws.root_volume_gib,
-    )
-    if current.default_pool != "aws" or current.aws != parity:
+    policy = client.policy()
+    if policy.default_pool != "aws":
         client.update_policy(
             WorkspaceComputePolicyUpdateRequest(
-                expected_revision=current.revision,
+                expected_revision=policy.revision,
                 default_pool="aws",
-                aws=parity,
+            )
+        )
+    current = connection.compute
+    parity = AwsAccountComputeConfiguration(
+        revision=current.revision,
+        default_region=current.default_region,
+        default_instance_type=current.default_instance_type,
+        initial_cpu_workers=1,
+        min_cpu_workers=1,
+        max_cpu_instances=max(1, current.max_cpu_instances),
+        max_gpu_instances=current.max_gpu_instances,
+        min_free_cpu_millicores=1_000,
+        min_free_memory_mib=1_024,
+        allowed_regions=current.allowed_regions,
+        allowed_instance_types=current.allowed_instance_types,
+        idle_timeout_seconds=current.idle_timeout_seconds,
+        root_volume_gib=current.root_volume_gib,
+    )
+    if current != parity:
+        client.update_compute_configuration(
+            AwsComputeConfigurationUpdateRequest(
+                expected_revision=current.revision,
+                compute=parity,
             )
         )
 

@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 
 from pydantic import JsonValue
 from shared.http.aws_connections import (
+    AwsComputeConfigurationUpdateRequest,
     AwsConnectionAuthorizationResponse,
     AwsConnectionCreateRequest,
     AwsConnectionCurrentResponse,
@@ -22,7 +23,6 @@ from shared.http.compute_policy import (
     ComputeCatalogResponse,
     MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
-    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -113,6 +113,18 @@ class ComputeClient:
     def retry_connection(self) -> AwsConnectionResponse:
         return AwsConnectionResponse.model_validate(self.channel.post(self._aws_path("/retry")))
 
+    def update_compute_configuration(
+        self,
+        request: AwsComputeConfigurationUpdateRequest,
+    ) -> AwsConnectionResponse:
+        return AwsConnectionResponse.model_validate(
+            self.channel.request(
+                "PUT",
+                self._aws_path("/compute"),
+                payload=request.model_dump(mode="json"),
+            )
+        )
+
     def policy(self) -> WorkspaceComputePolicyResponse:
         return WorkspaceComputePolicyResponse.model_validate(
             self.channel.get(self._compute_path("/policy"))
@@ -127,18 +139,6 @@ class ComputeClient:
                 "PUT",
                 self._compute_path("/policy"),
                 payload=request.model_dump(mode="json"),
-            )
-        )
-
-    def patch_policy(
-        self,
-        request: WorkspaceComputePolicyPatchRequest,
-    ) -> WorkspaceComputePolicyResponse:
-        return WorkspaceComputePolicyResponse.model_validate(
-            self.channel.request(
-                "PATCH",
-                self._compute_path("/policy"),
-                payload=request.model_dump(mode="json", exclude_none=True),
             )
         )
 

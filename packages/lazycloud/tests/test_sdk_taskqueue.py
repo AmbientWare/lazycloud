@@ -64,7 +64,7 @@ class RecordingTaskQueueControlChannel:
     payloads: list[dict[str, Any]] = field(default_factory=list)
 
     def post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, str]:
-        assert path == "/api/v1/taskqueues/put"
+        assert path == "/api/v1/taskqueues/put?workspace=default"
         assert payload is not None
         self.payloads.append(payload)
         return {"task_id": "task-queued"}

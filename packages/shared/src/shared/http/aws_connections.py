@@ -5,8 +5,10 @@ from datetime import datetime
 from pydantic import Field, model_validator
 
 from shared.aws_connections import (
+    AWS_REGION_PATTERN,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
+    AwsAccountComputeConfiguration,
     AwsAccountConnectionAvailableAction,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
@@ -33,9 +35,14 @@ class AwsConnectionReconnectRequest(HttpModel):
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
 
 
+class AwsComputeConfigurationUpdateRequest(HttpModel):
+    expected_revision: int = Field(ge=1)
+    compute: AwsAccountComputeConfiguration
+
+
 class AwsManagedAuthorizationResponse(HttpModel):
     stack_name: str = Field(min_length=1, max_length=128)
-    region: str = Field(pattern=r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
+    region: str = Field(pattern=AWS_REGION_PATTERN)
     generation: int = Field(ge=1)
     stack_id: str | None = Field(default=None, min_length=1, max_length=2048)
     template_version: str = Field(min_length=1, max_length=128)
@@ -65,6 +72,7 @@ class AwsConnectionResponse(HttpModel):
     account_id: str
     phase: AwsAccountConnectionPhase
     revision: int = Field(ge=1)
+    compute: AwsAccountComputeConfiguration
     hosts_workloads: bool
     can_manage_existing_capacity: bool
     available_actions: tuple[AwsAccountConnectionAvailableAction, ...] = ()
@@ -94,6 +102,7 @@ class AwsConnectionAuthorizationResponse(HttpModel):
 
 __all__ = [
     "AwsAuthorizationGenerationResponse",
+    "AwsComputeConfigurationUpdateRequest",
     "AwsConnectionAuthorization",
     "AwsConnectionAuthorizationResponse",
     "AwsConnectionCreateRequest",

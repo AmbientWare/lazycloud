@@ -93,8 +93,10 @@ export function GlobalSearch({
       {
         key: "destination-settings",
         label: "Settings",
-        detail: "Workspace",
-        href: `${base}/settings`,
+        detail: "Account",
+        // Settings is a layer over the current page rather than a page of its own,
+        // so it is reached by asking for it here rather than by navigating away.
+        href: `${base}/apps?settings=general`,
         icon: Settings,
       },
     ];

@@ -134,13 +134,13 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
         )
     # The machine's own workspace and the container's differ on purpose: a joined
     # machine belongs to an account, so the account is what the assignment compares.
-    owner_user_id = workspace_owner_user_id(isolated_services, workspace_id)
+    owner_user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
     with isolated_services.context.database.session() as session:
         WorkspaceMemberRepository(session).ensure_owner(
             workspace_id=sibling_workspace.id,
             user_id=owner_user_id,
         )
-    workspace_owner_user_id(isolated_services, other_workspace.id)
+    workspace_owner_user_id(isolated_services.context, other_workspace.id)
     with isolated_services.context.database.session() as session:
         sibling_container = ContainerRepository(session).upsert(
             ContainerRecord(

@@ -37,7 +37,6 @@ from networking.settings import (
 )
 from networking.tailnet import TailnetRuntimeMode
 from provider_aws import aws_account_connection_template_identity
-from provider_clients import configured_aws_compute_catalog
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from pydantic import SecretStr
 from scheduler.compute_hooks import SchedulerComputeHooks
@@ -46,6 +45,7 @@ from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
+    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
@@ -66,10 +66,10 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.deployment_records import DeploymentSpec
+from shared.http.aws_connections import AwsConnectionCurrentResponse, AwsConnectionResponse
 from shared.http.compute_policy import (
     MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
-    WorkspaceComputePolicyResponse,
     WorkspaceComputeSummaryResponse,
 )
 from shared.identity import TokenKind, WorkspaceRole
@@ -106,22 +106,6 @@ def _account_client(
             headers={"Authorization": f"Bearer {raw_token}"},
         )
     )
-
-
-def _client(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> TestClient:
-    token, _record = AuthService(isolated_services.context).create_token("compute-policy")
-    client_stack = ExitStack()
-    request.addfinalizer(client_stack.close)
-    client = client_stack.enter_context(
-        TestClient(
-            create_app(isolated_services),
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    )
-    return client
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,34 +220,32 @@ def _configured_aws_services(
     return services
 
 
-def test_workspace_policy_rejects_unavailable_catalog_selections(
+def test_account_compute_configuration_rejects_unavailable_catalog_selections(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> None:
+    owner_id = _seed_ready_aws_connection(isolated_services)
     services = _configured_aws_services(isolated_services, request)
-    client = _client(services, request)
-    policy_response = client.get("/api/v1/compute/policy")
-    policy = WorkspaceComputePolicyResponse.model_validate_json(policy_response.content)
+    client = _account_client(services, request, user_id=owner_id)
+    current = _current_connection(client)
 
     unavailable_region = client.put(
-        "/api/v1/compute/policy",
+        "/api/v1/aws-connection/compute",
         json={
-            "expected_revision": policy.revision,
-            "default_pool": "lazycloud",
-            "aws": {
-                **policy.aws.model_dump(mode="json"),
+            "expected_revision": current.compute.revision,
+            "compute": {
+                **current.compute.model_dump(mode="json"),
                 "default_region": "eu-west-1",
                 "allowed_regions": ["eu-west-1"],
             },
         },
     )
     unavailable_type = client.put(
-        "/api/v1/compute/policy",
+        "/api/v1/aws-connection/compute",
         json={
-            "expected_revision": policy.revision,
-            "default_pool": "lazycloud",
-            "aws": {
-                **policy.aws.model_dump(mode="json"),
+            "expected_revision": current.compute.revision,
+            "compute": {
+                **current.compute.model_dump(mode="json"),
                 "default_region": "us-west-2",
                 "default_instance_type": "g5.xlarge",
                 "allowed_regions": ["us-west-2"],
@@ -430,28 +412,34 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_inventory.data == []
 
 
-def test_policy_hosts_workloads_during_authorization_replacement(
+def test_account_compute_configuration_is_editable_during_authorization_replacement(
     isolated_services: ApiServices,
+    request: pytest.FixtureRequest,
 ) -> None:
-    configuration = _aws_catalog_configuration()
-    _seed_ready_aws_connection(isolated_services, reconnecting=True)
-    policies = WorkspaceComputePolicyService(
-        isolated_services.context,
-        available_catalog=configured_aws_compute_catalog(
-            configuration.capacity,
-            configuration.agent_binaries,
-        ),
-    )
-    current = policies.get_policy(workspace="default")
+    """Replacing authorization must not freeze the limits the running fleet obeys.
 
-    updated = policies.update_policy(
-        workspace="default",
-        expected_revision=current.revision,
-        default_pool="aws",
-        aws=current.aws,
+    The connection still hosts workloads while a replacement is completed, so an
+    owner who needs to lower a ceiling in that window has to be able to.
+    """
+    owner_id = _seed_ready_aws_connection(isolated_services, reconnecting=True)
+    services = _configured_aws_services(isolated_services, request)
+    client = _account_client(services, request, user_id=owner_id)
+    current = _current_connection(client)
+
+    response = client.put(
+        "/api/v1/aws-connection/compute",
+        json={
+            "expected_revision": current.compute.revision,
+            "compute": {**current.compute.model_dump(mode="json"), "idle_timeout_seconds": 600},
+        },
     )
-    assert updated.default_pool == "aws"
-    assert policies.default_machine_pool(workspace="default") == "aws"
+
+    assert response.status_code == 200, response.text
+    updated = AwsConnectionResponse.model_validate_json(response.content)
+    assert updated.hosts_workloads
+    assert updated.compute.idle_timeout_seconds == 600
+    assert updated.compute.revision == current.compute.revision + 1
+    assert _current_connection(client).compute.idle_timeout_seconds == 600
 
 
 def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
@@ -564,15 +552,8 @@ def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
 def test_deployment_placement_is_pinned_when_workspace_default_changes(
     isolated_services: ApiServices,
 ) -> None:
-    configuration = _aws_catalog_configuration()
     _seed_ready_aws_connection(isolated_services)
-    policies = WorkspaceComputePolicyService(
-        isolated_services.context,
-        available_catalog=configured_aws_compute_catalog(
-            configuration.capacity,
-            configuration.agent_binaries,
-        ),
-    )
+    policies = WorkspaceComputePolicyService(isolated_services.context)
     workspace_id = _workspace_id(isolated_services)
     original = isolated_services.deployments.deploy(
         DeploymentSpec(name="before-policy-change"),
@@ -584,7 +565,6 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
         workspace="default",
         expected_revision=policy.revision,
         default_pool="aws",
-        aws=policy.aws,
     )
     created_after = isolated_services.deployments.deploy(
         DeploymentSpec(name="after-policy-change"),
@@ -646,6 +626,14 @@ class _RecordingPooledCapacity:
         )
 
 
+def _current_connection(client: TestClient) -> AwsConnectionResponse:
+    response = client.get("/api/v1/aws-connection")
+    assert response.status_code == 200, response.text
+    current = AwsConnectionCurrentResponse.model_validate_json(response.content)
+    assert current.connection is not None
+    return current.connection
+
+
 def _workspace_id(isolated_services: ApiServices) -> str:
     with isolated_services.context.database.session() as session:
         return isolated_services.context.default_workspace_id(session)
@@ -687,6 +675,14 @@ def _seed_ready_aws_connection(
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
+                # No warm baseline: control-plane startup reconciles what every
+                # connected account asks for, and none of these tests are about
+                # provisioning it.
+                compute=AwsAccountComputeConfiguration(
+                    initial_cpu_workers=0,
+                    min_cpu_workers=0,
+                    max_cpu_instances=0,
+                ),
                 phase=(
                     AwsAccountConnectionPhase.ReconnectPending
                     if reconnecting

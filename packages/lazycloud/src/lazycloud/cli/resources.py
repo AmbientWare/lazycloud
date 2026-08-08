@@ -6,17 +6,17 @@ import webbrowser
 from typing import Annotated, Any
 
 import typer
-from shared.aws_connections import AwsAccountConnectionPhase
+from shared.aws_connections import AwsAccountComputeConfiguration, AwsAccountConnectionPhase
 from shared.compute_policy import MachinePool
-from shared.http.aws_connections import AwsConnectionResponse
+from shared.http.aws_connections import (
+    AwsComputeConfigurationUpdateRequest,
+    AwsConnectionResponse,
+)
 from shared.http.compute import (
     ContainerResponse,
     MachineJoinCommandRequest,
 )
-from shared.http.compute_policy import (
-    AwsWorkspaceComputePolicyPatch,
-    WorkspaceComputePolicyPatchRequest,
-)
+from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
 from shared.http.gateway import (
     AttachToContainerResponse,
     CheckpointContainerRequest,
@@ -36,11 +36,15 @@ from lazycloud.cli.task_results import task_result_human_value
 task_app = typer.Typer(help="Inspect and manage tasks.")
 container_app = typer.Typer(help="Inspect and manage containers.")
 machine_app = typer.Typer(help="Manage self-hosted machines.")
-cloud_app = typer.Typer(help="Connect and manage the workspace's cloud connection.")
+cloud_app = typer.Typer(help="Connect and manage this account's cloud connection.")
 cloud_connect_app = typer.Typer(help="Connect a cloud provider account.")
 cloud_app.add_typer(cloud_connect_app, name="connect")
+cloud_compute_app = typer.Typer(
+    help="Inspect and update how capacity is provisioned in the connected account."
+)
+cloud_app.add_typer(cloud_compute_app, name="compute")
 compute_app = typer.Typer(help="Inspect workspace compute pools and capacity.")
-compute_policy_app = typer.Typer(help="Inspect and update workspace compute guardrails.")
+compute_policy_app = typer.Typer(help="Inspect and update workspace scheduling defaults.")
 compute_app.add_typer(compute_policy_app, name="policy")
 
 
@@ -148,7 +152,36 @@ def compute_policy_show(
 @compute_policy_app.command("update")
 def compute_policy_update(
     ctx: typer.Context,
-    default_pool: Annotated[str, typer.Option("--default-pool")] = "",
+    default_pool: Annotated[str, typer.Option("--default-pool")],
+    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
+) -> None:
+    """Set the pool this workspace's workloads land in when they name none."""
+    client = compute_client(workspace=workspace)
+    current = client.policy()
+    response = client.update_policy(
+        WorkspaceComputePolicyUpdateRequest(
+            expected_revision=current.revision,
+            default_pool=default_pool,
+        )
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
+@cloud_compute_app.command("show")
+def cloud_compute_show(
+    ctx: typer.Context,
+    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
+) -> None:
+    """Show how capacity is provisioned in the connected account."""
+    connection = compute_client(workspace=workspace).current_connection()
+    if connection is None:
+        raise typer.BadParameter("no cloud account is connected")
+    print_payload(ctx, connection.compute.model_dump(mode="json"))
+
+
+@cloud_compute_app.command("update")
+def cloud_compute_update(
+    ctx: typer.Context,
     default_region: Annotated[str | None, typer.Option("--default-region")] = None,
     default_instance_type: Annotated[
         str | None,
@@ -187,30 +220,64 @@ def compute_policy_update(
     ] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
+    """Change the connected account's provisioning limits and defaults."""
     client = compute_client(workspace=workspace)
-    current = client.policy()
-    request = WorkspaceComputePolicyPatchRequest(
-        expected_revision=current.revision,
-        default_pool=default_pool,
-        aws=AwsWorkspaceComputePolicyPatch(
-            default_region=default_region,
-            default_instance_type=default_instance_type,
-            initial_cpu_workers=initial_cpu_workers,
-            min_cpu_workers=min_cpu_workers,
-            max_cpu_instances=max_cpu_instances,
-            max_gpu_instances=max_gpu_instances,
-            min_free_cpu_millicores=min_free_cpu_millicores,
-            min_free_memory_mib=min_free_memory_mib,
-            allowed_regions=None if allowed_regions is None else tuple(allowed_regions),
-            allowed_instance_types=(
-                None if allowed_instance_types is None else tuple(allowed_instance_types)
+    connection = client.current_connection()
+    if connection is None:
+        raise typer.BadParameter("no cloud account is connected")
+    # An option the caller left out keeps the value the account already carries.
+    current = connection.compute
+    response = client.update_compute_configuration(
+        AwsComputeConfigurationUpdateRequest(
+            expected_revision=current.revision,
+            compute=AwsAccountComputeConfiguration(
+                revision=current.revision,
+                default_region=default_region or current.default_region,
+                default_instance_type=default_instance_type or current.default_instance_type,
+                initial_cpu_workers=(
+                    current.initial_cpu_workers
+                    if initial_cpu_workers is None
+                    else initial_cpu_workers
+                ),
+                min_cpu_workers=(
+                    current.min_cpu_workers if min_cpu_workers is None else min_cpu_workers
+                ),
+                max_cpu_instances=(
+                    current.max_cpu_instances if max_cpu_instances is None else max_cpu_instances
+                ),
+                max_gpu_instances=(
+                    current.max_gpu_instances if max_gpu_instances is None else max_gpu_instances
+                ),
+                min_free_cpu_millicores=(
+                    current.min_free_cpu_millicores
+                    if min_free_cpu_millicores is None
+                    else min_free_cpu_millicores
+                ),
+                min_free_memory_mib=(
+                    current.min_free_memory_mib
+                    if min_free_memory_mib is None
+                    else min_free_memory_mib
+                ),
+                allowed_regions=(
+                    current.allowed_regions if allowed_regions is None else tuple(allowed_regions)
+                ),
+                allowed_instance_types=(
+                    current.allowed_instance_types
+                    if allowed_instance_types is None
+                    else tuple(allowed_instance_types)
+                ),
+                idle_timeout_seconds=(
+                    current.idle_timeout_seconds
+                    if idle_timeout_seconds is None
+                    else idle_timeout_seconds
+                ),
+                root_volume_gib=(
+                    current.root_volume_gib if root_volume_gib is None else root_volume_gib
+                ),
             ),
-            idle_timeout_seconds=idle_timeout_seconds,
-            root_volume_gib=root_volume_gib,
-        ),
+        )
     )
-    response = client.patch_policy(request)
-    print_payload(ctx, response.model_dump(mode="json"))
+    print_payload(ctx, response.compute.model_dump(mode="json"))
 
 
 @cloud_connect_app.command("aws")

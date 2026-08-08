@@ -327,6 +327,18 @@ class _Wake:
         return True
 
 
+class _UnownedWorkspaces:
+    """No workspace here has an account behind it.
+
+    These cases are about reservation accounting, and every worker they build is
+    shared capacity, which placement decides without asking who owns the request.
+    """
+
+    def owner_user_id(self, workspace_id: str) -> str:
+        _ = workspace_id
+        return ""
+
+
 class _Events:
     def append_event(
         self,
@@ -558,6 +570,7 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
         dispatch_wake=_Wake(),
         lifecycle_events=_Events(),
         capacity_reservations=capacity,
+        workspace_owners=_UnownedWorkspaces(),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("container-e2e")
@@ -609,6 +622,7 @@ def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
         dispatch_wake=_Wake(),
         lifecycle_events=_Events(),
         capacity_reservations=capacity,
+        workspace_owners=_UnownedWorkspaces(),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("container-scale-zero-fence")

@@ -1600,6 +1600,17 @@ class AwsAccountConnectionRepository:
             for row in self.session.scalars(statement)
         ]
 
+    def list_all(self) -> list[AwsAccountConnection]:
+        """Every connected account, for control-plane-wide reconciliation."""
+        statement = select(AwsAccountConnectionTable).order_by(
+            AwsAccountConnectionTable.created_at.asc(),
+            AwsAccountConnectionTable.id.asc(),
+        )
+        return [
+            AwsAccountConnection.model_validate(row.payload)
+            for row in self.session.scalars(statement)
+        ]
+
     def claim_due(
         self,
         *,

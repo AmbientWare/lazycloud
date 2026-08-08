@@ -47,16 +47,10 @@ import { cn } from "@/lib/utils";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
-import { useComputePolicyController } from "./ComputePolicyForm/controller";
+import { useAwsComputeController } from "./AwsComputeForm/controller";
 import { regionOptions, toggleAllowedRegion } from "./region-selection";
 
-export function ComputeSettings({
-  workspaceId,
-  workspaceName,
-}: {
-  workspaceId: string;
-  workspaceName: string;
-}) {
+export function ComputeSettings() {
   const connection = useQuery(awsConnectionQueryOptions());
   const instances = useQuery(computeInstancesQueryOptions());
   const machines = useQuery(machinesQueryOptions());
@@ -88,13 +82,8 @@ export function ComputeSettings({
   );
 
   return (
-    // Everything here belongs to the account, so nothing is collapsed into a
-    // workspace section. The one exception is the AWS policy, which is per
-    // workspace and says so where it is rendered.
     <div className="flex min-h-full flex-col gap-5 pb-1">
       <ConnectedCloudsPanel
-        workspaceId={workspaceId}
-        workspaceName={workspaceName}
         connection={connection.data ?? null}
         instances={awsInstances}
         expanded={expandedProvider === "aws"}
@@ -121,8 +110,6 @@ export function ComputeSettings({
 }
 
 function ConnectedCloudsPanel({
-  workspaceId,
-  workspaceName,
   connection,
   instances,
   expanded,
@@ -132,8 +119,6 @@ function ConnectedCloudsPanel({
   onToggle,
   onManageAws,
 }: {
-  workspaceId: string;
-  workspaceName: string;
   connection: AwsConnection | null;
   instances: CustomerComputeInstance[];
   expanded: boolean;
@@ -179,25 +164,19 @@ function ConnectedCloudsPanel({
               <div className="grid min-h-0 lg:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.1fr)]">
                 <section className="min-w-0 p-4 lg:border-r lg:border-border">
                   <div className="mb-4">
-                    <div>
-                      <h3 className="text-sm font-medium">AWS policy</h3>
-                      {/* The one thing on this tab that is not the account's. Limits
-                          and defaults are set per workspace, so the workspace is
-                          named rather than left to be inferred from the URL. */}
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Instance limits and provisioning defaults for{" "}
-                        <span className="text-foreground">{workspaceName}</span>
-                      </p>
-                    </div>
+                    <h3 className="text-sm font-medium">Provisioning</h3>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Instance limits and defaults for this account, applied in every workspace
+                    </p>
                   </div>
                   {catalogLoading ? (
-                    <PolicySkeleton />
+                    <ProvisioningSkeleton />
                   ) : catalogError ? (
                     <p className="text-sm text-destructive" role="alert">
                       {catalogError.message}
                     </p>
                   ) : (
-                    <AwsPolicyForm workspaceId={workspaceId} regions={catalogRegions} />
+                    <AwsComputeForm regions={catalogRegions} />
                   )}
                 </section>
                 <CloudInstances instances={instances} />
@@ -334,20 +313,20 @@ function CloudProviderRow({
   );
 }
 
-function AwsPolicyForm({ workspaceId, regions }: { workspaceId: string; regions: string[] }) {
-  const controller = useComputePolicyController(workspaceId);
+function AwsComputeForm({ regions }: { regions: string[] }) {
+  const controller = useAwsComputeController();
   const [advanced, setAdvanced] = useState(false);
 
-  if (controller.isLoading) return <PolicySkeleton />;
+  if (controller.isLoading) return <ProvisioningSkeleton />;
 
   if (controller.loadError || !controller.draft) {
     return (
       <div className="space-y-3" role="alert">
         <p className="text-sm text-destructive">
-          {controller.loadError?.message ?? "Compute policy is unavailable"}
+          {controller.loadError?.message ?? "AWS provisioning settings are unavailable"}
         </p>
         <Button type="button" size="sm" variant="outline" onClick={controller.retryLoad}>
-          Retry loading policy
+          Retry loading settings
         </Button>
       </div>
     );
@@ -509,7 +488,7 @@ function AwsPolicyForm({ workspaceId, regions }: { workspaceId: string; regions:
         {controller.requiresReview ? (
           <div className="mr-auto space-y-2" role="alert">
             <p className="text-xs text-warning">
-              Policy changed on the server. Review the merged fields before retrying.
+              Settings changed on the server. Review the merged fields before retrying.
             </p>
             <Button type="button" size="sm" variant="outline" onClick={controller.review}>
               Review changes
@@ -518,10 +497,10 @@ function AwsPolicyForm({ workspaceId, regions }: { workspaceId: string; regions:
         ) : controller.recoveryFailed ? (
           <div className="mr-auto space-y-2" role="alert">
             <p className="text-xs text-destructive">
-              {controller.saveError?.message ?? "Could not reload the current policy"}
+              {controller.saveError?.message ?? "Could not reload the current settings"}
             </p>
             <Button type="button" size="sm" variant="outline" onClick={controller.retryLoad}>
-              Retry loading policy
+              Retry loading settings
             </Button>
           </div>
         ) : controller.saveError ? (
@@ -530,11 +509,11 @@ function AwsPolicyForm({ workspaceId, regions }: { workspaceId: string; regions:
           </p>
         ) : null}
         {controller.isSaved && !controller.isDirty ? (
-          <p className="mr-auto text-xs text-success">Policy saved</p>
+          <p className="mr-auto text-xs text-success">Settings saved</p>
         ) : null}
         <Button type="submit" size="sm" disabled={!controller.canSave}>
           {controller.isSaving ? <Loader2 className="animate-spin" /> : <Save />}
-          Save policy
+          Save settings
         </Button>
       </div>
     </form>
@@ -786,7 +765,7 @@ function SettingsSkeleton() {
   );
 }
 
-function PolicySkeleton() {
+function ProvisioningSkeleton() {
   return (
     <div className="space-y-3" aria-hidden="true">
       <div className="grid grid-cols-3 gap-3">

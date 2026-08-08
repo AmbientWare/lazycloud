@@ -20,6 +20,7 @@ from shared.aws_connections import (
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
     AwsAccountAuthorizationPlan,
+    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
@@ -34,6 +35,7 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.timestamps import utc_now
 
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
+from compute.catalog import ComputeCatalogRegion, validate_aws_compute_configuration
 from compute.context import ComputeContext
 
 
@@ -154,6 +156,7 @@ class AwsAccountConnectionService:
     bucket_access_reconciler: AwsConnectionBucketAccessReconciler | None = None
     capacity_baseline: AwsConnectionCapacityBaseline | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
+    available_catalog: tuple[ComputeCatalogRegion, ...] = ()
     external_id_bytes: int = 48
     validation_lease_seconds: float = 300
     reconcile_claim_seconds: float = 120
@@ -233,6 +236,45 @@ class AwsAccountConnectionService:
         if connection is None:
             raise NotFoundError("AWS account connection not found")
         return connection
+
+    def update_compute_configuration(
+        self,
+        *,
+        user_id: str,
+        expected_revision: int,
+        configuration: AwsAccountComputeConfiguration,
+    ) -> AwsAccountConnection:
+        """Replace how capacity is provisioned in this account.
+
+        The warm baseline is then re-applied to every workspace the account
+        backs, because one set of numbers now describes all of them and applying
+        it to whichever workspace the caller happened to be in would leave the
+        rest holding capacity nobody asked for.
+        """
+        validate_aws_compute_configuration(configuration, catalog=self.available_catalog)
+        now = utc_now()
+        with self.context.database.session() as session:
+            repository = AwsAccountConnectionRepository(session)
+            current = repository.get_for_user(user_id, for_update=True)
+            if current is None:
+                raise NotFoundError("AWS account connection not found")
+            if current.compute.revision != expected_revision:
+                raise ConflictError("AWS compute configuration revision was superseded")
+            updated = current.model_copy(
+                update={
+                    "compute": configuration.model_copy(
+                        update={"revision": current.compute.revision + 1}
+                    ),
+                    "revision": current.revision + 1,
+                    "updated_at": now,
+                }
+            )
+            repository.save(updated)
+        if self.capacity_baseline is not None:
+            for workspace_id in self._owned_workspace_ids(user_id):
+                self.capacity_baseline.reconcile_workspace_baseline(workspace_id)
+        self._publish(updated, WorkspaceChangeType.Updated)
+        return updated
 
     def validate(self, *, user_id: str) -> AwsAccountConnection:
         started_at = utc_now()
@@ -602,12 +644,12 @@ class AwsAccountConnectionService:
         }:
             return self._reconcile_cleanup(claimed, now)
         if claimed.phase is AwsAccountConnectionPhase.Ready and self.capacity_baseline is not None:
-            # The workspace policy is what decides how much warm capacity a
-            # workspace holds, and it is applied when the policy is written or
-            # at control-plane startup. A connection reaching Ready is the third
-            # moment that capacity can first become buildable, so without this
-            # a workspace that connects an account waits for its next policy
-            # write to get the baseline it already asked for.
+            # The account's compute configuration decides how much warm capacity
+            # each of its workspaces holds, and it is applied when that
+            # configuration is written or at control-plane startup. A connection
+            # reaching Ready is the third moment that capacity can first become
+            # buildable, so without this an account waits for its next
+            # configuration write to get the baseline it already asked for.
             #
             # Every workspace the account backs, not one: the connection became
             # usable for all of them at the same instant.

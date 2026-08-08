@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from compute.policy import WorkspaceComputePolicyService
 from fastapi import APIRouter, Depends
-from shared.compute_policy import AwsWorkspaceComputePolicy, WorkspaceComputePolicy
+from shared.compute_policy import WorkspaceComputePolicy
 from shared.http.compute_policy import (
     ComputeCapacitySummaryResponse,
     ComputeCatalogInstanceResponse,
@@ -14,7 +14,6 @@ from shared.http.compute_policy import (
     MachinePoolResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeInstanceResponse,
-    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -61,30 +60,6 @@ def update_workspace_compute_policy(
             workspace=workspace_id,
             expected_revision=request.expected_revision,
             default_pool=request.default_pool,
-            aws=request.aws,
-        )
-    )
-
-
-@router.patch(
-    "/policy",
-    response_model=WorkspaceComputePolicyResponse,
-    operation_id="patch_workspace_compute_policy",
-)
-def patch_workspace_compute_policy(
-    request: WorkspaceComputePolicyPatchRequest,
-    workspace_id: write_workspace,
-    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
-) -> WorkspaceComputePolicyResponse:
-    current = service.get_policy(workspace=workspace_id)
-    changed = request.aws.model_dump(exclude_none=True)
-    merged = current.aws.model_copy(update=changed) if changed else current.aws
-    return _policy_response(
-        service.update_policy(
-            workspace=workspace_id,
-            expected_revision=request.expected_revision,
-            default_pool=request.default_pool or current.default_pool,
-            aws=AwsWorkspaceComputePolicy.model_validate(dict(merged)),
         )
     )
 
