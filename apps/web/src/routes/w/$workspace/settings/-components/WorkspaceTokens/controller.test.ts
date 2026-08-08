@@ -254,6 +254,7 @@ function token(overrides: Partial<AuthToken> = {}): AuthToken {
     name: "dashboard",
     prefix: "lc_1234",
     kind: "workspace",
+    user_id: "",
     workspace_id: "workspace-1",
     status: "active",
     scopes: ["read", "write"],

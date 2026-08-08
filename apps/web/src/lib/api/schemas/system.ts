@@ -4,6 +4,8 @@ const timestampSchema = z.string().datetime({ offset: true });
 
 export const tokenKindSchema = z.enum([
   "admin",
+  "user",
+  "session",
   "workspace-primary",
   "workspace",
   "workspace-restricted",
@@ -22,6 +24,9 @@ export const authTokenSchema = z
     name: z.string(),
     prefix: z.string(),
     kind: tokenKindSchema,
+    // Exactly one is set: a credential names the person holding it or the single
+    // workspace it was minted for.
+    user_id: z.string(),
     workspace_id: z.string(),
     status: tokenStatusSchema,
     scopes: z.array(z.string()),
