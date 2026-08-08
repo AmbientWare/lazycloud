@@ -35,7 +35,6 @@ class ConcurrencyAcquireResult(ContractModel):
 class StubUrlPlan(ContractModel):
     stub: StubRecord
     url: str
-    mode: str
     external_url: str
     route_kind: StubKind
     deployment: Deployment | None = None
@@ -64,7 +63,13 @@ class StubCloneResult(ContractModel):
 
 class WorkspaceCreateResult(ContractModel):
     workspace_id: str
-    token: str
+    token: str = ""
+    """The primary credential, readable only on the call that minted it.
+
+    Empty when the workspace already held one: a token is stored hashed, so an
+    existing primary can be pointed at but never handed back.
+    """
+
     workspace: WorkspaceRecord
 
 

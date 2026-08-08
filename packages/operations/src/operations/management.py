@@ -56,7 +56,6 @@ from shared.objects import ObjectRecord
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
-from shared.urls import InvokeUrlMode
 from shared.worker_events import TASK_EVENT_RESOURCE_TYPE
 from storage.service import ObjectStorage
 
@@ -825,7 +824,6 @@ class ManagementService:
         *,
         workspace: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
-        mode: InvokeUrlMode = InvokeUrlMode.Path,
     ) -> DeploymentUrlResult:
         deployment = (
             self.retrieve_deployment(workspace, deployment_id_or_name)
@@ -842,7 +840,7 @@ class ManagementService:
         return DeploymentUrlResult(
             deployment=resource.deployment,
             stub=resource.stub,
-            url=resource.invoke_url(external_url, mode=mode),
+            url=resource.invoke_url(external_url),
         )
 
     def deployment_manifest(
@@ -875,7 +873,6 @@ class ManagementService:
         *,
         app_id: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
-        mode: InvokeUrlMode = InvokeUrlMode.Path,
     ) -> DeploymentUrlResult:
         try:
             deployment_kind = DeploymentKind(stub_type.value)
@@ -892,7 +889,8 @@ class ManagementService:
         return DeploymentUrlResult(
             deployment=resource.deployment,
             stub=resource.stub,
-            url=resource.invoke_url(external_url, mode=mode),
+            # A caller that named a version gets a URL that keeps pointing at it.
+            url=resource.invoke_url(external_url, pin_version=version is not None),
         )
 
     def deployment_package(self, workspace: str, stub_id: str) -> DeploymentPackagePlan:

@@ -53,7 +53,7 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
             external_url="https://compute.example",
         )
     )
-    assert deployed.invoke_url == f"https://compute.example/pod/public/{deployed.stub_id}/8080"
+    assert deployed.invoke_url == f"https://{deployed.stub_id}-8080.compute.example"
     deployment_stub = control.get_stub(deployed.stub_id)
     assert deployment_stub.config.runtime.checkpoint_enabled is True
     assert deployment_stub.config.runtime.checkpoint_readiness_path == "/ready"

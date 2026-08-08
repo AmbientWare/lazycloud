@@ -77,11 +77,12 @@ class DeploymentRegistrationService:
     ) -> DeploymentAppResolution:
         source_stub = self._source_stub(spec, workspace=workspace)
         if source_stub is not None and source_stub.app_id:
-            return DeploymentAppResolution(app_id=source_stub.app_id)
+            source_app = self.apps.get(source_stub.app_id, workspace=workspace)
+            return DeploymentAppResolution(app_id=source_app.id, app_name=source_app.name)
         metadata_app_id = spec.metadata.get("app_id")
         if isinstance(metadata_app_id, str) and metadata_app_id:
             app = self.apps.get(metadata_app_id, workspace=workspace)
-            return DeploymentAppResolution(app_id=app.id)
+            return DeploymentAppResolution(app_id=app.id, app_name=app.name)
         metadata_app = spec.metadata.get("app")
         app_name = app_slug_or_default(
             metadata_app if isinstance(metadata_app, str) else None,
@@ -90,8 +91,8 @@ class DeploymentRegistrationService:
         try:
             app = self.apps.get(app_name, workspace=workspace)
         except NotFoundError:
-            return DeploymentAppResolution(app_id=None)
-        return DeploymentAppResolution(app_id=app.id)
+            return DeploymentAppResolution(app_id=None, app_name=app_name)
+        return DeploymentAppResolution(app_id=app.id, app_name=app.name)
 
     def register_deployment(
         self,
@@ -253,6 +254,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
             },
             "env": dict(spec.env),
             "route": spec.route,
+            "domain": spec.domain,
             "methods": list(spec.methods),
             "command": list(spec.command),
             "ports": {str(name): port for name, port in spec.ports.items()},

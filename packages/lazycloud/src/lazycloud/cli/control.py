@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from lazycloud.clients.compute.control import ComputeClient
+from lazycloud.clients.domain.control import DomainControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.observability.control import ObservabilityControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
@@ -64,6 +65,20 @@ def observability_client(
 ) -> ObservabilityControlClient:
     return observability_control_client(
         control_config(workspace=workspace, timeout_seconds=timeout_seconds)
+    )
+
+
+def domain_client(
+    *,
+    workspace: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> DomainControlClient:
+    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
+    return DomainControlClient.from_endpoint(
+        config.endpoint,
+        token=config.token,
+        timeout_seconds=config.timeout_seconds,
+        workspace=config.workspace,
     )
 
 

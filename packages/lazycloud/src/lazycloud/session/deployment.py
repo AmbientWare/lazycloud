@@ -715,6 +715,7 @@ def _stub_request_from_spec(
         gpu_count=spec.resources.gpu_count,
         handler=spec.handler or "",
         route=spec.route,
+        domain=spec.domain,
         methods=list(spec.methods),
         retry_policy=spec.retry_policy,
         timeout=spec.resources.timeout_seconds or _metadata_int(metadata, "timeout"),

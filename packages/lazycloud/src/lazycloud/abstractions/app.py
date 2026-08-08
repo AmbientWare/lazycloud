@@ -391,6 +391,7 @@ class App:
         image: Image | None = None,
         name: str | None = None,
         route: str = "/",
+        domain: str | None = None,
         methods: list[str] | None = None,
         cpu: float | None = DEFAULT_HTTP_CPU,
         memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -431,6 +432,7 @@ class App:
         image: Image | None = None,
         name: str | None = None,
         route: str = "/",
+        domain: str | None = None,
         methods: list[str] | None = None,
         cpu: float | None = DEFAULT_HTTP_CPU,
         memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -470,6 +472,7 @@ class App:
         image: Image | None = None,
         name: str | None = None,
         route: str = "/",
+        domain: str | None = None,
         methods: list[str] | None = None,
         cpu: float | None = DEFAULT_HTTP_CPU,
         memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -532,6 +535,7 @@ class App:
             image=image,
             name=name,
             route=route,
+            domain=domain,
             methods=methods,
             cpu=cpu,
             memory=memory,
@@ -575,6 +579,7 @@ class App:
         name: str = "asgi",
         image: Image | None = None,
         route: str = "/",
+        domain: str | None = None,
         cpu: float | None = DEFAULT_HTTP_CPU,
         memory: str | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
@@ -623,6 +628,7 @@ class App:
             name=name,
             image=image,
             route=route,
+            domain=domain,
             cpu=cpu,
             memory=memory,
             disk=disk,
@@ -660,6 +666,7 @@ class App:
         name: str = "realtime",
         image: Image | None = None,
         route: str = "/",
+        domain: str | None = None,
         cpu: float | None = DEFAULT_HTTP_CPU,
         memory: str | None = DEFAULT_HTTP_MEMORY,
         disk: str | None = None,
@@ -707,6 +714,7 @@ class App:
             name=name,
             image=image,
             route=route,
+            domain=domain,
             cpu=cpu,
             memory=memory,
             disk=disk,
@@ -1177,7 +1185,6 @@ class App:
         *,
         resource: str | None = None,
         timeout: int = 0,
-        url_type: str = "",
     ) -> object:
         """Serve one endpoint, ASGI app, or task queue resource for preview.
 
@@ -1187,10 +1194,9 @@ class App:
         Args:
             resource: Optional resource selector for the preview target.
             timeout: Serve timeout in seconds. `0` keeps serving until stopped.
-            url_type: Optional URL type requested from the gateway.
         """
         selected = self._select_one(resource=resource, method="serve", serveable=True)
-        return _invoke_method(selected.serve, {"timeout": timeout, "url_type": url_type})
+        return _invoke_method(selected.serve, {"timeout": timeout})
 
     def _register(self, resource: ResourceT) -> ResourceT:
         if not hasattr(resource, "spec"):
@@ -1562,6 +1568,7 @@ def _endpoint_options(
     image: Image | None,
     name: str | None,
     route: str,
+    domain: str | None,
     methods: list[str] | None,
     cpu: float | None,
     memory: str | None,
@@ -1597,6 +1604,7 @@ def _endpoint_options(
         "image": image,
         "name": name,
         "route": route,
+        "domain": domain,
         "methods": methods,
         "cpu": cpu,
         "memory": memory,
@@ -1635,6 +1643,7 @@ def _asgi_options(
     name: str,
     image: Image | None,
     route: str,
+    domain: str | None,
     cpu: float | None,
     memory: str | None,
     disk: str | None,
@@ -1661,6 +1670,7 @@ def _asgi_options(
         "name": name,
         "image": image,
         "route": route,
+        "domain": domain,
         "cpu": cpu,
         "memory": memory,
         "disk": disk,

@@ -166,6 +166,15 @@ class SchedulerTailnetCleanupService(Protocol):
     ) -> SchedulerTailnetCleanupBatch: ...
 
 
+class SchedulerCustomDomainService(Protocol):
+    def reconcile_due(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 50,
+    ) -> int: ...
+
+
 class SchedulerTailnetCleanupBacklog(Protocol):
     def pending_count(self) -> int: ...
 
@@ -264,6 +273,7 @@ class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
     retention: SchedulerRetentionService | None = None
     tailnet_cleanup: SchedulerTailnetCleanupService | None = None
+    custom_domains: SchedulerCustomDomainService | None = None
 
 
 @dataclass
@@ -277,6 +287,8 @@ class Scheduler:
     reconcile_agent_pools_enabled: bool = True
     managed_compute_reconcile_interval_seconds: float = MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
+    custom_domain_reconcile_interval_seconds: float = 60.0
+    last_custom_domain_reconcile_at: datetime | None = field(default=None, init=False)
     token_prune_interval_seconds: float = 3600.0
     last_token_prune_at: datetime | None = field(default=None, init=False)
     retention_interval_seconds: float = 3600.0
@@ -567,6 +579,7 @@ class Scheduler:
             now=now,
             limit=container_limit,
         )
+        self._best_effort_reconcile_custom_domains(now=now)
         worker_pool_drains = (
             self._best_effort_drain_worker_pools(now=now, limit=container_limit)
             if include_containers
@@ -961,6 +974,29 @@ class Scheduler:
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []
+
+    def _best_effort_reconcile_custom_domains(self, *, now: datetime | None) -> int:
+        """Advance domains still waiting on the edge.
+
+        Best effort and interval-gated like its neighbours: a certificate arriving
+        late is visible state, never a reason to fail a scheduler tick.
+        """
+        custom_domains = self.maintenance.custom_domains
+        if custom_domains is None:
+            return 0
+        current_time = now or utc_now()
+        if (
+            self.last_custom_domain_reconcile_at is not None
+            and (current_time - self.last_custom_domain_reconcile_at).total_seconds()
+            < self.custom_domain_reconcile_interval_seconds
+        ):
+            return 0
+        self.last_custom_domain_reconcile_at = current_time
+        try:
+            return custom_domains.reconcile_due(now=current_time)
+        except Exception:
+            LOGGER.exception("scheduler custom domain reconciliation failed")
+            return 0
 
     def _best_effort_reconcile_tailnet_cleanup(
         self,

@@ -42,6 +42,11 @@ from shared.app_identity import AGENT_NAME
 from shared.compute_policy import MachinePool
 from shared.http.errors import HttpApiError
 from shared.provider_config import ProviderKind
+from worker.execution import (
+    DEFAULT_CONTAINER_BRIDGE_NAME,
+    DEFAULT_CONTAINER_IPV6_SUBNET,
+    DEFAULT_CONTAINER_SUBNET,
+)
 from worker.source_cache_cleanup import (
     WorkerSourceCacheDestructionReceipt,
     destroy_source_cache_storage,
@@ -231,6 +236,12 @@ def _add_daemon_options(
     parser.add_argument("--worker-route-target", default="127.0.0.1")
     parser.add_argument("--worker-runtime-http-url", default="")
     parser.add_argument("--worker-network", type=_agent_worker_network_name, default="host")
+    # A second agent on the same host must build its containers on its own bridge:
+    # each allocates addresses inside its own control-plane scope, so one shared
+    # bridge is two allocators issuing one address with nothing between them.
+    parser.add_argument("--worker-bridge-name", default=DEFAULT_CONTAINER_BRIDGE_NAME)
+    parser.add_argument("--worker-bridge-subnet", default=DEFAULT_CONTAINER_SUBNET)
+    parser.add_argument("--worker-bridge-ipv6-subnet", default=DEFAULT_CONTAINER_IPV6_SUBNET)
     parser.add_argument("--worker-host-alias", action="append", default=[])
     parser.add_argument("--max-cpu", default="")
     parser.add_argument("--max-memory", default="")
@@ -288,7 +299,12 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
         worker_image=args.worker_image,
         worker_route_target=args.worker_route_target,
         worker_runtime_http_url=args.worker_runtime_http_url,
-        worker_network=AgentWorkerNetwork(name=args.worker_network),
+        worker_network=AgentWorkerNetwork(
+            name=args.worker_network,
+            bridge_name=args.worker_bridge_name,
+            bridge_subnet=args.worker_bridge_subnet,
+            bridge_ipv6_subnet=args.worker_bridge_ipv6_subnet,
+        ),
         worker_host_aliases=args.worker_host_alias,
         docker_binary=args.docker_binary,
         stream_interval_seconds=args.stream_interval_seconds,
@@ -401,6 +417,15 @@ def _install_service_command(
         command.extend(["--worker-runtime-http-url", args.worker_runtime_http_url])
     if args.worker_network != "host":
         command.extend(["--worker-network", args.worker_network])
+    # Re-emitted rather than left to the default: the installed unit is what runs from
+    # here on, and an agent that silently reverted to the shared bridge would collide
+    # with whichever other agent owns it.
+    if args.worker_bridge_name != DEFAULT_CONTAINER_BRIDGE_NAME:
+        command.extend(["--worker-bridge-name", args.worker_bridge_name])
+    if args.worker_bridge_subnet != DEFAULT_CONTAINER_SUBNET:
+        command.extend(["--worker-bridge-subnet", args.worker_bridge_subnet])
+    if args.worker_bridge_ipv6_subnet != DEFAULT_CONTAINER_IPV6_SUBNET:
+        command.extend(["--worker-bridge-ipv6-subnet", args.worker_bridge_ipv6_subnet])
     for alias in args.worker_host_alias:
         command.extend(["--worker-host-alias", alias])
     if args.max_cpu:

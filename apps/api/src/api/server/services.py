@@ -20,6 +20,7 @@ from control.apps import (
     DatabaseAppExecutionAdmission,
     DatabaseAppImageAvailability,
 )
+from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
@@ -130,6 +131,7 @@ from provider_clients.settings import (
     AwsCapacityReconciliationSettings,
     AwsCapacitySettings,
 )
+from provider_cloudflare import CloudflareSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
@@ -475,6 +477,7 @@ class ApiServiceCore:
     apps: AppService
     deployments: DeploymentService
     deployment_resources: DeploymentResourceService
+    custom_domains: CustomDomainService
     cron_jobs: CronJobService
     collections: CollectionService
     secrets: SecretService
@@ -933,6 +936,11 @@ class ApiServices(ApiServiceCore):
             archive_store=resolved_image_archive_store,
         )
         deployment_resources = DeploymentResourceService(context)
+        custom_domains = CustomDomainService(
+            context=context,
+            provider_factory=CloudflareSettings().provider,
+            platform_base_domain=gateway_config.public_base_domain,
+        )
         cron_jobs = CronJobService(
             context,
             deployments,
@@ -986,6 +994,7 @@ class ApiServices(ApiServiceCore):
             apps=apps,
             deployments=deployments,
             deployment_resources=deployment_resources,
+            custom_domains=custom_domains,
             cron_jobs=cron_jobs,
             collections=collections,
             secrets=secrets,
@@ -1302,6 +1311,7 @@ def _compose_api_services(
         apps=core.apps,
         deployments=core.deployments,
         deployment_resources=core.deployment_resources,
+        custom_domains=core.custom_domains,
         cron_jobs=core.cron_jobs,
         collections=core.collections,
         secrets=core.secrets,

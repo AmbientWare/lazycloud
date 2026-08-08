@@ -87,14 +87,6 @@ class BackendDialPlan(ContractModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class SubdomainRoute(ContractModel):
-    host: str
-    root_domain: str
-    subdomain: str
-    app: str
-    workspace: str | None = None
-
-
 class TailnetPeer(ContractModel):
     name: str
     hostname: str
@@ -205,29 +197,6 @@ def _normalized_route_id(route_id: str) -> str:
     if not normalized or any(character.isspace() for character in normalized):
         raise ValueError("backend route id is required")
     return normalized
-
-
-def parse_subdomain_route(host: str, root_domain: str) -> SubdomainRoute:
-    normalized_host = host.split(":", 1)[0].strip(".").lower()
-    normalized_root = root_domain.strip(".").lower()
-    suffix = f".{normalized_root}"
-    if not normalized_host.endswith(suffix):
-        msg = f"host {host!r} is not under root domain {root_domain!r}"
-        raise ValueError(msg)
-    subdomain = normalized_host[: -len(suffix)]
-    if not subdomain:
-        msg = "host does not contain an app subdomain"
-        raise ValueError(msg)
-    parts = subdomain.split(".")
-    app = parts[0]
-    workspace = parts[1] if len(parts) > 1 else None
-    return SubdomainRoute(
-        host=normalized_host,
-        root_domain=normalized_root,
-        subdomain=subdomain,
-        app=app,
-        workspace=workspace,
-    )
 
 
 def plan_route_prewarm(

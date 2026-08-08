@@ -477,7 +477,6 @@ class TaskQueueFunction(Generic[P, R]):
     def serve(
         self,
         timeout: int = 0,
-        url_type: str = "",
     ) -> StartTaskQueueServeResponse:
         terminal = self.terminal or Terminal()
         self.terminal = terminal
@@ -503,7 +502,6 @@ class TaskQueueFunction(Generic[P, R]):
             serve_url = resolve_serve_url(
                 gateway_client,
                 stub_id=stub_id,
-                url_type=url_type,
                 workspace=None,
                 external_url=config.endpoint,
             )

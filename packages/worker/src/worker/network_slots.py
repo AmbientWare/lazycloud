@@ -6,7 +6,12 @@ from foundation.validation import CidrValidation, validate_allow_list
 from pydantic import Field
 from shared.contracts import ContractModel
 
-from worker.execution import container_ipv6_address, container_veth_names
+from worker.execution import (
+    DEFAULT_CONTAINER_IPV6_SUBNET,
+    DEFAULT_CONTAINER_SUBNET,
+    container_ipv6_address,
+    container_veth_names,
+)
 from worker.network_rules import container_network_comment
 
 
@@ -46,12 +51,25 @@ def container_network_info_from_ip(
     container_ip: str,
     *,
     ipv6_enabled: bool = False,
+    ipv4_subnet: str = DEFAULT_CONTAINER_SUBNET,
+    ipv6_subnet: str = DEFAULT_CONTAINER_IPV6_SUBNET,
 ) -> ContainerNetworkInfo:
     veth_host = container_veth_names(container_id)[0]
     return ContainerNetworkInfo(
         container_id=container_id,
         container_ip=container_ip,
-        container_ipv6=container_ipv6_address(container_ip) if ipv6_enabled else "",
+        # Both subnets travel together: the v6 address is the v4 host offset rebased,
+        # so deriving it from a default while the v4 came from a configured bridge
+        # produces an address outside the network it claims to be on.
+        container_ipv6=(
+            container_ipv6_address(
+                container_ip,
+                ipv4_subnet=ipv4_subnet,
+                ipv6_subnet=ipv6_subnet,
+            )
+            if ipv6_enabled
+            else ""
+        ),
         namespace=container_id,
         veth_host=veth_host,
         comment=container_network_comment(veth_host, container_id, container_id),

@@ -245,7 +245,26 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
         Index("ix_deployments_workspace_created", "workspace_id", "created_at", "id"),
         Index("ix_deployments_app_created", "app_id", "created_at", "id"),
         Index("ix_deployments_stub", "stub_id"),
-        Index("ix_deployments_subdomain", "subdomain"),
+        # The public edge routes on this pair alone, so a digest collision between two
+        # resources must fail the second deploy rather than silently answer for it.
+        Index(
+            "uq_deployments_subdomain_version_active",
+            "subdomain",
+            "version",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        # Same reasoning for a claimed hostname. Nulls do not collide, so resources
+        # that claimed nothing are not treated as claiming the same thing.
+        Index(
+            "uq_deployments_custom_hostname_version_active",
+            "custom_hostname",
+            "version",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -267,7 +286,8 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    subdomain: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    subdomain: Mapped[str] = mapped_column(String(63), nullable=False)
+    custom_hostname: Mapped[str | None] = mapped_column(String(253), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

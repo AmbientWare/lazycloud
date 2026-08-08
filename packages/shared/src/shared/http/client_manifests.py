@@ -77,6 +77,16 @@ class ClientManifestResource(HttpModel):
     deployment_id: str
     deployment_version: int
     invoke_url: str
+    """The hostname this resource answers on, for publishing and sharing."""
+
+    invoke_path: str
+    """Same-origin path the platform serves it at, for a caller the platform serves.
+
+    A hostname invoke is cross-origin to the dashboard, and a deployed resource owes
+    the dashboard no CORS permission. Distinct from `invoke_url` on purpose: one is
+    what a user publishes, the other is how a first-party client reaches it.
+    """
+
     route: str | None = None
     methods: list[str] = Field(default_factory=list)
     inputs: dict[str, JsonValue] = Field(default_factory=dict)

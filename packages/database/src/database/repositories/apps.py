@@ -40,9 +40,10 @@ from shared.deployments import DeploymentKind
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
-from sqlalchemy import Integer, case, cast, delete, extract, func, or_, select
+from sqlalchemy import Integer, and_, case, cast, delete, extract, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.sql.elements import ColumnElement
 
 
 class DeploymentResourceRow(BaseModel):
@@ -537,6 +538,41 @@ class DeploymentRepository:
             status="active" if deployment.active else "inactive",
         )
 
+    def assert_subdomain_unclaimed(
+        self,
+        subdomain: str,
+        *,
+        workspace_id: str,
+        app_id: str | None,
+        name: str,
+        kind: DeploymentKind,
+    ) -> None:
+        """Refuse a subdomain another resource already answers on.
+
+        `uq_deployments_subdomain_version_active` only catches a digest collision when
+        both resources reach the same version number. Two colliding resources sitting at
+        different versions would otherwise share a hostname, and the edge would hand one
+        tenant's traffic to the other's resource.
+        """
+        same_resource = and_(
+            DeploymentTable.workspace_id == workspace_id,
+            DeploymentTable.app_id.is_not_distinct_from(app_id),
+            DeploymentTable.name == name,
+            DeploymentTable.kind == kind.value,
+        )
+        conflict = self.session.execute(
+            select(DeploymentTable.id)
+            .where(DeploymentTable.subdomain == subdomain)
+            .where(DeploymentTable.deleted_at.is_(None))
+            .where(~same_resource)
+            .limit(1)
+        ).first()
+        if conflict is not None:
+            raise ConflictError(
+                f"subdomain {subdomain} already belongs to another resource; "
+                f"rename {name} to claim a different one"
+            )
+
     def deactivate_for_workspace_deletion(
         self,
         deployment_id: str,
@@ -709,6 +745,80 @@ class DeploymentResourceRepository:
             )
             for app_row, deployment_row, stub_row in self.session.execute(statement).tuples()
         ]
+
+    def hostnames_claimed_under(self, *, workspace_id: str) -> list[str]:
+        """Every hostname a live deployment in this workspace currently answers on.
+
+        Read before retiring a registration, so discarding a certificate cannot take
+        a serving deployment offline as a side effect.
+        """
+        rows = self.session.execute(
+            select(DeploymentTable.custom_hostname)
+            .where(DeploymentTable.workspace_id == workspace_id)
+            .where(DeploymentTable.deleted_at.is_(None))
+            .where(DeploymentTable.active.is_(True))
+            .where(DeploymentTable.custom_hostname.is_not(None))
+            .distinct()
+        ).scalars()
+        return [hostname for hostname in rows if hostname]
+
+    def get_by_custom_hostname(self, hostname: str) -> DeploymentResourceRow | None:
+        """Resolve the resource that claimed a registered hostname, at its latest version.
+
+        Not workspace-scoped, for the same reason `get_by_subdomain` is not: the edge
+        has only the hostname. Safe because a deployment may claim a hostname only
+        under a domain its own workspace registered, and the registration is unique
+        across workspaces.
+        """
+        return self._resolve_host_row(DeploymentTable.custom_hostname == hostname)
+
+    def get_by_subdomain(
+        self,
+        subdomain: str,
+        *,
+        version: int | None = None,
+    ) -> DeploymentResourceRow | None:
+        """Resolve the resource a public hostname addresses.
+
+        `version=None` answers with the latest, which is what a bare hostname means.
+
+        Deliberately not workspace-scoped, unlike every other lookup here: a request
+        arriving at the edge carries no token, so the subdomain is the only routing key
+        available and the row it finds is what establishes which workspace answers.
+        That is safe only because a subdomain belongs to exactly one resource, which
+        `assert_subdomain_unclaimed` establishes when the subdomain is minted.
+        """
+        match = DeploymentTable.subdomain == subdomain
+        if version is not None:
+            match = and_(match, DeploymentTable.version == version)
+        return self._resolve_host_row(match)
+
+    def _resolve_host_row(self, match: ColumnElement[bool]) -> DeploymentResourceRow | None:
+        row = (
+            self.session.execute(
+                select(AppTable, DeploymentTable, StubTable)
+                .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
+                .join(StubTable, StubTable.id == DeploymentTable.stub_id)
+                .where(AppTable.deleted_at.is_(None))
+                .where(DeploymentTable.deleted_at.is_(None))
+                .where(DeploymentTable.active.is_(True))
+                .where(match)
+                .order_by(DeploymentTable.version.desc())
+                .limit(1)
+            )
+            .tuples()
+            .first()
+        )
+        if row is None:
+            return None
+        app_row, deployment_row, stub_row = row
+        return DeploymentResourceRow(
+            app=app_record_from_table(app_row),
+            deployment_payload=deployment_row.payload,
+            deployment_app_id=str(deployment_row.app_id) if deployment_row.app_id else None,
+            deployment_stub_id=str(deployment_row.stub_id) if deployment_row.stub_id else None,
+            stub_payload=stub_row.payload,
+        )
 
 
 @dataclass(slots=True)

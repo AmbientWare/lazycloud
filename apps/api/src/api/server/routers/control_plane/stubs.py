@@ -21,7 +21,6 @@ from shared.http.stubs import (
     StubUrlResponse,
 )
 from shared.identity import AuthScope
-from shared.urls import InvokeUrlMode
 
 from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import (
@@ -44,7 +43,6 @@ def _stub_url_response(result: StubUrlPlan) -> StubUrlResponse:
     return StubUrlResponse(
         stub=StubResponse.model_validate(result.stub),
         url=result.url,
-        mode=InvokeUrlMode(result.mode),
         external_url=result.external_url,
         route_kind=result.route_kind,
         deployment_id=deployment.id if deployment is not None else None,
@@ -203,7 +201,6 @@ def stub_url(
     stub_id: str,
     deployment_id: str | None = None,
     external_url: str = "http://127.0.0.1:9000",
-    mode: InvokeUrlMode = InvokeUrlMode.Path,
     port: int | None = None,
     *,
     workspace_id: read_workspace,
@@ -216,7 +213,6 @@ def stub_url(
             apps=services.apps,
             workspace=workspace_id,
             external_url=external_url,
-            mode=mode,
             deployment_id=deployment_id,
             port=port,
         )

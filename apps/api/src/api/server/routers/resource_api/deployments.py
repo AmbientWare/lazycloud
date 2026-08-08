@@ -19,7 +19,6 @@ from shared.http.deployments import (
 )
 from shared.http.stubs import StubResponse
 from shared.identity import AuthScope
-from shared.urls import InvokeUrlMode
 
 from api.server.auth import read_token, read_workspace, write_token, write_workspace
 from api.server.dependencies import current_services
@@ -231,7 +230,6 @@ def deployment_url_by_name(
     deployment_name: str,
     version: str,
     external_url: str = "http://127.0.0.1:9000",
-    mode: InvokeUrlMode = InvokeUrlMode.Path,
     *,
     workspace_id: read_workspace,
     token: read_token,
@@ -247,7 +245,6 @@ def deployment_url_by_name(
         deployment_name,
         parsed_version,
         external_url=external_url,
-        mode=mode,
     )
     return DeploymentUrlResponse(
         deployment=_deployment_response(
@@ -293,7 +290,6 @@ def download_deployment_package(
 def deployment_url(
     deployment_id: str,
     external_url: str = "http://127.0.0.1:9000",
-    mode: InvokeUrlMode = InvokeUrlMode.Path,
     *,
     workspace_id: read_workspace,
     token: read_token,
@@ -303,7 +299,6 @@ def deployment_url(
         deployment_id,
         workspace=workspace_id,
         external_url=external_url,
-        mode=mode,
     )
     return DeploymentUrlResponse(
         deployment=_deployment_response(

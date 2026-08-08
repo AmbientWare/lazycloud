@@ -116,6 +116,7 @@ class EndpointOptions(TypedDict, total=False):
     image: Image | None
     name: str | None
     route: str
+    domain: str | None
     methods: list[str] | None
     cpu: float | None
     memory: str | None
@@ -152,6 +153,7 @@ class ASGIOptions(TypedDict, total=False):
     name: str
     image: Image | None
     route: str
+    domain: str | None
     cpu: float | None
     memory: str | None
     disk: str | None
@@ -197,6 +199,7 @@ class Endpoint(Generic[P, R]):
     image: Image = field(default_factory=Image)
     name: str | None = None
     route: str = "/"
+    domain: str | None = None
     methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
     cpu: float | None = DEFAULT_HTTP_CPU
     memory: str | None = DEFAULT_HTTP_MEMORY
@@ -281,6 +284,7 @@ class Endpoint(Generic[P, R]):
                 preemptible=self.preemptible,
             ),
             route=self.route,
+            domain=self.domain,
             methods=list(self.methods),
             env=self.env,
             secrets=self.secrets,
@@ -335,11 +339,10 @@ class Endpoint(Generic[P, R]):
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0, url_type: str = "") -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
-            url_type=url_type,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
             container_id=None,
@@ -425,6 +428,7 @@ def _endpoint(
     image: Image | None = None,
     name: str | None = None,
     route: str = "/",
+    domain: str | None = None,
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -466,6 +470,7 @@ def _endpoint(
     image: Image | None = None,
     name: str | None = None,
     route: str = "/",
+    domain: str | None = None,
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -506,6 +511,7 @@ def _endpoint(
     image: Image | None = None,
     name: str | None = None,
     route: str = "/",
+    domain: str | None = None,
     methods: list[str] | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
@@ -573,6 +579,7 @@ def _endpoint(
             provider=provider,
             metadata=metadata or {},
             route=route,
+            domain=domain,
             methods=methods or ["GET", "POST"],
         )
 
@@ -588,6 +595,7 @@ class ASGI:
     name: str = "asgi"
     image: Image = field(default_factory=Image)
     route: str = "/"
+    domain: str | None = None
     cpu: float | None = DEFAULT_HTTP_CPU
     memory: str | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
@@ -660,6 +668,7 @@ class ASGI:
                 keep_warm=self.keep_warm_seconds,
             ),
             route=self.route,
+            domain=self.domain,
             env=self.env,
             secrets=self.secrets,
             volumes=list(self.volumes),
@@ -694,11 +703,10 @@ class ASGI:
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0, url_type: str = "") -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
-            url_type=url_type,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
             container_id=None,
@@ -785,6 +793,7 @@ def _asgi(
     name: str = "asgi",
     image: Image | None = None,
     route: str = "/",
+    domain: str | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
@@ -814,6 +823,7 @@ def _asgi(
             name=name,
             image=image or Image(),
             route=route,
+            domain=domain,
             cpu=cpu,
             memory=memory,
             disk=disk,
@@ -846,6 +856,7 @@ def _realtime(
     name: str = "realtime",
     image: Image | None = None,
     route: str = "/",
+    domain: str | None = None,
     cpu: float | None = DEFAULT_HTTP_CPU,
     memory: str | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
@@ -875,6 +886,7 @@ def _realtime(
             name=name,
             image=image or Image(),
             route=route,
+            domain=domain,
             cpu=cpu,
             memory=memory,
             disk=disk,
@@ -1217,7 +1229,6 @@ def _serve_endpoint(
     owner: Endpoint[..., Any] | ASGI,
     *,
     timeout: int,
-    url_type: str,
     workspace: str | None,
     sync_dir: str | None,
     container_id: str | None,
@@ -1247,7 +1258,6 @@ def _serve_endpoint(
     serve_url = resolve_serve_url(
         gateway_client,
         stub_id=stub_id,
-        url_type=url_type,
         workspace=workspace,
         external_url=config.endpoint,
     )

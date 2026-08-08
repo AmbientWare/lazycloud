@@ -120,10 +120,37 @@ class WorkerUnavailableReason(StringEnum):
     ShuttingDown = "shutting_down"
 
 
+def worker_serves_workspace(
+    *,
+    private_worker: bool,
+    worker_workspace_id: str,
+    request_workspace_id: str,
+) -> bool:
+    """Whether a worker may run a request belonging to `request_workspace_id`.
+
+    The platform fleet is shared, which is what lets any workspace place work on it.
+    A private worker is one tenant's own machine, and a private record naming no
+    workspace was written without the authority to name one, so it serves none rather
+    than all.
+    """
+
+    if not private_worker:
+        return True
+    return bool(worker_workspace_id) and worker_workspace_id == request_workspace_id
+
+
 class SchedulerWorkerRecord(ContractModel):
     worker_id: str
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    workspace_id: str = ""
+    """Workspace a private worker serves; empty on the shared platform fleet.
+
+    Written from the authority that decides a worker's tenant—the machine's enrollment
+    for an agent, the presented token at registration—never from what a worker says
+    about itself.
+    """
+
     machine_id: str = ""
     status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending
     unavailable_reason: WorkerUnavailableReason | None = None
@@ -159,6 +186,13 @@ class SchedulerWorkerRecord(ContractModel):
             msg = "worker values cannot be negative"
             raise ValueError(msg)
         return value
+
+    def serves_workspace(self, workspace_id: str) -> bool:
+        return worker_serves_workspace(
+            private_worker=self.private_worker,
+            worker_workspace_id=self.workspace_id,
+            request_workspace_id=workspace_id,
+        )
 
 
 class SchedulerContainerState(ContractModel):

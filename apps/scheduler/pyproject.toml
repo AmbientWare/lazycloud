@@ -19,6 +19,7 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
+    "provider-cloudflare",
     "scheduler",
     "storage",
     "storage-client",

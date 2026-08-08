@@ -48,6 +48,7 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
                 id=deployment_id,
                 name="owned-deployment",
                 kind=DeploymentKind.Endpoint,
+                subdomain="owned-deployment-a1b2c3d4",
                 spec=DeploymentSpec(name="owned-deployment", kind=DeploymentKind.Endpoint),
             ),
             workspace_id=owner.id,

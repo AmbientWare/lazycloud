@@ -22,6 +22,7 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
+    "provider-cloudflare",
     "pydantic-settings>=2.4,<3",
     "scheduler",
     "storage",

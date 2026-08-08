@@ -9,6 +9,7 @@ from gateway.shell_proxy import connect_shell_backend
 from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
+    BackendRouteUnavailable,
     SocketBackendConnector,
 )
 from networking.routing import (
@@ -221,7 +222,7 @@ def test_backend_route_dialer_rejects_unusable_routes() -> None:
         config=BackendRouteDialerConfig(timeout_seconds=1, ready_poll_seconds=0.001),
         connector=_FakeConnector(),
     )
-    with pytest.raises(RuntimeError, match="backend route route-bad is degraded"):
+    with pytest.raises(BackendRouteUnavailable, match="backend route route-bad is degraded"):
         degraded.dial_plan(build_backend_route_dial_plan("route-bad"))
 
     missing = BackendRouteDialer(
@@ -229,7 +230,7 @@ def test_backend_route_dialer_rejects_unusable_routes() -> None:
         config=BackendRouteDialerConfig(timeout_seconds=1, ready_poll_seconds=0.001),
         connector=_FakeConnector(),
     )
-    with pytest.raises(RuntimeError, match="backend route route-missing not found"):
+    with pytest.raises(BackendRouteUnavailable, match="backend route route-missing not found"):
         missing.dial_plan(build_backend_route_dial_plan("route-missing"))
 
 

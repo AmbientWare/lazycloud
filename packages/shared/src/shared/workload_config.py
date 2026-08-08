@@ -167,6 +167,10 @@ class StubConfig(ContractModel):
     runtime: StubRuntimeConfig = Field(default_factory=StubRuntimeConfig)
     env: dict[str, str | None] = Field(default_factory=dict)
     route: str | None = None
+    domain: str | None = None
+    """Registered hostname this resource claims, carried so a deploy from a stub
+    reconstructs the same claim the spec declared."""
+
     methods: list[str] = Field(default_factory=list)
     command: list[str] = Field(default_factory=list)
     ports: dict[str, int] = Field(default_factory=dict)

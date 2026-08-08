@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import TracebackType
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import uvicorn
@@ -60,6 +61,12 @@ from tests.metric_helpers import metric_value
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
 from websockets.asyncio.server import ServerConnection
+
+# Container ids are UUID columns in production, so a fabricated name would fail
+# validation rather than exercise dispatch.
+_STREAMING_ASGI_CONTAINER_ID = str(uuid5(NAMESPACE_URL, "lazycloud:test:running-streaming-asgi"))
+_HEARTBEAT_CONTAINER_ID = str(uuid5(NAMESPACE_URL, "lazycloud:test:running-heartbeat"))
+_WARM_CONTAINER_ID = str(uuid5(NAMESPACE_URL, "lazycloud:test:warm-container"))
 
 
 def endpoint_on_start(context: LifecycleStartupContext) -> None:
@@ -166,13 +173,13 @@ async def app(scope, receive, send):
         containers = _EndpointContainers(
             states=[
                 SchedulerContainerState(
-                    container_id="running-streaming-asgi",
+                    container_id=_STREAMING_ASGI_CONTAINER_ID,
                     stub_id=stub.id,
                     workspace_id=stub.workspace_id,
                     status=SchedulerContainerStatus.Running,
                 )
             ],
-            addresses={"running-streaming-asgi": served.address},
+            addresses={_STREAMING_ASGI_CONTAINER_ID: served.address},
         )
         service = EndpointControlService(
             isolated_services,
@@ -243,13 +250,13 @@ def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
     containers = _EndpointContainers(
         states=[
             SchedulerContainerState(
-                container_id="running-heartbeat",
+                container_id=_HEARTBEAT_CONTAINER_ID,
                 stub_id=stub.id,
                 workspace_id=stub.workspace_id,
                 status=SchedulerContainerStatus.Running,
             )
         ],
-        addresses={"running-heartbeat": "127.0.0.1:8001"},
+        addresses={_HEARTBEAT_CONTAINER_ID: "127.0.0.1:8001"},
     )
     service = EndpointControlService(
         isolated_services,
@@ -273,7 +280,7 @@ def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
     service.finish_asgi_websocket(session.task_id)
 
     finished = isolated_services.tasks.get(session.task_id)
-    assert session.target.container_id == "running-heartbeat"
+    assert session.target.container_id == _HEARTBEAT_CONTAINER_ID
     assert session.headers["X-Task-Id"] == [session.task_id]
     assert before is not None
     assert after is not None
@@ -362,13 +369,13 @@ def predict():
         _wait_until(lambda: len(scheduler.requests) == 1)
         containers.states.append(
             SchedulerContainerState(
-                container_id="warm-container",
+                container_id=_WARM_CONTAINER_ID,
                 stub_id=stub.id,
                 workspace_id=stub.workspace_id,
                 status=SchedulerContainerStatus.Running,
             )
         )
-        containers.addresses["warm-container"] = served.address
+        containers.addresses[_WARM_CONTAINER_ID] = served.address
         thread.join(timeout=2)
 
     assert not thread.is_alive()
@@ -379,7 +386,7 @@ def predict():
     task = isolated_services.tasks.list()[0]
     dispatch = _dispatch_record(task)
     assert dispatch.status is EndpointDispatchStatus.Complete
-    assert dispatch.container_id == "warm-container"
+    assert dispatch.container_id == _WARM_CONTAINER_ID
 
 
 def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_full(

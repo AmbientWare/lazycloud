@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import TracebackType
 
 from compute.state import RedisComputeStateRepository
+from control.custom_domains import CustomDomainService
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from execution.containers.preemption import PreemptedContainerService
@@ -124,6 +125,7 @@ class SchedulerRuntime:
                 volume_metering=app_services.volume_metering,
                 retention=app_services.retention,
                 tailnet_cleanup=app_services.tailnet_cleanup,
+                custom_domains=app_services.custom_domains,
                 interval_seconds=interval_seconds,
                 managed_compute_reconcile_interval_seconds=(
                     managed_compute_reconcile_interval_seconds
@@ -157,6 +159,7 @@ class SchedulerRuntime:
         volume_metering: SchedulerVolumeMeteringService,
         retention: SchedulerRetentionService | None,
         tailnet_cleanup: SchedulerTailnetCleanupService,
+        custom_domains: CustomDomainService,
         interval_seconds: float = 1.0,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
@@ -277,6 +280,7 @@ class SchedulerRuntime:
                 volume_metering=volume_metering,
                 retention=retention,
                 tailnet_cleanup=tailnet_cleanup,
+                custom_domains=custom_domains,
             ),
             retention_interval_seconds=retention_settings.interval_seconds,
             retention_retry_initial_seconds=(retention_settings.retry_initial_seconds),
