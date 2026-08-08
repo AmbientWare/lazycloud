@@ -30,6 +30,7 @@ from database.tables.identity import SecretTable
 from fastapi.testclient import TestClient
 from identity.auth import AuthError, AuthService
 from identity.device_auth import DeviceAuthorizationService
+from identity.users import UserService
 from identity.workspaces import WorkspaceDeletionIdentityService
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
@@ -48,6 +49,7 @@ from shared.identity import (
     TokenKind,
     TokenStatus,
     WorkspaceRecord,
+    WorkspaceRole,
     WorkspaceStatus,
 )
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
@@ -146,7 +148,7 @@ def test_workspace_deletion_tombstones_identity_and_invalidates_tokens(
     assert repeated_audit_records == audit_records
 
 
-def test_workspace_deleting_transition_atomically_revokes_credentials_and_device_codes(
+def test_workspace_deleting_transition_atomically_revokes_workspace_credentials(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -163,9 +165,13 @@ def test_workspace_deleting_transition_atomically_revokes_credentials_and_device
         "tenant-token",
         workspace_id=workspace.id,
     )
+    approver = UserService(isolated_services.context).create(
+        username="device-approver",
+        password="device-approver-password",
+    )
     device = DeviceAuthorizationService(isolated_services.context)
     pending = device.start(client_name="cli")
-    device.approve(pending.record.user_code, workspace_id=workspace.id)
+    device.approve(pending.record.user_code, user_id=approver.id)
     identity = WorkspaceDeletionIdentityService(isolated_services.context)
     original_mark_deleting = WorkspaceRepository.mark_deleting
 
@@ -221,7 +227,9 @@ def test_workspace_deleting_transition_atomically_revokes_credentials_and_device
         )
     assert persisted is not None and persisted.status is WorkspaceStatus.Deleting
     assert persisted_token is not None and persisted_token.status is TokenStatus.Revoked
-    assert persisted_device is None
+    # The pending CLI login belongs to the person who started it and reaches every
+    # workspace they hold, so deleting one workspace must not cancel it.
+    assert persisted_device is not None
 
 
 def test_workspace_deletion_rolls_back_when_audit_append_fails(
@@ -535,10 +543,15 @@ def test_workspace_deletion_api_requires_admin_and_returns_no_content(
     assert [item["name"] for item in workspaces if isinstance(item, dict)] == ["default"]
 
 
-def test_workspace_deletion_requires_aws_account_disconnect(
+def test_deleting_one_workspace_leaves_the_accounts_aws_connection_intact(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
+    """The connected account backs every workspace its owner holds, so it outlives one.
+
+    Deleting a scratch workspace must not tear down the compute serving production;
+    what deletion requires released is the capacity this workspace itself holds.
+    """
     control = ControlPlaneService(isolated_services.context)
     default = control.upsert_workspace("default")
     workspace = control.upsert_workspace("tenant")
@@ -547,12 +560,17 @@ def test_workspace_deletion_requires_aws_account_disconnect(
         kind=TokenKind.Admin,
         workspace_id=default.id,
     )
+    users = UserService(isolated_services.context)
+    owner = users.create(username="account-owner", password="account-owner-password")
+    for owned in (default, workspace):
+        users.add_member(workspace_id=owned.id, user_id=owner.id, role=WorkspaceRole.Owner)
     now = utc_now()
+    connection_id = str(uuid4())
     with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
-                id=str(uuid4()),
-                workspace_id=workspace.id,
+                id=connection_id,
+                user_id=owner.id,
                 account_id="123456789012",
                 external_id="x" * 48,
                 phase=AwsAccountConnectionPhase.AwaitingAuthorization,
@@ -567,8 +585,10 @@ def test_workspace_deletion_requires_aws_account_disconnect(
         headers=_auth(admin_token),
     )
 
-    assert response.status_code == 409
-    assert control.get_workspace(workspace.id).status is WorkspaceStatus.Active
+    assert response.status_code == 204
+    with isolated_services.context.database.session() as session:
+        surviving = AwsAccountConnectionRepository(session).get_for_user(owner.id)
+    assert surviving is not None and surviving.id == connection_id
 
 
 def test_workspace_deletion_aborts_when_object_removal_is_not_confirmed(
@@ -802,7 +822,7 @@ def _delete_identity_workspace(
         )
         if workspace.status is not WorkspaceStatus.Deleted:
             identity.mark_deleting(session, workspace)
-    services.auth.workspace_credentials_revoked()
+    services.auth.credentials_revoked()
     with services.context.database.session() as session:
         return identity.finalize(session, target.id, actor=audit_actor)
 

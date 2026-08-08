@@ -1107,13 +1107,13 @@ class AwsAccountConnectionPlanner:
     def plan_initial(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         account_id: str,
         external_id: SecretStr,
     ) -> AwsAccountConnectionAuthorizationPlan:
         return self._plan(
-            workspace_id=workspace_id,
+            user_id=user_id,
             connection_id=connection_id,
             account_id=account_id,
             external_id=external_id,
@@ -1124,14 +1124,14 @@ class AwsAccountConnectionPlanner:
     def plan_replacement(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         account_id: str,
         external_id: SecretStr,
         active: AwsActiveAccountAuthorization,
     ) -> AwsAccountConnectionAuthorizationPlan:
         return self._plan(
-            workspace_id=workspace_id,
+            user_id=user_id,
             connection_id=connection_id,
             account_id=account_id,
             external_id=external_id,
@@ -1142,17 +1142,17 @@ class AwsAccountConnectionPlanner:
     def plan_existing_role(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         account_id: str,
         role_arn: str,
         external_id: SecretStr,
     ) -> AwsExistingAccountAuthorization:
-        workspace = workspace_id.strip()
+        owner = user_id.strip()
         connection = connection_id.strip()
-        if not workspace or not connection:
-            raise ValueError("workspace ID and connection ID are required")
-        suffix = _connection_resource_suffix(workspace, connection)
+        if not owner or not connection:
+            raise ValueError("user ID and connection ID are required")
+        suffix = _connection_resource_suffix(owner, connection)
         raw_external_id = external_id.get_secret_value()
         if not _EXTERNAL_ID_PATTERN.fullmatch(raw_external_id):
             raise ValueError("external ID must contain 32-256 AWS-safe characters")
@@ -1171,20 +1171,20 @@ class AwsAccountConnectionPlanner:
     def _plan(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         account_id: str,
         external_id: SecretStr,
         generation: int,
         active: AwsActiveAccountAuthorization | None,
     ) -> AwsAccountConnectionAuthorizationPlan:
-        workspace = workspace_id.strip()
+        owner = user_id.strip()
         connection = connection_id.strip()
-        if not workspace or not connection:
-            raise ValueError("workspace ID and connection ID are required")
+        if not owner or not connection:
+            raise ValueError("user ID and connection ID are required")
         if not _ACCOUNT_ID_PATTERN.fullmatch(account_id):
             raise ValueError("AWS account ID must contain exactly 12 digits")
-        suffix = _connection_resource_suffix(workspace, connection)
+        suffix = _connection_resource_suffix(owner, connection)
         role_name = f"compute-connection-{suffix}-g{generation}"
         node_identity = _managed_node_identity(
             account_id=account_id,
@@ -2285,8 +2285,8 @@ def _iam_role_not_found(exc: ClientError) -> bool:
     return code.casefold() == "nosuchentity"
 
 
-def _connection_resource_suffix(workspace_id: str, connection_id: str) -> str:
-    digest = hashlib.sha256(f"{workspace_id}\0{connection_id}".encode()).hexdigest()[:20]
+def _connection_resource_suffix(user_id: str, connection_id: str) -> str:
+    digest = hashlib.sha256(f"{user_id}\0{connection_id}".encode()).hexdigest()[:20]
     return digest
 
 

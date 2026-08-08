@@ -502,7 +502,11 @@ def test_gateway_request_events_persist_only_server_errors(
 def _offline_admin_token(services: ApiServices, suffix: str) -> str:
     return (
         AuthService(services.context)
-        .bootstrap_admin_token(request_id=f"bootstrap:gateway-{suffix}")
+        .bootstrap_administrator(
+            request_id=f"bootstrap:gateway-{suffix}",
+            username="admin",
+            password="bootstrap-password",
+        )
         .token
     )
 

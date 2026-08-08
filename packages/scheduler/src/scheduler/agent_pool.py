@@ -36,6 +36,14 @@ class AgentPoolWorkerAction(StrEnum):
 
 class AgentPoolConfig(ContractModel):
     workspace_id: str
+    owner_user_id: str = ""
+    """Account that owns the enrolling workspace, and so owns these machines.
+
+    Resolved by whoever builds the config for each reconcile pass rather than stored
+    on the machine, so transferring a workspace cannot leave capacity still serving
+    the previous owner.
+    """
+
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
@@ -254,6 +262,7 @@ def agent_machine_worker_record(
         # credential, which is what keeps that unit's drain from terminating it.
         capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
         workspace_id=machine.workspace_id,
+        owner_user_id=config.owner_user_id,
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",

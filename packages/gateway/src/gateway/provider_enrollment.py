@@ -17,6 +17,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceMemberRepository
 from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
 from redis.exceptions import RedisError
@@ -356,10 +357,15 @@ class ProviderNodeEnrollmentService:
             ):
                 raise InvalidInputError("provider node enrollment request is not active")
             connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
+            # The account behind the unit's workspace, not the workspace itself: one
+            # connection backs every workspace its owner holds, so the tenancy check
+            # is that the unit and the connection answer to the same owner.
+            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
         if (
             connection is None
             or connection.id != pool.provider_ref.removeprefix("aws:")
-            or connection.workspace_id != pool.workspace_id
+            or owner is None
+            or connection.user_id != owner.user_id
             or not connection.hosts_workloads
             or connection.active_authorization is None
             or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready

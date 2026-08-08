@@ -224,6 +224,16 @@ class SchedulerContainerLifecycleEvents(Protocol):
     ) -> CloudEventRecord: ...
 
 
+class SchedulerWorkspaceOwners(Protocol):
+    """Which account a workspace belongs to, for the private-placement comparison.
+
+    A protocol rather than a repository import: placement needs one fact about the
+    requesting workspace, and the scheduler stays free of the identity schema.
+    """
+
+    def owner_user_id(self, workspace_id: str) -> str: ...
+
+
 class SchedulerCapacityReservations(Protocol):
     def mutation_lock(
         self,
@@ -290,6 +300,7 @@ class SchedulerContainerRequestService:
     assignments: SchedulerContainerAssignmentRecorder
     dispatch_wake: WakeSignalPublisher
     lifecycle_events: SchedulerContainerLifecycleEvents
+    workspace_owners: SchedulerWorkspaceOwners
     capacity_reservations: SchedulerCapacityReservations | None = None
     usage: SchedulerUsageRecorder | None = None
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS
@@ -489,6 +500,12 @@ class SchedulerContainerRequestService:
         if not claims:
             return results
         requests = [claim.request for claim in claims]
+        # Resolved once per distinct workspace rather than per request: a batch is
+        # mostly one tenant's work, and the owner cannot change inside a batch.
+        owners_by_workspace_id = {
+            workspace_id: self.workspace_owners.owner_user_id(workspace_id)
+            for workspace_id in {request.workspace_id for request in requests}
+        }
         claims_by_request_id = {claim.request.container_id: claim for claim in claims}
         schedulable_workers = _schedulable_workers(self.workers)
         workers_by_id = {worker.worker_id: worker for worker in schedulable_workers}
@@ -503,6 +520,7 @@ class SchedulerContainerRequestService:
                 [
                     _scheduling_request(
                         request,
+                        owner_user_id=owners_by_workspace_id[request.workspace_id],
                         provisionable=(
                             self.capacity_reservations.can_acquire(request)
                             if self.capacity_reservations is not None
@@ -545,6 +563,7 @@ class SchedulerContainerRequestService:
                         retry.reason.value,
                         request,
                         schedulable_workers,
+                        owner_user_id=owners_by_workspace_id[request.workspace_id],
                     ),
                     current_time,
                 )
@@ -600,7 +619,9 @@ class SchedulerContainerRequestService:
             # what should make this unreachable—stating it is what keeps that true by
             # construction instead of by coincidence. Falling through to the planner
             # refuses it there, with a reason.
-            if not worker.serves_workspace(claim.request.workspace_id):
+            if not worker.serves_owner(
+                self.workspace_owners.owner_user_id(claim.request.workspace_id)
+            ):
                 remaining.append(claim)
                 continue
             results.append(self._dispatch(claim, worker, now=now))
@@ -1084,6 +1105,7 @@ def _container_state(
 def _scheduling_request(
     request: SchedulerWorkerRequest,
     *,
+    owner_user_id: str,
     provisionable: bool = True,
 ) -> SchedulingRequest:
     memory_mib = capacity_memory_mib(request.memory_mib)
@@ -1096,6 +1118,7 @@ def _scheduling_request(
     return SchedulingRequest(
         id=request.container_id,
         workspace_id=request.workspace_id,
+        owner_user_id=owner_user_id,
         queue=request.stub_id or "containers",
         payload=request.payload,
         cpu=cpu,
@@ -1117,6 +1140,8 @@ def _placement_failure_detail(
     reason: str,
     request: SchedulerWorkerRequest,
     workers: list[SchedulerWorkerRecord],
+    *,
+    owner_user_id: str,
 ) -> str:
     """Explain an unplaceable request instead of reporting a bare retry reason.
 
@@ -1126,7 +1151,11 @@ def _placement_failure_detail(
     selector = request.pool_selector or "<none>"
     if not workers:
         return f"{reason}: no schedulable workers (pool selector {selector})"
-    scheduling = _scheduling_request(request, provisionable=False)
+    scheduling = _scheduling_request(
+        request,
+        owner_user_id=owner_user_id,
+        provisionable=False,
+    )
     rejections = [
         f"{worker.worker_id[:8]} in {worker.pool!r}: {detail}"
         for worker in workers[:3]
@@ -1147,6 +1176,7 @@ def _worker_capacity(
         worker_id=worker.worker_id,
         pool=worker.pool,
         workspace_id=worker.workspace_id,
+        owner_user_id=worker.owner_user_id,
         private_worker=worker.private_worker,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,

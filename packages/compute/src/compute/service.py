@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -1339,7 +1339,9 @@ class ComputeService:
         """Whether this workspace has an account capacity can be built in."""
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         return connection is not None and connection.hosts_workloads
 
     def reconcile_aws_default_capacity(
@@ -2163,19 +2165,26 @@ class ComputeService:
         self,
         connection_id: str,
         *,
-        workspace: str,
+        workspace_ids: Sequence[str],
     ) -> AwsAccountPoolDrain:
+        """Drain every pool the connection feeds, across all the owner's workspaces.
+
+        A connection backs each of them, so a unit in any one is capacity this
+        disconnect has to take down; a unit in none of them means the connection and
+        the capacity disagree about who owns them.
+        """
+        owned = set(workspace_ids)
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
             pools = ComputeUnitRepository(session).list_for_provider_connection(connection_id)
-        if any(unit.workspace_id != workspace_id for unit in pools):
+        if any(unit.workspace_id not in owned for unit in pools):
             raise UpstreamUnavailableError("AWS capacity ownership is inconsistent")
         with self.context.database.session() as session:
-            self._clear_other_internal_pool_floors(
-                session,
-                workspace_id=workspace_id,
-                keep_pool_id=None,
-            )
+            for workspace_id in owned:
+                self._clear_other_internal_pool_floors(
+                    session,
+                    workspace_id=workspace_id,
+                    keep_pool_id=None,
+                )
 
         for unit in pools:
             if unit.phase is ComputeUnitPhase.Deleted:
@@ -2197,7 +2206,9 @@ class ComputeService:
                     raise UpstreamUnavailableError("AWS capacity drain was superseded")
             try:
                 durable, provider, offer = self._internal_unit_provider(
-                    workspace_id,
+                    # The unit's own workspace: pools drained together may belong to
+                    # different workspaces of the same owner.
+                    current.workspace_id,
                     current.capacity_owner_id,
                 )
                 if provider.pooled is None:

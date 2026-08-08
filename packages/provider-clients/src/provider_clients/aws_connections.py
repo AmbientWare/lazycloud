@@ -115,7 +115,7 @@ class _AwsAccountAuthorizationPlanner:
     def plan(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         generation: int,
         account_id: str,
@@ -128,7 +128,7 @@ class _AwsAccountAuthorizationPlanner:
         secret_external_id = SecretStr(external_id)
         if role_arn is not None:
             existing = self.planner.plan_existing_role(
-                workspace_id=workspace_id,
+                user_id=user_id,
                 connection_id=connection_id,
                 account_id=account_id,
                 role_arn=role_arn,
@@ -144,14 +144,14 @@ class _AwsAccountAuthorizationPlanner:
             )
         plan = (
             self.planner.plan_initial(
-                workspace_id=workspace_id,
+                user_id=user_id,
                 connection_id=connection_id,
                 account_id=account_id,
                 external_id=secret_external_id,
             )
             if active_authorization is None
             else self.planner.plan_replacement(
-                workspace_id=workspace_id,
+                user_id=user_id,
                 connection_id=connection_id,
                 account_id=account_id,
                 external_id=secret_external_id,

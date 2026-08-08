@@ -297,7 +297,9 @@ class WorkspaceComputePolicyService:
         """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         if connection is None or not connection.hosts_workloads:
             return None
         return connection if connection.pool == pool else None
@@ -402,7 +404,9 @@ class WorkspaceComputePolicyService:
         workloads = self.workloads(workspace=workspace)
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         ready_instance_count = sum(
             item.service_state is MachineServiceState.Serving for item in instances
         )
@@ -430,7 +434,9 @@ class WorkspaceComputePolicyService:
     def assert_workspace_deletable(self, *, workspace: str) -> None:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
             pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         if connection is not None or any(
             pool.phase is not ComputeUnitPhase.Deleted for pool in pools

@@ -47,6 +47,7 @@ from database.repositories.orchestration import (
     WorkerRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
+from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -80,6 +81,7 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.identity import WorkspaceRole
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
@@ -1002,11 +1004,11 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
 
     drained = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
     repeated = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
     reconciled = compute.reconcile_pooled_capacity()
 
@@ -1207,7 +1209,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     compute.reconcile_pooled_capacity()
     first = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
     machine_id = "33333333-3333-4333-8333-333333333333"
     worker_id = agent_machine_worker_id(machine_id)
@@ -1270,7 +1272,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
 
     repeated = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
 
     assert first.remaining_pools == 0
@@ -1757,12 +1759,16 @@ def _seed_connection(isolated_services: ApiServices) -> None:
         created_at=now,
         updated_at=now,
     )
+    users = UserService(isolated_services.context)
+    owner = users.create(username="pooled-capacity-owner", password="pooled-capacity-password")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    users.add_member(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.Owner)
+    with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
-                workspace_id=workspace_id,
+                user_id=owner.id,
                 account_id=account_id,
                 external_id="x" * 48,
                 phase=AwsAccountConnectionPhase.Ready,

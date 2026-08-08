@@ -22,3 +22,17 @@ coordination primitives.
   second, separately verified identity may be stored in the clear; a value that
   authenticates goes through the workspace secret cipher. Know what that cipher
   actually protects against before relying on it, and say so where it is used.
+
+A connected cloud account belongs to a user, not a workspace, and backs every
+workspace that user owns. Runtime lookups therefore resolve
+`workspace -> owner -> connection` through `get_for_workspace_owner`, and anything
+that acts on the whole connection—draining its pools, reconciling its bucket
+grants—gathers every workspace the owner holds first. Snapshotting one workspace
+and applying it as the connection's whole state would revoke what the others rely
+on.
+
+Placement compares owners. A private worker is the customer's own machine and
+serves every workspace that customer owns; accept the consequence deliberately,
+that private capacity is no longer a hard isolation boundary between an owner's
+own environments. It stops at the account. Platform-managed capacity is shared and
+governed by a separate rule that no owner comparison may widen.

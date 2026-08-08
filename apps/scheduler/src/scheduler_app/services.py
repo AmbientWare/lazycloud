@@ -80,6 +80,7 @@ from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
 )
+from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
@@ -296,6 +297,7 @@ class SchedulerAppServices:
             usage=usage,
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
             lifecycle_events=stream_events,
+            workspace_owners=DatabaseWorkspaceOwners(context),
         )
         containers = ContainerService(
             context,
