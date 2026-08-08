@@ -4,13 +4,6 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { ApiError } from "@/lib/api/client";
 import type { DeviceCode } from "@/lib/api/schemas";
@@ -48,7 +41,7 @@ function ActivatePage() {
           </div>
           <h1 className="mt-3 text-xl font-semibold">Approve CLI sign-in</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Confirm the code shown in your terminal to connect the CLI to a workspace.
+            Confirm the code shown in your terminal to connect the CLI to your account.
           </p>
         </div>
         {userCode.length === 9 ? <DeviceCodePanel userCode={userCode} /> : <CodeEntryForm />}
@@ -125,17 +118,15 @@ function DeviceCodeDecision({
   userCode: string;
   deviceCode: DeviceCode;
 }) {
-  const { workspaces } = useSession();
-  const activeWorkspaces = workspaces.filter((item) => item.status === "active");
-  const [workspace, setWorkspace] = useState(activeWorkspaces[0]?.name ?? "");
+  const { user } = useSession();
   const approve = useMutation(approveDeviceCodeMutationOptions());
   const deny = useMutation(denyDeviceCodeMutationOptions());
 
   if (approve.isSuccess) {
     return (
       <Outcome tone="positive" title="CLI connected">
-        The CLI now has access to the <span className="font-medium">{workspace}</span> workspace.
-        You can return to your terminal.
+        The CLI is now signed in as <span className="font-medium">{user.username}</span> and reaches
+        every workspace you belong to. You can return to your terminal.
       </Outcome>
     );
   }
@@ -172,33 +163,22 @@ function DeviceCodeDecision({
 
       {failure ? (
         <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-          {failure instanceof ApiError && failure.status === 401
-            ? "Your token cannot authorize this workspace."
+          {failure instanceof ApiError && failure.status === 403
+            ? "Approving a CLI needs a signed-in account, not a workspace token."
             : failure.message}
         </div>
       ) : null}
 
-      <label className="block text-xs font-medium text-muted-foreground">
-        Workspace to authorize
-        <Select value={workspace} onValueChange={setWorkspace}>
-          <SelectTrigger className="mt-1 w-full">
-            <SelectValue placeholder="Select a workspace" />
-          </SelectTrigger>
-          <SelectContent>
-            {activeWorkspaces.map((item) => (
-              <SelectItem key={item.id} value={item.name}>
-                {item.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
+      <p className="text-sm text-muted-foreground">
+        Approving signs the CLI in as <span className="font-medium">{user.username}</span>. It will
+        reach every workspace you belong to, and picks its active one itself.
+      </p>
 
       <div className="flex gap-2">
         <Button
           className="flex-1"
-          disabled={!workspace || approve.isPending || deny.isPending}
-          onClick={() => approve.mutate({ userCode, workspace })}
+          disabled={approve.isPending || deny.isPending}
+          onClick={() => approve.mutate({ userCode })}
         >
           {approve.isPending ? <Loader2 className="size-4 animate-spin" /> : "Approve"}
         </Button>

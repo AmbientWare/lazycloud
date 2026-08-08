@@ -22,6 +22,7 @@ def gateway_control_client(config: ControlClientConfig) -> GatewayControlClient:
         config.endpoint,
         token=config.token,
         timeout_seconds=config.timeout_seconds,
+        workspace=config.workspace,
     )
 
 

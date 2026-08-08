@@ -55,7 +55,7 @@ class DeviceLoginResult:
     # The minted token is excluded from the repr so a traceback or a logged
     # result never carries the credential the device flow just issued.
     token: str = field(repr=False)
-    workspace: str
+    username: str
 
 
 def endpoint_url(endpoint: str, *, tls: bool) -> str:
@@ -123,7 +123,9 @@ def device_login(
 
     Requests a device code, hands the verification details to ``announce``,
     then polls until the user approves in the web app, denies, or the code
-    expires. Returns the minted workspace token and its workspace name.
+    expires. Returns the minted account token and who it belongs to; the token
+    reaches every workspace that person is a member of, so the profile keeps
+    choosing which one is active.
     """
     channel = HttpChannel(endpoint=endpoint)
     started = DeviceCodeCreateResponse.model_validate(
@@ -148,7 +150,7 @@ def device_login(
         if claim.status is DeviceAuthorizationStatus.Pending:
             continue
         if claim.status is DeviceAuthorizationStatus.Approved:
-            return DeviceLoginResult(token=claim.token, workspace=claim.workspace)
+            return DeviceLoginResult(token=claim.token, username=claim.username)
         msg = f"device login {claim.status.value}"
         raise DeviceLoginError(msg)
     msg = "device login expired before it was approved"
@@ -217,7 +219,6 @@ def login(
             error_console.print(theme.styled(str(exc), theme.ERROR))
             raise typer.Exit(1) from exc
         selected_token = result.token
-        selected_workspace = result.workspace or selected_workspace
         token_source = "device"
 
     saved = set_profile(
