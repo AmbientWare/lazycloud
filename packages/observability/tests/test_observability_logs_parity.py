@@ -114,6 +114,47 @@ def test_redis_log_batch_reads_back_in_capture_order(
     assert [log_record_from_redis(record).message for record in records] == list(messages)
 
 
+def test_capture_barriers_never_reach_a_reader(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    """A flush is the batch boundary the ingest cursor needs, not a line anyone wrote.
+
+    It carries no message, so surfacing it renders as a blank line between real
+    output. Dropped stays visible in the same read: it is the only account a reader
+    gets of output the worker could not deliver.
+    """
+    repo = RedisEventStreamRepository(real_redis_actors.client())
+    repo.append_container_log_batch(
+        container_id="container-1",
+        capture_id="capture-barrier",
+        first_sequence=0,
+        events=(
+            create_cloud_event_record(
+                EventRecordType.ContainerLog,
+                _container_log_data(message="printed"),
+                event_id="barrier-output",
+            ),
+            create_cloud_event_record(
+                EventRecordType.ContainerLog,
+                _container_log_data(message="", entry_kind="flush"),
+                event_id="barrier-flush",
+            ),
+            create_cloud_event_record(
+                EventRecordType.ContainerLog,
+                _container_log_data(message="output dropped", entry_kind="dropped"),
+                event_id="barrier-dropped",
+            ),
+        ),
+    )
+
+    records = repo.read_logs(LogStreamQuery(workspace_id="workspace-1"))
+
+    assert [log_record_from_redis(record).message for record in records] == [
+        "printed",
+        "output dropped",
+    ]
+
+
 def test_redis_event_repository_deletes_only_workspace_streams(
     real_redis_actors: RealRedisActors,
 ) -> None:
@@ -147,44 +188,6 @@ def test_redis_event_repository_deletes_only_workspace_streams(
     remaining = set(repo.redis.scan(f"{repo.redis.key_prefix}:*"))
     assert all("workspace-1" not in key for key in remaining)
     assert any("workspace-2" in key for key in remaining)
-
-
-def test_task_append_log_fans_out_to_app_scoped_live_stream(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
-    client_stack: ExitStack,
-) -> None:
-    redis = real_redis_actors.client()
-    services = _services_with_redis(isolated_services, redis, request)
-    with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
-    app = services.apps.create(
-        "fanout",
-        workspace=workspace_id,
-    )
-    task = services.tasks.create(
-        "fanout-task",
-        workspace_id=workspace_id,
-        app_id=app.id,
-    )
-
-    services.tasks.append_log(task.id, "stdout", "live line\n")
-
-    repo = RedisEventStreamRepository(services.redis())
-    direct = repo.read_logs(
-        LogStreamQuery(workspace_id=workspace_id, app_id=app.id, seq_num=0, clamp=True)
-    )
-    assert [log_record_from_redis(record).message for record in direct] == ["live line"]
-
-    client = client_stack.enter_context(TestClient(create_app(services)))
-    admin_token, _record = administrator_credential(isolated_services, "root")
-    stream = client.get(
-        f"/api/v1/logs/stream?workspace_id={workspace_id}&app_id={app.id}&follow=true&max_events=1&wait=2",
-        headers=_auth(admin_token) | {"Last-Event-ID": "0"},
-    )
-    assert stream.status_code == 200
-    assert "live line" in stream.text
 
 
 def test_api_log_history_and_stream_support_filters_wait_and_resume(
@@ -293,6 +296,7 @@ def _services_with_redis(
 def _container_log_data(
     *,
     message: str,
+    entry_kind: str = "output",
     workspace_id: str = "workspace-1",
     stub_id: str = "stub-1",
     app_id: str = "app-1",
@@ -311,6 +315,7 @@ def _container_log_data(
         "worker_id": worker_id,
         "message": message,
         "stream": "stdout",
+        "entry_kind": entry_kind,
         "timestamp": "2026-06-20T10:00:00Z",
     }
 

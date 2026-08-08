@@ -664,7 +664,6 @@ class ApiServices(ApiServiceCore):
         tasks = TaskService(
             context,
             events,
-            log_streams=stream_events,
             workspace_changes=workspace_changes,
         )
         secrets = SecretService(context, events, workspace_changes=workspace_changes)

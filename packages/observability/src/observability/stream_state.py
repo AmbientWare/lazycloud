@@ -12,6 +12,7 @@ from coordination.redis_client import RedisClient, redis_text
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.errors import ExpiredCursorError, InvalidInputError
 from shared.http.observability import LogRecord
+from shared.logs import ContainerLogEntryKind
 from shared.realtime.contracts import (
     CloudEventRecord,
     EventDataInput,
@@ -556,6 +557,20 @@ def _json(value: Mapping[str, JsonValue]) -> str:
     return json.dumps(to_json_value(value), separators=(",", ":"), sort_keys=True)
 
 
+def _is_capture_barrier(record: RedisStreamRecord) -> bool:
+    """A flush carries no message; it marks the end of a batch for the ingest cursor.
+
+    Dropped and diagnostic entries stay visible. They are the only account a reader
+    gets of output the worker could not deliver, and silence would read as a container
+    that printed nothing.
+    """
+    body = record.body
+    data = body.get("data")
+    payload: Mapping[str, JsonValue] = data if isinstance(data, dict) else {}
+    kind = payload.get("entry_kind") or body.get("entry_kind")
+    return kind == ContainerLogEntryKind.Flush.value
+
+
 def log_record_from_redis(record: RedisStreamRecord) -> LogRecord:
     sequenced = _sequenced(record)
     body = dict(record.body)
@@ -640,6 +655,8 @@ def _record_sort_key(record: RedisStreamRecord) -> tuple[int, int, str]:
 def _log_record_matches_query(record: RedisStreamRecord, query: LogStreamQuery) -> bool:
     sequenced = _sequenced(record)
     if log_record_headers_skip(sequenced, query):
+        return False
+    if _is_capture_barrier(record):
         return False
     log_record = log_record_from_redis(record)
     if query.cursor and _entry_id_parts(record.entry_id) <= _entry_id_parts(

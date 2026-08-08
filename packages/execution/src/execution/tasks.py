@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Protocol
 
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.execution import LogRepository, TaskAttemptRepository, TaskRepository
@@ -18,7 +17,6 @@ from shared.events import EventLevel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.logs import LogEntry
-from shared.realtime.contracts import CloudEventRecord
 from shared.tasks import (
     RetryDecision,
     RetryPolicy,
@@ -33,22 +31,6 @@ from shared.timestamps import utc_now
 
 from execution.callbacks import TaskCallbackDispatcher, TaskCallbackService
 from execution.context import ExecutionContext
-
-
-class ContainerLogStreamWriter(Protocol):
-    """Fan-out writer for live container log streams (container/stub/task/app/workspace)."""
-
-    def publish_container_log(
-        self,
-        *,
-        message: str,
-        stream: str,
-        workspace_id: str,
-        task_id: str = "",
-        stub_id: str = "",
-        app_id: str = "",
-        container_id: str = "",
-    ) -> CloudEventRecord: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +48,6 @@ class TaskFinishOutcome:
 class TaskService:
     context: ExecutionContext
     events: EventService
-    log_streams: ContainerLogStreamWriter | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
     callback_dispatcher: TaskCallbackDispatcher | None = None
 
@@ -204,16 +185,6 @@ class TaskService:
                     "message": line,
                 },
                 workspace_id=task.workspace_id,
-            )
-        if self.log_streams is not None:
-            self.log_streams.publish_container_log(
-                message=line,
-                stream=stream,
-                workspace_id=task.workspace_id or "",
-                task_id=task.id,
-                stub_id=task.stub_id or "",
-                app_id=task.app_id or "",
-                container_id=task.container_id or "",
             )
 
     def merge_kwargs(self, task_id: str, key: str, value: JsonValue) -> Task:
