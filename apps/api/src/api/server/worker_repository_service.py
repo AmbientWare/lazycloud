@@ -550,8 +550,13 @@ class WorkerRepositoryService:
                     worker,
                     container_request,
                     principal=principal,
-                    request_owner_user_id=self._workspace_owner_user_id(
-                        container_request.workspace_id
+                    # Only the private-worker branch reads it, and resolving it
+                    # eagerly charged the shared fleet a membership query per
+                    # dispatched container for a value it never looks at.
+                    request_owner_user_id=(
+                        self._workspace_owner_user_id(container_request.workspace_id)
+                        if principal is not None and principal.is_private_worker
+                        else ""
                     ),
                 )
             except WorkerRequestNotAdmissibleError as exc:

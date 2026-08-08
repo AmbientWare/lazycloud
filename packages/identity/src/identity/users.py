@@ -176,11 +176,6 @@ class UserService:
                 )
             return repository.remove(workspace_id=workspace_id, user_id=user_id)
 
-    def owner_user_id(self, workspace_id: str) -> str:
-        """The account backing a workspace: whose compute and domains it resolves to."""
-        with self.context.database.session() as session:
-            return WorkspaceMemberRepository(session).owner_user_id(workspace_id)
-
     def owned_workspace_ids(self, user_id: str) -> list[str]:
         """The workspaces an account's compute and domains apply to, in creation order."""
         with self.context.database.session() as session:
@@ -201,7 +196,6 @@ class SessionService:
 
     def sign_in(self, *, username: str, password: str) -> AuthenticatedSession:
         issuer = TokenIssuer(self.context)
-        issued = False
         with self.context.database.session() as session:
             user = self._verified_user(session, username=username, password=password)
             raw_token, record = issuer.issue_for_user(
@@ -212,9 +206,7 @@ class SessionService:
                 expires_in_seconds=self.ttl_seconds,
                 reusable=True,
             )
-            issued = True
-        if issued:
-            issuer.committed()
+        issuer.committed()
         expires_at = record.expires_at or (utc_now() + timedelta(seconds=self.ttl_seconds))
         return AuthenticatedSession(
             token=raw_token,

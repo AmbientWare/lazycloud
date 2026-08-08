@@ -23,29 +23,45 @@ entropy; what actually bounds guessing is the rate limit on the sign-in route.""
 _PASSWORD_MAX_LENGTH = 1024
 _USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 
-ABSENT_USER_HASH = f"pbkdf2_sha256$absent${'0' * 64}"
+_ENCODING = "pbkdf2_sha256"
+
+ABSENT_USER_HASH = f"{_ENCODING}$absent${'0' * 64}"
 """Verified against when no user matched, so a missing username and a wrong password
 cost the same and cannot be told apart by timing them."""
 
 
-def hash_password(password: str, salt: str | None = None) -> str:
-    password_salt = salt or secrets.token_hex(16)
+def pbkdf2_encode(secret: str, salt: str, *, iterations: int) -> str:
+    """The stored form of a secret: one definition of how a hash is written down.
+
+    Passwords and tokens choose different work factors and nothing else; a second
+    copy of the encoding is a second place the salt separator, the digest, or the
+    algorithm label could drift from what already-stored rows use.
+    """
     digest = hashlib.pbkdf2_hmac(
         "sha256",
-        password.encode("utf-8"),
-        password_salt.encode("utf-8"),
-        _PASSWORD_ITERATIONS,
+        secret.encode("utf-8"),
+        salt.encode("utf-8"),
+        iterations,
     ).hex()
-    return f"pbkdf2_sha256${password_salt}${digest}"
+    return f"{_ENCODING}${salt}${digest}"
 
 
-def verify_password(password: str, encoded: str) -> bool:
+def pbkdf2_matches(secret: str, encoded: str, *, iterations: int) -> bool:
+    """Compare in constant time; an unparseable stored hash matches nothing."""
     try:
         _, salt, expected = encoded.split("$", 2)
     except ValueError:
         return False
-    actual = hash_password(password, salt).split("$", 2)[2]
+    actual = pbkdf2_encode(secret, salt, iterations=iterations).split("$", 2)[2]
     return hmac.compare_digest(actual, expected)
+
+
+def hash_password(password: str, salt: str | None = None) -> str:
+    return pbkdf2_encode(password, salt or secrets.token_hex(16), iterations=_PASSWORD_ITERATIONS)
+
+
+def verify_password(password: str, encoded: str) -> bool:
+    return pbkdf2_matches(password, encoded, iterations=_PASSWORD_ITERATIONS)
 
 
 def validate_password(password: str) -> str:

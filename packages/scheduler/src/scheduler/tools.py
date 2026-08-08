@@ -111,7 +111,6 @@ class WorkerPoolCapacity(ContractModel):
 
 class SchedulingRequest(ContractModel):
     id: str
-    workspace_id: str = ""
     owner_user_id: str = ""
     """Account that owns the requesting workspace; what private placement compares."""
 
@@ -135,7 +134,6 @@ class SchedulingRequest(ContractModel):
 class WorkerCapacity(ContractModel):
     worker_id: str
     pool: MachinePool = MachinePool("default")
-    workspace_id: str = ""
     owner_user_id: str = ""
     """Account whose machine this is; empty on the shared platform fleet."""
 

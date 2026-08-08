@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { adminAccessQueryOptions } from "@/lib/queries/compute";
 import { currentWorkspaceQueryOptions } from "@/lib/queries/workspace";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
@@ -24,18 +23,18 @@ import { WorkspaceDeletionContext } from "./context";
 
 export function WorkspaceDeletionProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { workspaces } = useSession();
+  const { user, workspaces } = useSession();
   const lastWorkspaceName = useWorkspaceSelection((state) => state.lastWorkspaceName);
   const rememberWorkspaceName = useWorkspaceSelection((state) => state.rememberWorkspaceName);
-  const authorityWorkspace =
-    workspaces.find((workspace) => workspace.status === "active") ?? workspaces[0];
-  const adminAccess = useQuery(adminAccessQueryOptions(authorityWorkspace.id));
+  // The session states the role, so nothing here has to infer it from a 403 against
+  // a workspace picked arbitrarily to ask in.
+  const canManage = user.role === "administrator";
   const currentWorkspace = useQuery({
     ...currentWorkspaceQueryOptions(),
-    enabled: adminAccess.data === true,
+    enabled: canManage,
   });
   const controller = useWorkspaceDeletionController({
-    canManage: adminAccess.data === true,
+    canManage,
     currentWorkspaceId: currentWorkspace.data?.id,
     lastWorkspaceName,
     rememberWorkspaceName,

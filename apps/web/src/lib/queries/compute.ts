@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { ApiError, apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import {
   awsConnectionAuthorizationSchema,
   awsConnectionEnvelopeSchema,
@@ -9,7 +9,6 @@ import {
   machinePoolListSchema,
   poolJoinCommandResponseSchema,
   unitMachineListSchema,
-  workerListSchema,
   type AwsComputeConfigurationUpdateRequest,
   type AwsConnection,
 } from "@/lib/api/schemas";
@@ -23,23 +22,6 @@ export const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
  * Capability probe for operator-only actions. A 403 is an authorization
  * decision and must not invalidate the user's otherwise valid session.
  */
-export function adminAccessQueryOptions(workspaceId: string) {
-  return queryOptions({
-    queryKey: computeQueryKeys.adminAccess(workspaceId),
-    queryFn: async () => {
-      try {
-        await apiRequest(withWorkspace("/api/v1/workers", workspaceId), workerListSchema);
-        return true;
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 403) return false;
-        throw error;
-      }
-    },
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
-}
-
 /** Machines this account connected. They serve every workspace it owns. */
 export function machinesQueryOptions() {
   return queryOptions({

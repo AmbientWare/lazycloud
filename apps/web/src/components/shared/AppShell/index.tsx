@@ -31,7 +31,6 @@ import { settingsView, type SettingsView } from "@/components/shared/SettingsDia
 import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { adminAccessQueryOptions } from "@/lib/queries/compute";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
@@ -489,10 +488,9 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
 }
 
 function CreateWorkspaceControl() {
-  const { workspace } = useWorkspace();
-  const adminAccess = useQuery(adminAccessQueryOptions(workspace.id));
+  const { user } = useSession();
   const [open, setOpen] = useState(false);
-  if (adminAccess.data !== true) return null;
+  if (user.role !== "administrator") return null;
   return (
     <>
       <Button

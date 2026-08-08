@@ -47,7 +47,13 @@ from identity.authz import (
     decide_authorization,
     token_has_scope,
 )
-from identity.passwords import hash_password, validate_password, validate_username
+from identity.passwords import (
+    hash_password,
+    pbkdf2_encode,
+    pbkdf2_matches,
+    validate_password,
+    validate_username,
+)
 from identity.token_invalidation import (
     AuthTokenInvalidation,
     configured_token_invalidation,
@@ -310,7 +316,7 @@ class TokenIssuer:
             workspace = self.context.workspace(session, workspace_id)
             owner_workspace_id = WorkspaceRepository(session).lock_active_owner(workspace.id).id
         else:
-            _lock_active_user_for_issue(session, user_id)
+            UserRepository(session).lock_active(user_id)
         record = TokenRepository(session).create(
             name=name,
             token_hash=_hash_token(raw_token),
@@ -383,27 +389,16 @@ def _recovered_administrator(
     return user
 
 
-def _lock_active_user_for_issue(session: DatabaseSession, user_id: str) -> None:
-    user = UserRepository(session).get(user_id)
-    if user is None or user.status is not UserStatus.Active:
-        raise NotFoundError(f"user not found: {user_id}")
+_TOKEN_ITERATIONS = 200_000
+"""Lower than the password work factor: a token is 256 bits of urandom, not a guess."""
 
 
 def _hash_token(token: str, salt: str | None = None) -> str:
-    token_salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256",
-        token.encode("utf-8"),
-        token_salt.encode("utf-8"),
-        200_000,
-    ).hex()
-    return f"pbkdf2_sha256${token_salt}${digest}"
+    return pbkdf2_encode(token, salt or secrets.token_hex(16), iterations=_TOKEN_ITERATIONS)
 
 
 def _verify_token(token: str, encoded: str) -> bool:
-    _, salt, expected = encoded.split("$", 2)
-    actual = _hash_token(token, salt).split("$", 2)[2]
-    return hmac.compare_digest(actual, expected)
+    return pbkdf2_matches(token, encoded, iterations=_TOKEN_ITERATIONS)
 
 
 def _token_digest(token: str) -> str:

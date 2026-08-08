@@ -3,8 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Workspace } from "@/lib/api/schemas";
-import { currentWorkspaceQueryOptions, workspacesQueryOptions } from "@/lib/queries/workspace";
+import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { currentWorkspaceQueryOptions } from "@/lib/queries/workspace";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { useWorkspaceDeletionController } from "./controller";
@@ -17,7 +18,10 @@ describe("workspace deletion controller", () => {
     const replacePath = vi.fn();
     const rememberWorkspaceName = vi.fn();
     const deleteCommand = vi.fn().mockResolvedValue(null);
-    queryClient.setQueryData(workspacesQueryOptions().queryKey, [sibling, target]);
+    queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
+      user: sessionUser(),
+      workspaces: [sibling, target],
+    });
     queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, sibling);
     queryClient.setQueryData(workspaceQueryKeys.apps.root(target.id), ["target"]);
     queryClient.setQueryData(workspaceQueryKeys.apps.root(sibling.id), ["sibling"]);
@@ -43,7 +47,10 @@ describe("workspace deletion controller", () => {
     await waitFor(() => expect(result.current.target).toBeNull());
     expect(deleteCommand).toHaveBeenCalledOnce();
     expect(deleteCommand).toHaveBeenCalledWith(target.id);
-    expect(queryClient.getQueryData(workspacesQueryOptions().queryKey)).toEqual([sibling]);
+    expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
+      user: sessionUser(),
+      workspaces: [sibling],
+    });
     expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(target.id))).toBeUndefined();
     expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(sibling.id))).toEqual(["sibling"]);
     expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(sibling);
@@ -132,6 +139,17 @@ function testQueryClient() {
       queries: { retry: false },
     },
   });
+}
+
+function sessionUser(): CurrentSession["user"] {
+  return {
+    id: "user-1",
+    username: "owner",
+    role: "administrator",
+    status: "active",
+    created_at: "2026-07-21T10:00:00Z",
+    updated_at: "2026-07-21T10:00:00Z",
+  };
 }
 
 function workspace(id: string, name: string): Workspace {

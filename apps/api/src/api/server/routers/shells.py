@@ -39,11 +39,10 @@ from shared.identity import AuthScope, AuthTokenRecord
 
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import (
-    DEFAULT_WORKSPACE_NAME,
-    authorize_token_workspace,
     current_services,
     current_websocket_services,
     websocket_authorization_header,
+    websocket_workspace,
 )
 from api.server.service_dependencies import (
     backend_route_dialer_config,
@@ -338,23 +337,6 @@ async def _websocket_to_socket(
             await loop.sock_sendall(backend, data)
 
 
-def _token_workspace(services: ApiServices, token: AuthTokenRecord) -> str:
-    """The workspace a websocket caller acts in.
-
-    A workspace-scoped credential names its own. A person's names none, so this
-    resolves the same default the HTTP dependency does and checks their membership
-    before the socket is accepted.
-    """
-    if token.workspace_id:
-        return token.workspace_id
-    return authorize_token_workspace(
-        services,
-        token,
-        DEFAULT_WORKSPACE_NAME,
-        AuthScope.Read,
-    )
-
-
 def _mint_shell_ticket(
     services: ApiServices,
     token: AuthTokenRecord,
@@ -411,7 +393,7 @@ def _authorize_shell_websocket(
     return ShellWebSocketAuthorization(
         token=token,
         audience=ShellWebSocketAudience(
-            workspace_id=_token_workspace(services, token),
+            workspace_id=websocket_workspace(services, websocket, token, AuthScope.Read),
             stub_id=stub_id,
             container_id=container_id,
         ),

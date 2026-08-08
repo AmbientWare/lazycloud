@@ -35,7 +35,7 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 from websockets.typing import Data
 
-from api.server.auth import write_token, write_workspace
+from api.server.auth import write_workspace
 from api.server.dependencies import (
     authorize_websocket_workspace,
     current_services,
@@ -72,7 +72,6 @@ ASGI_METHODS = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", 
 @endpoint_router.post("/serve", response_model=StartEndpointServeResponse)
 def start_endpoint_serve(
     request: StartEndpointServeRequest,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -85,7 +84,6 @@ def start_endpoint_serve(
 async def deployed_endpoint_request_by_id(
     stub_id: str,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -133,7 +131,6 @@ async def deployed_public_endpoint_request_by_id(
 @endpoint_router.post("/id/{stub_id}/warmup", response_model=StartEndpointServeResponse)
 def deployed_endpoint_warmup_by_id(
     stub_id: str,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -157,7 +154,6 @@ def deployed_endpoint_warmup_by_id(
 )
 def deployed_endpoint_warmup_by_latest_path(
     deployment_name: str,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -182,7 +178,6 @@ def deployed_endpoint_warmup_by_latest_path(
 def deployed_endpoint_warmup_by_version(
     deployment_name: str,
     version: int,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -208,7 +203,6 @@ def deployed_endpoint_warmup_by_version(
 async def deployed_endpoint_request_by_latest_path(
     deployment_name: str,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -239,7 +233,6 @@ async def deployed_endpoint_request_by_version(
     deployment_name: str,
     version: int,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -264,7 +257,6 @@ async def deployed_endpoint_request_by_version(
 @asgi_router.post("/id/{stub_id}/warmup", response_model=StartEndpointServeResponse)
 def deployed_asgi_warmup_by_id(
     stub_id: str,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -288,7 +280,6 @@ def deployed_asgi_warmup_by_id(
 )
 def deployed_asgi_warmup_by_latest_path(
     deployment_name: str,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -313,7 +304,6 @@ def deployed_asgi_warmup_by_latest_path(
 def deployed_asgi_warmup_by_version(
     deployment_name: str,
     version: int,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -453,7 +443,6 @@ async def deployed_asgi_request_by_id(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -521,7 +510,6 @@ async def deployed_asgi_request_by_latest_path(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -560,7 +548,6 @@ async def deployed_asgi_request_by_version(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),

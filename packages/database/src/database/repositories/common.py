@@ -411,12 +411,15 @@ class WorkspaceTableRepository[TModel: BaseModel](_TableRecordStore[TModel]):
 class UserTableRepository[TModel: BaseModel](_TableRecordStore[TModel]):
     """Accessor for account-owned tables.
 
-    The same guarantee ``WorkspaceTableRepository`` gives, one level up: every default
-    read, write, and delete path requires an explicit user scope, and reaching across
-    accounts only happens through the explicitly named ``*_across_users`` methods.
-    Resources that belong to a person rather than a workspace—their connected compute
-    account, their domains—live here so moving them up did not cost the scoping the
-    workspace tables have.
+    The same guarantee ``WorkspaceTableRepository`` gives, one level up: every read
+    and write path requires an explicit user scope. Resources that belong to a person
+    rather than a workspace—their connected compute account, their domains—live here
+    so moving them up did not cost the scoping the workspace tables have.
+
+    Cross-account reads have no method here on purpose. The workspace peer has them
+    because platform surfaces genuinely need them; nothing has yet needed to read one
+    account's rows from another's request, and an unused way to do it is a way to do
+    it by accident.
     """
 
     _scope_column: ClassVar[str | None] = "user_id"
@@ -429,17 +432,6 @@ class UserTableRepository[TModel: BaseModel](_TableRecordStore[TModel]):
                 "GlobalTableRepository for tables that carry no ownership"
             )
             raise ValueError(msg)
-
-    def create(
-        self,
-        payload: Mapping[str, PayloadValue],
-        *,
-        user_id: str,
-        name: str | None = None,
-        status: str | None = None,
-    ) -> TModel:
-        _lock_active_user(self.session, user_id)
-        return self._create(payload, scope_id=user_id, name=name, status=status)
 
     def upsert(
         self,
@@ -463,9 +455,6 @@ class UserTableRepository[TModel: BaseModel](_TableRecordStore[TModel]):
     def get(self, key: str, *, user_id: str) -> TModel | None:
         return self._get(key, scope_id=user_id, scoped=True)
 
-    def get_across_users(self, key: str) -> TModel | None:
-        return self._get(key, scope_id=None, scoped=False)
-
     def list(
         self,
         *,
@@ -481,25 +470,6 @@ class UserTableRepository[TModel: BaseModel](_TableRecordStore[TModel]):
             status=status,
             name=name,
         )
-
-    def list_across_users(
-        self,
-        *,
-        app_id: str | None = None,
-        status: str | None = None,
-        name: str | None = None,
-    ) -> list[TModel]:
-        return self._list(
-            scope_id=None,
-            scoped=False,
-            app_id=app_id,
-            status=status,
-            name=name,
-        )
-
-    def delete(self, key: str, *, user_id: str) -> bool:
-        _lock_active_user(self.session, user_id)
-        return self._delete(key, scope_id=user_id, scoped=True)
 
 
 @dataclass(slots=True)

@@ -3,12 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Workspace } from "@/lib/api/schemas";
-import {
-  currentWorkspaceQueryOptions,
-  updateWorkspace,
-  workspacesQueryOptions,
-} from "@/lib/queries/workspace";
+import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { currentWorkspaceQueryOptions, updateWorkspace } from "@/lib/queries/workspace";
 
 import { useWorkspaceIdentityController } from "./controller";
 
@@ -33,7 +30,10 @@ describe("workspace identity controller", () => {
     const accepted = { ...target, name: "platform_team", updated_at: "2026-07-21T12:00:00Z" };
     const queryClient = testQueryClient();
     const replacePath = vi.fn();
-    queryClient.setQueryData(workspacesQueryOptions().queryKey, [target, sibling]);
+    queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
+      user: sessionUser(),
+      workspaces: [target, sibling],
+    });
     queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, target);
     updateWorkspaceMock.mockResolvedValue(accepted);
     const { result } = renderController({ queryClient, workspace: target, replacePath });
@@ -44,10 +44,10 @@ describe("workspace identity controller", () => {
 
     await waitFor(() => expect(result.current.mode).toBe("saved"));
     expect(updateWorkspaceMock).toHaveBeenCalledWith("workspace-1", "platform_team");
-    expect(queryClient.getQueryData(workspacesQueryOptions().queryKey)).toEqual([
-      accepted,
-      sibling,
-    ]);
+    expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
+      user: sessionUser(),
+      workspaces: [accepted, sibling],
+    });
     expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(accepted);
     expect(replacePath).toHaveBeenCalledWith("/w/platform_team/settings");
 
@@ -191,6 +191,17 @@ function testQueryClient() {
       queries: { retry: false },
     },
   });
+}
+
+function sessionUser(): CurrentSession["user"] {
+  return {
+    id: "user-1",
+    username: "owner",
+    role: "administrator",
+    status: "active",
+    created_at: "2026-07-21T10:00:00Z",
+    updated_at: "2026-07-21T10:00:00Z",
+  };
 }
 
 function workspace(id: string, name: string): Workspace {

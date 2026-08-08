@@ -327,16 +327,13 @@ def _membership_denial(
 ) -> AuthzDecision | None:
     """A person reaches a workspace only through a membership row naming them."""
     membership = requirement.membership
-    if membership is None or membership.user_id != principal.user_id:
-        return _deny(
-            AuthzDecisionReason.NotAMember,
-            "token is not authorized for this workspace",
-            requirement,
-            principal,
-        )
-    if membership.workspace_id != requirement.workspace_id:
-        # A membership resolved for a different workspace cannot authorize this one,
-        # however it reached the requirement.
+    # The row has to name this person and this workspace: one resolved for another
+    # workspace cannot authorize this one, however it reached the requirement.
+    if (
+        membership is None
+        or membership.user_id != principal.user_id
+        or membership.workspace_id != requirement.workspace_id
+    ):
         return _deny(
             AuthzDecisionReason.NotAMember,
             "token is not authorized for this workspace",

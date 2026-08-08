@@ -492,20 +492,22 @@ class SchedulerContainerRequestService:
         if not claims:
             return results
 
+        # Resolved once per distinct workspace rather than per request: a batch is
+        # mostly one tenant's work, and the owner cannot change inside a batch. Built
+        # before the reserved path so both dispatch routes read the same answers.
+        owners_by_workspace_id = {
+            workspace_id: self.workspace_owners.owner_user_id(workspace_id)
+            for workspace_id in {claim.request.workspace_id for claim in claims}
+        }
         claims, reserved_dispatches = self._dispatch_registered_reservations(
             claims,
+            owners_by_workspace_id=owners_by_workspace_id,
             now=current_time,
         )
         results.extend(reserved_dispatches)
         if not claims:
             return results
         requests = [claim.request for claim in claims]
-        # Resolved once per distinct workspace rather than per request: a batch is
-        # mostly one tenant's work, and the owner cannot change inside a batch.
-        owners_by_workspace_id = {
-            workspace_id: self.workspace_owners.owner_user_id(workspace_id)
-            for workspace_id in {request.workspace_id for request in requests}
-        }
         claims_by_request_id = {claim.request.container_id: claim for claim in claims}
         schedulable_workers = _schedulable_workers(self.workers)
         workers_by_id = {worker.worker_id: worker for worker in schedulable_workers}
@@ -601,6 +603,7 @@ class SchedulerContainerRequestService:
         self,
         claims: list[SchedulerContainerRequestClaim],
         *,
+        owners_by_workspace_id: Mapping[str, str],
         now: datetime,
     ) -> tuple[list[SchedulerContainerRequestClaim], list[SchedulerContainerDispatchResult]]:
         if self.capacity_reservations is None:
@@ -619,9 +622,7 @@ class SchedulerContainerRequestService:
             # what should make this unreachable—stating it is what keeps that true by
             # construction instead of by coincidence. Falling through to the planner
             # refuses it there, with a reason.
-            if not worker.serves_owner(
-                self.workspace_owners.owner_user_id(claim.request.workspace_id)
-            ):
+            if not worker.serves_owner(owners_by_workspace_id[claim.request.workspace_id]):
                 remaining.append(claim)
                 continue
             results.append(self._dispatch(claim, worker, now=now))
@@ -1117,7 +1118,6 @@ def _scheduling_request(
     )
     return SchedulingRequest(
         id=request.container_id,
-        workspace_id=request.workspace_id,
         owner_user_id=owner_user_id,
         queue=request.stub_id or "containers",
         payload=request.payload,
@@ -1175,7 +1175,6 @@ def _worker_capacity(
     return WorkerCapacity(
         worker_id=worker.worker_id,
         pool=worker.pool,
-        workspace_id=worker.workspace_id,
         owner_user_id=worker.owner_user_id,
         private_worker=worker.private_worker,
         gpu_type=worker.gpu_type,

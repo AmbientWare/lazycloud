@@ -20,7 +20,7 @@ from shared.http.taskqueues import (
     TaskQueueStateResponse,
 )
 
-from api.server.auth import read_app_token, read_workspace, write_token, write_workspace
+from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
@@ -37,7 +37,6 @@ router = APIRouter(prefix="/api/v1/taskqueues", tags=["taskqueue"])
 @router.post("/put", response_model=TaskQueuePutResponse)
 def task_queue_put(
     request: TaskQueuePutBody,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -49,7 +48,6 @@ def task_queue_put(
 @router.post("/pop", response_model=TaskQueuePopResponse)
 def task_queue_pop(
     request: TaskQueuePopRequest,
-    token: write_token,
     workspace_id: write_workspace,
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: TaskQueueApiService = Depends(taskqueue_service),
@@ -61,7 +59,6 @@ def task_queue_pop(
 @router.post("/monitor", response_model=TaskQueueMonitorResponse)
 def task_queue_monitor(
     request: TaskQueueMonitorRequest,
-    token: read_app_token,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -75,7 +72,6 @@ def task_queue_monitor(
 @router.post("/complete", response_model=TaskQueueCompleteResponse)
 def task_queue_complete(
     request: TaskQueueCompleteBody,
-    token: write_token,
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -93,7 +89,6 @@ def task_queue_complete(
 )
 def task_queue_state(
     stub_id: str,
-    token: read_app_token,
     workspace_id: read_workspace,
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: TaskQueueApiService = Depends(taskqueue_service),
@@ -105,7 +100,6 @@ def task_queue_state(
 @router.post("/serve", response_model=StartTaskQueueServeResponse)
 def start_task_queue_serve(
     request: StartTaskQueueServeRequest,
-    token: write_token,
     workspace_id: write_workspace,
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: TaskQueueApiService = Depends(taskqueue_service),
@@ -118,7 +112,6 @@ def start_task_queue_serve(
 async def deployed_task_queue_put_by_id(
     stub_id: str,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -158,7 +151,6 @@ async def deployed_public_task_queue_put_by_id(
 @router.post("/id/{stub_id}/warmup", response_model=StartTaskQueueServeResponse)
 def deployed_task_queue_warmup_by_id(
     stub_id: str,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -179,7 +171,6 @@ def deployed_task_queue_warmup_by_id(
 @router.post("/{deployment_name}/latest/warmup", response_model=StartTaskQueueServeResponse)
 def deployed_task_queue_warmup_by_latest_path(
     deployment_name: str,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -201,7 +192,6 @@ def deployed_task_queue_warmup_by_latest_path(
 def deployed_task_queue_warmup_by_version(
     deployment_name: str,
     version: int,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -223,7 +213,6 @@ def deployed_task_queue_warmup_by_version(
 async def deployed_task_queue_put_by_latest_path(
     deployment_name: str,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -246,7 +235,6 @@ async def deployed_task_queue_put_by_version(
     deployment_name: str,
     version: int,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: TaskQueueApiService = Depends(taskqueue_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),

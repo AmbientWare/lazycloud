@@ -35,7 +35,13 @@ from shared.http.system import (
     TokenListResponse,
     WorkspaceSigningKeyResponse,
 )
-from shared.identity import USER_PRINCIPAL_TOKEN_KINDS, AuthScope, AuthTokenRecord, TokenKind
+from shared.identity import (
+    USER_PRINCIPAL_TOKEN_KINDS,
+    AuthScope,
+    AuthTokenRecord,
+    PlatformRole,
+    TokenKind,
+)
 from shared.usage import usage_to_prometheus
 
 from api.server.auth import (
@@ -65,7 +71,11 @@ def _public_token(record: AuthTokenRecord) -> AuthTokenResponse:
     )
 
 
-def _authorize_token_issuance(issuer: AuthTokenRecord, requested_kind: TokenKind) -> None:
+def _authorize_token_issuance(
+    services: ApiServices,
+    issuer: AuthTokenRecord,
+    requested_kind: TokenKind,
+) -> None:
     """This route mints workspace credentials, and only those.
 
     A credential that names a person comes from signing in or from the offline
@@ -79,7 +89,10 @@ def _authorize_token_issuance(issuer: AuthTokenRecord, requested_kind: TokenKind
             f"{requested_kind.value} credentials name an account, not a workspace; "
             f"they come from signing in or from the offline administrator bootstrap"
         )
-    if requested_kind is not TokenKind.Workspace and issuer.kind is not TokenKind.Admin:
+    if (
+        requested_kind is not TokenKind.Workspace
+        and services.auth.platform_role(issuer) is not PlatformRole.Administrator
+    ):
         raise AuthorizationDeniedError("admin token required to issue non-workspace tokens")
 
 
@@ -206,7 +219,7 @@ def api_v1_create_workspace_token(
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> TokenCreateResponse:
-    _authorize_token_issuance(token, request.kind)
+    _authorize_token_issuance(services, token, request.kind)
     authorized_workspace_id = authorize_token_workspace(
         services,
         token,

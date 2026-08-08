@@ -21,7 +21,7 @@ from shared.http.functions import (
 )
 from shared.http.task_payload import serialize_http_task_payload
 
-from api.server.auth import read_app_token, read_workspace, write_token, write_workspace
+from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
@@ -38,7 +38,6 @@ router = APIRouter(prefix="/api/v1/functions", tags=["function"])
 @router.post("/invoke", response_model=FunctionInvokeResponse)
 def function_invoke(
     request: FunctionInvokeBody,
-    token: write_token,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -50,7 +49,6 @@ def function_invoke(
 @router.post("/invoke/stream", response_class=StreamingResponse)
 def function_invoke_stream(
     request: FunctionInvokeBody,
-    token: write_token,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -65,7 +63,6 @@ def function_invoke_stream(
 @router.post("/get-args", response_model=FunctionGetArgsResponse)
 def function_get_args(
     request: FunctionGetArgsRequest,
-    token: read_app_token,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
@@ -77,7 +74,6 @@ def function_get_args(
 @router.post("/set-result", response_model=FunctionSetResultResponse)
 def function_set_result(
     request: FunctionSetResultBody,
-    token: write_token,
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
@@ -89,7 +85,6 @@ def function_set_result(
 @router.post("/monitor", response_model=FunctionMonitorResponse)
 def function_monitor(
     request: FunctionMonitorRequest,
-    token: read_app_token,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -103,7 +98,6 @@ def function_monitor(
 @router.post("/cron", response_model=FunctionCronResponse)
 def function_cron(
     request: FunctionCronRequest,
-    token: write_token,
     workspace_id: write_workspace,
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: FunctionApiService = Depends(function_service),
@@ -116,7 +110,6 @@ def function_cron(
 async def deployed_function_invoke_by_id(
     stub_id: str,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -157,7 +150,6 @@ async def deployed_public_function_invoke_by_id(
 async def deployed_function_invoke_by_latest_path(
     deployment_name: str,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -180,7 +172,6 @@ async def deployed_function_invoke_by_version(
     deployment_name: str,
     version: int,
     request: Request,
-    token: write_token,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),

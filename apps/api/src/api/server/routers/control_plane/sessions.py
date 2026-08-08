@@ -6,8 +6,7 @@ from shared.http.users import (
     SessionCreateRequest,
     SessionResponse,
 )
-from shared.http.workspaces import WorkspaceResponse
-from shared.identity import WorkspaceRecord
+from shared.http.workspaces import workspace_response
 
 from api.server.auth import read_token
 from api.server.dependencies import current_services, require_user_principal
@@ -15,15 +14,6 @@ from api.server.routers.control_plane.users import user_response
 from api.server.services import ApiServices
 
 router = APIRouter()
-
-
-def _workspace_response(record: WorkspaceRecord) -> WorkspaceResponse:
-    return WorkspaceResponse.model_validate(
-        record.model_dump(
-            mode="json",
-            exclude={"signing_key": True, "storage": {"config"}},
-        )
-    )
 
 
 @router.post(
@@ -66,7 +56,7 @@ def get_current_session(
     user = services.users.get(user_id)
     return CurrentSessionResponse(
         user=user_response(user),
-        workspaces=[_workspace_response(record) for record in services.users.workspaces(user.id)],
+        workspaces=[workspace_response(record) for record in services.users.workspaces(user.id)],
     )
 
 

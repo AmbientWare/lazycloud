@@ -242,6 +242,9 @@ class WorkspaceAuditRecord(ContractModel):
     workspace_id: str
     action: WorkspaceAuditAction
     actor_token_id: str | None = None
+    actor_user_id: str | None = None
+    """Account behind the change, kept because a token can be revoked and a person cannot."""
+
     actor_name: str
     target_type: WorkspaceAuditTarget
     target_id: str
@@ -300,6 +303,26 @@ class UserRepository:
         row = self.session.get(UserTable, user_id)
         return user_record_from_table(row) if row is not None else None
 
+    def lock_active(self, user_id: str) -> UserRecord:
+        """Take a share lock on the account so a concurrent disable cannot slip past.
+
+        The workspace branch of token issue fences its owner this way; reading the row
+        without the lock let a token be minted against an account another transaction
+        was in the middle of disabling.
+        """
+        row = self.session.scalars(
+            select(UserTable)
+            .where(UserTable.id == user_id)
+            .with_for_update(read=True, key_share=True)
+            .execution_options(populate_existing=True)
+        ).first()
+        if row is None:
+            raise NotFoundError(f"user not found: {user_id}")
+        record = user_record_from_table(row)
+        if record.status is not UserStatus.Active:
+            raise NotFoundError(f"user not found: {user_id}")
+        return record
+
     def by_username(self, username: str) -> UserRecord | None:
         row = self.session.scalars(
             select(UserTable).where(UserTable.username == normalize_username(username))
@@ -320,11 +343,6 @@ class UserRepository:
 
     def set_role(self, user_id: str, *, role: PlatformRole) -> UserRecord:
         return self._update(user_id, role=role.value)
-
-    def delete(self, user_id: str) -> bool:
-        result = self.session.execute(delete(UserTable).where(UserTable.id == user_id))
-        self.session.flush()
-        return isinstance(result, CursorResult) and result.rowcount > 0
 
     def _update(self, user_id: str, **columns: object) -> UserRecord:
         row = self.session.get(UserTable, user_id)
@@ -437,14 +455,6 @@ class WorkspaceMemberRepository:
             .order_by(WorkspaceMemberTable.created_at.asc())
         )
         return [str(row) for row in rows]
-
-    def for_user(self, user_id: str) -> list[WorkspaceMemberRecord]:
-        rows = self.session.scalars(
-            select(WorkspaceMemberTable)
-            .where(WorkspaceMemberTable.user_id == user_id)
-            .order_by(WorkspaceMemberTable.created_at.asc())
-        )
-        return [workspace_member_record_from_table(row) for row in rows]
 
     def workspaces_for_user(self, user_id: str) -> list[WorkspaceRecord]:
         """Active workspaces this person reaches, resolved in one query.
@@ -757,6 +767,7 @@ class WorkspaceAuditRepository:
                 "workspace_id": workspace_id,
                 "action": action.value,
                 "actor_token_id": actor.id,
+                "actor_user_id": actor.user_id or None,
                 "actor_name": actor.name,
                 "target_type": target_type.value,
                 "target_id": target_id,
@@ -784,6 +795,7 @@ class WorkspaceAuditRepository:
             workspace_id=workspace_id,
             action=WorkspaceAuditAction.WorkspaceDeleted,
             actor_token_id=actor.id,
+            actor_user_id=actor.user_id or None,
             actor_name=actor.name,
             target_type=WorkspaceAuditTarget.Workspace,
             target_id=workspace_id,
@@ -797,6 +809,7 @@ class WorkspaceAuditRepository:
                 id=record.id,
                 workspace_id=workspace_id,
                 actor_token_id=actor.id,
+                actor_user_id=actor.user_id or None,
                 action=record.action.value,
                 target_type=record.target_type.value,
                 target_id=record.target_id,
@@ -932,14 +945,6 @@ class TokenRepository:
         self.session.add(row)
         self.session.flush()
         return auth_token_record_from_table(row)
-
-    def list_for_user(self, user_id: str) -> list[AuthTokenRecord]:
-        rows = self.session.scalars(
-            select(TokenTable)
-            .where(TokenTable.user_id == user_id)
-            .order_by(TokenTable.created_at.desc(), TokenTable.id.asc())
-        )
-        return [auth_token_record_from_table(row) for row in rows]
 
     def get_for_user(self, token_id: str, *, user_id: str) -> AuthTokenRecord | None:
         row = self.session.scalars(

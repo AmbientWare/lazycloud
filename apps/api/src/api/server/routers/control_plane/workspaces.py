@@ -23,6 +23,7 @@ from shared.http.workspaces import (
     WorkspaceSetRequest,
     WorkspaceStorageRequest,
     WorkspaceUpdateRequest,
+    workspace_response,
     workspace_storage_config,
 )
 from shared.identity import PlatformRole, WorkspaceRecord
@@ -48,20 +49,8 @@ def _storage_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
 
 
-def _workspace_response(record: WorkspaceRecord) -> WorkspaceResponse:
-    return WorkspaceResponse.model_validate(
-        record.model_dump(
-            mode="json",
-            exclude={
-                "signing_key": True,
-                "storage": {"config"},
-            },
-        )
-    )
-
-
 def _workspace_list_response(records: Sequence[WorkspaceRecord]) -> WorkspaceListResponse:
-    return WorkspaceListResponse(workspaces=[_workspace_response(item) for item in records])
+    return WorkspaceListResponse(workspaces=[workspace_response(item) for item in records])
 
 
 @router.post(
@@ -92,7 +81,7 @@ def api_v1_create_workspace(
             owner_user_id=require_user_principal(services, token),
             storage=storage,
         )
-        return _workspace_response(result.workspace)
+        return workspace_response(result.workspace)
     except (KeyError, WorkspaceStorageError) as exc:
         raise _storage_http_error(exc) from exc
 
@@ -142,7 +131,7 @@ def upsert_workspace(
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     """Write a workspace's settings, creating it owned by the caller if it is new."""
-    return _workspace_response(
+    return workspace_response(
         service.set_workspace(
             name,
             owner_user_id=require_user_principal(services, token),
@@ -164,7 +153,7 @@ def api_v1_current_workspace(
     workspace_id: read_workspace,
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
-    return _workspace_response(service.get_workspace(workspace_id))
+    return workspace_response(service.get_workspace(workspace_id))
 
 
 @router.patch(
@@ -178,7 +167,7 @@ def api_v1_update_current_workspace(
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceResponse:
-    return _workspace_response(
+    return workspace_response(
         WorkspaceSettingsService(services.context).rename(
             workspace_id,
             name=request.name,
@@ -253,7 +242,7 @@ def api_v1_set_external_workspace_storage(
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     try:
-        return _workspace_response(
+        return workspace_response(
             service.attach_external_workspace_storage(
                 workspace_id,
                 request.workspace_storage(),
@@ -280,7 +269,7 @@ def get_workspace(
     _auth: admin_access,
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
-    return _workspace_response(service.get_workspace(workspace_id_or_name))
+    return workspace_response(service.get_workspace(workspace_id_or_name))
 
 
 @router.delete(
@@ -314,7 +303,7 @@ def api_v1_create_workspace_storage(
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     try:
-        return _workspace_response(
+        return workspace_response(
             service.create_workspace_storage(
                 workspace_id,
                 actor_workspace_id=token.workspace_id,

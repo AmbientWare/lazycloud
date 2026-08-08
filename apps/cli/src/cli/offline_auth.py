@@ -31,6 +31,15 @@ auth_app = typer.Typer(help="Bootstrap or recover control-plane administrator ac
 @auth_app.command("bootstrap")
 def bootstrap_admin(
     ctx: typer.Context,
+    password_file: Annotated[
+        Path,
+        typer.Option(
+            "--password-file",
+            dir_okay=False,
+            resolve_path=True,
+            help="Private file holding the first administrator's password.",
+        ),
+    ],
     output: Annotated[
         Path | None,
         typer.Option(
@@ -46,15 +55,6 @@ def bootstrap_admin(
         str,
         typer.Option("--username", help="Username for the first administrator account."),
     ] = "admin",
-    password_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--password-file",
-            dir_okay=False,
-            resolve_path=True,
-            help="Private file holding the first administrator's password.",
-        ),
-    ] = None,
     token_file: Annotated[
         Path | None,
         typer.Option(
@@ -67,8 +67,6 @@ def bootstrap_admin(
 ) -> None:
     # Read from a file rather than an option value: a password on argv is visible in
     # the process list and lands in shell history.
-    if password_file is None:
-        raise CredentialFileError("--password-file is required to create the administrator")
     password = _read_password(password_file)
     configured_token = _read_configured_token(token_file) if token_file is not None else None
     if output is None and configured_token is None:

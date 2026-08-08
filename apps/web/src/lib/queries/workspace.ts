@@ -1,16 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
-import { apiRequest, listWorkspaces, postJson, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import { workspaceSchema, type Workspace } from "@/lib/api/schemas";
-
-export function workspacesQueryOptions() {
-  return queryOptions({
-    queryKey: ["workspaces"],
-    queryFn: () => listWorkspaces({ includeDeleting: true }),
-    staleTime: 30_000,
-  });
-}
 
 /** Workspace that owns the authenticated token, used for protected actions. */
 export function currentWorkspaceQueryOptions() {
