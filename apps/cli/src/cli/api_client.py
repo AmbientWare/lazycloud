@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-from lazycloud.cli.components.context import current_workspace
 from lazycloud.control import resolve_control_client_config
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.collections import MapCollectionListResponse, SimpleQueueListResponse
@@ -99,7 +98,11 @@ class AdminApiClient:
 
     @classmethod
     def from_profile(cls, *, workspace: str | None = None) -> AdminApiClient:
-        config = resolve_control_client_config(workspace=current_workspace(workspace))
+        # Passed through rather than resolved against the profile first: the profile
+        # always answers, so resolving here filled the highest-precedence slot and the
+        # workspace environment below it was never consulted. An administrator running
+        # in a container that names its workspace silently addressed `default`.
+        config = resolve_control_client_config(workspace=workspace)
         return cls(
             channel=HttpChannel(
                 endpoint=config.endpoint,
