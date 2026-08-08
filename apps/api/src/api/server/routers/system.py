@@ -13,7 +13,6 @@ from identity.device_auth import DeviceAuthorizationService
 from shared.errors import ConflictError
 from shared.http.device_auth import (
     DEVICE_AUTHORIZATION_VERIFICATION_PATH,
-    DeviceCodeApproveRequest,
     DeviceCodeCreateRequest,
     DeviceCodeCreateResponse,
     DeviceCodeResponse,
@@ -52,6 +51,7 @@ from api.server.dependencies import (
     authorization_header,
     authorize_token_workspace,
     current_services,
+    require_user_principal,
 )
 from api.server.services import ApiServices
 
@@ -319,7 +319,7 @@ def claim_device_authorization(
     return DeviceCodeTokenResponse(
         status=claim.status,
         token=claim.token,
-        workspace=claim.workspace,
+        username=claim.username,
     )
 
 
@@ -344,21 +344,17 @@ def api_v1_get_device_code(
 )
 def api_v1_approve_device_code(
     user_code: str,
-    request: DeviceCodeApproveRequest,
     services: ApiServices = Depends(current_services),
     *,
     token: write_token,
 ) -> DeviceCodeResponse:
-    workspace_id = authorize_token_workspace(
-        services,
-        token,
-        request.workspace,
-        AuthScope.Write,
-    )
-    record = DeviceAuthorizationService(services.context).approve(
-        user_code,
-        workspace_id=workspace_id,
-    )
+    """Approve a waiting CLI for the signed-in account.
+
+    No workspace is chosen here: the credential the CLI claims reaches every
+    workspace the approving person belongs to, and the CLI picks its active one.
+    """
+    user_id = require_user_principal(services, token)
+    record = DeviceAuthorizationService(services.context).approve(user_code, user_id=user_id)
     return _device_code_response(record)
 
 

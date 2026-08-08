@@ -9,13 +9,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import AuthzRequirement, decide_authorization, workspace_requirement
 from shared.errors import NotFoundError
-from shared.identity import AuthScope, AuthTokenRecord, WorkspaceStatus
+from shared.identity import AuthScope, AuthTokenRecord, WorkspaceRole, WorkspaceStatus
 from starlette.requests import HTTPConnection
 
 from api.server.services import ApiServices
 
 _bearer = HTTPBearer(auto_error=False)
 AuthorizationCredentials = Annotated[HTTPAuthorizationCredentials | None, Security(_bearer)]
+DEFAULT_WORKSPACE_NAME = "default"
+"""Workspace a request acts on when it names none and the credential names none."""
+
 WorkspaceScopeDependency = Callable[..., str]
 AuthScopeDependency = Callable[..., None]
 OptionalTokenDependency = Callable[..., AuthTokenRecord | None]
@@ -86,10 +89,14 @@ def require_workspace_scope(
         token = authorize_services(services, credentials, scope)
         if token is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
+        # A workspace-scoped credential names its own; a person's does not, so an
+        # unnamed workspace resolves to "default" and is then checked against their
+        # membership. Guessing among the workspaces they hold would sometimes act on
+        # the wrong one silently, where this refuses with a reason.
         return authorize_token_workspace(
             services,
             token,
-            workspace or token.workspace_id,
+            workspace or token.workspace_id or DEFAULT_WORKSPACE_NAME,
             scope,
             strict=strict,
         )
@@ -104,16 +111,53 @@ def authorize_token_workspace(
     action: AuthScope,
     *,
     strict: bool = False,
+    required_role: WorkspaceRole = WorkspaceRole.Member,
 ) -> str:
+    """Resolve and authorize the workspace a request acts on.
+
+    The one place membership is read. A user-principal token reaches a workspace only
+    through a membership row, so resolving it here—rather than in each route that
+    remembered to ask—is what keeps the rule identical on every path.
+    """
     canonical = canonical_workspace_id(services, workspace)
+    membership = (
+        services.users.membership(workspace_id=canonical, user_id=token.user_id)
+        if token.names_user and token.user_id
+        else None
+    )
     decision = decide_authorization(
         token,
-        workspace_requirement(canonical, action=action, strict=strict),
+        workspace_requirement(
+            canonical,
+            action=action,
+            strict=strict,
+            membership=membership,
+            required_role=required_role,
+        ),
+        platform_role=services.auth.platform_role(token),
     )
     if not decision.allowed:
         # The token authenticated but is not allowed to act on this workspace.
         raise HTTPException(status.HTTP_403_FORBIDDEN, decision.message)
     return canonical
+
+
+def require_user_principal(
+    services: ApiServices,
+    token: AuthTokenRecord,
+) -> str:
+    """The account a request acts as, for resources a person owns rather than a workspace.
+
+    A workspace-scoped automation token deliberately fails here: connecting a cloud
+    account or claiming a domain is an account-level act, and a credential minted for
+    one workspace carries no authority over the account that owns it.
+    """
+    if not token.names_user or not token.user_id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "this action requires a user credential; sign in or use a user token",
+        )
+    return token.user_id
 
 
 def current_websocket_services(
@@ -238,6 +282,21 @@ def require_workspace_token(
         if token is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
         return token
+
+    return dependency
+
+
+def require_user_scope(scope: AuthScope) -> WorkspaceScopeDependency:
+    """Authorize the acting account for a resource a person owns."""
+
+    def dependency(
+        services: Annotated[ApiServices, Depends(current_services)],
+        credentials: AuthorizationCredentials = None,
+    ) -> str:
+        token = authorize_services(services, credentials, scope)
+        if token is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
+        return require_user_principal(services, token)
 
     return dependency
 

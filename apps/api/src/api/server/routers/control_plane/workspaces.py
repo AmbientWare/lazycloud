@@ -25,7 +25,7 @@ from shared.http.workspaces import (
     WorkspaceUpdateRequest,
     workspace_storage_config,
 )
-from shared.identity import TokenKind, WorkspaceRecord
+from shared.identity import PlatformRole, WorkspaceRecord
 
 from api.server.auth import admin_access, read_token, read_workspace, write_token, write_workspace
 from api.server.dependencies import current_services
@@ -93,15 +93,24 @@ def api_v1_list_workspaces(
     include_deleting: bool = False,
     *,
     token: read_token,
+    services: ApiServices = Depends(current_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceListResponse:
-    if token.kind is TokenKind.Admin:
+    """The workspaces this caller may act on.
+
+    Three answers, because there are three kinds of caller: an administrator sees
+    every workspace, a person sees the ones they are a member of, and a
+    workspace-scoped credential sees the single workspace it was minted for.
+    """
+    if services.auth.platform_role(token) is PlatformRole.Administrator:
         return _workspace_list_response(
             service.list_workspaces(
                 include_deleted=include_deleted,
                 include_deleting=include_deleting,
             )
         )
+    if token.names_user and token.user_id:
+        return _workspace_list_response(services.users.workspaces(token.user_id))
     return _workspace_list_response([service.get_workspace(token.workspace_id)])
 
 

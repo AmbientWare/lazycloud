@@ -24,7 +24,7 @@ from shared.http.gateway_tasks import (
     StartTaskResponse,
 )
 
-from api.server.auth import read_token, write_token
+from api.server.auth import read_workspace, write_workspace
 from api.server.routers.gateway.common import gateway_write_token
 from api.server.service_dependencies import gateway_service
 from api.server.sse import sse_event
@@ -35,28 +35,28 @@ router = APIRouter(prefix="/gateway", tags=["gateway"])
 @router.post("/containers/checkpoint", response_model=CheckpointContainerResponse)
 def checkpoint_container(
     request: CheckpointContainerRequest,
-    token: write_token,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> CheckpointContainerResponse:
-    return service.checkpoint_container(request, workspace_id=token.workspace_id)
+    return service.checkpoint_container(request, workspace_id=workspace_id)
 
 
 @router.post("/containers/attach", response_model=AttachToContainerResponse)
 def attach_to_container(
     request: AttachToContainerRequest,
-    token: read_token,
+    workspace_id: read_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> AttachToContainerResponse:
-    return service.attach_to_container(request, workspace_id=token.workspace_id)
+    return service.attach_to_container(request, workspace_id=workspace_id)
 
 
 @router.post("/containers/sync-workspace", response_model=SyncContainerWorkspaceResponse)
 def sync_container_workspace(
     request: SyncContainerWorkspaceBody,
-    token: write_token,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> SyncContainerWorkspaceResponse:
-    return service.sync_container_workspace(request, workspace_id=token.workspace_id)
+    return service.sync_container_workspace(request, workspace_id=workspace_id)
 
 
 @router.get("/containers/attach/stream", response_class=StreamingResponse)
@@ -66,7 +66,7 @@ def attach_to_container_stream(
     max_idle_polls: int = Query(0, ge=0),
     poll_interval_seconds: float = Query(0.25, ge=0.05, le=30),
     *,
-    token: read_token,
+    workspace_id: read_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> StreamingResponse:
     return StreamingResponse(
@@ -74,7 +74,7 @@ def attach_to_container_stream(
             service,
             container_id,
             poll_interval_seconds,
-            workspace_id=token.workspace_id,
+            workspace_id=workspace_id,
             max_events=max_events,
             max_idle_polls=max_idle_polls,
         ),

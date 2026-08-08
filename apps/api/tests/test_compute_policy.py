@@ -29,6 +29,7 @@ from database.repositories.orchestration import MachineRepository, WorkerReposit
 from fastapi.testclient import TestClient
 from gateway.settings import GatewaySettings
 from identity.auth import AuthService
+from identity.users import UserService
 from networking.settings import (
     BackendRouteSettings,
     TailnetControlSettings,
@@ -71,9 +72,19 @@ from shared.http.compute_policy import (
     WorkspaceComputePolicyResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind
+from shared.identity import TokenKind, WorkspaceRole
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from tests.url_constants import EXAMPLE_COM_URL
+
+
+def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
+    """The account that owns the default workspace; connections hang off it."""
+    users = UserService(services.context)
+    user = users.create(username=username, password="connection-owner-password")
+    with services.context.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    return user.id
 
 
 def _client(
@@ -257,7 +268,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     workspace_id = _workspace_id(isolated_services)
     _seed_ready_aws_connection(isolated_services)
     with isolated_services.context.database.session() as session:
-        connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+        connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(workspace_id)
     assert connection is not None
     pool_id = str(uuid4())
     ready_machine_id = str(uuid4())
@@ -622,7 +633,6 @@ def _seed_ready_aws_connection(
     isolated_services: ApiServices, *, reconnecting: bool = False
 ) -> None:
     now = datetime.now(UTC)
-    workspace_id = _workspace_id(isolated_services)
     account_id = "123456789012"
     authorization = AwsAccountAuthorizationGeneration(
         id=str(uuid4()),
@@ -647,11 +657,12 @@ def _seed_ready_aws_connection(
         if reconnecting
         else None
     )
+    owner_id = _workspace_owner_id(isolated_services, username="compute-policy-owner")
     with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=str(uuid4()),
-                workspace_id=workspace_id,
+                user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
                 phase=(

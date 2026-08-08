@@ -31,6 +31,10 @@ DEFAULT_UNAUTHENTICATED_LIMITS: tuple[UnauthenticatedRouteLimit, ...] = (
     UnauthenticatedRouteLimit("/gateway/provider-nodes/", 30, 600),
     UnauthenticatedRouteLimit("/auth/device", 10, 200),
     UnauthenticatedRouteLimit("/auth/authorize", 10, 200),
+    # Password sign-in: the one route where guessing the credential is the attack.
+    # The global budget matters as much as the per-address one, because credential
+    # stuffing spreads a list across many addresses rather than hammering one.
+    UnauthenticatedRouteLimit("/api/v1/sessions", 10, 200),
     UnauthenticatedRouteLimit("/health", 60, 600, fail_open=True),
 )
 

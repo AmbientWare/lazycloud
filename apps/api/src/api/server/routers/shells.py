@@ -37,8 +37,10 @@ from shared.http.shells import (
 )
 from shared.identity import AuthScope, AuthTokenRecord
 
-from api.server.auth import read_token, write_workspace
+from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import (
+    DEFAULT_WORKSPACE_NAME,
+    authorize_token_workspace,
     current_services,
     current_websocket_services,
     websocket_authorization_header,
@@ -140,13 +142,13 @@ def create_shell_in_existing_container(
 def shell_connect_plan(
     stub_id: str,
     container_id: str,
-    token: read_token,
+    workspace_id: read_workspace,
     service: ShellControlService = Depends(shell_service),
 ) -> ShellConnectPlanResponse:
     return service.connect_plan(
         stub_id=stub_id,
         container_id=container_id,
-        workspace_id=_token_workspace(token),
+        workspace_id=workspace_id,
     )
 
 
@@ -155,7 +157,7 @@ async def shell_connect_tunnel(
     request: Request,
     stub_id: str,
     container_id: str,
-    token: read_token,
+    workspace_id: read_workspace,
     service: ShellControlService = Depends(shell_service),
     route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
     route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
@@ -164,7 +166,7 @@ async def shell_connect_tunnel(
     target = service.shell_backend_target(
         stub_id=stub_id,
         container_id=container_id,
-        workspace_id=_token_workspace(token),
+        workspace_id=workspace_id,
     )
     try:
         backend = await asyncio.to_thread(
@@ -336,8 +338,21 @@ async def _websocket_to_socket(
             await loop.sock_sendall(backend, data)
 
 
-def _token_workspace(token: AuthTokenRecord) -> str:
-    return token.workspace_id
+def _token_workspace(services: ApiServices, token: AuthTokenRecord) -> str:
+    """The workspace a websocket caller acts in.
+
+    A workspace-scoped credential names its own. A person's names none, so this
+    resolves the same default the HTTP dependency does and checks their membership
+    before the socket is accepted.
+    """
+    if token.workspace_id:
+        return token.workspace_id
+    return authorize_token_workspace(
+        services,
+        token,
+        DEFAULT_WORKSPACE_NAME,
+        AuthScope.Read,
+    )
 
 
 def _mint_shell_ticket(
@@ -396,7 +411,7 @@ def _authorize_shell_websocket(
     return ShellWebSocketAuthorization(
         token=token,
         audience=ShellWebSocketAudience(
-            workspace_id=token.workspace_id,
+            workspace_id=_token_workspace(services, token),
             stub_id=stub_id,
             container_id=container_id,
         ),

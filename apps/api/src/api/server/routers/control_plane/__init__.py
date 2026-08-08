@@ -6,8 +6,10 @@ from api.server.routers.control_plane import (
     apps,
     concurrency,
     custom_domains,
+    sessions,
     source_cache_cleanup,
     stubs,
+    users,
     workspaces,
 )
 
@@ -18,5 +20,7 @@ router.include_router(stubs.router)
 router.include_router(apps.router)
 router.include_router(concurrency.router)
 router.include_router(custom_domains.router)
+router.include_router(sessions.router)
+router.include_router(users.router)
 
 __all__ = ["router"]

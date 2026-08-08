@@ -10,6 +10,7 @@ from api.server.dependencies import (
     require_app_requirement,
     require_app_scope,
     require_app_token,
+    require_user_scope,
     require_workspace_scope,
     require_workspace_token,
 )
@@ -18,6 +19,8 @@ type read_access = Annotated[None, Depends(require_app_scope(AuthScope.Read))]
 type write_access = Annotated[None, Depends(require_app_scope(AuthScope.Write))]
 type read_workspace = Annotated[str, Depends(require_workspace_scope(AuthScope.Read))]
 type write_workspace = Annotated[str, Depends(require_workspace_scope(AuthScope.Write))]
+type read_user = Annotated[str, Depends(require_user_scope(AuthScope.Read))]
+type write_user = Annotated[str, Depends(require_user_scope(AuthScope.Write))]
 type read_token = Annotated[
     AuthTokenRecord,
     Depends(require_workspace_token(AuthScope.Read)),
@@ -44,9 +47,11 @@ __all__ = [
     "read_access",
     "read_app_token",
     "read_token",
+    "read_user",
     "read_workspace",
     "write_access",
     "write_app_token",
     "write_token",
+    "write_user",
     "write_workspace",
 ]

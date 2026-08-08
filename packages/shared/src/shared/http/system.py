@@ -30,7 +30,10 @@ class AuthTokenResponse(HttpModel):
     name: str
     prefix: str
     kind: TokenKind = TokenKind.Workspace
-    workspace_id: str
+    # Exactly one is set: a credential names the person who holds it or the single
+    # workspace it was minted for.
+    user_id: str = ""
+    workspace_id: str = ""
     status: TokenStatus = TokenStatus.Active
     scopes: list[str] = Field(default_factory=lambda: ["*"])
     reusable: bool = True
