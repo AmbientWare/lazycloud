@@ -21,6 +21,7 @@ from database.tables.compute import (
     TailnetCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
+from database.tables.identity import WorkspaceMemberTable
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 from shared.aws_connections import (
     AwsAccountConnection,
@@ -48,7 +49,7 @@ from shared.compute_policy import (
 )
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
-from shared.identity import WorkspaceStatus
+from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.timestamps import utc_now
 from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -1519,7 +1520,7 @@ class AwsAccountConnectionRepository:
     def create(self, connection: AwsAccountConnection) -> AwsAccountConnection:
         row = AwsAccountConnectionTable(
             id=connection.id,
-            workspace_id=connection.workspace_id,
+            user_id=connection.user_id,
             account_id=connection.account_id,
             external_id=connection.external_id,
             pool=connection.pool,
@@ -1548,13 +1549,13 @@ class AwsAccountConnectionRepository:
 
     def get_for_account(
         self,
-        workspace_id: str,
+        user_id: str,
         account_id: str,
         *,
         for_update: bool = False,
     ) -> AwsAccountConnection | None:
         statement = select(AwsAccountConnectionTable).where(
-            AwsAccountConnectionTable.workspace_id == workspace_id,
+            AwsAccountConnectionTable.user_id == user_id,
             AwsAccountConnectionTable.account_id == account_id,
         )
         if for_update:
@@ -1562,17 +1563,44 @@ class AwsAccountConnectionRepository:
         row = self.session.scalars(statement).first()
         return AwsAccountConnection.model_validate(row.payload) if row is not None else None
 
-    def get_for_workspace(
+    def get_for_user(
+        self,
+        user_id: str,
+        *,
+        for_update: bool = False,
+    ) -> AwsAccountConnection | None:
+        statement = select(AwsAccountConnectionTable).where(
+            AwsAccountConnectionTable.user_id == user_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = self.session.scalars(statement).first()
+        return AwsAccountConnection.model_validate(row.payload) if row is not None else None
+
+    def get_for_workspace_owner(
         self,
         workspace_id: str,
         *,
         for_update: bool = False,
     ) -> AwsAccountConnection | None:
-        statement = select(AwsAccountConnectionTable).where(
-            AwsAccountConnectionTable.workspace_id == workspace_id
+        """The connected account backing a workspace, reached through its owner.
+
+        One join rather than two lookups so the owner cannot change between them, and
+        so every caller asks the question the same way.
+        """
+        statement = (
+            select(AwsAccountConnectionTable)
+            .join(
+                WorkspaceMemberTable,
+                WorkspaceMemberTable.user_id == AwsAccountConnectionTable.user_id,
+            )
+            .where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+            )
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=AwsAccountConnectionTable)
         row = self.session.scalars(statement).first()
         return AwsAccountConnection.model_validate(row.payload) if row is not None else None
 
@@ -1590,10 +1618,10 @@ class AwsAccountConnectionRepository:
         row = self.session.scalars(statement).first()
         return AwsAccountConnection.model_validate(row.payload) if row is not None else None
 
-    def list_for_workspace(self, workspace_id: str) -> list[AwsAccountConnection]:
+    def list_for_user(self, user_id: str) -> list[AwsAccountConnection]:
         statement = (
             select(AwsAccountConnectionTable)
-            .where(AwsAccountConnectionTable.workspace_id == workspace_id)
+            .where(AwsAccountConnectionTable.user_id == user_id)
             .order_by(
                 AwsAccountConnectionTable.created_at.desc(),
                 AwsAccountConnectionTable.id.asc(),
@@ -1695,7 +1723,7 @@ class AwsAccountConnectionRepository:
         row: AwsAccountConnectionTable,
         connection: AwsAccountConnection,
     ) -> None:
-        row.workspace_id = connection.workspace_id
+        row.user_id = connection.user_id
         row.account_id = connection.account_id
         row.external_id = connection.external_id
         row.pool = connection.pool
@@ -1736,7 +1764,7 @@ class AwsAuthorizationCleanupTombstoneRepository:
     ) -> AwsAuthorizationCleanupTombstone:
         row = AwsAuthorizationCleanupTombstoneTable(
             id=tombstone.id,
-            workspace_id=tombstone.workspace_id,
+            user_id=tombstone.user_id,
             connection_id=tombstone.connection_id,
             account_id=tombstone.account_id,
             status=tombstone.status.value,
@@ -1847,7 +1875,7 @@ class AwsAuthorizationCleanupTombstoneRepository:
         row: AwsAuthorizationCleanupTombstoneTable,
         tombstone: AwsAuthorizationCleanupTombstone,
     ) -> None:
-        row.workspace_id = tombstone.workspace_id
+        row.user_id = tombstone.user_id
         row.connection_id = tombstone.connection_id
         row.account_id = tombstone.account_id
         row.status = tombstone.status.value

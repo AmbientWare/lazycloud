@@ -355,9 +355,16 @@ class TailnetCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
 
 
 class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
+    """The customer AWS account backing every workspace one user owns.
+
+    One per account rather than per workspace: an org running dev, staging, and prod
+    authorized the same account once, and re-authorizing it per workspace produced
+    three records that had to be kept in step by hand.
+    """
+
     __tablename__ = "aws_account_connections"
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("workspace_id", name="uq_aws_account_connections_workspace"),
+        UniqueConstraint("user_id", name="uq_aws_account_connections_user"),
         UniqueConstraint("external_id", name="uq_aws_account_connections_external_id"),
         Index(
             "ix_aws_account_connections_reconcile_due",
@@ -371,9 +378,9 @@ class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
         ),
     )
 
-    workspace_id: Mapped[str] = mapped_column(
+    user_id: Mapped[str] = mapped_column(
         uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
@@ -414,7 +421,9 @@ class AwsAuthorizationCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
         ),
     )
 
-    workspace_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    # No foreign key: the tombstone outlives the account whose authorization it is
+    # still tearing down, which is the whole reason it is written separately.
+    user_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     connection_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

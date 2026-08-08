@@ -63,6 +63,74 @@ class IdentityAdminRecoveryRequestTable(TimestampMixin, DatabaseBase):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class UserTable(IdPayloadTable, DatabaseBase):
+    """A person who signs in and owns account-level resources."""
+
+    __tablename__ = "users"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("username", name="uq_users_username"),
+        CheckConstraint("username = lower(username)", name="ck_users_username_lowercase"),
+        CheckConstraint(
+            "role IN ('administrator', 'member')",
+            name="ck_users_role",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'disabled')",
+            name="ck_users_status",
+        ),
+    )
+
+    # Lowercased on the way in rather than stored case-preserved behind a citext
+    # column, so PostgreSQL and the SQLite test backend answer a lookup the same way
+    # without depending on an extension.
+    username: Mapped[str] = mapped_column(String(120), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    # Authentication compares this against the token's issue time, which is what makes
+    # a password change end sessions that were already minted.
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
+    """Which users reach a workspace, and with how much authority."""
+
+    __tablename__ = "workspace_members"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("workspace_id", "user_id", name="uq_workspace_members_workspace_user"),
+        # One owner per workspace, held by the schema: the owner is who the AWS
+        # connection and custom domains resolve through, so a second one would make
+        # "whose account backs this workspace" have two answers.
+        Index(
+            "uq_workspace_members_owner",
+            "workspace_id",
+            unique=True,
+            postgresql_where=text("role = 'owner'"),
+            sqlite_where=text("role = 'owner'"),
+        ),
+        Index("ix_workspace_members_user", "user_id"),
+        CheckConstraint(
+            "role IN ('owner', 'administrator', 'member')",
+            name="ck_workspace_members_role",
+        ),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
+
+
 class WorkspaceTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "workspaces"
     __table_args__: tuple[SchemaItem, ...] = (
@@ -121,6 +189,13 @@ class WorkspaceAuditEventTable(IdPayloadTable, DatabaseBase):
         ForeignKey("tokens.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Recorded alongside the token because a token can be revoked and a person cannot:
+    # the audit trail has to survive the credential that made the change.
+    actor_user_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     action: Mapped[str] = mapped_column(String(80), nullable=False)
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -131,7 +206,15 @@ class TokenTable(IdTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("token_hash", name="uq_tokens_token_hash"),
         Index("ix_tokens_workspace_created", "workspace_id", "created_at", "id"),
+        Index("ix_tokens_user_created", "user_id", "created_at", "id"),
         Index("ix_tokens_prefix", "prefix"),
+        # A token names a person or a workspace, never both and never neither. The two
+        # reach different things—an account's memberships versus one workspace—so a
+        # token carrying both would have two answers to what it may touch.
+        CheckConstraint(
+            "(user_id IS NULL) <> (workspace_id IS NULL)",
+            name="ck_tokens_single_principal",
+        ),
         CheckConstraint(
             "consumed_at IS NULL OR reusable = false",
             name="ck_tokens_consumed_non_reusable",
@@ -146,10 +229,15 @@ class TokenTable(IdTable, DatabaseBase):
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     prefix: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    workspace_id: Mapped[str] = mapped_column(
+    user_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    workspace_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     worker_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -173,9 +261,9 @@ class DeviceAuthorizationTable(IdTable, DatabaseBase):
             name="ck_device_authorizations_status",
         ),
         CheckConstraint(
-            "(status = 'approved' AND workspace_id IS NOT NULL) OR "
-            "(status IN ('pending', 'denied') AND workspace_id IS NULL)",
-            name="ck_device_authorizations_workspace_state",
+            "(status = 'approved' AND user_id IS NOT NULL) OR "
+            "(status IN ('pending', 'denied') AND user_id IS NULL)",
+            name="ck_device_authorizations_user_state",
         ),
         CheckConstraint(
             "consumed_at IS NULL OR status IN ('approved', 'denied')",
@@ -187,9 +275,11 @@ class DeviceAuthorizationTable(IdTable, DatabaseBase):
     user_code: Mapped[str] = mapped_column(String(32), nullable=False)
     client_name: Mapped[str] = mapped_column(String(120), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
-    workspace_id: Mapped[str | None] = mapped_column(
+    # The signed-in person approves the CLI for their account, not for one of their
+    # workspaces: the credential it claims reaches every workspace they belong to.
+    user_id: Mapped[str | None] = mapped_column(
         uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

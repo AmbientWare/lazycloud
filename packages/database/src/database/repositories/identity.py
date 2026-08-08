@@ -10,6 +10,8 @@ from database.mappers.identity import (
     auth_token_record_from_table,
     device_authorization_record_from_table,
     secret_storage_record_from_table,
+    user_record_from_table,
+    workspace_member_record_from_table,
 )
 from database.records.identity import (
     DeviceAuthorizationRecord as _DeviceAuthorizationRecord,
@@ -32,7 +34,9 @@ from database.tables.identity import (
     IdentityBootstrapClaimTable,
     SecretTable,
     TokenTable,
+    UserTable,
     WorkspaceAuditEventTable,
+    WorkspaceMemberTable,
     WorkspaceStorageTable,
     WorkspaceTable,
 )
@@ -53,9 +57,14 @@ from shared.identity import (
     AuthTokenRecord,
     ConcurrencyLimitRecord,
     DeviceAuthorizationStatus,
+    PlatformRole,
     TokenKind,
     TokenStatus,
+    UserRecord,
+    UserStatus,
+    WorkspaceMemberRecord,
     WorkspaceRecord,
+    WorkspaceRole,
     WorkspaceStatus,
     WorkspaceStorageConfig,
 )
@@ -255,6 +264,213 @@ class WorkspaceAuditPage:
     next: WorkspaceAuditCursor | None = None
 
 
+def normalize_username(value: str) -> str:
+    """The one spelling of a username the database stores and looks up by."""
+    return value.strip().lower()
+
+
+@dataclass(slots=True)
+class UserRepository:
+    session: Session
+
+    def create(
+        self,
+        *,
+        username: str,
+        password_hash: str,
+        role: PlatformRole = PlatformRole.Member,
+    ) -> UserRecord:
+        now = utc_now()
+        row = UserTable(
+            username=normalize_username(username),
+            password_hash=password_hash,
+            role=role.value,
+            status=UserStatus.Active.value,
+            password_changed_at=now,
+            payload={},
+        )
+        self.session.add(row)
+        self.session.flush()
+        record = user_record_from_table(row)
+        row.payload = record.model_dump(mode="json")
+        self.session.flush()
+        return record
+
+    def get(self, user_id: str) -> UserRecord | None:
+        row = self.session.get(UserTable, user_id)
+        return user_record_from_table(row) if row is not None else None
+
+    def by_username(self, username: str) -> UserRecord | None:
+        row = self.session.scalars(
+            select(UserTable).where(UserTable.username == normalize_username(username))
+        ).first()
+        return user_record_from_table(row) if row is not None else None
+
+    def list(self) -> list[UserRecord]:
+        rows = self.session.scalars(
+            select(UserTable).order_by(UserTable.created_at.desc(), UserTable.id.asc())
+        )
+        return [user_record_from_table(row) for row in rows]
+
+    def set_password(self, user_id: str, *, password_hash: str) -> UserRecord:
+        return self._update(user_id, password_hash=password_hash, password_changed_at=utc_now())
+
+    def set_status(self, user_id: str, *, status: UserStatus) -> UserRecord:
+        return self._update(user_id, status=status.value)
+
+    def set_role(self, user_id: str, *, role: PlatformRole) -> UserRecord:
+        return self._update(user_id, role=role.value)
+
+    def delete(self, user_id: str) -> bool:
+        result = self.session.execute(delete(UserTable).where(UserTable.id == user_id))
+        self.session.flush()
+        return isinstance(result, CursorResult) and result.rowcount > 0
+
+    def _update(self, user_id: str, **columns: object) -> UserRecord:
+        row = self.session.get(UserTable, user_id)
+        if row is None:
+            raise NotFoundError(f"user not found: {user_id}")
+        for column, value in columns.items():
+            setattr(row, column, value)
+        row.updated_at = utc_now()
+        self.session.flush()
+        record = user_record_from_table(row)
+        row.payload = record.model_dump(mode="json")
+        self.session.flush()
+        return record
+
+
+@dataclass(slots=True)
+class WorkspaceMemberRepository:
+    session: Session
+
+    def add(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        role: WorkspaceRole = WorkspaceRole.Member,
+    ) -> WorkspaceMemberRecord:
+        # Two different constraints can refuse this insert, and they mean different
+        # things to whoever is asking. Reading the existing rows first is what lets
+        # the refusal name the actual reason; the indexes still decide under a race.
+        if self.membership(workspace_id=workspace_id, user_id=user_id) is not None:
+            raise ConflictError(f"user is already a member of this workspace: {user_id}")
+        if role is WorkspaceRole.Owner and self.owner(workspace_id) is not None:
+            raise ConflictError(
+                f"workspace already has an owner; transfer ownership instead: {workspace_id}"
+            )
+        row = WorkspaceMemberTable(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            role=role.value,
+            payload={},
+        )
+        self.session.add(row)
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            raise ConflictError(
+                f"workspace membership conflicts with an existing row: {workspace_id}"
+            ) from exc
+        record = workspace_member_record_from_table(row)
+        row.payload = record.model_dump(mode="json")
+        self.session.flush()
+        return record
+
+    def membership(self, *, workspace_id: str, user_id: str) -> WorkspaceMemberRecord | None:
+        """The single row that decides whether this person reaches this workspace."""
+        row = self.session.scalars(
+            select(WorkspaceMemberTable).where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                WorkspaceMemberTable.user_id == user_id,
+            )
+        ).first()
+        return workspace_member_record_from_table(row) if row is not None else None
+
+    def owner(self, workspace_id: str) -> WorkspaceMemberRecord | None:
+        """Whose account backs this workspace—the compute and domains resolve through it."""
+        row = self.session.scalars(
+            select(WorkspaceMemberTable).where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+            )
+        ).first()
+        return workspace_member_record_from_table(row) if row is not None else None
+
+    def owner_user_id(self, workspace_id: str) -> str:
+        owner = self.owner(workspace_id)
+        if owner is None:
+            raise NotFoundError(f"workspace has no owner: {workspace_id}")
+        return owner.user_id
+
+    def for_workspace(self, workspace_id: str) -> list[WorkspaceMemberRecord]:
+        rows = self.session.scalars(
+            select(WorkspaceMemberTable)
+            .where(WorkspaceMemberTable.workspace_id == workspace_id)
+            .order_by(WorkspaceMemberTable.created_at.asc())
+        )
+        return [workspace_member_record_from_table(row) for row in rows]
+
+    def owned_workspace_ids(self, user_id: str) -> list[str]:
+        """Workspaces this account backs—the ones its compute and domains apply to."""
+        rows = self.session.scalars(
+            select(WorkspaceMemberTable.workspace_id)
+            .where(
+                WorkspaceMemberTable.user_id == user_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+            )
+            .order_by(WorkspaceMemberTable.created_at.asc())
+        )
+        return [str(row) for row in rows]
+
+    def for_user(self, user_id: str) -> list[WorkspaceMemberRecord]:
+        rows = self.session.scalars(
+            select(WorkspaceMemberTable)
+            .where(WorkspaceMemberTable.user_id == user_id)
+            .order_by(WorkspaceMemberTable.created_at.asc())
+        )
+        return [workspace_member_record_from_table(row) for row in rows]
+
+    def workspaces_for_user(self, user_id: str) -> list[WorkspaceRecord]:
+        """Active workspaces this person reaches, resolved in one query.
+
+        A deleting or deleted workspace is excluded here rather than by the caller:
+        every consumer wants the set a person may actually act on.
+        """
+        rows = self.session.scalars(
+            select(WorkspaceTable)
+            .join(WorkspaceMemberTable, WorkspaceMemberTable.workspace_id == WorkspaceTable.id)
+            .where(WorkspaceMemberTable.user_id == user_id)
+            .order_by(WorkspaceTable.created_at.asc())
+        )
+        # Status lives in the workspace payload rather than a column, so the filter
+        # happens after mapping, the same way WorkspaceRepository.list does it.
+        workspaces = [WorkspaceRecord.model_validate(row.payload) for row in rows]
+        return [item for item in workspaces if item.status is WorkspaceStatus.Active]
+
+    def set_role(self, *, workspace_id: str, user_id: str, role: WorkspaceRole) -> None:
+        self.session.execute(
+            update(WorkspaceMemberTable)
+            .where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                WorkspaceMemberTable.user_id == user_id,
+            )
+            .values(role=role.value, updated_at=utc_now())
+        )
+        self.session.flush()
+
+    def remove(self, *, workspace_id: str, user_id: str) -> bool:
+        result = self.session.execute(
+            delete(WorkspaceMemberTable).where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                WorkspaceMemberTable.user_id == user_id,
+            )
+        )
+        self.session.flush()
+        return isinstance(result, CursorResult) and result.rowcount > 0
+
+
 @dataclass(slots=True)
 class WorkspaceRepository:
     session: Session
@@ -420,26 +636,19 @@ class WorkspaceRepository:
         return self.upsert(workspace)
 
     def delete_identity_records(self, workspace_id: str) -> None:
+        # Device authorizations are not here: a pending CLI login belongs to the person
+        # who started it and reaches every workspace they hold, so deleting one
+        # workspace must not cancel it.
         for table in (
             TokenTable,
-            DeviceAuthorizationTable,
             ConcurrencyLimitTable,
             WorkspaceStorageTable,
         ):
             self.session.execute(delete(table).where(table.workspace_id == workspace_id))
-        self.session.flush()
-
-    def delete_device_authorizations_for_deletion(self, workspace_id: str) -> int:
-        workspace = self.lock_for_deletion(workspace_id)
-        if workspace.status not in {WorkspaceStatus.Active, WorkspaceStatus.Deleting}:
-            raise ConflictError(f"workspace deletion cannot begin: {workspace_id}")
-        result = self.session.execute(
-            delete(DeviceAuthorizationTable).where(
-                DeviceAuthorizationTable.workspace_id == workspace_id
-            )
+        self.session.execute(
+            delete(WorkspaceMemberTable).where(WorkspaceMemberTable.workspace_id == workspace_id)
         )
         self.session.flush()
-        return int(result.rowcount) if isinstance(result, CursorResult) else 0
 
     def ensure_named(self, name: str, *, signing_key: str | None = None) -> WorkspaceRecord:
         current = self.by_name(name)
@@ -682,18 +891,23 @@ class TokenRepository:
         token_hash: str,
         prefix: str,
         kind: TokenKind,
-        workspace_id: str,
+        user_id: str = "",
+        workspace_id: str = "",
         worker_id: str = "",
         scopes: list[str] | None = None,
         reusable: bool = True,
         expires_at: datetime | None = None,
     ) -> AuthTokenRecord:
+        if bool(user_id) == bool(workspace_id):
+            msg = "a token names exactly one principal: a user or a workspace"
+            raise ValueError(msg)
         row = TokenTable(
             name=name,
             token_hash=token_hash,
             prefix=prefix,
             kind=kind.value,
-            workspace_id=workspace_id,
+            user_id=user_id or None,
+            workspace_id=workspace_id or None,
             worker_id=worker_id,
             status=TokenStatus.Active.value,
             scopes=list(scopes if scopes is not None else ["*"]),
@@ -704,6 +918,41 @@ class TokenRepository:
         self.session.add(row)
         self.session.flush()
         return auth_token_record_from_table(row)
+
+    def list_for_user(self, user_id: str) -> list[AuthTokenRecord]:
+        rows = self.session.scalars(
+            select(TokenTable)
+            .where(TokenTable.user_id == user_id)
+            .order_by(TokenTable.created_at.desc(), TokenTable.id.asc())
+        )
+        return [auth_token_record_from_table(row) for row in rows]
+
+    def get_for_user(self, token_id: str, *, user_id: str) -> AuthTokenRecord | None:
+        row = self.session.scalars(
+            select(TokenTable).where(
+                TokenTable.id == token_id,
+                TokenTable.user_id == user_id,
+            )
+        ).first()
+        return auth_token_record_from_table(row) if row is not None else None
+
+    def revoke_user_sessions(self, user_id: str, *, now: datetime) -> int:
+        """End every live session a person holds, which is what a password change means."""
+        result = self.session.execute(
+            update(TokenTable)
+            .where(
+                TokenTable.user_id == user_id,
+                TokenTable.kind == TokenKind.Session.value,
+                TokenTable.status == TokenStatus.Active.value,
+            )
+            .values(
+                status=TokenStatus.Revoked.value,
+                revoked_at=now,
+                updated_at=now,
+            )
+        )
+        self.session.flush()
+        return int(result.rowcount) if isinstance(result, CursorResult) else 0
 
     def list_by_prefix(self, prefix: str) -> list[AuthTokenRecord]:
         """Authentication lookup by opaque token prefix; runs before any workspace exists."""
@@ -977,7 +1226,7 @@ class DeviceAuthorizationRepository:
             user_code=user_code,
             client_name=client_name,
             status=DeviceAuthorizationStatus.Pending.value,
-            workspace_id=None,
+            user_id=None,
             expires_at=expires_at,
         )
         try:
@@ -1000,7 +1249,7 @@ class DeviceAuthorizationRepository:
         record: _DeviceAuthorizationRecord,
         *,
         status: DeviceAuthorizationStatus,
-        workspace_id: str | None,
+        user_id: str | None,
         decided_at: datetime,
     ) -> _DeviceAuthorizationRecord | None:
         if status not in {
@@ -1009,8 +1258,8 @@ class DeviceAuthorizationRepository:
         }:
             msg = "a device authorization decision must be approved or denied"
             raise ValueError(msg)
-        if (status is DeviceAuthorizationStatus.Approved) != (workspace_id is not None):
-            msg = "only approved device authorizations bind a workspace"
+        if (status is DeviceAuthorizationStatus.Approved) != (user_id is not None):
+            msg = "only approved device authorizations bind a user"
             raise ValueError(msg)
         statement = (
             update(DeviceAuthorizationTable)
@@ -1022,7 +1271,7 @@ class DeviceAuthorizationRepository:
             )
             .values(
                 status=status.value,
-                workspace_id=workspace_id,
+                user_id=user_id,
                 updated_at=decided_at,
             )
             .returning(DeviceAuthorizationTable)

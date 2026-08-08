@@ -152,7 +152,7 @@ class AwsAccountAuthorizationGeneration(ContractModel):
 
 class AwsAccountConnection(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
-    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    user_id: str = Field(pattern=_UUID_PATTERN)
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     external_id: str = Field(
         min_length=32,
@@ -361,7 +361,7 @@ class AwsAccountConnection(ContractModel):
 
 class AwsAuthorizationCleanupTombstone(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
-    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    user_id: str = Field(pattern=_UUID_PATTERN)
     connection_id: str = Field(pattern=_UUID_PATTERN)
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     external_id: str = Field(
