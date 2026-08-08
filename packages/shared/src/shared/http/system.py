@@ -49,7 +49,15 @@ class TokenCreateRequest(HttpModel):
     scopes: list[str] = Field(default_factory=lambda: ["*"])
     expires_in_seconds: int | None = None
     kind: TokenKind = TokenKind.Workspace
-    workspace_id: str = "default"
+    workspace_id: str = ""
+    """Workspace the credential is minted for; empty takes the one the request scopes to.
+
+    Empty rather than a workspace name, so that omitting it stays distinguishable from
+    asking for a particular workspace. Naming one here defaulted every request to
+    `default` and silently discarded the workspace the caller had scoped to, which
+    left every other workspace unable to mint a credential at all.
+    """
+
     reusable: bool = True
 
 
