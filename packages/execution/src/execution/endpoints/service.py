@@ -677,7 +677,11 @@ class EndpointControlService:
             )
         return response
 
-    def _raise_if_capacity_is_dead(self, stub: StubRecord) -> None:
+    def _raise_if_capacity_is_dead(
+        self,
+        dispatcher: EndpointRequestDispatcher,
+        stub: StubRecord,
+    ) -> None:
         """Stop waiting when every container that could serve this stub has died.
 
         Read after a warmup has already been asked for, so a cold start still gets its
@@ -694,12 +698,35 @@ class EndpointControlService:
             return
         # The listing is newest first, so the most recent failure is the one to name.
         latest = containers[0]
+        reason = self._scheduling_failure_reason(dispatcher, stub, latest.id)
+        if reason:
+            raise EndpointDispatchUnavailable(
+                f"no container could start for this endpoint: {reason}"
+            )
         exit_code = latest.exit_code
         detail = f" (exit code {exit_code})" if exit_code is not None else ""
         raise EndpointDispatchUnavailable(
             f"no container could start for this endpoint{detail}; "
             f"check the container logs for {latest.id}"
         )
+
+    @staticmethod
+    def _scheduling_failure_reason(
+        dispatcher: EndpointRequestDispatcher,
+        stub: StubRecord,
+        container_id: str,
+    ) -> str:
+        """The scheduler's account of a container that never reached a worker.
+
+        A container the fleet could not place has no logs to read and an exit code this
+        service invented, so pointing the caller at either sends them looking in the
+        wrong place. The scheduler holds the only real account of why.
+        """
+
+        for state in dispatcher.container_states(stub.id):
+            if state.container_id == container_id:
+                return state.failure_reason
+        return ""
 
     def _forward_failed(self, container_id: str, exc: Exception) -> EndpointDispatchError:
         """Name the container that dropped the request rather than the socket that noticed.
@@ -774,7 +801,7 @@ class EndpointControlService:
                 msg = "Timed out waiting for a backend container"
                 raise EndpointDispatchTimedOut(msg)
             if warmup_attempted:
-                self._raise_if_capacity_is_dead(stub)
+                self._raise_if_capacity_is_dead(dispatcher, stub)
 
             record = repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
             self._emit_dispatch_lifecycle(stub, record, emit_event=False)
@@ -840,7 +867,7 @@ class EndpointControlService:
                 msg = "Timed out waiting for a backend container"
                 raise EndpointDispatchTimedOut(msg)
             if warmup_attempted:
-                self._raise_if_capacity_is_dead(stub)
+                self._raise_if_capacity_is_dead(dispatcher, stub)
 
             record = repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
             self._emit_dispatch_lifecycle(stub, record, emit_event=False)

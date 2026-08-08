@@ -89,6 +89,13 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
     assert payload.checkpoint_exposed_ports == [8001]
 
 
+class _NoStatesDispatcher:
+    """A scheduler holding no account of the container, so the exit code answers."""
+
+    def container_states(self, stub_id: str) -> list[object]:
+        return []
+
+
 def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
     isolated_services: ApiServices,
 ) -> None:
@@ -123,4 +130,6 @@ def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
             )
         )
     with pytest.raises(EndpointDispatchUnavailable, match="exit code 1"):
-        EndpointControlService(isolated_services)._raise_if_capacity_is_dead(stub)
+        EndpointControlService(isolated_services)._raise_if_capacity_is_dead(
+            _NoStatesDispatcher(), stub
+        )

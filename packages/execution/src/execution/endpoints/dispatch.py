@@ -156,6 +156,9 @@ class EndpointContainerState(Protocol):
     @property
     def started_at(self) -> datetime | None: ...
 
+    @property
+    def failure_reason(self) -> str: ...
+
 
 class EndpointContainerAddress(Protocol):
     @property
@@ -207,6 +210,8 @@ class EndpointRequestDispatcher(Protocol):
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ) -> EndpointDispatchTarget | None: ...
+
+    def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
 
     def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None: ...
 
@@ -332,6 +337,9 @@ class EndpointInstanceDispatcher:
             max_inflight_per_container=max_inflight_per_container,
         )
         return targets[0] if targets else None
+
+    def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]:
+        return self.containers.list_by_stub(stub_id)
 
     def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None:
         route = target.route
