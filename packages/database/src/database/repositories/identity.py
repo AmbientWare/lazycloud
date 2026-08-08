@@ -955,10 +955,17 @@ class TokenRepository:
         ).first()
         return auth_token_record_from_table(row) if row is not None else None
 
-    def list_for_user(self, user_id: str) -> list[AuthTokenRecord]:
+    def list_manageable_for_user(self, user_id: str) -> list[AuthTokenRecord]:
+        """The credentials a person deliberately created, which are theirs to manage.
+
+        Their sessions are not among them: a session is what being signed in *is*, it
+        is ended by signing out, and listing one beside a credential invites revoking
+        the browser you are reading the list in. The offline administrator credential
+        is not either, because it is minted and rotated outside the product.
+        """
         rows = self.session.scalars(
             select(TokenTable)
-            .where(TokenTable.user_id == user_id)
+            .where(TokenTable.user_id == user_id, TokenTable.kind == TokenKind.User.value)
             .order_by(TokenTable.created_at.desc(), TokenTable.id.asc())
         )
         return [auth_token_record_from_table(row) for row in rows]
@@ -972,7 +979,11 @@ class TokenRepository:
     ) -> AuthTokenRecord | None:
         row = self.session.scalars(
             update(TokenTable)
-            .where(TokenTable.id == token_id, TokenTable.user_id == user_id)
+            .where(
+                TokenTable.id == token_id,
+                TokenTable.user_id == user_id,
+                TokenTable.kind == TokenKind.User.value,
+            )
             .values(
                 status=TokenStatus.Revoked.value,
                 revoked_at=func.coalesce(TokenTable.revoked_at, now),
@@ -985,7 +996,11 @@ class TokenRepository:
 
     def delete_for_user(self, token_id: str, *, user_id: str) -> bool:
         result = self.session.execute(
-            delete(TokenTable).where(TokenTable.id == token_id, TokenTable.user_id == user_id)
+            delete(TokenTable).where(
+                TokenTable.id == token_id,
+                TokenTable.user_id == user_id,
+                TokenTable.kind == TokenKind.User.value,
+            )
         )
         self.session.flush()
         return isinstance(result, CursorResult) and result.rowcount > 0

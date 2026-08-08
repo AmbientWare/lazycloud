@@ -881,7 +881,7 @@ class AuthService:
 
     def list_account_tokens(self, user_id: str) -> list[AuthTokenRecord]:
         with self.context.database.session() as session:
-            records = TokenRepository(session).list_for_user(user_id)
+            records = TokenRepository(session).list_manageable_for_user(user_id)
         records.sort(key=lambda item: item.created_at, reverse=True)
         return records
 
@@ -899,10 +899,9 @@ class AuthService:
 
     def delete_account_token(self, user_id: str, token_id: str) -> None:
         with self.context.database.session() as session:
-            repository = TokenRepository(session)
-            if repository.get_for_user(token_id, user_id=user_id) is None:
-                raise NotFoundError(f"account token not found: {token_id}")
-            repository.delete_for_user(token_id, user_id=user_id)
+            deleted = TokenRepository(session).delete_for_user(token_id, user_id=user_id)
+        if not deleted:
+            raise NotFoundError(f"account token not found: {token_id}")
         self._invalidate_token_caches()
 
     def list_workspace_tokens(self, workspace_id_or_name: str) -> list[AuthTokenRecord]:

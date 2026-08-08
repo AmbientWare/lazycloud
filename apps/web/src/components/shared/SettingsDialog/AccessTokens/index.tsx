@@ -51,13 +51,6 @@ export function AccessTokens() {
       className="min-h-0 flex-1"
       contentClassName="flex flex-col overflow-hidden"
     >
-      {/* Said here rather than implied by a missing column: a token carries no
-          workspace, and someone who used to pick one will look for where it went. */}
-      <p className="shrink-0 border-b border-border/80 px-4 py-2 text-[11px] text-muted-foreground">
-        Tokens belong to your account, not to a workspace. Each one reaches every workspace you
-        belong to, and revoking one stops it everywhere.
-      </p>
-
       {controller.issued ? (
         <IssuedTokenNotice issued={controller.issued} onDismiss={controller.dismissIssued} />
       ) : controller.createMode !== "closed" ? (

@@ -104,22 +104,26 @@ def test_token_cannot_mutate_its_own_record(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    admin_token, admin_record = administrator_credential(isolated_services, "self-mutation")
+    _admin_token, admin_record = administrator_credential(isolated_services, "self-mutation")
+    own_token, own_record = AuthService(isolated_services.context).create_account_token(
+        admin_record.user_id,
+        "self-mutation-token",
+    )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.request(
         method,
-        f"/api/v1/tokens/{admin_record.id}{suffix}",
-        headers=_auth(admin_token),
+        f"/api/v1/tokens/{own_record.id}{suffix}",
+        headers=_auth(own_token),
     )
 
     _assert_error(response, 409, detail)
-    listed = client.get("/api/v1/tokens", headers=_auth(admin_token))
+    listed = client.get("/api/v1/tokens", headers=_auth(own_token))
     assert listed.status_code == 200
     persisted = next(
         item
         for item in TokenListResponse.model_validate_json(listed.content).tokens
-        if item.id == admin_record.id
+        if item.id == own_record.id
     )
     assert persisted.status is TokenStatus.Active
 
