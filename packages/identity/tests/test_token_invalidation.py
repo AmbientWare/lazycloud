@@ -9,6 +9,7 @@ from identity.auth import AuthError, AuthService
 from identity.token_invalidation import (
     AuthTokenInvalidation,
 )
+from identity.users import UserService
 from identity.workspaces import WorkspaceDeletionIdentityService
 from redis.exceptions import ConnectionError as RedisConnectionError
 from shared.errors import NotFoundError
@@ -73,20 +74,25 @@ def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServic
     after_toggle = generation()
     assert after_toggle > after_revoke
 
-    auth.toggle_workspace_token(record.workspace_id, record.id)
-    after_workspace_toggle = generation()
-    assert after_workspace_toggle > after_toggle
-
     auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=True)
     after_disable = generation()
-    assert after_disable > after_workspace_toggle
+    assert after_disable > after_toggle
     auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=False)
 
-    before_delete = generation()
-    auth.delete_workspace_token(record.workspace_id, record.id)
-    assert generation() > before_delete
-    with pytest.raises(NotFoundError, match="workspace token not found"):
-        auth.toggle_workspace_token(record.workspace_id, record.id)
+    owner = UserService(isolated_services.context).create(
+        username="invalidation-owner",
+        password="invalidation-owner-password",
+    )
+    _account_raw, account_record = auth.create_account_token(owner.id, "account-key")
+    before_account_revoke = generation()
+    auth.revoke_account_token(owner.id, account_record.id)
+    after_account_revoke = generation()
+    assert after_account_revoke > before_account_revoke
+
+    auth.delete_account_token(owner.id, account_record.id)
+    assert generation() > after_account_revoke
+    with pytest.raises(NotFoundError, match="account token not found"):
+        auth.revoke_account_token(owner.id, account_record.id)
 
     _raw, expired = auth.create_token(
         "expired-worker",

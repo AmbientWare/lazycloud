@@ -3,6 +3,7 @@ import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 
+import { AccessTokens } from "./AccessTokens";
 import { AccountSettings } from "./AccountSettings";
 import { ComputeSettings } from "./ComputeSettings";
 import { DomainSettings } from "./DomainSettings";
@@ -13,9 +14,9 @@ import { WorkspaceAccordion } from "./WorkspaceAccordion";
  * Settings, as a near-full-screen layer over whatever you were looking at.
  *
  * Nothing in here is addressed by the workspace in the URL — the connected clouds,
- * the machines and the domains belong to the account, and the workspaces appear as a
- * list rather than as whichever one the sidebar selected. A page under
- * `/w/<workspace>/` would have claimed otherwise in its address.
+ * the machines, the domains, and the access tokens belong to the account, and the
+ * workspaces appear as a list rather than as whichever one the sidebar selected. A
+ * page under `/w/<workspace>/` would have claimed otherwise in its address.
  */
 export function SettingsDialog({
   view,
@@ -50,6 +51,7 @@ export function SettingsDialog({
           <div className="shrink-0 px-5 pt-3">
             <LinearTabsList ariaLabel="Settings sections">
               <LinearTab value="general">General</LinearTab>
+              <LinearTab value="tokens">Tokens</LinearTab>
               <LinearTab value="compute">Compute</LinearTab>
               <LinearTab value="domains">Domains</LinearTab>
             </LinearTabsList>
@@ -69,6 +71,15 @@ export function SettingsDialog({
                 />
               </section>
             </div>
+          </TabsContent>
+
+          {/* The list keeps its own scroll region, and unmounting on a tab change is
+              what drops a freshly issued secret without anything having to clear it. */}
+          <TabsContent
+            value="tokens"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4"
+          >
+            <AccessTokens />
           </TabsContent>
 
           <TabsContent value="compute" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">

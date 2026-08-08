@@ -9,7 +9,6 @@ import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/cont
 import type { Workspace } from "@/lib/api/schemas";
 
 import { WorkspaceIdentity } from "./WorkspaceIdentity";
-import { WorkspaceTokens } from "./WorkspaceTokens";
 
 /**
  * Every workspace the account belongs to, one section each.
@@ -51,9 +50,8 @@ export function WorkspaceAccordion({
               ) : null}
             </span>
           </AccordionTrigger>
-          <AccordionContent className="grid gap-4 pb-4 lg:grid-cols-5 lg:grid-rows-[11.5rem_minmax(0,1fr)]">
+          <AccordionContent className="grid gap-4 pb-4 lg:grid-cols-5">
             <WorkspaceIdentity workspace={workspace} fullWidth={!deletion.canManage} />
-            <WorkspaceTokens workspaceId={workspace.id} />
             <WorkspaceDeletionPanel workspace={workspace} />
           </AccordionContent>
         </AccordionItem>

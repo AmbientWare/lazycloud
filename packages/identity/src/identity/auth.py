@@ -854,6 +854,57 @@ class AuthService:
             audit_actor=audit_actor,
         )
 
+    def create_account_token(
+        self,
+        user_id: str,
+        name: str,
+        *,
+        expires_in_seconds: int | None = None,
+    ) -> tuple[str, AuthTokenRecord]:
+        """Mint a named, long-lived credential for one account.
+
+        The account is the tenant, so this reaches every workspace its owner belongs
+        to, decided per request from membership exactly as a session is. It differs
+        from a session only in living past a sign-in and in being revocable by name.
+        """
+        issuer = TokenIssuer(self.context)
+        with self.context.database.session() as session:
+            raw_token, record = issuer.issue_for_user(
+                session,
+                name,
+                kind=TokenKind.User,
+                user_id=user_id,
+                expires_in_seconds=expires_in_seconds,
+            )
+        issuer.committed()
+        return raw_token, record
+
+    def list_account_tokens(self, user_id: str) -> list[AuthTokenRecord]:
+        with self.context.database.session() as session:
+            records = TokenRepository(session).list_for_user(user_id)
+        records.sort(key=lambda item: item.created_at, reverse=True)
+        return records
+
+    def revoke_account_token(self, user_id: str, token_id: str) -> AuthTokenRecord:
+        with self.context.database.session() as session:
+            updated = TokenRepository(session).revoke_for_user(
+                token_id,
+                user_id=user_id,
+                now=utc_now(),
+            )
+        if updated is None:
+            raise NotFoundError(f"account token not found: {token_id}")
+        self._invalidate_token_caches()
+        return updated
+
+    def delete_account_token(self, user_id: str, token_id: str) -> None:
+        with self.context.database.session() as session:
+            repository = TokenRepository(session)
+            if repository.get_for_user(token_id, user_id=user_id) is None:
+                raise NotFoundError(f"account token not found: {token_id}")
+            repository.delete_for_user(token_id, user_id=user_id)
+        self._invalidate_token_caches()
+
     def list_workspace_tokens(self, workspace_id_or_name: str) -> list[AuthTokenRecord]:
         workspace_id = self._workspace_id(workspace_id_or_name)
         with self.context.database.session() as session:

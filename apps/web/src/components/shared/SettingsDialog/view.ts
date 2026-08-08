@@ -1,4 +1,4 @@
-export const SETTINGS_VIEWS = ["general", "compute", "domains"] as const;
+export const SETTINGS_VIEWS = ["general", "tokens", "compute", "domains"] as const;
 
 export type SettingsView = (typeof SETTINGS_VIEWS)[number];
 

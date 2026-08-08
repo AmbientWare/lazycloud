@@ -955,6 +955,41 @@ class TokenRepository:
         ).first()
         return auth_token_record_from_table(row) if row is not None else None
 
+    def list_for_user(self, user_id: str) -> list[AuthTokenRecord]:
+        rows = self.session.scalars(
+            select(TokenTable)
+            .where(TokenTable.user_id == user_id)
+            .order_by(TokenTable.created_at.desc(), TokenTable.id.asc())
+        )
+        return [auth_token_record_from_table(row) for row in rows]
+
+    def revoke_for_user(
+        self,
+        token_id: str,
+        *,
+        user_id: str,
+        now: datetime,
+    ) -> AuthTokenRecord | None:
+        row = self.session.scalars(
+            update(TokenTable)
+            .where(TokenTable.id == token_id, TokenTable.user_id == user_id)
+            .values(
+                status=TokenStatus.Revoked.value,
+                revoked_at=func.coalesce(TokenTable.revoked_at, now),
+                updated_at=now,
+            )
+            .returning(TokenTable)
+        ).first()
+        self.session.flush()
+        return auth_token_record_from_table(row) if row is not None else None
+
+    def delete_for_user(self, token_id: str, *, user_id: str) -> bool:
+        result = self.session.execute(
+            delete(TokenTable).where(TokenTable.id == token_id, TokenTable.user_id == user_id)
+        )
+        self.session.flush()
+        return isinstance(result, CursorResult) and result.rowcount > 0
+
     def revoke_user_credentials(self, user_id: str, *, now: datetime) -> int:
         """End every live credential naming a person, which is what disabling means.
 

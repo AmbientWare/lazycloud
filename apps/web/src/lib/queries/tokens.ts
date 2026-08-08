@@ -1,60 +1,57 @@
 import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
-import { apiRequest, withWorkspace } from "@/lib/api/client";
+import { apiRequest } from "@/lib/api/client";
 import {
   authTokenSchema,
+  tokenCreateRequestSchema,
   tokenCreateResponseSchema,
   tokenListSchema,
-  workspaceTokenCreateRequestSchema,
   type AuthToken,
   type TokenCreateResponse,
 } from "@/lib/api/schemas";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+
+const COLLECTION = "/api/v1/tokens";
 
 export type CreateTokenInput = {
   name: string;
-  scopes: Array<"read" | "write">;
+  /** Lifetime in seconds, or null for a token that never expires. */
   expiresInSeconds: number | null;
 };
 
-export function tokensQueryOptions(workspaceId: string) {
+function tokenPath(tokenId: string): string {
+  return `${COLLECTION}/${encodeURIComponent(tokenId)}`;
+}
+
+/**
+ * Every token the account holds, addressed without a workspace.
+ *
+ * A token reaches every workspace its account belongs to, so the list is the same
+ * answer everywhere and stays out of the workspace keys that a switch invalidates.
+ */
+export function tokensQueryOptions() {
   return queryOptions({
-    queryKey: workspaceQueryKeys.settings.tokens(workspaceId),
-    queryFn: () => apiRequest(withWorkspace("/api/v1/tokens", workspaceId), tokenListSchema),
+    queryKey: accountQueryKeys.tokens(),
+    queryFn: () => apiRequest(COLLECTION, tokenListSchema),
   });
 }
 
-export function createToken(
-  workspaceId: string,
-  input: CreateTokenInput,
-): Promise<TokenCreateResponse> {
-  const request = workspaceTokenCreateRequestSchema.parse({
-    name: input.name,
-    scopes: input.scopes,
+export function createToken(input: CreateTokenInput): Promise<TokenCreateResponse> {
+  const request = tokenCreateRequestSchema.parse({
+    name: input.name.trim(),
     expires_in_seconds: input.expiresInSeconds,
-    kind: "workspace",
-    workspace_id: workspaceId,
-    reusable: true,
   });
-  return apiRequest(withWorkspace("/api/v1/tokens", workspaceId), tokenCreateResponseSchema, {
+  return apiRequest(COLLECTION, tokenCreateResponseSchema, {
     method: "POST",
     body: JSON.stringify(request),
   });
 }
 
-export function toggleToken(workspaceId: string, tokenId: string): Promise<AuthToken> {
-  return apiRequest(
-    withWorkspace(`/api/v1/tokens/${encodeURIComponent(tokenId)}/toggle`, workspaceId),
-    authTokenSchema,
-    { method: "POST" },
-  );
+export function revokeToken(tokenId: string): Promise<AuthToken> {
+  return apiRequest(`${tokenPath(tokenId)}/revoke`, authTokenSchema, { method: "POST" });
 }
 
-export function deleteToken(workspaceId: string, tokenId: string): Promise<null> {
-  return apiRequest(
-    withWorkspace(`/api/v1/tokens/${encodeURIComponent(tokenId)}`, workspaceId),
-    z.null(),
-    { method: "DELETE" },
-  );
+export function deleteToken(tokenId: string): Promise<null> {
+  return apiRequest(tokenPath(tokenId), z.null(), { method: "DELETE" });
 }

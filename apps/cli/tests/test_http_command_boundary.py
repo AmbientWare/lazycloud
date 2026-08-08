@@ -4,8 +4,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-import pytest
-from cli.api_client import AdminApiClient
 from cli.main import build_admin_cli
 from pydantic import JsonValue
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
@@ -14,9 +12,6 @@ from shared.http.apps import AppResponse
 from shared.http.compute import ContainerWithAppPageResponse, UnitResponse
 from shared.http.system import AuthTokenResponse
 from shared.http_transport import HttpChannel
-from typer.testing import CliRunner
-
-from cli import identity
 
 cli = build_admin_cli()
 
@@ -67,37 +62,3 @@ class _CanonicalAppClient:
             created_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
             updated_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
         )
-
-
-def test_operator_token_revoke_targets_explicit_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    channel = _RecordingHttpChannel()
-    selected_workspaces: list[str | None] = []
-
-    def resolve_client(workspace: str | None = None) -> AdminApiClient:
-        selected_workspaces.append(workspace)
-        return AdminApiClient(channel=channel, workspace=workspace or "default")
-
-    monkeypatch.setattr(identity, "admin_api_client", resolve_client)
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "--json",
-            "token",
-            "revoke",
-            "provider-token",
-            "--workspace",
-            "provider-acceptance",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert selected_workspaces == ["provider-acceptance"]
-    assert channel.posts == [
-        (
-            "/api/v1/tokens/provider-token/revoke?workspace=provider-acceptance",
-            {},
-        )
-    ]

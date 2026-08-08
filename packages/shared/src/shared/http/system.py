@@ -45,19 +45,15 @@ class AuthTokenResponse(HttpModel):
 
 
 class TokenCreateRequest(HttpModel):
-    name: str = "default"
-    scopes: list[str] = Field(default_factory=lambda: ["*"])
-    expires_in_seconds: int | None = None
-    kind: TokenKind = TokenKind.Workspace
-    workspace_id: str = ""
-    """Workspace the credential is minted for; empty takes the one the request scopes to.
+    """Everything a person chooses when minting a credential for their account.
 
-    Empty rather than a workspace name, so omitting it stays distinguishable from
-    asking for a particular one. A name here would be the answer for every request
-    that omits the field, which silently discards the workspace the caller scoped to.
+    No workspace and no kind: a token names the account, reaches every workspace that
+    account belongs to, and is resolved per request from membership. The kinds that do
+    name a workspace are minted by the platform for workers and machines, never here.
     """
 
-    reusable: bool = True
+    name: str = "default"
+    expires_in_seconds: int | None = None
 
 
 class TokenAdminUpdateRequest(HttpModel):

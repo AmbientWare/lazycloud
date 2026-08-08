@@ -5,126 +5,95 @@ from contextlib import ExitStack
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from identity.auth import AuthService
+from identity.users import UserService
 from shared.http.errors import ErrorResponse
 from shared.http.system import TokenCreateResponse, TokenListResponse
-from shared.identity import AuthScope, TokenKind, TokenStatus
+from shared.identity import TokenKind, TokenStatus
 from tests.service_fixtures import administrator_credential
 
 
-def test_workspace_writer_can_issue_an_ordinary_workspace_token(
+def test_a_minted_token_names_the_account_rather_than_a_workspace(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    auth = AuthService(isolated_services.context)
-    creator_token, creator = auth.create_token(
-        "workspace-writer",
-        scopes=[AuthScope.Read.value, AuthScope.Write.value],
-    )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    """The credential a person creates reaches every workspace their account holds.
 
-    response = client.post(
-        "/api/v1/tokens",
-        headers=_auth(creator_token),
-        json={
-            "name": "ordinary-workspace-token",
-            "kind": TokenKind.Workspace.value,
-            "workspace_id": creator.workspace_id,
-        },
-    )
-
-    assert response.status_code == 201
-    created = TokenCreateResponse.model_validate_json(response.content)
-    assert created.record.kind is TokenKind.Workspace
-    assert created.record.workspace_id == creator.workspace_id
-
-
-@pytest.mark.parametrize(
-    "requested_kind",
-    [
-        TokenKind.WorkspacePrimary,
-        TokenKind.WorkspaceRestricted,
-        TokenKind.Worker,
-        TokenKind.WorkerPrivate,
-        TokenKind.Machine,
-    ],
-)
-def test_workspace_writer_cannot_issue_a_privileged_token_kind(
-    requested_kind: TokenKind,
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
-) -> None:
-    auth = AuthService(isolated_services.context)
-    creator_token, creator = auth.create_token(
-        "workspace-writer",
-        scopes=[AuthScope.Read.value, AuthScope.Write.value],
-    )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-
-    response = client.post(
-        "/api/v1/tokens",
-        headers=_auth(creator_token),
-        json={
-            "name": f"forbidden-{requested_kind.value}",
-            "kind": requested_kind.value,
-            "workspace_id": creator.workspace_id,
-        },
-    )
-
-    _assert_error(response, 403, "admin token required to issue non-workspace tokens")
-    assert [record.name for record in auth.list_workspace_tokens(creator.workspace_id)] == [
-        creator.name
-    ]
-
-
-@pytest.mark.parametrize("requested_kind", [TokenKind.Admin, TokenKind.User, TokenKind.Session])
-def test_no_one_can_mint_an_account_credential_from_the_workspace_token_route(
-    requested_kind: TokenKind,
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
-) -> None:
-    """Not even an administrator, because the result would belong to nobody.
-
-    These kinds mean "this names a person", and this route writes a row that names a
-    workspace. The token that came out passed every administrator check while having
-    no account to attribute, revoke, or disable it through.
+    Which workspace it acts on is decided per request from membership, so the row
+    carries an account and no workspace. A workspace on the row would pin it to one,
+    and nothing here lets the caller ask for that.
     """
-    admin_token, _record = administrator_credential(isolated_services, "token-authority-admin")
-    auth = AuthService(isolated_services.context)
-    workspace_id = ControlPlaneService(isolated_services.context).get_workspace("default").id
+    admin_token, admin_record = administrator_credential(isolated_services, "token-authority")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.post(
         "/api/v1/tokens",
         headers=_auth(admin_token),
-        json={
-            "name": f"forbidden-{requested_kind.value}",
-            "kind": requested_kind.value,
-            "workspace_id": workspace_id,
-        },
+        json={"name": "account-token"},
     )
 
-    _assert_error(
-        response,
-        400,
-        f"{requested_kind.value} credentials name an account, not a workspace; "
-        f"they come from signing in or from the offline administrator bootstrap",
+    assert response.status_code == 201
+    created = TokenCreateResponse.model_validate_json(response.content)
+    assert created.record.kind is TokenKind.User
+    assert created.record.user_id == admin_record.user_id
+    assert created.record.workspace_id == ""
+
+
+def test_one_account_cannot_see_or_revoke_another_account_s_tokens(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    """Tokens are listed and revoked through the account that owns them, only.
+
+    The credential reaches every workspace its account belongs to, so reaching one
+    from another account would hand over that whole account rather than one workspace.
+    """
+    owner_token, _owner = administrator_credential(isolated_services, "token-owner")
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    created = TokenCreateResponse.model_validate_json(
+        client.post(
+            "/api/v1/tokens",
+            headers=_auth(owner_token),
+            json={"name": "owned-token"},
+        ).content
     )
-    assert not [
-        record
-        for record in auth.list_workspace_tokens(workspace_id)
-        if record.name.startswith("forbidden-")
-    ]
+
+    stranger = UserService(isolated_services.context).create(
+        username="token-stranger",
+        password="token-stranger-password",
+    )
+    stranger_token, _stranger_record = AuthService(isolated_services.context).create_account_token(
+        stranger.id,
+        "stranger",
+    )
+
+    listed = client.get("/api/v1/tokens", headers=_auth(stranger_token))
+    assert listed.status_code == 200
+    assert created.record.id not in {
+        item.id for item in TokenListResponse.model_validate_json(listed.content).tokens
+    }
+
+    revoked = client.post(
+        f"/api/v1/tokens/{created.record.id}/revoke",
+        headers=_auth(stranger_token),
+    )
+    assert revoked.status_code == 404
+
+    still_active = client.get("/api/v1/tokens", headers=_auth(owner_token))
+    persisted = next(
+        item
+        for item in TokenListResponse.model_validate_json(still_active.content).tokens
+        if item.id == created.record.id
+    )
+    assert persisted.status is TokenStatus.Active
 
 
 @pytest.mark.parametrize(
     ("method", "suffix", "detail"),
     [
         ("POST", "/revoke", "cannot revoke the authenticating token"),
-        ("POST", "/toggle", "cannot toggle the authenticating token"),
         ("DELETE", "", "cannot delete the authenticating token"),
     ],
 )
@@ -135,26 +104,22 @@ def test_token_cannot_mutate_its_own_record(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    auth = AuthService(isolated_services.context)
-    raw_token, record = auth.create_token(
-        "workspace-writer",
-        scopes=[AuthScope.Read.value, AuthScope.Write.value],
-    )
+    admin_token, admin_record = administrator_credential(isolated_services, "self-mutation")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.request(
         method,
-        f"/api/v1/tokens/{record.id}{suffix}",
-        headers=_auth(raw_token),
+        f"/api/v1/tokens/{admin_record.id}{suffix}",
+        headers=_auth(admin_token),
     )
 
     _assert_error(response, 409, detail)
-    listed = client.get("/api/v1/tokens", headers=_auth(raw_token))
+    listed = client.get("/api/v1/tokens", headers=_auth(admin_token))
     assert listed.status_code == 200
     persisted = next(
         item
         for item in TokenListResponse.model_validate_json(listed.content).tokens
-        if item.id == record.id
+        if item.id == admin_record.id
     )
     assert persisted.status is TokenStatus.Active
 

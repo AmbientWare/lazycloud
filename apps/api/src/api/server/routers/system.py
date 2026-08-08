@@ -37,7 +37,6 @@ from shared.http.system import (
 )
 from shared.identity import (
     USER_PRINCIPAL_TOKEN_KINDS,
-    AuthScope,
     AuthTokenRecord,
     PlatformRole,
     TokenKind,
@@ -47,15 +46,15 @@ from shared.usage import usage_to_prometheus
 from api.server.auth import (
     admin_access,
     read_token,
+    read_user,
     read_workspace,
     write_token,
-    write_workspace,
+    write_user,
 )
 from api.server.dependencies import (
     AuthorizationCredentials,
     api_services,
     authorization_header,
-    authorize_token_workspace,
     current_services,
     require_user_principal,
 )
@@ -196,13 +195,13 @@ def api_v1_workspace_signing_key(
 @router.get(
     "/api/v1/tokens",
     response_model=TokenListResponse,
-    operation_id="list_workspace_tokens",
+    operation_id="list_account_tokens",
 )
-def api_v1_list_workspace_tokens(
-    workspace_id: read_workspace,
+def api_v1_list_account_tokens(
+    user_id: read_user,
     services: ApiServices = Depends(current_services),
 ) -> TokenListResponse:
-    records = services.auth.list_workspace_tokens(workspace_id)
+    records = services.auth.list_account_tokens(user_id)
     return TokenListResponse(tokens=[_public_token(item) for item in records])
 
 
@@ -210,30 +209,17 @@ def api_v1_list_workspace_tokens(
     "/api/v1/tokens",
     response_model=TokenCreateResponse,
     status_code=status.HTTP_201_CREATED,
-    operation_id="create_workspace_token",
+    operation_id="create_account_token",
 )
-def api_v1_create_workspace_token(
+def api_v1_create_account_token(
     request: TokenCreateRequest,
-    *,
-    workspace_id: write_workspace,
-    token: write_token,
+    user_id: write_user,
     services: ApiServices = Depends(current_services),
 ) -> TokenCreateResponse:
-    _authorize_token_issuance(services, token, request.kind)
-    authorized_workspace_id = authorize_token_workspace(
-        services,
-        token,
-        request.workspace_id or workspace_id,
-        AuthScope.Write,
-    )
-    raw_token, record = services.auth.create_token(
+    raw_token, record = services.auth.create_account_token(
+        user_id,
         request.name,
-        scopes=request.scopes,
         expires_in_seconds=request.expires_in_seconds,
-        kind=request.kind,
-        workspace_id=authorized_workspace_id,
-        reusable=request.reusable,
-        audit_actor=token,
     )
     return TokenCreateResponse(token=raw_token, record=_public_token(record))
 
@@ -241,61 +227,32 @@ def api_v1_create_workspace_token(
 @router.post(
     "/api/v1/tokens/{token_id}/revoke",
     response_model=AuthTokenResponse,
-    operation_id="revoke_workspace_token",
+    operation_id="revoke_account_token",
 )
-def api_v1_revoke_workspace_token(
+def api_v1_revoke_account_token(
     token_id: str,
-    workspace_id: write_workspace,
+    user_id: write_user,
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> AuthTokenResponse:
     _reject_self_token_mutation(token, token_id, action="revoke")
-    record = services.auth.revoke_workspace_token(
-        workspace_id,
-        token_id,
-        audit_actor=token,
-    )
-    return _public_token(record)
-
-
-@router.post(
-    "/api/v1/tokens/{token_id}/toggle",
-    response_model=AuthTokenResponse,
-    operation_id="toggle_workspace_token",
-)
-def api_v1_toggle_workspace_token(
-    token_id: str,
-    workspace_id: write_workspace,
-    token: write_token,
-    services: ApiServices = Depends(current_services),
-) -> AuthTokenResponse:
-    _reject_self_token_mutation(token, token_id, action="toggle")
-    record = services.auth.toggle_workspace_token(
-        workspace_id,
-        token_id,
-        audit_actor=token,
-    )
-    return _public_token(record)
+    return _public_token(services.auth.revoke_account_token(user_id, token_id))
 
 
 @router.delete(
     "/api/v1/tokens/{token_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    operation_id="delete_workspace_token",
+    operation_id="delete_account_token",
 )
-def api_v1_delete_workspace_token(
+def api_v1_delete_account_token(
     token_id: str,
-    workspace_id: write_workspace,
+    user_id: write_user,
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> None:
     _reject_self_token_mutation(token, token_id, action="delete")
-    services.auth.delete_workspace_token(
-        workspace_id,
-        token_id,
-        audit_actor=token,
-    )
+    services.auth.delete_account_token(user_id, token_id)
 
 
 def _device_code_response(record: DeviceAuthorizationRecord) -> DeviceCodeResponse:
