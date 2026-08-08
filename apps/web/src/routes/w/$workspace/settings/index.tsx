@@ -5,9 +5,16 @@ import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { WorkspaceDeletionPanel } from "@/components/shared/WorkspaceDeletion/Panel";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { useWorkspace } from "@/lib/workspace-context";
 
+import { AccountSettings } from "./-components/AccountSettings";
 import { ComputeSettings } from "./-components/ComputeSettings";
 import { DomainSettings } from "./-components/DomainSettings";
 import { WorkspaceIdentity } from "./-components/WorkspaceIdentity";
@@ -51,14 +58,29 @@ function SettingsPage() {
           <LinearTab value="compute">Compute</LinearTab>
           <LinearTab value="domains">Domains</LinearTab>
         </LinearTabsList>
-        <TabsContent
-          value="general"
-          className="mt-3 min-h-0 flex-1 overflow-visible lg:overflow-hidden"
-        >
-          <div className="grid min-h-full gap-4 pb-1 lg:h-full lg:grid-cols-5 lg:grid-rows-[11.5rem_minmax(0,1fr)]">
-            <WorkspaceIdentity workspace={workspace} fullWidth={!deletion.canManage} />
-            <WorkspaceTokens workspaceId={workspace.id} />
-            <WorkspaceDeletionPanel workspace={workspace} />
+        <TabsContent value="general" className="mt-3 min-h-0 flex-1 overflow-y-auto">
+          {/* The account comes first and reads the same in every workspace, because it
+              is not about one. What belongs to the workspace you happen to be in is
+              collapsed below it, named so it is clear which workspace that is. */}
+          <div className="space-y-4 pb-1">
+            <AccountSettings />
+            <Accordion type="single" collapsible defaultValue="workspace">
+              <AccordionItem value="workspace" className="panel rounded-md border-b-0 px-4">
+                <AccordionTrigger className="hover:no-underline">
+                  <span className="flex min-w-0 flex-col gap-0.5 text-left">
+                    <span className="truncate text-sm font-medium">Workspace</span>
+                    <span className="mono truncate text-[11px] font-normal text-muted-foreground">
+                      {workspace.name}
+                    </span>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="grid gap-4 lg:grid-cols-5">
+                  <WorkspaceIdentity workspace={workspace} fullWidth={!deletion.canManage} />
+                  <WorkspaceTokens workspaceId={workspace.id} />
+                  <WorkspaceDeletionPanel workspace={workspace} />
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </div>
         </TabsContent>
         <TabsContent

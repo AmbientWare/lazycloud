@@ -1,4 +1,5 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
+import { z } from "zod";
 
 import { apiRequest } from "@/lib/api/client";
 import { currentSessionSchema, deviceCodeSchema, sessionSchema } from "@/lib/api/schemas";
@@ -18,6 +19,27 @@ export function currentSessionQueryOptions() {
     queryKey: ["auth", "session"],
     queryFn: () => apiRequest("/api/v1/sessions/current", currentSessionSchema),
     retry: false,
+  });
+}
+
+export function changePasswordMutationOptions() {
+  return mutationOptions({
+    mutationFn: ({
+      userId,
+      currentPassword,
+      newPassword,
+    }: {
+      userId: string;
+      currentPassword: string;
+      newPassword: string;
+    }) =>
+      apiRequest(`/api/v1/users/${encodeURIComponent(userId)}/password`, z.null(), {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      }),
   });
 }
 
