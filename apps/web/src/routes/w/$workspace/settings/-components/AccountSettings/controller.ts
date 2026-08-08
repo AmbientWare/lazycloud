@@ -13,19 +13,21 @@ export type PasswordChangeController = {
   setCurrentPassword: (value: string) => void;
   setNewPassword: (value: string) => void;
   setConfirmPassword: (value: string) => void;
-  /** Why the form cannot be submitted yet, or "" when it can. */
-  blocker: string;
+  /** What is still missing, but only once there is something to be missing from. */
+  guidance: string;
   canSubmit: boolean;
   isSaving: boolean;
-  isSaved: boolean;
   error: string;
   submit: () => void;
 };
 
 export function usePasswordChangeController({
   userId,
+  onChanged,
 }: {
   userId: string;
+  /** Called once the change lands, so the caller can close what is showing the form. */
+  onChanged?: () => void;
 }): PasswordChangeController {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -37,11 +39,15 @@ export function usePasswordChangeController({
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      onChanged?.();
     },
   });
 
   const blocker = passwordChangeBlocker({ currentPassword, newPassword, confirmPassword });
   const canSubmit = blocker === "" && !change.isPending;
+  // An untouched form has nothing wrong with it. Showing the first unmet rule at
+  // rest reads as a complaint about something the person has not done yet.
+  const touched = Boolean(currentPassword || newPassword || confirmPassword);
 
   return {
     currentPassword,
@@ -59,10 +65,9 @@ export function usePasswordChangeController({
       change.reset();
       setConfirmPassword(value);
     },
-    blocker,
+    guidance: touched ? blocker : "",
     canSubmit,
     isSaving: change.isPending,
-    isSaved: change.isSuccess,
     error: change.error ? passwordChangeError(change.error) : "",
     submit: () => {
       if (!canSubmit) return;

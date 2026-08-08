@@ -48,7 +48,7 @@ export function DomainSettings({ workspaceId }: { workspaceId: string }) {
   return (
     <Panel
       title="Domains"
-      description="Domains this workspace can serve deployments from"
+      description="Registered once for your account; any workspace you own can serve from them"
       action={
         <form
           className="flex items-center gap-2"

@@ -47,10 +47,17 @@ import { cn } from "@/lib/utils";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
+import { WorkspaceSection } from "./WorkspaceSection";
 import { useComputePolicyController } from "./ComputePolicyForm/controller";
 import { regionOptions, toggleAllowedRegion } from "./region-selection";
 
-export function ComputeSettings({ workspaceId }: { workspaceId: string }) {
+export function ComputeSettings({
+  workspaceId,
+  workspaceName,
+}: {
+  workspaceId: string;
+  workspaceName: string;
+}) {
   const connection = useQuery(awsConnectionQueryOptions(workspaceId));
   const instances = useQuery(computeInstancesQueryOptions(workspaceId));
   const machines = useQuery(machinesQueryOptions(workspaceId));
@@ -82,7 +89,7 @@ export function ComputeSettings({ workspaceId }: { workspaceId: string }) {
   );
 
   return (
-    <div className="flex min-h-full flex-col gap-3 pb-1 lg:h-full lg:min-h-0">
+    <div className="flex min-h-full flex-col gap-5 pb-1">
       <ConnectedCloudsPanel
         workspaceId={workspaceId}
         connection={connection.data ?? null}
@@ -94,12 +101,14 @@ export function ComputeSettings({ workspaceId }: { workspaceId: string }) {
         onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
       />
-      <SelfHostedPanel
-        machines={selfHostedMachines}
-        loading={machines.isPending}
-        error={machines.error}
-        onJoin={() => setJoinDialogOpen(true)}
-      />
+      <WorkspaceSection workspaceName={workspaceName}>
+        <SelfHostedPanel
+          machines={selfHostedMachines}
+          loading={machines.isPending}
+          error={machines.error}
+          onJoin={() => setJoinDialogOpen(true)}
+        />
+      </WorkspaceSection>
       <AwsConnectionDialog
         workspaceId={workspaceId}
         connection={connection.data ?? null}
@@ -140,9 +149,9 @@ function ConnectedCloudsPanel({
   return (
     <Panel
       title="Connected clouds"
-      description="Customer-owned infrastructure attached to this workspace"
+      description="Your own cloud accounts, available to every workspace you own"
       action={<AddCloudMenu connection={connection} onSelectAws={onManageAws} />}
-      className="min-h-[22rem] flex-1"
+      className="min-h-[18rem]"
       contentClassName="overflow-y-auto"
     >
       {!connection ? (
