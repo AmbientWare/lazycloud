@@ -16,7 +16,9 @@ from database.repositories.identity import (
     IdentityAdminRecoveryRequestRepository,
     IdentityBootstrapClaimRepository,
     TokenRepository,
+    UserRepository,
     WorkspaceAuditRepository,
+    WorkspaceMemberRepository,
     WorkspaceRepository,
 )
 from database.types import DatabaseSession
@@ -24,11 +26,16 @@ from shared.errors import ConflictError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     SYSTEM_TOKEN_KINDS,
+    USER_PRINCIPAL_TOKEN_KINDS,
     AuthScope,
     AuthTokenRecord,
+    PlatformRole,
     TokenKind,
     TokenStatus,
+    UserRecord,
+    UserStatus,
     WorkspaceRecord,
+    WorkspaceRole,
     WorkspaceStatus,
 )
 from shared.timestamps import utc_now
@@ -40,6 +47,7 @@ from identity.authz import (
     decide_authorization,
     token_has_scope,
 )
+from identity.passwords import hash_password, validate_password, validate_username
 from identity.token_invalidation import (
     AuthTokenInvalidation,
     configured_token_invalidation,
@@ -151,6 +159,8 @@ class BootstrapAdminToken:
     record: AuthTokenRecord
     request_id: str
     replayed: bool = False
+    username: str = ""
+    """The administrator account the credential belongs to, empty on a replay."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,13 +228,38 @@ class TokenIssuer:
             audit_actor=audit_actor,
         )
 
+    def issue_for_user(
+        self,
+        session: DatabaseSession,
+        name: str,
+        *,
+        user_id: str,
+        kind: TokenKind = TokenKind.User,
+        scopes: list[str] | None = None,
+        expires_in_seconds: int | None = None,
+        reusable: bool = True,
+    ) -> tuple[str, AuthTokenRecord]:
+        """Mint a credential that names a person rather than one workspace."""
+        if kind not in USER_PRINCIPAL_TOKEN_KINDS:
+            raise ValueError(f"not a user principal token kind: {kind.value}")
+        return self._issue(
+            session,
+            name,
+            raw_token=f"rt_{secrets.token_urlsafe(32)}",
+            scopes=scopes,
+            expires_in_seconds=expires_in_seconds,
+            kind=kind,
+            user_id=user_id,
+            reusable=reusable,
+        )
+
     def issue_configured_administrator(
         self,
         session: DatabaseSession,
         name: str,
         *,
         configured_token: str,
-        workspace_id: str,
+        user_id: str,
     ) -> tuple[str, AuthTokenRecord]:
         validated = _validate_configured_admin_token(configured_token)
         return self._issue(
@@ -233,7 +268,7 @@ class TokenIssuer:
             raw_token=validated,
             scopes=["*"],
             kind=TokenKind.Admin,
-            workspace_id=workspace_id,
+            user_id=user_id,
             reusable=True,
         )
 
@@ -246,33 +281,42 @@ class TokenIssuer:
         scopes: list[str] | None,
         expires_in_seconds: int | None = None,
         kind: TokenKind | str,
-        workspace_id: str,
+        user_id: str = "",
+        workspace_id: str = "",
         worker_id: str = "",
         reusable: bool,
         audit_actor: AuthTokenRecord | None = None,
     ) -> tuple[str, AuthTokenRecord]:
+        if bool(user_id) == bool(workspace_id):
+            msg = "a token names exactly one principal: a user or a workspace"
+            raise ValueError(msg)
         now = utc_now()
-        repository = WorkspaceRepository(session)
-        workspace = self.context.workspace(session, workspace_id)
-        workspace = repository.lock_active_owner(workspace.id)
+        expires_at = (
+            now + timedelta(seconds=expires_in_seconds) if expires_in_seconds is not None else None
+        )
+        # Fence the owner the same way on both paths: a credential must not be minted
+        # against a principal another transaction is in the middle of deleting.
+        owner_workspace_id = ""
+        if workspace_id:
+            workspace = self.context.workspace(session, workspace_id)
+            owner_workspace_id = WorkspaceRepository(session).lock_active_owner(workspace.id).id
+        else:
+            _lock_active_user_for_issue(session, user_id)
         record = TokenRepository(session).create(
             name=name,
             token_hash=_hash_token(raw_token),
             prefix=raw_token[:10],
             kind=TokenKind(kind),
-            workspace_id=workspace.id,
+            user_id=user_id,
+            workspace_id=owner_workspace_id,
             worker_id=worker_id,
             scopes=scopes if scopes is not None else ["*"],
             reusable=reusable,
-            expires_at=(
-                now + timedelta(seconds=expires_in_seconds)
-                if expires_in_seconds is not None
-                else None
-            ),
+            expires_at=expires_at,
         )
-        if audit_actor is not None:
+        if audit_actor is not None and owner_workspace_id:
             WorkspaceAuditRepository(session).append(
-                workspace_id=workspace.id,
+                workspace_id=owner_workspace_id,
                 action=WorkspaceAuditAction.TokenCreated,
                 actor=audit_actor,
                 target_type=WorkspaceAuditTarget.Token,
@@ -287,6 +331,53 @@ class TokenIssuer:
         # process's cache after the transaction has actually committed.
         if self.token_cache is not None:
             self.token_cache.reset()
+
+
+def _create_bootstrap_administrator(
+    session: DatabaseSession,
+    *,
+    username: str,
+    password: str,
+) -> UserRecord:
+    normalized = validate_username(username)
+    repository = UserRepository(session)
+    if repository.by_username(normalized) is not None:
+        raise ConflictError(f"username is already in use: {normalized}")
+    return repository.create(
+        username=normalized,
+        password_hash=hash_password(validate_password(password)),
+        role=PlatformRole.Administrator,
+    )
+
+
+def _recovered_administrator(
+    session: DatabaseSession,
+    *,
+    username: str,
+    password: str | None,
+) -> UserRecord:
+    normalized = validate_username(username)
+    repository = UserRepository(session)
+    user = repository.by_username(normalized)
+    if user is None:
+        raise NotFoundError(f"user not found: {normalized}")
+    if user.status is not UserStatus.Active:
+        user = repository.set_status(user.id, status=UserStatus.Active)
+    if user.role is not PlatformRole.Administrator:
+        user = repository.set_role(user.id, role=PlatformRole.Administrator)
+    if password is not None:
+        user = repository.set_password(
+            user.id,
+            password_hash=hash_password(validate_password(password)),
+        )
+        TokenRepository(session).revoke_user_sessions(user.id, now=utc_now())
+    return user
+
+
+def _lock_active_user_for_issue(session: DatabaseSession, user_id: str) -> None:
+    user = UserRepository(session).get(user_id)
+    if user is None or user.status is not UserStatus.Active:
+        raise NotFoundError(f"user not found: {user_id}")
 
 
 def _hash_token(token: str, salt: str | None = None) -> str:
@@ -332,9 +423,31 @@ class AuthService:
         if invalidation is not None:
             invalidation.emit()
 
-    def workspace_credentials_revoked(self) -> None:
-        """Publish a committed workspace-deletion credential revocation."""
+    def credentials_revoked(self) -> None:
+        """Publish a committed credential revocation to every replica's token cache.
+
+        Called after the revoking transaction commits—workspace deletion, a password
+        change, a disabled account—so a cached positive cannot outlive it.
+        """
         self._invalidate_token_caches()
+
+    def platform_role(self, token: AuthTokenRecord) -> PlatformRole:
+        """The one answer to whether a caller administers the platform.
+
+        Two things confer it: the administrator token kind, which platform-minted
+        operator credentials still carry, and an account whose role says so. Every
+        caller—the authorization decision and the routes that branch on it—asks here,
+        so the two cannot drift into disagreeing.
+        """
+        if token.kind is TokenKind.Admin:
+            return PlatformRole.Administrator
+        if not token.names_user or not token.user_id:
+            return PlatformRole.Member
+        with self.context.database.session() as session:
+            user = UserRepository(session).get(token.user_id)
+        if user is None or user.status is not UserStatus.Active:
+            return PlatformRole.Member
+        return user.role
 
     def create_token(
         self,
@@ -393,16 +506,24 @@ class AuthService:
         with self.context.database.session() as session:
             return IdentityAdminRecoveryRequestRepository(session).get(request_id) is not None
 
-    def bootstrap_admin_token(
+    def bootstrap_administrator(
         self,
         *,
         request_id: str,
+        username: str,
+        password: str,
         name: str = "first-admin",
         workspace: str = "default",
         staged_token: str | None = None,
         configured_token: str | None = None,
         stage_token: Callable[[str], None] | None = None,
     ) -> BootstrapAdminToken:
+        """Create the first administrator: the person, their workspace, and a credential.
+
+        The person is what the bootstrap produces. A token alone could not be signed in
+        with, and every later credential is minted against an account, so the account
+        has to exist before anything else can own something.
+        """
         _validate_offline_request_id(request_id)
         selected_token = _bootstrap_token(staged_token, configured_token)
         issuer = TokenIssuer(self.context, self.token_cache)
@@ -445,14 +566,24 @@ class AuthService:
                     request_id=request_id,
                     replayed=True,
                 )
+            administrator = _create_bootstrap_administrator(
+                session,
+                username=username,
+                password=password,
+            )
             workspace_record = WorkspaceRepository(session).ensure_named(workspace)
+            WorkspaceMemberRepository(session).add(
+                workspace_id=workspace_record.id,
+                user_id=administrator.id,
+                role=WorkspaceRole.Owner,
+            )
             if configured_token is None:
-                raw_token, record = issuer.issue(
+                raw_token, record = issuer.issue_for_user(
                     session,
                     name,
                     scopes=["*"],
                     kind=TokenKind.Admin,
-                    workspace_id=workspace_record.id,
+                    user_id=administrator.id,
                     reusable=True,
                 )
             else:
@@ -460,10 +591,8 @@ class AuthService:
                     session,
                     name,
                     configured_token=configured_token,
-                    workspace_id=workspace_record.id,
+                    user_id=administrator.id,
                 )
-            workspace_record.primary_token_id = record.id
-            WorkspaceRepository(session).upsert(workspace_record)
             claim_repository.attach_admin_token(record.id)
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace_record.id,
@@ -484,17 +613,28 @@ class AuthService:
             record=record,
             request_id=request_id,
             replayed=not created,
+            username=administrator.username,
         )
 
     def recover_admin_token(
         self,
         *,
         request_id: str,
+        username: str,
+        password: str | None = None,
         name: str = "recovery-admin",
         workspace: str = "default",
         staged_token: str | None = None,
         stage_token: Callable[[str], None] | None = None,
     ) -> BootstrapAdminToken:
+        """Re-establish administrator access offline for an existing account.
+
+        Recovery re-keys a person rather than minting a free-floating credential: the
+        account is what owns the workspaces and the connected compute, so an operator
+        who has lost access needs that account back, not a second identity beside it.
+        Supplying ``password`` also resets it, which is the usual case when the reason
+        for recovering is that nobody can sign in.
+        """
         _validate_offline_request_id(request_id)
         issuer = TokenIssuer(self.context, self.token_cache)
         with self.context.database.session() as session:
@@ -522,16 +662,19 @@ class AuthService:
             workspace_record = workspace_repository.by_name(workspace)
             if workspace_record is None or workspace_record.status is not WorkspaceStatus.Active:
                 raise NotFoundError(f"workspace not found: {workspace}")
-            raw_token, record = issuer.issue(
+            administrator = _recovered_administrator(
+                session,
+                username=username,
+                password=password,
+            )
+            raw_token, record = issuer.issue_for_user(
                 session,
                 name,
                 scopes=["*"],
                 kind=TokenKind.Admin,
-                workspace_id=workspace_record.id,
+                user_id=administrator.id,
                 reusable=True,
             )
-            workspace_record.primary_token_id = record.id
-            workspace_repository.upsert(workspace_record)
             recovery_repository.create(
                 request_id=request_id,
                 workspace_id=workspace_record.id,
@@ -554,6 +697,7 @@ class AuthService:
             token=raw_token,
             record=record,
             request_id=request_id,
+            username=administrator.username,
         )
 
     def mark_admin_token_published(self, *, request_id: str, recovery: bool) -> None:
@@ -935,7 +1079,11 @@ class AuthService:
         )
         if token is None:
             return None
-        decision = decide_authorization(token, requirement)
+        decision = decide_authorization(
+            token,
+            requirement,
+            platform_role=self.platform_role(token),
+        )
         if not decision.allowed:
             raise AuthorizationDeniedError(decision.message)
         return token
@@ -944,7 +1092,8 @@ class AuthService:
         self,
         token_id: str,
         *,
-        token_workspace_id: str,
+        token_user_id: str = "",
+        token_workspace_id: str = "",
         requirement: AuthzRequirement,
     ) -> AuthTokenRecord:
         """Reload and authorize a previously authenticated identity from PostgreSQL.
@@ -959,12 +1108,18 @@ class AuthService:
         updated: AuthTokenRecord | None = None
         with self.context.database.session() as session:
             repository = TokenRepository(session)
-            record = repository.get(token_id, workspace_id=token_workspace_id)
+            # Reloaded through the principal the exchange recorded, so a credential
+            # cannot be redeemed as one belonging to someone else.
+            record = (
+                repository.get_for_user(token_id, user_id=token_user_id)
+                if token_user_id
+                else repository.get(token_id, workspace_id=token_workspace_id)
+            )
             if (
                 record is None
                 or record.status is not TokenStatus.Active
                 or not record.reusable
-                or repository.is_consumed(token_id, workspace_id=token_workspace_id)
+                or repository.is_consumed(token_id, workspace_id=token_workspace_id or None)
             ):
                 raise AuthError("invalid token identity")
             if record.expires_at is not None and record.expires_at <= now:
@@ -979,7 +1134,11 @@ class AuthService:
             raise AuthError("token has expired")
         if updated is None:
             raise AuthError("invalid token identity")
-        decision = decide_authorization(updated, requirement)
+        decision = decide_authorization(
+            updated,
+            requirement,
+            platform_role=self.platform_role(updated),
+        )
         if not decision.allowed:
             raise AuthorizationDeniedError(decision.message)
         return updated
@@ -995,7 +1154,13 @@ class AuthService:
             authorization,
             allow_if_no_tokens=allow_if_no_tokens,
         )
-        return decide_authorization(token, requirement)
+        if token is None:
+            return decide_authorization(None, requirement)
+        return decide_authorization(
+            token,
+            requirement,
+            platform_role=self.platform_role(token),
+        )
 
     def _find_token(self, token_id_or_name: str) -> AuthTokenRecord:
         """Admin/operator token lookup across every workspace."""

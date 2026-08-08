@@ -17,27 +17,43 @@ from identity.device_auth import (
     DEVICE_CODE_TTL_SECONDS,
     DeviceAuthorizationService,
 )
+from identity.users import UserService
 from pydantic import JsonValue
-from shared.identity import AuthTokenRecord, DeviceAuthorizationStatus, TokenKind
+from shared.identity import (
+    DeviceAuthorizationStatus,
+    TokenKind,
+    UserRecord,
+    WorkspaceRole,
+)
 from shared.timestamps import utc_now
 from sqlalchemy import update
 
 
-def _admin_headers(services: ApiServices) -> dict[str, str]:
-    raw_token, _ = AuthService(services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id="default",
-    )
-    return {"Authorization": f"Bearer {raw_token}"}
+def _signed_in_user(
+    services: ApiServices,
+    *,
+    username: str = "operator",
+    workspace: str = "default",
+) -> tuple[UserRecord, dict[str, str]]:
+    """A person who belongs to a workspace, and a credential that names them."""
+    users = UserService(services.context)
+    user = users.create(username=username, password="device-login-password")
+    with services.context.database.session() as session:
+        workspace_id = services.context.workspace(session, workspace).id
+    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    issuer = TokenIssuer(services.context)
+    with services.context.database.session() as session:
+        raw_token, _ = issuer.issue_for_user(session, username, user_id=user.id)
+    issuer.committed()
+    return user, {"Authorization": f"Bearer {raw_token}"}
 
 
-def test_device_login_flow_approves_and_mints_workspace_token(
+def test_device_login_flow_approves_and_mints_account_token(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = _admin_headers(isolated_services)
+    user, headers = _signed_in_user(isolated_services)
 
     started = client.post("/auth/device", json={"client_name": "cli@laptop"})
     assert started.status_code == 201
@@ -49,7 +65,7 @@ def test_device_login_flow_approves_and_mints_workspace_token(
 
     pending = client.post("/auth/device/token", json={"device_code": start["device_code"]})
     assert pending.status_code == 200
-    assert pending.json() == {"status": "pending", "token": "", "workspace": ""}
+    assert pending.json() == {"status": "pending", "token": "", "username": ""}
 
     shown = client.get(f"/api/v1/device-codes/{start['user_code']}", headers=headers)
     assert shown.status_code == 200
@@ -58,7 +74,6 @@ def test_device_login_flow_approves_and_mints_workspace_token(
 
     approved = client.post(
         f"/api/v1/device-codes/{start['user_code']}/approve",
-        json={"workspace": "default"},
         headers=headers,
     )
     assert approved.status_code == 200
@@ -68,10 +83,10 @@ def test_device_login_flow_approves_and_mints_workspace_token(
     assert claimed.status_code == 200
     claim = claimed.json()
     assert claim["status"] == "approved"
-    assert claim["workspace"] == "default"
+    assert claim["username"] == user.username
     assert claim["token"]
 
-    # The minted token is a workspace credential that works for API access.
+    # The minted token names the approving account and reaches its workspaces.
     workspaces = client.get(
         "/api/v1/workspaces",
         headers={"Authorization": f"Bearer {claim['token']}"},
@@ -84,10 +99,15 @@ def test_device_login_flow_approves_and_mints_workspace_token(
     assert replay.json()["detail"] == "device code was already consumed"
 
 
-def test_device_code_approval_requires_workspace_write_access(
+def test_device_code_approval_requires_a_user_credential(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
+    """A workspace-scoped automation token cannot hand out account-wide access.
+
+    The credential the CLI claims reaches every workspace the approver belongs to, so
+    approving is an act only a person can perform.
+    """
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     auth = AuthService(isolated_services.context)
     other_workspace = ControlPlaneService(isolated_services.context).upsert_workspace("other")
@@ -100,15 +120,11 @@ def test_device_code_approval_requires_workspace_write_access(
     start = client.post("/auth/device", json={"client_name": "cli"}).json()
     approve = client.post(
         f"/api/v1/device-codes/{start['user_code']}/approve",
-        json={"workspace": "default"},
         headers={"Authorization": f"Bearer {raw_other}"},
     )
     assert approve.status_code == 403
 
-    unauthenticated = client.post(
-        f"/api/v1/device-codes/{start['user_code']}/approve",
-        json={"workspace": "default"},
-    )
+    unauthenticated = client.post(f"/api/v1/device-codes/{start['user_code']}/approve")
     assert unauthenticated.status_code == 401
 
     claim = client.post("/auth/device/token", json={"device_code": start["device_code"]})
@@ -163,44 +179,30 @@ def test_device_claim_rolls_back_consumption_when_token_insert_fails(
 ) -> None:
     service = DeviceAuthorizationService(isolated_services.context)
     started = service.start(client_name="cli")
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.workspace(session).id
-    service.approve(started.record.user_code, workspace_id=workspace_id)
+    user, _ = _signed_in_user(isolated_services)
+    service.approve(started.record.user_code, user_id=user.id)
 
-    original_issue = TokenIssuer.issue
+    original_issue = TokenIssuer.issue_for_user
 
     def fail_issue(
         self: TokenIssuer,
         session: DatabaseSession,
         name: str,
         *,
+        user_id: str,
+        kind: TokenKind = TokenKind.User,
         scopes: list[str] | None = None,
         expires_in_seconds: int | None = None,
-        kind: TokenKind | str = TokenKind.Workspace,
-        workspace_id: str = "default",
-        worker_id: str = "",
         reusable: bool = True,
-        audit_actor: AuthTokenRecord | None = None,
     ) -> Never:
-        del (
-            self,
-            session,
-            name,
-            scopes,
-            expires_in_seconds,
-            kind,
-            workspace_id,
-            worker_id,
-            reusable,
-            audit_actor,
-        )
+        del (self, session, name, user_id, kind, scopes, expires_in_seconds, reusable)
         raise RuntimeError("token insert failed")
 
-    monkeypatch.setattr(TokenIssuer, "issue", fail_issue)
+    monkeypatch.setattr(TokenIssuer, "issue_for_user", fail_issue)
     with pytest.raises(RuntimeError, match="token insert failed"):
         service.claim(started.device_code)
 
-    monkeypatch.setattr(TokenIssuer, "issue", original_issue)
+    monkeypatch.setattr(TokenIssuer, "issue_for_user", original_issue)
     claimed = service.claim(started.device_code)
     assert claimed.status is DeviceAuthorizationStatus.Approved
     assert claimed.token

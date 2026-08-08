@@ -86,21 +86,27 @@ def test_bootstrap_succeeds_once_and_never_reopens(
 
     auth = AuthService(isolated_services.context)
     assert auth.bootstrap_required()
-    created = auth.bootstrap_admin_token(
+    created = auth.bootstrap_administrator(
         request_id="bootstrap:test-initial",
+        username="admin",
+        password="bootstrap-password",
         name="initial-admin",
     )
     token_id = created.record.id
     with pytest.raises(AuthError, match="already complete"):
-        auth.bootstrap_admin_token(
+        auth.bootstrap_administrator(
             request_id="bootstrap:test-conflict",
+            username="admin",
+            password="bootstrap-password",
             name="second-admin",
         )
 
     with isolated_services.context.database.session() as session:
         token = TokenRepository(session).get_across_workspaces(token_id)
         assert token is not None
-        assert TokenRepository(session).delete(token.id, workspace_id=token.workspace_id)
+        # An administrator credential names a person, not a workspace, so deleting it
+        # is the cross-scope operation rather than a tenant-scoped one.
+        assert TokenRepository(session).delete_across_workspaces(token.id)
 
     assert not auth.bootstrap_required()
     assert auth.token_count() == 0

@@ -121,7 +121,7 @@ def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServic
             actor_workspace_id=audit_actor.workspace_id,
         )
         identity.mark_deleting(session, deleting)
-    auth.workspace_credentials_revoked()
+    auth.credentials_revoked()
     with isolated_services.context.database.session() as session:
         identity.finalize(session, doomed_workspace.id, actor=audit_actor)
     assert generation() > before_workspace_delete
