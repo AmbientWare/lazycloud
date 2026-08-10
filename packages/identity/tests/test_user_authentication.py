@@ -13,6 +13,7 @@ from shared.identity import (
     WorkspaceMemberRecord,
     WorkspaceRole,
 )
+from tests.service_fixtures import owned_workspace
 
 PASSWORD = "correct-horse-battery"
 
@@ -78,13 +79,11 @@ def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
     perform an action reserved for the owner.
     """
     control = ControlPlaneService(isolated_services.context)
-    mine = control.upsert_workspace("mine")
-    theirs = control.upsert_workspace("theirs")
     users = _users(isolated_services)
     me = users.create(username="me-user", password=PASSWORD)
     them = users.create(username="them-user", password=PASSWORD)
-    users.add_member(workspace_id=mine.id, user_id=me.id, role=WorkspaceRole.Owner)
-    users.add_member(workspace_id=theirs.id, user_id=them.id, role=WorkspaceRole.Owner)
+    mine = control.set_workspace("mine", owner_user_id=me.id)
+    theirs = control.set_workspace("theirs", owner_user_id=them.id)
 
     my_token = (
         SessionService(isolated_services.context)
@@ -153,8 +152,8 @@ def test_a_workspace_credential_cannot_be_widened_by_a_membership_row(
 ) -> None:
     """Automation keeps its single-workspace blast radius whatever else is presented."""
     control = ControlPlaneService(isolated_services.context)
-    mine = control.upsert_workspace("mine")
-    theirs = control.upsert_workspace("theirs")
+    mine = owned_workspace(control, "mine")
+    theirs = owned_workspace(control, "theirs")
     users = _users(isolated_services)
     me = users.create(username="me-user", password=PASSWORD)
     _raw, workspace_token = AuthService(isolated_services.context).create_token(

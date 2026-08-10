@@ -16,6 +16,7 @@ from shared.deployments import DeploymentKind
 from shared.http.deployments import DeploymentListResponse
 from shared.http.tasks import TaskPageResponse
 from shared.identity import TokenKind
+from tests.service_fixtures import owned_workspace
 
 
 def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
@@ -24,8 +25,8 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
 ) -> None:
     """A workspace B token gets typed not-found for workspace A's resource ids."""
     control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("isolation-owner")
-    intruder = control.upsert_workspace("isolation-intruder")
+    owner = owned_workspace(control, "isolation-owner")
+    intruder = owned_workspace(control, "isolation-intruder")
     owner_token = _workspace_token(isolated_services, owner.id, "owner-token")
     intruder_token = _workspace_token(isolated_services, intruder.id, "intruder-token")
 

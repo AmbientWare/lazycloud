@@ -21,14 +21,14 @@ from identity.authz import (
     workspace_requirement,
 )
 from shared.identity import AuthScope, AuthTokenRecord, TokenKind
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 
 def test_auth_service_records_token_kind_and_checks_scopes(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("workspace-a")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "workspace-a")
     cache = AuthTokenCache()
     auth = AuthService(isolated_services.context, token_cache=cache)
     stored_token_ids: list[str] = []
@@ -153,8 +153,8 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace_a = control.upsert_workspace("workspace-a")
-    workspace_b = control.upsert_workspace("workspace-b")
+    workspace_a = owned_workspace(control, "workspace-a")
+    workspace_b = owned_workspace(control, "workspace-b")
     auth = AuthService(isolated_services.context)
     _, restricted = auth.create_token(
         "reader",
@@ -193,7 +193,7 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
 def test_policy_decisions_cover_worker_machine_and_external_input(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("workspace-a")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "workspace-a")
     auth = AuthService(isolated_services.context)
     _, public_worker = auth.create_token(
         "worker",

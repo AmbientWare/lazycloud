@@ -16,6 +16,7 @@ from execution.collections.redis import (
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import owned_workspace
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -70,7 +71,7 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
     RedisControlPlaneOriginRepository(redis).publish(
         services.gateway_settings.runtime_callback_http_url
     )
-    ControlPlaneService(services.context).upsert_workspace("default")
+    owned_workspace(ControlPlaneService(services.context), "default")
     try:
         yield services
     finally:

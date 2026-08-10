@@ -39,7 +39,7 @@ from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
@@ -208,7 +208,7 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
         isolated_services.context,
         workspace_changes=isolated_services.workspace_changes,
     )
-    workspace = control_plane.upsert_workspace("default")
+    workspace = owned_workspace(control_plane, "default")
     source_object = ObjectRecord(
         id=str(uuid4()),
         bucket="objects",
@@ -287,7 +287,7 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
 def test_registration_and_placement_cleanup_failures_are_both_reported(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
     placements = _FailingPlacementCleanup()
     deployments = replace(
         isolated_services.deployments,

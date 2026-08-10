@@ -17,6 +17,7 @@ from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.identity import AuthScope, TokenKind
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
+from tests.service_fixtures import owned_workspace
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -26,8 +27,8 @@ def test_public_stub_config_allows_public_and_same_workspace_private_only(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("owner")
-    other = control.upsert_workspace("other")
+    owner = owned_workspace(control, "owner")
+    other = owned_workspace(control, "other")
     private_stub = control.create_stub(
         "private-api",
         workspace=owner.id,
@@ -82,8 +83,8 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
     tmp_path: Path,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("clone-owner")
-    target = control.upsert_workspace("clone-target")
+    owner = owned_workspace(control, "clone-owner")
+    target = owned_workspace(control, "clone-target")
     source = control.create_stub("shared", workspace=owner.id, public=True, kind=StubKind.Function)
     with isolated_services.context.database.session() as session:
         SecretRepository(session).create(
@@ -167,8 +168,8 @@ def test_cross_workspace_private_clone_is_denied(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("private-owner")
-    other = control.upsert_workspace("private-other")
+    owner = owned_workspace(control, "private-owner")
+    other = owned_workspace(control, "private-other")
     source = control.create_stub("private", workspace=owner.id, public=False)
     token = _workspace_token(isolated_services, other.id, "private-other-token")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
@@ -189,7 +190,7 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
     request: pytest.FixtureRequest,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("packages")
+    workspace = owned_workspace(control, "packages")
     local_stub = control.create_stub("local-package", workspace=workspace.id)
     remote_stub = control.create_stub("remote-package", workspace=workspace.id)
     local_file = tmp_path / "local.pkg"

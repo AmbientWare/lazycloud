@@ -32,7 +32,7 @@ from shared.compute_policy import (
 from shared.identity import WorkspaceStatus
 from sqlalchemy import delete
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -68,9 +68,9 @@ def test_tombstone_survives_ownership_deletion_and_scheduler_removes_late_device
     isolated_services: ApiServices,
 ) -> None:
     control_plane = ControlPlaneService(isolated_services.context)
-    control_plane.upsert_workspace("default")
+    owned_workspace(control_plane, "default")
     _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
-    workspace = control_plane.upsert_workspace("tailnet-tombstone-owner")
+    workspace = owned_workspace(control_plane, "tailnet-tombstone-owner")
     pool = "tailnet-tombstone-pool"
     isolated_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace.id)
     machine = isolated_services.compute.create_machine(

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
 from shared.identity import AuthScope
+from tests.service_fixtures import owned_workspace
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -18,7 +19,7 @@ def test_workspace_audit_attributes_each_change_and_pages_in_order(
     client_stack: ExitStack,
 ) -> None:
     """Every workspace change names who made it, newest first, across a cursor."""
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
     auth = AuthService(isolated_services.context)
     token, record = auth.create_token(
         "settings-owner",
@@ -65,7 +66,7 @@ def test_workspace_rename_requires_write_scope_and_valid_name(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
     token, _ = AuthService(isolated_services.context).create_token(
         "reader",
         workspace_id=workspace.id,

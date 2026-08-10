@@ -26,6 +26,7 @@ from shared.errors import UpstreamUnavailableError
 from shared.identity import WorkspaceStorageConfig
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
+from tests.service_fixtures import owned_workspace
 from worker.events import ContainerRequestContext
 from worker.execution import stub_code_cache_key
 from worker.source_code import SourceCodePackageMaterializer
@@ -130,7 +131,7 @@ def test_source_code_mounts_presign_for_the_source_workspace(
 ) -> None:
     object_client = _ObjectClient()
     object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("source-owner")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "source-owner")
     record = object_storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=SOURCE_PACKAGE_BUCKET,
@@ -161,8 +162,8 @@ def test_object_storage_deletes_only_the_target_workspace_objects(
     object_client = _ObjectClient()
     object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
     control = ControlPlaneService(isolated_services.context)
-    target = control.upsert_workspace("object-target")
-    retained = control.upsert_workspace("object-retained")
+    target = owned_workspace(control, "object-target")
+    retained = owned_workspace(control, "object-retained")
     target_record = object_storage.put_bytes_for_workspace(
         workspace_id=target.id,
         bucket=SOURCE_PACKAGE_BUCKET,
@@ -200,8 +201,8 @@ def test_object_storage_deletes_each_workspace_physical_object_independently(
     object_client = _ObjectClient()
     object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
     control = ControlPlaneService(isolated_services.context)
-    first = control.upsert_workspace("object-first")
-    last = control.upsert_workspace("object-last")
+    first = owned_workspace(control, "object-first")
+    last = owned_workspace(control, "object-last")
     key = "sources/shared.zip"
     first_record = object_storage.put_bytes_for_workspace(
         workspace_id=first.id,
@@ -238,7 +239,7 @@ def test_object_storage_preserves_metadata_when_physical_delete_is_not_confirmed
 ) -> None:
     object_client = _StickyDeleteObjectClient()
     object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("object-sticky")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "object-sticky")
     record = object_storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=SOURCE_PACKAGE_BUCKET,
@@ -265,7 +266,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    unprovisioned = control.upsert_workspace("mount-storage-unprovisioned")
+    unprovisioned = owned_workspace(control, "mount-storage-unprovisioned")
     mounts = container_resource_mounts(
         context=isolated_services.context,
         object_storage=isolated_services.object_storage,

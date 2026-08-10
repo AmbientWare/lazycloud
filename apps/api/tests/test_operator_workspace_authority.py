@@ -11,6 +11,7 @@ from httpx2 import Response
 from identity.auth import AuthService
 from pydantic import JsonValue
 from shared.identity import TokenKind
+from tests.service_fixtures import owned_workspace
 
 
 @pytest.mark.parametrize(
@@ -38,7 +39,7 @@ def test_workspace_token_cannot_forge_operator_workspace_override(
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     workspace_a = control.get_workspace("default")
-    workspace_b = control.upsert_workspace("forged-target")
+    workspace_b = owned_workspace(control, "forged-target")
     workspace_token, _record = AuthService(isolated_services.context).create_token(
         "workspace-authority",
         kind=TokenKind.Workspace,

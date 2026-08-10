@@ -19,6 +19,7 @@ from identity.websocket_tickets import (
 )
 from shared.identity import AuthScope
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import owned_workspace
 
 
 def _ticket_service(isolated_services: ApiServices) -> tuple[WebSocketTicketService, FakeRedis]:
@@ -206,7 +207,7 @@ def test_ticket_mint_rejects_wrong_workspace_and_insufficient_scope(
         service.mint_shell_ticket(token, audience=_audience(token.workspace_id))
     assert not fake.values
 
-    other_workspace = ControlPlaneService(isolated_services.context).upsert_workspace("other")
+    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
     _other_raw, other = auth.create_workspace_token(
         other_workspace.id,
         name="other-shell",

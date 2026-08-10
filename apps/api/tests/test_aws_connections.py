@@ -17,7 +17,6 @@ from compute.aws_connections import (
 )
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
-from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -32,7 +31,7 @@ from shared.http.aws_connections import (
     AwsConnectionCurrentResponse,
     AwsConnectionResponse,
 )
-from shared.identity import WorkspaceRole
+from tests.service_fixtures import workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 VALIDATED_AT = datetime(2026, 7, 15, 12, tzinfo=UTC)
@@ -223,14 +222,12 @@ def _client(
 
 def _account_token(services: ApiServices, name: str) -> str:
     """A credential that names a person: connecting an account is an account-level act."""
-    users = UserService(services.context)
-    user = users.create(username=name, password="aws-connection-password")
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
-    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    user_id = workspace_owner_user_id(services.context, workspace_id)
     issuer = TokenIssuer(services.context)
     with services.context.database.session() as session:
-        raw_token, _ = issuer.issue_for_user(session, name, user_id=user.id)
+        raw_token, _ = issuer.issue_for_user(session, name, user_id=user_id)
     issuer.committed()
     return raw_token
 

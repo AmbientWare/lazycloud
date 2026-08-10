@@ -35,6 +35,7 @@ from starlette.types import Receive, Scope, Send
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import owned_workspace
 from worker.container_client import models
 
 _JSON_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
@@ -184,7 +185,7 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
 ) -> None:
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     admin_token = _offline_admin_token(isolated_services, "compute-projection")
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("compute-team")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "compute-team")
 
     isolated_services.compute.create_unit(UnitName("default-pool"))
     isolated_services.compute.create_unit(UnitName("team-pool"), workspace=workspace.id)
@@ -436,8 +437,8 @@ def test_gateway_task_routes_do_not_cross_workspace_boundaries(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace_a = control.upsert_workspace("workspace-a")
-    workspace_b = control.upsert_workspace("workspace-b")
+    workspace_a = owned_workspace(control, "workspace-a")
+    workspace_b = owned_workspace(control, "workspace-b")
     token_a, _ = AuthService(isolated_services.context).create_token(
         "workspace-a",
         kind=TokenKind.Workspace,

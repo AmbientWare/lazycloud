@@ -44,7 +44,6 @@ from database.repositories.orchestration import (
     WorkerRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
-from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -77,8 +76,8 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
-from shared.identity import WorkspaceRole
 from shared.source_cache_cleanup import WorkerCacheGenerationState
+from tests.service_fixtures import workspace_owner_user_id
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -1727,16 +1726,14 @@ def _seed_connection(isolated_services: ApiServices) -> None:
         created_at=now,
         updated_at=now,
     )
-    users = UserService(isolated_services.context)
-    owner = users.create(username="pooled-capacity-owner", password="pooled-capacity-password")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    users.add_member(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.Owner)
+    owner_id = workspace_owner_user_id(isolated_services.context, workspace_id)
     with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
-                user_id=owner.id,
+                user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
                 phase=AwsAccountConnectionPhase.Ready,

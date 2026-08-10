@@ -11,12 +11,13 @@ from shared.checkpoints import (
     CheckpointStatus,
     checkpoint_recent_stub_key,
 )
+from tests.service_fixtures import owned_workspace
 
 
 def test_checkpoint_repository_lifecycle_uses_database(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-1")
-    other_workspace = control.upsert_workspace("workspace-2")
+    workspace = owned_workspace(control, "workspace-1")
+    other_workspace = owned_workspace(control, "workspace-2")
     stub = control.create_stub("stub-1", workspace=workspace.id, kind=StubKind.Function)
     other_stub = control.create_stub(
         "stub-2",
@@ -93,8 +94,8 @@ def test_checkpoint_repository_requires_durable_expiration_before_pruning(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-1")
-    other_workspace = control.upsert_workspace("workspace-2")
+    workspace = owned_workspace(control, "workspace-1")
+    other_workspace = owned_workspace(control, "workspace-2")
     active_stub = control.create_stub(
         "stub-active",
         workspace=workspace.id,
@@ -186,8 +187,8 @@ def test_checkpoint_repository_requires_durable_expiration_before_pruning(
 def test_checkpoint_retention_selects_only_published_or_terminal_records(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "checkpoint-retention-states"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "checkpoint-retention-states"
     )
     now = datetime(2026, 2, 1, tzinfo=UTC)
     expired = now - timedelta(seconds=1)

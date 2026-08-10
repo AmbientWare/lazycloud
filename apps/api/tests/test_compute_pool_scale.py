@@ -22,7 +22,6 @@ from compute.service import ComputeService
 from control.service import ControlPlaneService
 from database.repositories.compute import AwsAccountConnectionRepository, ComputeUnitRepository
 from fastapi.testclient import TestClient
-from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -39,8 +38,11 @@ from shared.compute_policy import (
     ComputeUnitRecord,
 )
 from shared.http.compute import UnitScaleResponse
-from shared.identity import WorkspaceRole
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import (
+    administrator_credential,
+    owned_workspace,
+    workspace_owner_user_id,
+)
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 _OFFER_ID = "us-east-1:i4i.xlarge"
@@ -198,7 +200,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     )
     headers = {"Authorization": f"Bearer {raw_token}"}
     path = f"/api/v1/units/{pool.id}/scale"
-    ControlPlaneService(isolated_services.context).upsert_workspace("other")
+    owned_workspace(ControlPlaneService(isolated_services.context), "other")
 
     cross_workspace = client.put(
         f"{path}?workspace=other",
@@ -264,15 +266,9 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
 
 
 def _seed_connection(services: ApiServices) -> str:
-    users = UserService(services.context)
-    owner = users.create(username="pool-scale-owner", password="pool-scale-password")
     with services.context.database.session() as session:
         owner_workspace_id = services.context.default_workspace_id(session)
-    users.add_member(
-        workspace_id=owner_workspace_id,
-        user_id=owner.id,
-        role=WorkspaceRole.Owner,
-    )
+    owner_id = workspace_owner_user_id(services.context, owner_workspace_id)
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
         now = datetime.now(UTC)
@@ -280,7 +276,7 @@ def _seed_connection(services: ApiServices) -> str:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
-                user_id=owner.id,
+                user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
                 # No warm floor, and the account's ceiling is the one the unit

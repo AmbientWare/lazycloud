@@ -20,6 +20,7 @@ from shared.http.compute import ContainerWithAppPageResponse
 from shared.http.errors import HttpResponseDecodeError
 from shared.identity import TokenKind
 from sqlalchemy import update
+from tests.service_fixtures import owned_workspace
 
 
 @pytest.fixture
@@ -38,8 +39,8 @@ def test_canonical_container_pages_are_bounded_stable_and_secret_free(
     expected_ids = [
         str(uuid5(NAMESPACE_URL, f"lazycloud:gateway-container:{index}")) for index in range(205)
     ]
-    foreign_workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "container-inspection-foreign"
+    foreign_workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "container-inspection-foreign"
     )
     with isolated_services.context.database.session() as session:
         repository = ContainerRepository(session)

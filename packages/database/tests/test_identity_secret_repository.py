@@ -12,6 +12,7 @@ from database.tables.identity import WorkspaceTable
 from shared.errors import ConflictError, NotFoundError
 from sqlalchemy import delete, inspect
 from sqlalchemy.engine import URL
+from tests.service_fixtures import owned_workspace
 
 from database import (
     DatabaseApplicationName,
@@ -24,8 +25,8 @@ from database import (
 def test_secret_repository_mutations_have_exact_outcomes_and_stable_identity(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "secret-mutation-owner"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "secret-mutation-owner"
     )
     with isolated_services.context.database.session() as session:
         repository = SecretRepository(session)
@@ -68,8 +69,8 @@ def test_secret_repository_isolates_same_name_and_cascades_workspace_delete(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    first = control.upsert_workspace("secret-isolation-a")
-    second = control.upsert_workspace("secret-isolation-b")
+    first = owned_workspace(control, "secret-isolation-a")
+    second = owned_workspace(control, "secret-isolation-b")
     with isolated_services.context.database.session() as session:
         repository = SecretRepository(session)
         repository.create("SAME_NAME", "ciphertext-a", workspace_id=first.id)

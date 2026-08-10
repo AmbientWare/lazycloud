@@ -17,13 +17,14 @@ from shared.source_cache_cleanup import (
     WorkerCacheStorageOwnerKind,
     WorkerCacheStorageOwnerRecord,
 )
+from tests.service_fixtures import owned_workspace
 
 
 def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "cache-storage-owner"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "cache-storage-owner"
     )
     owner = WorkerCacheStorageOwnerRecord(
         kind=WorkerCacheStorageOwnerKind.Machine,

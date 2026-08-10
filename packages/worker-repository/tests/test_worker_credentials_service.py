@@ -7,6 +7,7 @@ from identity.auth import AuthService
 from shared.container_requests import RequestMount, RequestMountPointConfig, RequestMountType
 from shared.identity import TokenKind, WorkspaceStorageConfig
 from shared.mounts import MountAuthMode
+from tests.service_fixtures import owned_workspace
 from worker.container_execution import ContainerExecutionContext
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal
@@ -21,7 +22,8 @@ from worker_repository.credentials import (
 
 def test_worker_credential_service_vends_requested_bundle(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace(
+    workspace = owned_workspace(
+        control,
         "default",
         storage=WorkspaceStorageConfig(
             backend="s3",
@@ -112,7 +114,7 @@ def test_worker_credential_service_reuses_gateway_token_across_containers(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("default")
+    workspace = owned_workspace(control, "default")
     stub = control.create_stub("worker", workspace=workspace.id)
     service = WorkerCredentialService(isolated_services)
     principal = WorkerCredentialPrincipal(
@@ -154,7 +156,7 @@ def test_worker_credential_service_replaces_revoked_or_aging_gateway_tokens(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("default")
+    workspace = owned_workspace(control, "default")
     stub = control.create_stub("worker", workspace=workspace.id)
     service = WorkerCredentialService(isolated_services)
     principal = WorkerCredentialPrincipal(
@@ -205,7 +207,7 @@ def test_worker_credential_service_resolves_volume_secret_names(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("default")
+    workspace = owned_workspace(control, "default")
     isolated_services.secrets.set("MOUNT_ACCESS_KEY", "mount-ak")
     isolated_services.secrets.set("MOUNT_SECRET_KEY", "mount-sk")
     stub = control.create_stub(
@@ -275,7 +277,7 @@ def test_worker_credential_service_rejects_invalid_principal_and_assignment(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-a")
+    workspace = owned_workspace(control, "workspace-a")
     stub = control.create_stub("worker", workspace=workspace.id)
     container = isolated_services.containers.run(
         "worker-container",
@@ -333,7 +335,7 @@ def test_worker_credential_service_rejects_unavailable_secret_storage_and_mount(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-a")
+    workspace = owned_workspace(control, "workspace-a")
     stub = control.create_stub("worker", workspace=workspace.id)
     container = isolated_services.containers.run(
         "worker-container",
@@ -391,7 +393,8 @@ def test_worker_credential_hydrator_applies_credentials_to_execution_context(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace(
+    workspace = owned_workspace(
+        control,
         "default",
         storage=WorkspaceStorageConfig(
             backend="s3",

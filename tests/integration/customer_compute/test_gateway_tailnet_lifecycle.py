@@ -56,7 +56,11 @@ from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential, workspace_owner_user_id
+from tests.service_fixtures import (
+    administrator_credential,
+    owned_workspace,
+    workspace_owner_user_id,
+)
 
 
 @pytest.fixture
@@ -317,8 +321,8 @@ def test_resource_pool_delete_cannot_delete_another_workspace_pool(
     client_stack: ExitStack,
 ) -> None:
     control_plane = ControlPlaneService(isolated_services.context)
-    control_plane.upsert_workspace("default")
-    foreign = control_plane.upsert_workspace("foreign-pool-owner")
+    owned_workspace(control_plane, "default")
+    foreign = owned_workspace(control_plane, "foreign-pool-owner")
     isolated_services.compute.create_unit(
         UnitName("foreign-pool"),
         provider="agent",
@@ -349,9 +353,9 @@ def test_workspace_deletion_conflicts_before_self_hosted_tailnet_authority_chang
     real_redis_actors: RealRedisActors,
 ) -> None:
     control_plane = ControlPlaneService(isolated_services.context)
-    control_plane.upsert_workspace("default")
+    owned_workspace(control_plane, "default")
     _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
-    workspace = control_plane.upsert_workspace("tailnet-workspace-delete")
+    workspace = owned_workspace(control_plane, "tailnet-workspace-delete")
     control = _RecordingTailnetControl()
     gateway = _gateway(
         isolated_services,

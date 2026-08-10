@@ -23,10 +23,10 @@ from shared.identity import (
     DeviceAuthorizationStatus,
     TokenKind,
     UserRecord,
-    WorkspaceRole,
 )
 from shared.timestamps import utc_now
 from sqlalchemy import update
+from tests.service_fixtures import owned_workspace
 
 
 def _signed_in_user(
@@ -40,7 +40,7 @@ def _signed_in_user(
     user = users.create(username=username, password="device-login-password")
     with services.context.database.session() as session:
         workspace_id = services.context.workspace(session, workspace).id
-    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    users.add_member(workspace_id=workspace_id, user_id=user.id)
     issuer = TokenIssuer(services.context)
     with services.context.database.session() as session:
         raw_token, _ = issuer.issue_for_user(session, username, user_id=user.id)
@@ -110,7 +110,7 @@ def test_device_code_approval_requires_a_user_credential(
     """
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     auth = AuthService(isolated_services.context)
-    other_workspace = ControlPlaneService(isolated_services.context).upsert_workspace("other")
+    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
     raw_other, _ = auth.create_token(
         "other-workspace",
         kind=TokenKind.Workspace,

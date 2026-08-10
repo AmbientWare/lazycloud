@@ -24,15 +24,22 @@ workload asks for, and several units feed one pool; a route keyed on a name
 could resolve a unit through a value that meant a pool, which is how the two
 were confused before they were separated.
 
-Membership is read in exactly one place, `authorize_token_workspace`. A user
-credential reaches a workspace only through a row naming them, and resolving that
-in the shared dependency rather than in the routes that remembered to ask is what
-keeps the rule identical on every path. A request that names no workspace resolves
-the default and is then checked against membership: guessing among the workspaces
-a person holds would sometimes act on the wrong one silently, where this refuses
-and says why.
+Every bearer-authenticated request resolves its workspace through
+`authorize_token_workspace`: the shared dependency calls it for a route that takes
+the workspace from its query, and a route that names the workspace in its path
+calls it directly rather than deciding for itself. A user credential reaches a
+workspace only through a membership row naming them, and keeping that read in one
+function is what makes the rule identical on every path. A request that names no
+workspace resolves the default and is then checked against membership: guessing
+among the workspaces a person holds would sometimes act on the wrong one silently,
+where this refuses and says why.
+
+The shell WebSocket ticket is the one credential that does not arrive as a bearer
+header, so it carries its own membership read in `identity.websocket_tickets`
+against the workspace the ticket was minted for. Keep that decision equivalent to
+this one; a ticket is redeemed once and cannot fall back to the header path.
 
 Resources a person owns rather than a workspace—their connected cloud account,
-their registered domains—take `read_user`/`write_user`. A workspace-scoped
-automation token deliberately fails there: it carries no authority over the
-account that owns the workspace it was minted for.
+their registered domains, the machines they join—take `read_user`/`write_user`. A
+workspace-scoped automation token deliberately fails there: it carries no
+authority over the account that owns the workspace it was minted for.

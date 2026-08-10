@@ -9,6 +9,7 @@ from shared.identity import TokenKind
 from shared.image_building.records import ImageArchiveRecord, ImageRecord
 from storage.image_archive import ResolvedImageArchiveSettings
 from storage_client.s3 import S3ObjectStoreSettings, S3PresignedUpload
+from tests.service_fixtures import owned_workspace
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.image_lifecycle import ImageRegistryStore
 from worker.origin_access import (
@@ -55,8 +56,8 @@ def test_archive_download_is_signed_only_for_an_authorized_workspace(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-a")
-    sibling = control.upsert_workspace("workspace-b")
+    workspace = owned_workspace(control, "workspace-a")
+    sibling = owned_workspace(control, "workspace-b")
     archive = _publish_archive(isolated_services, workspace_id=workspace.id)
     signer = _FakePresigner()
     service = WorkerCacheOriginCredentialService(
@@ -105,7 +106,7 @@ def test_archive_download_is_signed_only_for_an_authorized_workspace(
 def test_archive_upload_binds_the_reserved_digest_and_skips_a_published_archive(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("workspace-a")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "workspace-a")
     archive = _publish_archive(isolated_services, workspace_id=workspace.id)
     signer = _FakePresigner()
     service = WorkerCacheOriginCredentialService(
@@ -190,7 +191,7 @@ def test_image_archive_vending_requires_injected_lifespan_signer(
 def test_image_archive_presign_failures_are_sanitized(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("workspace-1")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "workspace-1")
     archive = _publish_archive(isolated_services, workspace_id=workspace.id)
     service = WorkerCacheOriginCredentialService(
         isolated_services,

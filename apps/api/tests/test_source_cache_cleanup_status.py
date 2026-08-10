@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.identity import TokenKind
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 
 def test_source_cache_cleanup_status_is_admin_only_and_bounded(
@@ -21,7 +21,7 @@ def test_source_cache_cleanup_status_is_admin_only_and_bounded(
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     default_workspace = control.get_workspace("default")
-    target = control.upsert_workspace("cleanup-status-target")
+    target = owned_workspace(control, "cleanup-status-target")
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with isolated_services.context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)

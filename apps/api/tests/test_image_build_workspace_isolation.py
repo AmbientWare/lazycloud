@@ -14,6 +14,7 @@ from shared.http.operations import ImageBuildListResponse, ImageBuildResponse
 from shared.identity import TokenKind
 from storage.service import ObjectStorage
 from tests.fakes import FakeObjectClient
+from tests.service_fixtures import owned_workspace
 
 
 def test_image_build_http_records_events_and_context_are_workspace_owned(
@@ -21,8 +22,8 @@ def test_image_build_http_records_events_and_context_are_workspace_owned(
     request: pytest.FixtureRequest,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    first_workspace = control.upsert_workspace("image-build-first")
-    second_workspace = control.upsert_workspace("image-build-second")
+    first_workspace = owned_workspace(control, "image-build-first")
+    second_workspace = owned_workspace(control, "image-build-second")
     first_token = _workspace_token(isolated_services, first_workspace.id, "image-build-first")
     second_token = _workspace_token(isolated_services, second_workspace.id, "image-build-second")
     object_storage = ObjectStorage(

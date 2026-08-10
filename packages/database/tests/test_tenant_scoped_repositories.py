@@ -17,14 +17,15 @@ from shared.errors import NotFoundError
 from shared.identity import TokenKind
 from shared.image_building.records import ImageRecord
 from shared.timestamps import utc_now
+from tests.service_fixtures import owned_workspace
 
 
 def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("tenant-owner")
-    intruder = control.upsert_workspace("tenant-intruder")
+    owner = owned_workspace(control, "tenant-owner")
+    intruder = owned_workspace(control, "tenant-intruder")
 
     app_id = str(uuid4())
     container_id = str(uuid4())
@@ -105,9 +106,9 @@ def test_one_global_archive_serves_every_authorized_workspace(
     """
 
     control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("image-archive-owner")
-    sibling = control.upsert_workspace("image-archive-sibling")
-    stranger = control.upsert_workspace("image-archive-stranger")
+    owner = owned_workspace(control, "image-archive-owner")
+    sibling = owned_workspace(control, "image-archive-sibling")
+    stranger = owned_workspace(control, "image-archive-stranger")
     image_id = "shared-image-name"
 
     with isolated_services.context.database.session() as session:
@@ -157,8 +158,8 @@ def test_container_shutdown_targets_include_only_active_workspace_rows(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("shutdown-target-owner")
-    sibling = control.upsert_workspace("shutdown-target-sibling")
+    workspace = owned_workspace(control, "shutdown-target-owner")
+    sibling = owned_workspace(control, "shutdown-target-sibling")
     compute_worker_id = str(uuid4())
     ids_by_name: dict[str, str] = {}
 
