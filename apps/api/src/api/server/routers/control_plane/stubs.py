@@ -6,7 +6,6 @@ from control.models import StubCloneOverride, StubUrlPlan
 from control.service import ControlPlaneService
 from database.records.apps import StubRecord
 from fastapi import APIRouter, Depends, HTTPException, status
-from identity.authz import workspace_requirement
 from shared.http.apps import AppResponse, StubCloneResponse
 from shared.http.pods import SandboxListResponse, SandboxStatsResponse, SandboxTimeline
 from shared.http.stubs import (
@@ -22,10 +21,9 @@ from shared.http.stubs import (
 )
 from shared.identity import AuthScope
 
-from api.server.auth import read_workspace, write_workspace
+from api.server.auth import read_workspace, write_principal, write_workspace
 from api.server.dependencies import (
-    AuthorizationCredentials,
-    authorize_services,
+    authorize_token_workspace,
     current_services,
 )
 from api.server.service_dependencies import control_plane_service
@@ -163,22 +161,25 @@ def get_public_stub_config(
 def clone_stub(
     stub_id: str,
     request: StubCloneRequest,
-    authorization: AuthorizationCredentials = None,
+    principal: write_principal,
     services: ApiServices = Depends(current_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> StubCloneResponse:
-    target_workspace = service.get_workspace(request.workspace)
-    authorize_services(
+    # The destination is named in the body rather than the query, so this asks the
+    # shared check directly instead of building its own requirement: a person reaches
+    # the target workspace through membership, which only that check reads.
+    workspace_id = authorize_token_workspace(
         services,
-        authorization,
+        principal.token,
+        request.workspace,
         AuthScope.Write,
-        requirement=workspace_requirement(target_workspace.id, action=AuthScope.Write),
+        platform_role=principal.platform_role,
     )
     try:
         result = service.clone_stub(
             stub_id,
             apps=services.apps,
-            workspace=target_workspace.id,
+            workspace=workspace_id,
             overrides=StubCloneOverride.model_validate(request.overrides.model_dump(mode="json")),
         )
         return StubCloneResponse(

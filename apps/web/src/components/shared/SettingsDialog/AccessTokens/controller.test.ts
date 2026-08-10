@@ -1,5 +1,5 @@
 import { createElement, type PropsWithChildren } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,7 +21,7 @@ describe("access tokens controller", () => {
         createRequests += 1;
         return createResponse.promise;
       }
-      return jsonResponse({ tokens: [existing] });
+      return jsonResponse({ data: [existing], next: "" });
     });
     const queryClient = testQueryClient();
     const { result } = renderHook(() => useAccessTokensController(), {
@@ -46,7 +46,7 @@ describe("access tokens controller", () => {
       name: "ci-deploy",
       prefix: "lc_9zz",
     });
-    expect(tokenCache(queryClient)).toEqual({ tokens: [existing, created] });
+    expect(cachedTokens(queryClient)).toEqual([created, existing]);
     expect(serializedQueryState(queryClient)).not.toContain("one-time-value");
 
     act(() => result.current.dismissIssued());
@@ -65,7 +65,7 @@ describe("access tokens controller", () => {
           ? jsonResponse({ detail: "revoke unavailable" }, 503)
           : jsonResponse(token({ id: "target", name: "target", status: "revoked" }));
       }
-      return jsonResponse({ tokens: [target, sibling] });
+      return jsonResponse({ data: [target, sibling], next: "" });
     });
     const queryClient = testQueryClient();
     const { result } = renderHook(() => useAccessTokensController(), {
@@ -82,11 +82,11 @@ describe("access tokens controller", () => {
     await waitFor(() => expect(result.current.actionMode).toBe("error"));
     expect(revokeRequests).toBe(1);
     expect(result.current.actionError?.message).toBe("revoke unavailable");
-    expect(tokenCache(queryClient)).toEqual({ tokens: [target, sibling] });
+    expect(cachedTokens(queryClient)).toEqual([target, sibling]);
 
     act(() => result.current.confirmAction());
     await waitFor(() => expect(result.current.actionMode).toBe("idle"));
-    expect(tokenCache(queryClient)).toEqual({ tokens: [sibling] });
+    expect(cachedTokens(queryClient)).toEqual([sibling]);
   });
 });
 
@@ -101,8 +101,11 @@ function testQueryClient(): QueryClient {
   });
 }
 
-function tokenCache(queryClient: QueryClient): TokenListResponse | undefined {
-  return queryClient.getQueryData<TokenListResponse>(accountQueryKeys.tokens());
+function cachedTokens(queryClient: QueryClient): AuthToken[] {
+  const cache = queryClient.getQueryData<InfiniteData<TokenListResponse, string>>(
+    accountQueryKeys.tokens(),
+  );
+  return (cache?.pages ?? []).flatMap((page) => page.data);
 }
 
 function serializedQueryState(queryClient: QueryClient): string {

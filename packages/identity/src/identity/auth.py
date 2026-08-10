@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Protocol
 from uuid import UUID
 
 from database.repositories.identity import (
+    AccountTokenCursor,
+    AccountTokenPage,
     IdentityAdminRecoveryRequestRepository,
     IdentityBootstrapClaimRepository,
     TokenRepository,
@@ -22,7 +27,9 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from database.types import DatabaseSession
-from shared.errors import ConflictError, NotFoundError
+from pydantic import ValidationError
+from shared.contracts import ContractModel
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     SYSTEM_TOKEN_KINDS,
@@ -386,6 +393,17 @@ class AuthorizedPrincipal:
 
     token: AuthTokenRecord
     platform_role: PlatformRole
+
+
+@dataclass(frozen=True, slots=True)
+class AccountTokenResult:
+    page: AccountTokenPage
+    next: str = ""
+
+
+class _AccountTokenCursorPayload(ContractModel):
+    created_at: datetime
+    id: UUID
 
 
 _TOKEN_ITERATIONS = 200_000
@@ -774,7 +792,14 @@ class AuthService:
         name: str,
         kind: TokenKind,
         workspace_id: str,
+        scopes: list[str] | None = None,
     ) -> AuthTokenRecord:
+        """A published service credential still matching what this owner would mint.
+
+        Scopes are part of that match: a published credential granting more than the
+        caller asks for stays valid forever otherwise, so narrowing what a service
+        may do would never reach a host that already has a file.
+        """
         if not self.administrator_ready():
             raise AuthError("offline administrator bootstrap must complete first")
         record = self.authenticate(token)
@@ -783,6 +808,7 @@ class AuthService:
             record.name != name
             or record.kind is not kind
             or record.workspace_id != normalized_workspace_id
+            or (scopes is not None and sorted(record.scopes) != sorted(scopes))
         ):
             raise AuthError("credential does not match the service-token owner")
         return record
@@ -858,11 +884,26 @@ class AuthService:
         issuer.committed()
         return raw_token, record
 
-    def list_account_tokens(self, user_id: str) -> list[AuthTokenRecord]:
+    def list_account_tokens(
+        self,
+        user_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> AccountTokenResult:
+        if limit < 1 or limit > 100:
+            raise InvalidInputError("account token limit must be between 1 and 100")
+        decoded = _decode_account_token_cursor(cursor)
         with self.context.database.session() as session:
-            records = TokenRepository(session).list_manageable_for_user(user_id)
-        records.sort(key=lambda item: item.created_at, reverse=True)
-        return records
+            page = TokenRepository(session).list_manageable_for_user(
+                user_id,
+                limit=limit,
+                cursor=decoded,
+            )
+        return AccountTokenResult(
+            page=page,
+            next=_encode_account_token_cursor(page.next) if page.next is not None else "",
+        )
 
     def revoke_account_token(self, user_id: str, token_id: str) -> AuthTokenRecord:
         with self.context.database.session() as session:
@@ -1217,6 +1258,32 @@ def _validate_configured_admin_token(token: str) -> str:
     if re.fullmatch(r"rt_[A-Za-z0-9_-]{43}", token) is None:
         raise AuthError("configured administrator credential is invalid")
     return token
+
+
+def _encode_account_token_cursor(cursor: AccountTokenCursor) -> str:
+    payload = {
+        "created_at": cursor.created_at.isoformat(),
+        "id": cursor.id,
+    }
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    ).decode()
+
+
+def _decode_account_token_cursor(value: str | None) -> AccountTokenCursor | None:
+    if not value:
+        return None
+    try:
+        payload = _AccountTokenCursorPayload.model_validate_json(
+            base64.urlsafe_b64decode(value.encode()),
+            strict=True,
+        )
+    except (binascii.Error, ValidationError) as exc:
+        raise InvalidInputError("invalid account token cursor") from exc
+    created_at = payload.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return AccountTokenCursor(created_at=created_at, id=str(payload.id))
 
 
 def try_uuid(value: str) -> str | None:

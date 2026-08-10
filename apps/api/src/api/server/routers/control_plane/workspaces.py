@@ -135,7 +135,9 @@ def upsert_workspace(
         service.set_workspace(
             name,
             owner_user_id=require_user_principal(token),
-            storage=workspace_storage_config(request.storage),
+            storage=(
+                workspace_storage_config(request.storage) if request.storage is not None else None
+            ),
             signing_key_prefix=request.signing_key_prefix,
             primary_token_id=request.primary_token_id,
             labels=request.labels,

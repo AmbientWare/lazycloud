@@ -1,14 +1,22 @@
 import { useRef, useState } from "react";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 
 import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
 import {
   createToken,
   revokeToken,
+  selectTokenList,
   tokensQueryOptions,
   type CreateTokenInput,
 } from "@/lib/queries/tokens";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+
+type TokenPages = InfiniteData<TokenListResponse, string>;
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
 type ActionMode = "idle" | "confirming" | "running" | "error";
@@ -41,6 +49,10 @@ export type AccessTokensController = {
   tokens: readonly AuthToken[];
   isLoading: boolean;
   loadError: Error | null;
+  nextCursor: string | undefined;
+  loadingMore: boolean;
+  loadMoreError: boolean;
+  loadMore: () => void;
   createMode: CreateMode;
   createError: Error | null;
   issued: IssuedToken | null;
@@ -64,7 +76,8 @@ const IDLE: ControllerState = {
 
 export function useAccessTokensController(): AccessTokensController {
   const queryClient = useQueryClient();
-  const query = useQuery(tokensQueryOptions());
+  const query = useInfiniteQuery(tokensQueryOptions());
+  const list = selectTokenList(query.data, query.hasNextPage);
   const [state, setState] = useState<ControllerState>(IDLE);
   // One command at a time, so a double submit cannot mint two credentials and a
   // confirm cannot race the request it is confirming.
@@ -153,9 +166,13 @@ export function useAccessTokensController(): AccessTokensController {
   };
 
   return {
-    tokens: query.data?.tokens ?? [],
+    tokens: list.items,
     isLoading: query.isPending,
     loadError: query.error,
+    nextCursor: list.nextCursor,
+    loadingMore: query.isFetchingNextPage,
+    loadMoreError: query.isFetchNextPageError,
+    loadMore: () => void query.fetchNextPage(),
     createMode: state.create.mode,
     createError: state.create.mode === "error" ? state.create.error : null,
     issued: state.create.mode === "issued" ? state.create.issued : null,
@@ -177,15 +194,26 @@ function isDraftable(mode: CreateMode): boolean {
   return mode === "drafting" || mode === "error";
 }
 
+/** Newest first, matching the order the server pages in, so the row lands where it will stay. */
 function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
-  queryClient.setQueryData<TokenListResponse>(accountQueryKeys.tokens(), (current) => ({
-    tokens: [...(current?.tokens.filter((token) => token.id !== record.id) ?? []), record],
-  }));
+  queryClient.setQueryData<TokenPages>(accountQueryKeys.tokens(), (current) => {
+    if (!current) return current;
+    const [first, ...rest] = withoutToken(current.pages, record.id);
+    if (!first) return current;
+    return { ...current, pages: [{ ...first, data: [record, ...first.data] }, ...rest] };
+  });
 }
 
 function removeTokenRecord(queryClient: QueryClient, tokenId: string): void {
-  queryClient.setQueryData<TokenListResponse>(accountQueryKeys.tokens(), (current) => ({
-    tokens: current?.tokens.filter((token) => token.id !== tokenId) ?? [],
+  queryClient.setQueryData<TokenPages>(accountQueryKeys.tokens(), (current) =>
+    current ? { ...current, pages: withoutToken(current.pages, tokenId) } : current,
+  );
+}
+
+function withoutToken(pages: TokenListResponse[], tokenId: string): TokenListResponse[] {
+  return pages.map((page) => ({
+    ...page,
+    data: page.data.filter((token) => token.id !== tokenId),
   }));
 }
 

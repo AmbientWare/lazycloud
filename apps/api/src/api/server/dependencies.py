@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Annotated, Protocol
 
 from control.service import ControlPlaneService
@@ -30,7 +30,6 @@ AuthScopeDependency = Callable[..., None]
 OptionalTokenDependency = Callable[..., AuthTokenRecord | None]
 RequiredTokenDependency = Callable[..., AuthTokenRecord]
 RequiredPrincipalDependency = Callable[..., AuthorizedPrincipal]
-WebSocketAuthDependency = Callable[..., Awaitable[None]]
 
 
 class _ApiServicesState(Protocol):
@@ -379,29 +378,5 @@ def require_app_requirement(
             requirement=requirement,
             allow_if_no_tokens=allow_if_no_tokens,
         )
-
-    return dependency
-
-
-def require_app_websocket_scope(
-    scope: AuthScope,
-    *,
-    allow_if_no_tokens: bool = False,
-) -> WebSocketAuthDependency:
-    async def dependency(
-        websocket: WebSocket,
-        services: Annotated[ApiServices, Depends(current_websocket_services)],
-    ) -> None:
-        try:
-            services.auth.authorize_header(
-                websocket_authorization_header(websocket),
-                AuthzRequirement(action=scope),
-                allow_if_no_tokens=allow_if_no_tokens,
-            )
-        except AuthError as exc:
-            raise WebSocketException(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason=str(exc),
-            ) from exc
 
     return dependency

@@ -166,7 +166,13 @@ def _upsert_workspace_row(
         )
     if existing.status is not WorkspaceStatus.Active:
         raise ConflictError(f"workspace name is retained after deletion: {name}")
-    existing.storage = storage or existing.storage
+    if storage is not None:
+        # The response model never carries the connection settings, so a caller naming
+        # a bucket cannot resend the credentials that reach it. Keeping the existing
+        # bag is what stops a settings update from stranding the objects already there.
+        existing.storage = storage.model_copy(
+            update={"config": storage.config or existing.storage.config}
+        )
     existing.signing_key_prefix = signing_key_prefix or existing.signing_key_prefix
     if not existing.signing_key:
         existing.signing_key = new_signing_key(existing.signing_key_prefix)

@@ -102,7 +102,7 @@ def token_create(
 
 
 def token_list(ctx: typer.Context) -> None:
-    tokens = admin_api_client().list_tokens().tokens
+    tokens = admin_api_client().list_tokens().data
     payload: list[dict[str, str | bool | list[str] | None]] = [
         {
             "id": item.id,

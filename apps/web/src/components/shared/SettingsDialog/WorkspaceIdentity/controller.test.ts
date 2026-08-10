@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { currentWorkspaceQueryOptions, updateWorkspace } from "@/lib/queries/workspace";
+import { updateWorkspace } from "@/lib/queries/workspace";
 
 import { useWorkspaceIdentityController } from "./controller";
 
@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 
 describe("workspace identity controller", () => {
-  it("normalizes one rename and replaces only matching directory and owner entries", async () => {
+  it("normalizes one rename and replaces only the matching directory entry", async () => {
     const target = workspace("workspace-1", "acme");
     const sibling = workspace("workspace-2", "platform");
     const accepted = { ...target, name: "platform_team", updated_at: "2026-07-21T12:00:00Z" };
@@ -34,7 +34,6 @@ describe("workspace identity controller", () => {
       user: sessionUser(),
       workspaces: [target, sibling],
     });
-    queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, target);
     updateWorkspaceMock.mockResolvedValue(accepted);
     const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
@@ -48,19 +47,7 @@ describe("workspace identity controller", () => {
       user: sessionUser(),
       workspaces: [accepted, sibling],
     });
-    expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(accepted);
     expect(onRenamed).toHaveBeenCalledWith("platform_team");
-
-    const otherOwner = workspace("workspace-owner", "owner");
-    queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, otherOwner);
-    updateWorkspaceMock.mockResolvedValue({ ...accepted, name: "platform-next" });
-    const second = renderController({ queryClient, workspace: accepted, onRenamed });
-    act(() => second.result.current.beginEditing());
-    act(() => second.result.current.setDraftName("platform-next"));
-    act(() => second.result.current.save());
-
-    await waitFor(() => expect(second.result.current.mode).toBe("saved"));
-    expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(otherOwner);
   });
 
   it("keeps a failed draft and exact error available for retry", async () => {

@@ -1,9 +1,9 @@
-"""Complete one CLI device login and delete the minted workspace token.
+"""Complete one CLI device login and revoke the account token it mints.
 
 Prerequisites: an authenticated public lazycloud profile targeting a healthy
 local stack and LAZYCLOUD_E2E_ADMIN_TOKEN. The scenario uses an isolated CLI
 home, approves the announced code through the public admin API, verifies the
-selected workspace, and deletes only the uniquely minted token.
+account the credential names, and revokes only the uniquely minted token.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from shared.http.device_auth import DeviceCodeResponse
 from shared.http.system import AuthTokenResponse, TokenListResponse
 from shared.http.workspaces import WorkspaceListResponse
 from shared.http_transport import HttpChannel
-from shared.identity import DeviceAuthorizationStatus
+from shared.identity import DeviceAuthorizationStatus, TokenStatus
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -42,7 +42,11 @@ class LoginOutput(BaseModel):
 
 
 def _tokens(channel: HttpChannel) -> list[AuthTokenResponse]:
-    return TokenListResponse.model_validate(channel.get("/api/v1/tokens/all")).tokens
+    return TokenListResponse.model_validate(channel.get("/api/v1/tokens/all")).data
+
+
+def _live_token_ids(channel: HttpChannel) -> set[str]:
+    return {token.id for token in _tokens(channel) if token.status is TokenStatus.Active}
 
 
 def _read_stream(stream: TextIO, received: queue.Queue[str | None]) -> None:
@@ -124,8 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     matches = [item for item in workspaces if item.name == workspace]
     if len(matches) != 1:
         raise RuntimeError("device-login workspace is unavailable or ambiguous")
-    selected_workspace = matches[0]
-    before = {token.id for token in _tokens(admin)}
+    before = _live_token_ids(admin)
     minted: AuthTokenResponse | None = None
     profile = f"e2e-device-{time.time_ns()}"
     try:
@@ -182,10 +185,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if len(created) != 1:
             raise RuntimeError("device login did not mint exactly one token")
         minted = created[0]
-        if (
-            minted.name != device_login_client_name()
-            or minted.workspace_id != selected_workspace.id
-        ):
+        # A device login mints an account credential, so the row names the person who
+        # approved it and no workspace at all.
+        if minted.name != device_login_client_name() or minted.workspace_id:
             raise RuntimeError("device login minted a token for the wrong owner")
         print(
             json.dumps(
@@ -203,12 +205,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if len(candidates) == 1:
                 minted = candidates[0]
         if minted is not None:
-            admin.request(
-                "DELETE",
-                f"/api/v1/tokens/{quote(minted.id, safe='')}?workspace={quote(workspace, safe='')}",
-            )
-        if {token.id for token in _tokens(admin)} != before:
-            raise RuntimeError("device-login token cleanup did not restore the public baseline")
+            admin.request("POST", f"/api/v1/tokens/{quote(minted.id, safe='')}/revoke")
+        # Revocation keeps the row, so the baseline is which credentials still work.
+        if _live_token_ids(admin) != before:
+            raise RuntimeError("device-login token cleanup left a live credential behind")
     return 0
 
 

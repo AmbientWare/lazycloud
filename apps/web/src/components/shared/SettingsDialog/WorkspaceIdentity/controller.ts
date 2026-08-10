@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiProtocolError } from "@/lib/api/client";
 import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { currentWorkspaceQueryOptions, updateWorkspace } from "@/lib/queries/workspace";
+import { updateWorkspace } from "@/lib/queries/workspace";
 
 export type WorkspaceIdentityMode = "idle" | "editing" | "saving" | "saved" | "error";
 
@@ -70,9 +70,6 @@ export function useWorkspaceIdentityController({
               ),
             }
           : session,
-      );
-      queryClient.setQueryData<Workspace>(currentWorkspaceQueryOptions().queryKey, (owner) =>
-        owner?.id === updated.id ? updated : owner,
       );
       setState((current) => {
         if (current.workspaceId !== command.workspaceId) return current;

@@ -75,8 +75,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Append the admin cross-workspace `workspace` query param. Without it the API
- * scopes every request to the bearer token's own workspace.
+ * Name the workspace a request acts on, and let membership authorize it. A request
+ * that names none resolves the default rather than guessing among the account's others.
  */
 export function withWorkspace(path: string, workspaceId: string): string {
   const separator = path.includes("?") ? "&" : "?";

@@ -37,10 +37,14 @@ broad barrel, and delete the old re-export path.
 
 ## Data And Security
 
-- Requests are same-origin, carry the auth-store bearer token, and are scoped to
-  the active workspace. Sign-in is a username and password exchanged for a session
-  credential; there is no paste-a-token path, because two ways in means two ways to
-  keep working.
+- Requests are same-origin and carry the auth-store bearer token. Sign-in is a
+  username and password exchanged for a session credential; there is no
+  paste-a-token path, because two ways in means two ways to keep working.
+- That credential names a person rather than a workspace, so a workspace-scoped
+  request names its workspace in the `workspace` query parameter. Resources the
+  account owns—access tokens, the connected cloud account, domains, joined
+  machines—are addressed without one and keyed off the account, so switching
+  workspace does not invalidate them.
 - Validate every JSON response against the hand-maintained Zod schemas that
   mirror the server contracts. A contract change updates both halves together.
 - TanStack Query is authoritative for server records: option builders live in
