@@ -22,7 +22,13 @@ from shared.identity import (
     WorkspaceRole,
 )
 
-from api.server.auth import admin_access, read_token, write_token
+from api.server.auth import (
+    admin_access,
+    read_principal,
+    read_token,
+    write_principal,
+    write_token,
+)
 from api.server.dependencies import (
     authorize_token_workspace,
     current_services,
@@ -161,10 +167,16 @@ def set_user_status(
 )
 def list_workspace_members(
     workspace: str,
-    token: read_token,
+    principal: read_principal,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceMemberListResponse:
-    workspace_id = authorize_token_workspace(services, token, workspace, AuthScope.Read)
+    workspace_id = authorize_token_workspace(
+        services,
+        principal.token,
+        workspace,
+        AuthScope.Read,
+        platform_role=principal.platform_role,
+    )
     memberships = services.users.members(workspace_id)
     return WorkspaceMemberListResponse(
         data=[
@@ -183,15 +195,16 @@ def list_workspace_members(
 def add_workspace_member(
     workspace: str,
     request: WorkspaceMemberAddRequest,
-    token: write_token,
+    principal: write_principal,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceMemberResponse:
     """Admitting someone to a workspace is an administrator's decision, not a member's."""
     workspace_id = authorize_token_workspace(
         services,
-        token,
+        principal.token,
         workspace,
         AuthScope.Write,
+        platform_role=principal.platform_role,
         required_role=WorkspaceRole.Administrator,
     )
     if request.role is WorkspaceRole.Owner:
@@ -217,14 +230,15 @@ def set_workspace_member_role(
     workspace: str,
     user_id: str,
     request: WorkspaceMemberRoleRequest,
-    token: write_token,
+    principal: write_principal,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceMemberResponse:
     workspace_id = authorize_token_workspace(
         services,
-        token,
+        principal.token,
         workspace,
         AuthScope.Write,
+        platform_role=principal.platform_role,
         required_role=WorkspaceRole.Administrator,
     )
     if request.role is WorkspaceRole.Owner:
@@ -248,14 +262,15 @@ def set_workspace_member_role(
 def remove_workspace_member(
     workspace: str,
     user_id: str,
-    token: write_token,
+    principal: write_principal,
     services: ApiServices = Depends(current_services),
 ) -> Response:
     workspace_id = authorize_token_workspace(
         services,
-        token,
+        principal.token,
         workspace,
         AuthScope.Write,
+        platform_role=principal.platform_role,
         required_role=WorkspaceRole.Administrator,
     )
     if not services.users.remove_member(workspace_id=workspace_id, user_id=user_id):
@@ -274,7 +289,7 @@ def _authorize_user_access(
     user_id: str,
 ) -> None:
     """Your own account, or any account when you administer the platform."""
-    acting_user_id = require_user_principal(services, token)
+    acting_user_id = require_user_principal(token)
     if acting_user_id == user_id:
         return
     if _is_platform_administrator(services, token):

@@ -52,7 +52,7 @@ def get_current_session(
     token: read_token,
     services: ApiServices = Depends(current_services),
 ) -> CurrentSessionResponse:
-    user_id = require_user_principal(services, token)
+    user_id = require_user_principal(token)
     user = services.users.get(user_id)
     return CurrentSessionResponse(
         user=user_response(user),
@@ -74,7 +74,7 @@ def sign_out(
     Signing out in one place must not sign the person out everywhere, so this ends
     the presented session rather than every session the account holds.
     """
-    require_user_principal(services, token)
+    require_user_principal(token)
     services.auth.revoke_token(token.id)
     services.auth.credentials_revoked()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

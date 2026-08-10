@@ -78,7 +78,7 @@ def api_v1_create_workspace(
         storage = workspace_storage_config(request.storage) if request.storage is not None else None
         result = service.create_workspace(
             request.name,
-            owner_user_id=require_user_principal(services, token),
+            owner_user_id=require_user_principal(token),
             storage=storage,
         )
         return workspace_response(result.workspace)
@@ -134,7 +134,7 @@ def upsert_workspace(
     return workspace_response(
         service.set_workspace(
             name,
-            owner_user_id=require_user_principal(services, token),
+            owner_user_id=require_user_principal(token),
             storage=workspace_storage_config(request.storage),
             signing_key_prefix=request.signing_key_prefix,
             primary_token_id=request.primary_token_id,

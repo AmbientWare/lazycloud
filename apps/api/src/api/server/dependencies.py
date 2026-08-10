@@ -6,10 +6,16 @@ from typing import Annotated, Protocol
 from control.service import ControlPlaneService
 from fastapi import Depends, HTTPException, Security, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from identity.auth import AuthError, AuthorizationDeniedError
+from identity.auth import AuthError, AuthorizationDeniedError, AuthorizedPrincipal
 from identity.authz import AuthzRequirement, decide_authorization, workspace_requirement
 from shared.errors import NotFoundError
-from shared.identity import AuthScope, AuthTokenRecord, WorkspaceRole, WorkspaceStatus
+from shared.identity import (
+    AuthScope,
+    AuthTokenRecord,
+    PlatformRole,
+    WorkspaceRole,
+    WorkspaceStatus,
+)
 from starlette.requests import HTTPConnection
 
 from api.server.services import ApiServices
@@ -23,6 +29,7 @@ WorkspaceScopeDependency = Callable[..., str]
 AuthScopeDependency = Callable[..., None]
 OptionalTokenDependency = Callable[..., AuthTokenRecord | None]
 RequiredTokenDependency = Callable[..., AuthTokenRecord]
+RequiredPrincipalDependency = Callable[..., AuthorizedPrincipal]
 WebSocketAuthDependency = Callable[..., Awaitable[None]]
 
 
@@ -86,9 +93,8 @@ def require_workspace_scope(
         credentials: AuthorizationCredentials = None,
         workspace: str | None = None,
     ) -> str:
-        token = authorize_services(services, credentials, scope)
-        if token is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
+        principal = require_principal(services, credentials, scope)
+        token = principal.token
         # A workspace-scoped credential names its own; a person's does not, so an
         # unnamed workspace resolves to "default" and is then checked against their
         # membership. Guessing among the workspaces they hold would sometimes act on
@@ -98,6 +104,7 @@ def require_workspace_scope(
             token,
             workspace or token.workspace_id or DEFAULT_WORKSPACE_NAME,
             scope,
+            platform_role=principal.platform_role,
             strict=strict,
         )
 
@@ -110,6 +117,7 @@ def authorize_token_workspace(
     workspace: str,
     action: AuthScope,
     *,
+    platform_role: PlatformRole,
     strict: bool = False,
     required_role: WorkspaceRole = WorkspaceRole.Member,
 ) -> str:
@@ -134,7 +142,7 @@ def authorize_token_workspace(
             membership=membership,
             required_role=required_role,
         ),
-        platform_role=services.auth.platform_role(token),
+        platform_role=platform_role,
     )
     if not decision.allowed:
         # The token authenticated but is not allowed to act on this workspace.
@@ -142,10 +150,7 @@ def authorize_token_workspace(
     return canonical
 
 
-def require_user_principal(
-    services: ApiServices,
-    token: AuthTokenRecord,
-) -> str:
+def require_user_principal(token: AuthTokenRecord) -> str:
     """The account a request acts as, for resources a person owns rather than a workspace.
 
     A workspace-scoped automation token deliberately fails here: connecting a cloud
@@ -178,15 +183,15 @@ def websocket_authorization_header(websocket: WebSocket) -> str | None:
     return websocket.headers.get("authorization")
 
 
-def authorize_websocket(services: ApiServices, websocket: WebSocket) -> AuthTokenRecord:
+def authorize_websocket(services: ApiServices, websocket: WebSocket) -> AuthorizedPrincipal:
     try:
-        token = services.auth.authorize_header(
+        principal = services.auth.authorize_principal(
             websocket_authorization_header(websocket),
             AuthzRequirement(action=AuthScope.Write),
         )
-        if token is None:
+        if principal is None:
             raise AuthError("missing authorization principal")
-        return token
+        return principal
     except AuthError as exc:
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION,
@@ -197,7 +202,7 @@ def authorize_websocket(services: ApiServices, websocket: WebSocket) -> AuthToke
 def websocket_workspace(
     services: ApiServices,
     websocket: WebSocket,
-    token: AuthTokenRecord,
+    principal: AuthorizedPrincipal,
     scope: AuthScope,
 ) -> str:
     """The workspace an already-authorized socket acts in.
@@ -208,12 +213,14 @@ def websocket_workspace(
     names a person rather than a workspace.
     """
     named = websocket.query_params.get("workspace", "")
+    token = principal.token
     try:
         return authorize_token_workspace(
             services,
             token,
             named or token.workspace_id or DEFAULT_WORKSPACE_NAME,
             scope,
+            platform_role=principal.platform_role,
         )
     except HTTPException as exc:
         raise WebSocketException(
@@ -231,16 +238,16 @@ def authorize_websocket_workspace(services: ApiServices, websocket: WebSocket) -
     )
 
 
-def authorize_services(
+def authorize_principal(
     services: ApiServices,
     credentials: HTTPAuthorizationCredentials | None,
     scope: AuthScope,
     *,
     requirement: AuthzRequirement | None = None,
     allow_if_no_tokens: bool = False,
-) -> AuthTokenRecord | None:
+) -> AuthorizedPrincipal | None:
     try:
-        return services.auth.authorize_header(
+        return services.auth.authorize_principal(
             authorization_header(credentials),
             requirement or AuthzRequirement(action=scope),
             allow_if_no_tokens=allow_if_no_tokens,
@@ -251,23 +258,33 @@ def authorize_services(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
 
-def require_auth_scope(
+def require_principal(
+    services: ApiServices,
+    credentials: HTTPAuthorizationCredentials | None,
+    scope: AuthScope,
+) -> AuthorizedPrincipal:
+    principal = authorize_principal(services, credentials, scope)
+    if principal is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
+    return principal
+
+
+def authorize_services(
+    services: ApiServices,
+    credentials: HTTPAuthorizationCredentials | None,
     scope: AuthScope,
     *,
+    requirement: AuthzRequirement | None = None,
     allow_if_no_tokens: bool = False,
-) -> AuthScopeDependency:
-    def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
-        credentials: AuthorizationCredentials = None,
-    ) -> None:
-        _ = authorize_services(
-            services,
-            credentials,
-            scope,
-            allow_if_no_tokens=allow_if_no_tokens,
-        )
-
-    return dependency
+) -> AuthTokenRecord | None:
+    principal = authorize_principal(
+        services,
+        credentials,
+        scope,
+        requirement=requirement,
+        allow_if_no_tokens=allow_if_no_tokens,
+    )
+    return principal.token if principal is not None else None
 
 
 def require_app_scope(
@@ -315,10 +332,21 @@ def require_workspace_token(
         services: Annotated[ApiServices, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> AuthTokenRecord:
-        token = authorize_services(services, credentials, scope)
-        if token is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
-        return token
+        return require_principal(services, credentials, scope).token
+
+    return dependency
+
+
+def require_workspace_principal(
+    scope: AuthScope,
+) -> RequiredPrincipalDependency:
+    """For a route that authorizes a workspace named in its path rather than its query."""
+
+    def dependency(
+        services: Annotated[ApiServices, Depends(current_services)],
+        credentials: AuthorizationCredentials = None,
+    ) -> AuthorizedPrincipal:
+        return require_principal(services, credentials, scope)
 
     return dependency
 
@@ -330,10 +358,7 @@ def require_user_scope(scope: AuthScope) -> WorkspaceScopeDependency:
         services: Annotated[ApiServices, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> str:
-        token = authorize_services(services, credentials, scope)
-        if token is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing authorization principal")
-        return require_user_principal(services, token)
+        return require_user_principal(require_principal(services, credentials, scope).token)
 
     return dependency
 
@@ -359,30 +384,6 @@ def require_app_requirement(
 
 
 def require_app_websocket_scope(
-    scope: AuthScope,
-    *,
-    allow_if_no_tokens: bool = False,
-) -> WebSocketAuthDependency:
-    async def dependency(
-        websocket: WebSocket,
-        services: Annotated[ApiServices, Depends(current_websocket_services)],
-    ) -> None:
-        try:
-            services.auth.authorize_header(
-                websocket_authorization_header(websocket),
-                AuthzRequirement(action=scope),
-                allow_if_no_tokens=allow_if_no_tokens,
-            )
-        except AuthError as exc:
-            raise WebSocketException(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason=str(exc),
-            ) from exc
-
-    return dependency
-
-
-def require_websocket_scope(
     scope: AuthScope,
     *,
     allow_if_no_tokens: bool = False,

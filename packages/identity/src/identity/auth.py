@@ -376,6 +376,19 @@ def _recovered_administrator(
     return user
 
 
+@dataclass(frozen=True, slots=True)
+class AuthorizedPrincipal:
+    """An authorized credential and the platform standing it carries.
+
+    Resolving the role costs a read of the owning account, and a request that
+    checks a workspace needs the same answer twice — once to authorize the
+    credential, once to authorize the workspace. Carrying it makes those one read.
+    """
+
+    token: AuthTokenRecord
+    platform_role: PlatformRole
+
+
 _TOKEN_ITERATIONS = 200_000
 """Lower than the password work factor: a token is 256 bits of urandom, not a guess."""
 
@@ -682,6 +695,9 @@ class AuthService:
             if stage_token is not None:
                 stage_token(raw_token)
         issuer.committed()
+        # Recovery can promote an existing account and revoke its sessions, neither of
+        # which a replica sees until its token cache is dropped.
+        self._invalidate_token_caches()
         return BootstrapAdminToken(
             token=raw_token,
             record=record,
@@ -981,6 +997,25 @@ class AuthService:
             raise AuthError(msg)
         return self.authenticate(authorization.removeprefix("Bearer ").strip(), scope=scope)
 
+    def authorize_principal(
+        self,
+        authorization: str | None,
+        requirement: AuthzRequirement,
+        *,
+        allow_if_no_tokens: bool = False,
+    ) -> AuthorizedPrincipal | None:
+        token = self.authenticate_header(
+            authorization,
+            allow_if_no_tokens=allow_if_no_tokens,
+        )
+        if token is None:
+            return None
+        platform_role = self.platform_role(token)
+        decision = decide_authorization(token, requirement, platform_role=platform_role)
+        if not decision.allowed:
+            raise AuthorizationDeniedError(decision.message)
+        return AuthorizedPrincipal(token, platform_role)
+
     def authorize_header(
         self,
         authorization: str | None,
@@ -988,20 +1023,12 @@ class AuthService:
         *,
         allow_if_no_tokens: bool = False,
     ) -> AuthTokenRecord | None:
-        token = self.authenticate_header(
+        principal = self.authorize_principal(
             authorization,
+            requirement,
             allow_if_no_tokens=allow_if_no_tokens,
         )
-        if token is None:
-            return None
-        decision = decide_authorization(
-            token,
-            requirement,
-            platform_role=self.platform_role(token),
-        )
-        if not decision.allowed:
-            raise AuthorizationDeniedError(decision.message)
-        return token
+        return principal.token if principal is not None else None
 
     def authorize_token_identity(
         self,
