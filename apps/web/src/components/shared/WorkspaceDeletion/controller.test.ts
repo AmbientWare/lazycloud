@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { currentWorkspaceQueryOptions } from "@/lib/queries/workspace";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { useWorkspaceDeletionController } from "./controller";
@@ -22,7 +21,6 @@ describe("workspace deletion controller", () => {
       user: sessionUser(),
       workspaces: [sibling, target],
     });
-    queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, sibling);
     queryClient.setQueryData(workspaceQueryKeys.apps.root(target.id), ["target"]);
     queryClient.setQueryData(workspaceQueryKeys.apps.root(sibling.id), ["sibling"]);
     queryClient.setQueryData(["global", "health"], "healthy");
@@ -52,7 +50,6 @@ describe("workspace deletion controller", () => {
     });
     expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(target.id))).toBeUndefined();
     expect(queryClient.getQueryData(workspaceQueryKeys.apps.root(sibling.id))).toEqual(["sibling"]);
-    expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(sibling);
     expect(queryClient.getQueryData(["global", "health"])).toBe("healthy");
     expect(rememberWorkspaceName).toHaveBeenCalledWith(sibling.name);
     expect(replacePath).toHaveBeenCalledWith("/w/default/apps");

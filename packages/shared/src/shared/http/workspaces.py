@@ -46,7 +46,7 @@ def workspace_response(record: WorkspaceRecord) -> WorkspaceResponse:
 
 class WorkspaceSetRequest(HttpModel):
     name: str = "default"
-    storage: WorkspaceStorageResponse = Field(default_factory=WorkspaceStorageResponse)
+    storage: WorkspaceStorageResponse | None = None
     signing_key_prefix: str | None = None
     primary_token_id: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)

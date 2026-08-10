@@ -30,9 +30,3 @@ export const workspaceSchema = z
   })
   .strict();
 export type Workspace = z.infer<typeof workspaceSchema>;
-
-export const workspaceListSchema = z
-  .object({
-    workspaces: z.array(workspaceSchema),
-  })
-  .strict();

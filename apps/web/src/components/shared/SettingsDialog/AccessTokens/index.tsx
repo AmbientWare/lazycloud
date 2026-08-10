@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
+import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -103,6 +104,13 @@ function TokenTable({
           <TokenRow key={token.id} token={token} controller={controller} />
         ))}
       </ul>
+      <InfiniteScrollBoundary
+        nextCursor={controller.nextCursor}
+        loading={controller.loadingMore}
+        error={controller.loadMoreError}
+        onLoadMore={controller.loadMore}
+        resourceLabel="access tokens"
+      />
     </div>
   );
 }

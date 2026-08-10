@@ -128,7 +128,7 @@ def list_tokens(
     _auth: admin_access,
 ) -> TokenListResponse:
     tokens = services.auth.list_tokens()
-    return TokenListResponse(tokens=[_public_token(item) for item in tokens])
+    return TokenListResponse(data=[_public_token(item) for item in tokens])
 
 
 @router.patch(
@@ -170,11 +170,17 @@ def api_v1_workspace_signing_key(
     operation_id="list_account_tokens",
 )
 def api_v1_list_account_tokens(
+    limit: int = 50,
+    cursor: str | None = None,
+    *,
     user_id: read_user,
     services: ApiServices = Depends(current_services),
 ) -> TokenListResponse:
-    records = services.auth.list_account_tokens(user_id)
-    return TokenListResponse(tokens=[_public_token(item) for item in records])
+    result = services.auth.list_account_tokens(user_id, limit=limit, cursor=cursor)
+    return TokenListResponse(
+        data=[_public_token(item) for item in result.page.records],
+        next=result.next,
+    )
 
 
 @router.post(

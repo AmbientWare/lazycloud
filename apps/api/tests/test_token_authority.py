@@ -71,7 +71,7 @@ def test_one_account_cannot_see_or_revoke_another_account_s_tokens(
     listed = client.get("/api/v1/tokens", headers=_auth(stranger_token))
     assert listed.status_code == 200
     assert created.record.id not in {
-        item.id for item in TokenListResponse.model_validate_json(listed.content).tokens
+        item.id for item in TokenListResponse.model_validate_json(listed.content).data
     }
 
     revoked = client.post(
@@ -83,10 +83,51 @@ def test_one_account_cannot_see_or_revoke_another_account_s_tokens(
     still_active = client.get("/api/v1/tokens", headers=_auth(owner_token))
     persisted = next(
         item
-        for item in TokenListResponse.model_validate_json(still_active.content).tokens
+        for item in TokenListResponse.model_validate_json(still_active.content).data
         if item.id == created.record.id
     )
     assert persisted.status is TokenStatus.Active
+
+
+def test_the_account_token_list_pages_through_a_server_cursor(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    """Every credential the account holds is reachable by following the cursor.
+
+    A row no page ever reaches is a credential its owner cannot revoke, and tokens
+    minted in the same instant share a timestamp — which is why the cursor carries
+    the identifier tie-break the ordering does.
+    """
+    owner_token, _owner = administrator_credential(isolated_services, "token-pager")
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    minted = {
+        TokenCreateResponse.model_validate_json(
+            client.post(
+                "/api/v1/tokens",
+                headers=_auth(owner_token),
+                json={"name": f"paged-{index}"},
+            ).content
+        ).record.id
+        for index in range(5)
+    }
+
+    listed: list[str] = []
+    cursor = ""
+    for _ in range(len(minted) + 1):
+        response = client.get(
+            f"/api/v1/tokens?limit=2&cursor={cursor}",
+            headers=_auth(owner_token),
+        )
+        page = TokenListResponse.model_validate_json(response.content)
+        listed.extend(item.id for item in page.data)
+        cursor = page.next
+        if not cursor:
+            break
+
+    assert cursor == ""
+    assert len(listed) == len(set(listed))
+    assert minted <= set(listed)
 
 
 def test_token_cannot_revoke_its_own_record(
@@ -113,7 +154,7 @@ def test_token_cannot_revoke_its_own_record(
     assert listed.status_code == 200
     persisted = next(
         item
-        for item in TokenListResponse.model_validate_json(listed.content).tokens
+        for item in TokenListResponse.model_validate_json(listed.content).data
         if item.id == own_record.id
     )
     assert persisted.status is TokenStatus.Active

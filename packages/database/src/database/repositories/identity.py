@@ -907,6 +907,18 @@ class CredentialRepository:
         return self.records.list(workspace_id=workspace_id)
 
 
+@dataclass(frozen=True, slots=True)
+class AccountTokenCursor:
+    created_at: datetime
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AccountTokenPage:
+    records: tuple[AuthTokenRecord, ...]
+    next: AccountTokenCursor | None = None
+
+
 @dataclass(slots=True)
 class TokenRepository:
     session: Session
@@ -955,7 +967,13 @@ class TokenRepository:
         ).first()
         return auth_token_record_from_table(row) if row is not None else None
 
-    def list_manageable_for_user(self, user_id: str) -> list[AuthTokenRecord]:
+    def list_manageable_for_user(
+        self,
+        user_id: str,
+        *,
+        limit: int,
+        cursor: AccountTokenCursor | None = None,
+    ) -> AccountTokenPage:
         """The credentials a person deliberately created, which are theirs to manage.
 
         Their sessions are not among them: a session is what being signed in *is*, it
@@ -967,16 +985,38 @@ class TokenRepository:
         it ever existed, when it was made, and when it stopped working, so removing
         the row would destroy the account's own history of it.
         """
-        rows = self.session.scalars(
-            select(TokenTable)
-            .where(
-                TokenTable.user_id == user_id,
-                TokenTable.kind == TokenKind.User.value,
-                TokenTable.status == TokenStatus.Active.value,
-            )
-            .order_by(TokenTable.created_at.desc(), TokenTable.id.asc())
+        statement = select(TokenTable).where(
+            TokenTable.user_id == user_id,
+            TokenTable.kind == TokenKind.User.value,
+            TokenTable.status == TokenStatus.Active.value,
         )
-        return [auth_token_record_from_table(row) for row in rows]
+        if cursor is not None:
+            statement = statement.where(
+                or_(
+                    TokenTable.created_at < cursor.created_at,
+                    and_(
+                        TokenTable.created_at == cursor.created_at,
+                        TokenTable.id > cursor.id,
+                    ),
+                )
+            )
+        rows = list(
+            self.session.scalars(
+                statement.order_by(
+                    TokenTable.created_at.desc(),
+                    TokenTable.id.asc(),
+                ).limit(limit + 1)
+            )
+        )
+        page_rows = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit and page_rows:
+            last = page_rows[-1]
+            next_cursor = AccountTokenCursor(created_at=last.created_at, id=str(last.id))
+        return AccountTokenPage(
+            records=tuple(auth_token_record_from_table(row) for row in page_rows),
+            next=next_cursor,
+        )
 
     def revoke_for_user(
         self,

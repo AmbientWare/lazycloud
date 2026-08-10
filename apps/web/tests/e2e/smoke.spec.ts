@@ -114,7 +114,7 @@ async function mockControlPlane(page: Page) {
     await route.fulfill({ json: { data: [], next: "" } });
   });
   await page.route("**/api/v1/tokens*", async (route) => {
-    await route.fulfill({ json: { tokens: [] } });
+    await route.fulfill({ json: { data: [], next: "" } });
   });
   await page.route("**/api/v1/stubs?*", async (route) => {
     await route.fulfill({ json: { stubs: [] } });

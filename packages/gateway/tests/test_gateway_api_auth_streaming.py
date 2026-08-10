@@ -102,7 +102,7 @@ def test_account_token_create_names_and_revokes(
     assert revoked.status_code == 200
     token_items = _response_object_list(
         client.get("/api/v1/tokens", headers=_auth(admin_token)),
-        "tokens",
+        "data",
     )
     names = [_required_string(item, "name") for item in token_items]
     assert "dashboard" not in names

@@ -41,6 +41,10 @@ export const awsAuthorizationErrorCodeSchema = z.enum([
   "upstream_unavailable",
 ]);
 
+const awsRegionSchema = z
+  .string()
+  .regex(/^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$/);
+
 export const awsAuthorizationGenerationSchema = z
   .object({
     generation: z.number().int().positive(),
@@ -48,7 +52,7 @@ export const awsAuthorizationGenerationSchema = z
     managed_authorization: z
       .object({
         stack_name: z.string().min(1).max(128),
-        region: z.string().regex(/^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$/),
+        region: awsRegionSchema,
         generation: z.number().int().positive(),
         stack_id: z.string().min(1).max(2048).nullable(),
         template_version: z.string().min(1).max(128),
@@ -81,7 +85,7 @@ const awsDefaultInstanceTypeSchema = z
 export const awsComputeConfigurationSchema = z
   .object({
     revision: z.number().int().positive(),
-    default_region: z.string(),
+    default_region: awsRegionSchema,
     default_instance_type: awsDefaultInstanceTypeSchema,
     initial_cpu_workers: z.number().int().min(0).max(100),
     min_cpu_workers: z.number().int().min(0).max(100),

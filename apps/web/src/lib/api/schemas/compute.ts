@@ -89,25 +89,6 @@ export const customerComputeCatalogSchema = z
   })
   .strict();
 
-/** One pool a workload may name, described by the units feeding it. */
-export const machinePoolSchema = z
-  .object({
-    name: z.string(),
-    is_default: z.boolean().default(false),
-    providers: z.array(z.string()).default([]),
-    unit_count: z.number().int().nonnegative().default(0),
-    gpu_types: z.array(z.string()).default([]),
-  })
-  .strict();
-export type MachinePool = z.infer<typeof machinePoolSchema>;
-
-export const machinePoolListSchema = z
-  .object({
-    data: z.array(machinePoolSchema),
-    next: z.string(),
-  })
-  .strict();
-
 export const poolJoinCommandResponseSchema = z
   .object({
     command: z.string(),
@@ -207,38 +188,3 @@ export const customerComputeInstanceListSchema = z
     next: z.string(),
   })
   .strict();
-
-const workerContainerSchema = z.object({
-  container_id: z.string(),
-  workspace_id: z.string().default(""),
-  stub_id: z.string().default(""),
-  status: z.string().default(""),
-  scheduled_at: z.string().nullish(),
-  started_at: z.string().nullish(),
-});
-
-export const workerSchema = z.object({
-  id: z.string(),
-  status: z.string(),
-  pool: z.string(),
-  machine_id: z.string().default(""),
-  gpu: z.string().default(""),
-  runtime: z.string().default(""),
-  total_cpu: z.number().default(0),
-  total_memory: z.number().default(0),
-  total_gpu_count: z.number().default(0),
-  free_cpu: z.number().default(0),
-  free_memory: z.number().default(0),
-  free_gpu_count: z.number().default(0),
-  resource_version: z.number().default(0),
-  requires_pool_selector: z.boolean().default(false),
-  preemptible: z.boolean().default(false),
-  created_at: z.string().nullish(),
-  updated_at: z.string().nullish(),
-  active_containers: z.array(workerContainerSchema).default([]),
-});
-export type Worker = z.infer<typeof workerSchema>;
-
-export const workerListSchema = z.object({
-  workers: z.array(workerSchema).default([]),
-});

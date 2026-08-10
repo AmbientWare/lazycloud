@@ -239,9 +239,6 @@ class AdminApiClient:
             self.channel.post(f"/api/v1/tokens/{url_path_segment(token_id)}/revoke")
         )
 
-    def delete_token(self, token_id: str) -> None:
-        self.channel.delete(f"/api/v1/tokens/{url_path_segment(token_id)}")
-
     def run_container(self, request: ContainerRunRequest) -> ContainerResponse:
         return ContainerResponse.model_validate(
             self.channel.post(

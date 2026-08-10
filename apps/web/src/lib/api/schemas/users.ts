@@ -26,7 +26,6 @@ export const sessionSchema = z
     user: userSchema,
   })
   .strict();
-export type Session = z.infer<typeof sessionSchema>;
 
 export const currentSessionSchema = z
   .object({

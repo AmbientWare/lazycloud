@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions } from "@tanstack/react-query";
 
 import { apiRequest } from "@/lib/api/client";
 import {
@@ -8,10 +8,13 @@ import {
   tokenListSchema,
   type AuthToken,
   type TokenCreateResponse,
+  type TokenListResponse,
 } from "@/lib/api/schemas";
+import { selectInfiniteList, type InfiniteListQueryData } from "@/lib/queries/infinite-list";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 const COLLECTION = "/api/v1/tokens";
+const PAGE_SIZE = 50;
 
 export type CreateTokenInput = {
   name: string;
@@ -30,10 +33,33 @@ function tokenPath(tokenId: string): string {
  * answer everywhere and stays out of the workspace keys that a switch invalidates.
  */
 export function tokensQueryOptions() {
-  return queryOptions({
+  return infiniteQueryOptions({
     queryKey: accountQueryKeys.tokens(),
-    queryFn: () => apiRequest(COLLECTION, tokenListSchema),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (pageParam) params.set("cursor", pageParam);
+      return apiRequest(`${COLLECTION}?${params.toString()}`, tokenListSchema);
+    },
+    getNextPageParam: nextTokenCursor,
   });
+}
+
+/** A repeated cursor would page forever, so a server that returns one ends the list. */
+function nextTokenCursor(
+  lastPage: TokenListResponse,
+  pages: TokenListResponse[],
+): string | undefined {
+  if (!lastPage.next) return undefined;
+  const cursorAlreadySeen = pages.slice(0, -1).some((page) => page.next === lastPage.next);
+  return cursorAlreadySeen ? undefined : lastPage.next;
+}
+
+export function selectTokenList(
+  data: InfiniteListQueryData<AuthToken> | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectInfiniteList(data, hasNextPage, (token) => token.id);
 }
 
 export function createToken(input: CreateTokenInput): Promise<TokenCreateResponse> {

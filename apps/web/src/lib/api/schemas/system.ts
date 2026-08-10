@@ -13,10 +13,8 @@ export const tokenKindSchema = z.enum([
   "worker-private",
   "machine",
 ]);
-export type TokenKind = z.infer<typeof tokenKindSchema>;
 
 export const tokenStatusSchema = z.enum(["active", "revoked"]);
-export type TokenStatus = z.infer<typeof tokenStatusSchema>;
 
 export const authTokenSchema = z
   .object({
@@ -42,7 +40,8 @@ export type AuthToken = z.infer<typeof authTokenSchema>;
 
 export const tokenListSchema = z
   .object({
-    tokens: z.array(authTokenSchema),
+    data: z.array(authTokenSchema),
+    next: z.string(),
   })
   .strict();
 export type TokenListResponse = z.infer<typeof tokenListSchema>;

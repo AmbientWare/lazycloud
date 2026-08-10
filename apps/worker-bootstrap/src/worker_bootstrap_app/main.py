@@ -209,6 +209,7 @@ def _valid_worker_token(
             name=name,
             kind=TokenKind.Worker,
             workspace_id=workspace_id,
+            scopes=[AuthScope.Worker.value],
         )
     except AuthError:
         return False

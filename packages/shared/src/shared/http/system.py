@@ -61,7 +61,8 @@ class TokenAdminUpdateRequest(HttpModel):
 
 
 class TokenListResponse(HttpModel):
-    tokens: list[AuthTokenResponse] = Field(default_factory=list)
+    data: list[AuthTokenResponse] = Field(default_factory=list)
+    next: str = ""
 
 
 class TokenAdminUpdateResponse(HttpModel):

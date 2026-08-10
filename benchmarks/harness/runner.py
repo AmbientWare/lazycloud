@@ -12,6 +12,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from foundation.process import run_process
+from identity.users import UserService
 from pydantic import JsonValue
 from storage.service import CacheStorage, ObjectStorage
 from storage_client.s3 import S3ObjectInfo
@@ -47,7 +48,12 @@ def _services(root: Path) -> ApiServices:
         owns_redis_client=True,
         owns_binary_redis_client=True,
     )
-    ControlPlaneService(services.context).upsert_workspace("default")
+    control = ControlPlaneService(services.context)
+    owner = UserService(services.context).create(
+        username="benchmark-owner",
+        password="benchmark-owner-password",
+    )
+    control.set_workspace("default", owner_user_id=owner.id)
     return services
 
 
