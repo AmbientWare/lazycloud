@@ -17,7 +17,6 @@ import { Route as WWorkspaceIndexRouteImport } from "./routes/w/$workspace/index
 import { Route as WWorkspaceTasksRouteImport } from "./routes/w/$workspace/tasks"
 import { Route as WWorkspaceUsageIndexRouteImport } from "./routes/w/$workspace/usage/index"
 import { Route as WWorkspaceStorageIndexRouteImport } from "./routes/w/$workspace/storage/index"
-import { Route as WWorkspaceSettingsIndexRouteImport } from "./routes/w/$workspace/settings/index"
 import { Route as WWorkspaceAppsIndexRouteImport } from "./routes/w/$workspace/apps/index"
 import { Route as WWorkspaceTasksTaskIdRouteImport } from "./routes/w/$workspace/tasks.$taskId"
 import { Route as WWorkspaceSandboxesContainerIdRouteImport } from "./routes/w/$workspace/sandboxes/$containerId"
@@ -65,11 +64,6 @@ const WWorkspaceUsageIndexRoute = WWorkspaceUsageIndexRouteImport.update({
 const WWorkspaceStorageIndexRoute = WWorkspaceStorageIndexRouteImport.update({
   id: "/storage/",
   path: "/storage/",
-  getParentRoute: () => WWorkspaceRouteRoute,
-} as any)
-const WWorkspaceSettingsIndexRoute = WWorkspaceSettingsIndexRouteImport.update({
-  id: "/settings/",
-  path: "/settings/",
   getParentRoute: () => WWorkspaceRouteRoute,
 } as any)
 const WWorkspaceAppsIndexRoute = WWorkspaceAppsIndexRouteImport.update({
@@ -129,7 +123,6 @@ export interface FileRoutesByFullPath {
   "/w/$workspace/sandboxes/$containerId": typeof WWorkspaceSandboxesContainerIdRoute
   "/w/$workspace/tasks/$taskId": typeof WWorkspaceTasksTaskIdRoute
   "/w/$workspace/apps/": typeof WWorkspaceAppsIndexRoute
-  "/w/$workspace/settings/": typeof WWorkspaceSettingsIndexRoute
   "/w/$workspace/storage/": typeof WWorkspaceStorageIndexRoute
   "/w/$workspace/usage/": typeof WWorkspaceUsageIndexRoute
   "/w/$workspace/apps/$appId/tasks/$taskId": typeof WWorkspaceAppsAppIdTasksTaskIdRoute
@@ -147,7 +140,6 @@ export interface FileRoutesByTo {
   "/w/$workspace/sandboxes/$containerId": typeof WWorkspaceSandboxesContainerIdRoute
   "/w/$workspace/tasks/$taskId": typeof WWorkspaceTasksTaskIdRoute
   "/w/$workspace/apps": typeof WWorkspaceAppsIndexRoute
-  "/w/$workspace/settings": typeof WWorkspaceSettingsIndexRoute
   "/w/$workspace/storage": typeof WWorkspaceStorageIndexRoute
   "/w/$workspace/usage": typeof WWorkspaceUsageIndexRoute
   "/w/$workspace/apps/$appId/tasks/$taskId": typeof WWorkspaceAppsAppIdTasksTaskIdRoute
@@ -167,7 +159,6 @@ export interface FileRoutesById {
   "/w/$workspace/sandboxes/$containerId": typeof WWorkspaceSandboxesContainerIdRoute
   "/w/$workspace/tasks/$taskId": typeof WWorkspaceTasksTaskIdRoute
   "/w/$workspace/apps/": typeof WWorkspaceAppsIndexRoute
-  "/w/$workspace/settings/": typeof WWorkspaceSettingsIndexRoute
   "/w/$workspace/storage/": typeof WWorkspaceStorageIndexRoute
   "/w/$workspace/usage/": typeof WWorkspaceUsageIndexRoute
   "/w/$workspace/apps/$appId/tasks/$taskId": typeof WWorkspaceAppsAppIdTasksTaskIdRoute
@@ -188,7 +179,6 @@ export interface FileRouteTypes {
     | "/w/$workspace/sandboxes/$containerId"
     | "/w/$workspace/tasks/$taskId"
     | "/w/$workspace/apps/"
-    | "/w/$workspace/settings/"
     | "/w/$workspace/storage/"
     | "/w/$workspace/usage/"
     | "/w/$workspace/apps/$appId/tasks/$taskId"
@@ -206,7 +196,6 @@ export interface FileRouteTypes {
     | "/w/$workspace/sandboxes/$containerId"
     | "/w/$workspace/tasks/$taskId"
     | "/w/$workspace/apps"
-    | "/w/$workspace/settings"
     | "/w/$workspace/storage"
     | "/w/$workspace/usage"
     | "/w/$workspace/apps/$appId/tasks/$taskId"
@@ -225,7 +214,6 @@ export interface FileRouteTypes {
     | "/w/$workspace/sandboxes/$containerId"
     | "/w/$workspace/tasks/$taskId"
     | "/w/$workspace/apps/"
-    | "/w/$workspace/settings/"
     | "/w/$workspace/storage/"
     | "/w/$workspace/usage/"
     | "/w/$workspace/apps/$appId/tasks/$taskId"
@@ -297,13 +285,6 @@ declare module "@tanstack/react-router" {
       path: "/storage"
       fullPath: "/w/$workspace/storage/"
       preLoaderRoute: typeof WWorkspaceStorageIndexRouteImport
-      parentRoute: typeof WWorkspaceRouteRoute
-    }
-    "/w/$workspace/settings/": {
-      id: "/w/$workspace/settings/"
-      path: "/settings"
-      fullPath: "/w/$workspace/settings/"
-      preLoaderRoute: typeof WWorkspaceSettingsIndexRouteImport
       parentRoute: typeof WWorkspaceRouteRoute
     }
     "/w/$workspace/apps/": {
@@ -412,7 +393,6 @@ interface WWorkspaceRouteRouteChildren {
   WWorkspaceAppsAppIdRoute: typeof WWorkspaceAppsAppIdRouteWithChildren
   WWorkspaceSandboxesContainerIdRoute: typeof WWorkspaceSandboxesContainerIdRoute
   WWorkspaceAppsIndexRoute: typeof WWorkspaceAppsIndexRoute
-  WWorkspaceSettingsIndexRoute: typeof WWorkspaceSettingsIndexRoute
   WWorkspaceStorageIndexRoute: typeof WWorkspaceStorageIndexRoute
   WWorkspaceUsageIndexRoute: typeof WWorkspaceUsageIndexRoute
   WWorkspaceAppsAppIdWorkloadsNameRoute: typeof WWorkspaceAppsAppIdWorkloadsNameRouteWithChildren
@@ -424,7 +404,6 @@ const WWorkspaceRouteRouteChildren: WWorkspaceRouteRouteChildren = {
   WWorkspaceAppsAppIdRoute: WWorkspaceAppsAppIdRouteWithChildren,
   WWorkspaceSandboxesContainerIdRoute: WWorkspaceSandboxesContainerIdRoute,
   WWorkspaceAppsIndexRoute: WWorkspaceAppsIndexRoute,
-  WWorkspaceSettingsIndexRoute: WWorkspaceSettingsIndexRoute,
   WWorkspaceStorageIndexRoute: WWorkspaceStorageIndexRoute,
   WWorkspaceUsageIndexRoute: WWorkspaceUsageIndexRoute,
   WWorkspaceAppsAppIdWorkloadsNameRoute:

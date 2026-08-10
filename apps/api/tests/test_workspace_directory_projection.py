@@ -9,7 +9,8 @@ from database.repositories.identity import WorkspaceRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.workspaces import WorkspaceListResponse
-from shared.identity import TokenKind, WorkspaceStatus
+from shared.identity import WorkspaceStatus
+from tests.service_fixtures import administrator_credential
 
 
 def test_admin_current_workspace_honors_explicit_workspace_override(
@@ -17,13 +18,9 @@ def test_admin_current_workspace_honors_explicit_workspace_override(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner = control.get_workspace("default")
+    control.get_workspace("default")
     target = control.upsert_workspace("provider-acceptance")
-    admin_token, _ = AuthService(isolated_services.context).create_token(
-        "workspace-override-admin",
-        kind=TokenKind.Admin,
-        workspace_id=owner.id,
-    )
+    admin_token, _ = administrator_credential(isolated_services, "workspace-override-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(
@@ -42,7 +39,7 @@ def test_admin_can_include_deleting_workspaces_but_not_deleted_tombstones(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner = control.get_workspace("default")
+    control.get_workspace("default")
     active = control.upsert_workspace("projection-active")
     deleting = control.upsert_workspace("projection-deleting")
     deleted = control.upsert_workspace("projection-deleted")
@@ -51,11 +48,7 @@ def test_admin_can_include_deleting_workspaces_but_not_deleted_tombstones(
         deleting_workspace_id=deleting.id,
         deleted_workspace_id=deleted.id,
     )
-    admin_token, _ = AuthService(isolated_services.context).create_token(
-        "directory-admin",
-        kind=TokenKind.Admin,
-        workspace_id=owner.id,
-    )
+    admin_token, _ = administrator_credential(isolated_services, "directory-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(

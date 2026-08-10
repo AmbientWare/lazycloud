@@ -62,6 +62,14 @@ class PodControlChannel(Protocol):
 @dataclass
 class PodControlClient:
     channel: PodControlChannel
+    workspace: str = "default"
+    """Workspace every call acts in, named rather than inferred.
+
+    A user credential reaches every workspace its owner belongs to, so the request
+    has to say which one; inside a container the workspace comes from the environment
+    the runner pins. Either way the caller states it rather than letting the server
+    pick one.
+    """
 
     @classmethod
     def from_endpoint(
@@ -69,15 +77,21 @@ class PodControlClient:
         endpoint: str,
         *,
         token: str | None = None,
+        workspace: str = "default",
         timeout_seconds: float = 10.0,
     ) -> PodControlClient:
         return cls(
-            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds)
+            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds),
+            workspace=workspace,
         )
+
+    def _scoped(self, path: str) -> str:
+        separator = "&" if "?" in path else "?"
+        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
 
     def create_pod(self, request: CreatePodRequest) -> CreatePodResponse:
         return CreatePodResponse.model_validate(
-            self.channel.post("/api/v1/pods", request.model_dump(mode="json"))
+            self.channel.post(self._scoped("/api/v1/pods"), request.model_dump(mode="json"))
         )
 
     def sandbox_exec(
@@ -87,24 +101,24 @@ class PodControlClient:
     ) -> PodSandboxExecResponse:
         return PodSandboxExecResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/exec",
+                self._scoped(f"/api/v1/pods/{container_id}/exec"),
                 request.model_dump(mode="json"),
             )
         )
 
     def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse:
         return PodSandboxStatusResponse.model_validate(
-            self.channel.get(f"/api/v1/pods/{container_id}/status?pid={pid}")
+            self.channel.get(self._scoped(f"/api/v1/pods/{container_id}/status?pid={pid}"))
         )
 
     def sandbox_stdout(self, container_id: str, pid: int) -> PodSandboxStdoutResponse:
         return PodSandboxStdoutResponse.model_validate(
-            self.channel.get(f"/api/v1/pods/{container_id}/stdout?pid={pid}")
+            self.channel.get(self._scoped(f"/api/v1/pods/{container_id}/stdout?pid={pid}"))
         )
 
     def sandbox_stderr(self, container_id: str, pid: int) -> PodSandboxStderrResponse:
         return PodSandboxStderrResponse.model_validate(
-            self.channel.get(f"/api/v1/pods/{container_id}/stderr?pid={pid}")
+            self.channel.get(self._scoped(f"/api/v1/pods/{container_id}/stderr?pid={pid}"))
         )
 
     def sandbox_kill(
@@ -114,14 +128,14 @@ class PodControlClient:
     ) -> PodSandboxKillResponse:
         return PodSandboxKillResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/kill",
+                self._scoped(f"/api/v1/pods/{container_id}/kill"),
                 request.model_dump(mode="json"),
             )
         )
 
     def sandbox_list_processes(self, container_id: str) -> PodSandboxListProcessesResponse:
         return PodSandboxListProcessesResponse.model_validate(
-            self.channel.get(f"/api/v1/pods/{container_id}/processes")
+            self.channel.get(self._scoped(f"/api/v1/pods/{container_id}/processes"))
         )
 
     def sandbox_upload_file(
@@ -139,7 +153,7 @@ class PodControlClient:
         )
         return PodSandboxUploadFileResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/files/upload",
+                self._scoped(f"/api/v1/pods/{container_id}/files/upload"),
                 body.model_dump(mode="json"),
             )
         )
@@ -151,8 +165,10 @@ class PodControlClient:
     ) -> PodSandboxDownloadFileResponse:
         return PodSandboxDownloadFileResponse.model_validate(
             self.channel.get(
-                f"/api/v1/pods/{container_id}/files/download"
-                f"?container_path={_query(container_path)}"
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/files/download"
+                    f"?container_path={_query(container_path)}"
+                )
             )
         )
 
@@ -163,7 +179,9 @@ class PodControlClient:
     ) -> PodSandboxStatFileResponse:
         return PodSandboxStatFileResponse.model_validate(
             self.channel.get(
-                f"/api/v1/pods/{container_id}/files/stat?container_path={_query(container_path)}"
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/files/stat?container_path={_query(container_path)}"
+                )
             )
         )
 
@@ -174,7 +192,9 @@ class PodControlClient:
     ) -> PodSandboxListFilesResponse:
         return PodSandboxListFilesResponse.model_validate(
             self.channel.get(
-                f"/api/v1/pods/{container_id}/files?container_path={_query(container_path)}"
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/files?container_path={_query(container_path)}"
+                )
             )
         )
 
@@ -185,7 +205,9 @@ class PodControlClient:
     ) -> PodSandboxDeleteFileResponse:
         return PodSandboxDeleteFileResponse.model_validate(
             self.channel.delete(
-                f"/api/v1/pods/{container_id}/files?container_path={_query(container_path)}"
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/files?container_path={_query(container_path)}"
+                )
             )
         )
 
@@ -196,7 +218,7 @@ class PodControlClient:
     ) -> PodSandboxCreateDirectoryResponse:
         return PodSandboxCreateDirectoryResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/directories",
+                self._scoped(f"/api/v1/pods/{container_id}/directories"),
                 request.model_dump(mode="json"),
             )
         )
@@ -208,7 +230,9 @@ class PodControlClient:
     ) -> PodSandboxDeleteDirectoryResponse:
         return PodSandboxDeleteDirectoryResponse.model_validate(
             self.channel.delete(
-                f"/api/v1/pods/{container_id}/directories?container_path={_query(container_path)}"
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/directories?container_path={_query(container_path)}"
+                )
             )
         )
 
@@ -219,7 +243,7 @@ class PodControlClient:
     ) -> PodSandboxExposePortResponse:
         return PodSandboxExposePortResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/ports/expose",
+                self._scoped(f"/api/v1/pods/{container_id}/ports/expose"),
                 request.model_dump(mode="json"),
             )
         )
@@ -231,7 +255,7 @@ class PodControlClient:
     ) -> PodSandboxUpdateNetworkPermissionsResponse:
         return PodSandboxUpdateNetworkPermissionsResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/network/update",
+                self._scoped(f"/api/v1/pods/{container_id}/network/update"),
                 request.model_dump(mode="json"),
             )
         )
@@ -241,7 +265,7 @@ class PodControlClient:
         container_id: str,
     ) -> PodSandboxUpdateNetworkPermissionsResponse:
         return PodSandboxUpdateNetworkPermissionsResponse.model_validate(
-            self.channel.get(f"/api/v1/pods/{container_id}/network")
+            self.channel.get(self._scoped(f"/api/v1/pods/{container_id}/network"))
         )
 
     def sandbox_replace_in_files(
@@ -251,7 +275,7 @@ class PodControlClient:
     ) -> PodSandboxReplaceInFilesResponse:
         return PodSandboxReplaceInFilesResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/files/replace",
+                self._scoped(f"/api/v1/pods/{container_id}/files/replace"),
                 request.model_dump(mode="json"),
             )
         )
@@ -263,14 +287,14 @@ class PodControlClient:
     ) -> PodSandboxFindInFilesResponse:
         return PodSandboxFindInFilesResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/files/find",
+                self._scoped(f"/api/v1/pods/{container_id}/files/find"),
                 request.model_dump(mode="json"),
             )
         )
 
     def sandbox_connect(self, container_id: str) -> PodSandboxConnectResponse:
         return PodSandboxConnectResponse.model_validate(
-            self.channel.post(f"/api/v1/pods/{container_id}/connect")
+            self.channel.post(self._scoped(f"/api/v1/pods/{container_id}/connect"))
         )
 
     def sandbox_update_ttl(
@@ -280,13 +304,13 @@ class PodControlClient:
     ) -> PodSandboxUpdateTTLResponse:
         return PodSandboxUpdateTTLResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/ttl",
+                self._scoped(f"/api/v1/pods/{container_id}/ttl"),
                 request.model_dump(mode="json"),
             )
         )
 
     def sandbox_terminate(self, container_id: str) -> None:
-        self.channel.post(f"/api/v1/pods/{container_id}/terminate")
+        self.channel.post(self._scoped(f"/api/v1/pods/{container_id}/terminate"))
 
     def sandbox_create_image_from_filesystem(
         self,
@@ -295,7 +319,7 @@ class PodControlClient:
     ) -> PodSandboxCreateImageFromFilesystemResponse:
         return PodSandboxCreateImageFromFilesystemResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/create-image-from-filesystem",
+                self._scoped(f"/api/v1/pods/{container_id}/create-image-from-filesystem"),
                 request.model_dump(mode="json"),
             )
         )
@@ -307,34 +331,36 @@ class PodControlClient:
     ) -> PodSandboxSnapshotMemoryResponse:
         return PodSandboxSnapshotMemoryResponse.model_validate(
             self.channel.post(
-                f"/api/v1/pods/{container_id}/snapshot-memory",
+                self._scoped(f"/api/v1/pods/{container_id}/snapshot-memory"),
                 request.model_dump(mode="json"),
             )
         )
 
     def sandbox_list_urls(self, container_id: str) -> PodSandboxListUrlsResponse:
         return PodSandboxListUrlsResponse.model_validate(
-            self.channel.get(f"/api/v1/pods/{container_id}/urls")
+            self.channel.get(self._scoped(f"/api/v1/pods/{container_id}/urls"))
         )
 
     def sandbox_list(self, request: SandboxListRequest | None = None) -> SandboxListResponse:
         selected = request or SandboxListRequest()
         query = _query_params({"app_id": selected.app_id, "limit": selected.limit})
         return SandboxListResponse.model_validate(
-            self.channel.get(f"/api/v1/stubs/sandboxes{query}")
+            self.channel.get(self._scoped(f"/api/v1/stubs/sandboxes{query}"))
         )
 
     def sandbox_stats(self, request: SandboxStatsRequest | None = None) -> SandboxStatsResponse:
         selected = request or SandboxStatsRequest()
         query = _query_params({"app_id": selected.app_id})
         return SandboxStatsResponse.model_validate(
-            self.channel.get(f"/api/v1/stubs/sandboxes/stats{query}")
+            self.channel.get(self._scoped(f"/api/v1/stubs/sandboxes/stats{query}"))
         )
 
     def sandbox_timeline(self, request: SandboxTimelineRequest) -> SandboxTimeline:
         query = _query_params({"container_id": request.container_id})
         return SandboxTimeline.model_validate(
-            self.channel.get(f"/api/v1/stubs/sandboxes/{_path(request.stub_id)}/timeline{query}")
+            self.channel.get(
+                self._scoped(f"/api/v1/stubs/sandboxes/{_path(request.stub_id)}/timeline{query}")
+            )
         )
 
 

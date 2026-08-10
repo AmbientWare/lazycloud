@@ -2,12 +2,9 @@ import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { ApiProtocolError } from "@/lib/api/client";
-import type { Workspace } from "@/lib/api/schemas";
-import {
-  currentWorkspaceQueryOptions,
-  updateWorkspace,
-  workspacesQueryOptions,
-} from "@/lib/queries/workspace";
+import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { currentWorkspaceQueryOptions, updateWorkspace } from "@/lib/queries/workspace";
 
 export type WorkspaceIdentityMode = "idle" | "editing" | "saving" | "saved" | "error";
 
@@ -39,10 +36,10 @@ export type WorkspaceIdentityController = {
 
 export function useWorkspaceIdentityController({
   workspace,
-  replacePath,
+  onRenamed,
 }: {
   workspace: Workspace;
-  replacePath: (path: string) => void;
+  onRenamed: (name: string) => void;
 }): WorkspaceIdentityController {
   const queryClient = useQueryClient();
   const [state, setState] = useState<WorkspaceIdentityState>(() => idleState(workspace));
@@ -62,8 +59,17 @@ export function useWorkspaceIdentityController({
       return updated;
     },
     onSuccess: (updated, command) => {
-      queryClient.setQueryData<Workspace[]>(workspacesQueryOptions().queryKey, (workspaces) =>
-        workspaces?.map((item) => (item.id === updated.id ? updated : item)),
+      // The session is what the shell and this dialog read, so the rename has to land
+      // there; a second list nothing observes would just go stale.
+      queryClient.setQueryData<CurrentSession>(currentSessionQueryOptions().queryKey, (session) =>
+        session
+          ? {
+              ...session,
+              workspaces: session.workspaces.map((item) =>
+                item.id === updated.id ? updated : item,
+              ),
+            }
+          : session,
       );
       queryClient.setQueryData<Workspace>(currentWorkspaceQueryOptions().queryKey, (owner) =>
         owner?.id === updated.id ? updated : owner,
@@ -78,7 +84,7 @@ export function useWorkspaceIdentityController({
         };
       });
       if (workspace.id === command.workspaceId) {
-        replacePath(`/w/${encodeURIComponent(updated.name)}/settings`);
+        onRenamed(updated.name);
       }
     },
     onError: (error, command) => {

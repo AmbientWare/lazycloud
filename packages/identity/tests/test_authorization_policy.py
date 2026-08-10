@@ -22,6 +22,7 @@ from identity.authz import (
 )
 from shared.errors import ConflictError
 from shared.identity import AuthScope, AuthTokenRecord, TokenKind
+from tests.service_fixtures import administrator_credential
 
 
 def test_auth_service_records_token_kind_and_checks_scopes(
@@ -86,21 +87,27 @@ def test_bootstrap_succeeds_once_and_never_reopens(
 
     auth = AuthService(isolated_services.context)
     assert auth.bootstrap_required()
-    created = auth.bootstrap_admin_token(
+    created = auth.bootstrap_administrator(
         request_id="bootstrap:test-initial",
+        username="admin",
+        password="bootstrap-password",
         name="initial-admin",
     )
     token_id = created.record.id
     with pytest.raises(AuthError, match="already complete"):
-        auth.bootstrap_admin_token(
+        auth.bootstrap_administrator(
             request_id="bootstrap:test-conflict",
+            username="admin",
+            password="bootstrap-password",
             name="second-admin",
         )
 
     with isolated_services.context.database.session() as session:
         token = TokenRepository(session).get_across_workspaces(token_id)
         assert token is not None
-        assert TokenRepository(session).delete(token.id, workspace_id=token.workspace_id)
+        # An administrator credential names a person, not a workspace, so deleting it
+        # is the cross-scope operation rather than a tenant-scoped one.
+        assert TokenRepository(session).delete_across_workspaces(token.id)
 
     assert not auth.bootstrap_required()
     assert auth.token_count() == 0
@@ -161,7 +168,6 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
     control = ControlPlaneService(isolated_services.context)
     workspace_a = control.upsert_workspace("workspace-a")
     workspace_b = control.upsert_workspace("workspace-b")
-    platform = control.upsert_workspace("platform")
     auth = AuthService(isolated_services.context)
     _, restricted = auth.create_token(
         "reader",
@@ -169,12 +175,7 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
         kind=TokenKind.WorkspaceRestricted,
         workspace_id=workspace_a.id,
     )
-    _, admin = auth.create_token(
-        "admin",
-        scopes=[],
-        kind=TokenKind.Admin,
-        workspace_id=platform.id,
-    )
+    _, admin = administrator_credential(isolated_services, "policy-admin")
 
     workspace_read = workspace_requirement(workspace_a.id, action=AuthScope.Read)
     assert decide_authorization(restricted, workspace_read).allowed
@@ -251,54 +252,3 @@ def test_disabled_tokens_are_rejected_by_policy(isolated_services: ApiServices) 
 
     assert not decision.allowed
     assert decision.reason == AuthzDecisionReason.DisabledToken
-
-
-def test_public_token_api_enforces_exactly_one_single_use_request(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
-) -> None:
-    auth = AuthService(isolated_services.context)
-    creator_token, creator = auth.create_token("single-use-creator")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    creator_headers = {"Authorization": f"Bearer {creator_token}"}
-
-    created = client.post(
-        "/api/v1/tokens",
-        json={
-            "name": "single-use-api",
-            "scopes": [AuthScope.Read.value],
-            "kind": TokenKind.Workspace.value,
-            "workspace_id": creator.workspace_id,
-            "reusable": False,
-        },
-        headers=creator_headers,
-    )
-    assert created.status_code == 201
-    payload = created.json()
-    single_use_token = payload["token"]
-    token_id = payload["record"]["id"]
-    assert payload["record"]["reusable"] is False
-
-    first = client.get(
-        "/api/v1/workspaces/current",
-        headers={"Authorization": f"Bearer {single_use_token}"},
-    )
-    second = client.get(
-        "/api/v1/workspaces/current",
-        headers={"Authorization": f"Bearer {single_use_token}"},
-    )
-    assert first.status_code == 200
-    assert second.status_code == 401
-
-    listed = client.get("/api/v1/tokens", headers=creator_headers)
-    assert listed.status_code == 200
-    single_use_records = [item for item in listed.json()["tokens"] if item["id"] == token_id]
-    assert len(single_use_records) == 1
-    assert single_use_records[0]["status"] == "revoked"
-
-    toggle = client.post(f"/api/v1/tokens/{token_id}/toggle", headers=creator_headers)
-    assert toggle.status_code == 409
-    assert toggle.json()["detail"] == "expired or consumed token cannot be reactivated"
-
-    deleted = client.delete(f"/api/v1/tokens/{token_id}", headers=creator_headers)
-    assert deleted.status_code == 204

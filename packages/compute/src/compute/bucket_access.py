@@ -8,6 +8,7 @@ from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
+from database.repositories.identity import WorkspaceMemberRepository
 from pydantic import BaseModel, ConfigDict
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
 from shared.deployment_records import Deployment, DeploymentSpec
@@ -58,7 +59,9 @@ class AwsDeploymentBucketAccessService:
         workspace: str,
         required: bool = True,
     ) -> None:
-        workspace_id, connection, grants = self._snapshot(workspace)
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+        connection, grants = self._snapshot_for_workspace(workspace_id)
         if connection is None or not connection.can_manage_existing_capacity:
             if grants and required:
                 raise InvalidInputError(
@@ -82,7 +85,7 @@ class AwsDeploymentBucketAccessService:
         )
 
     def reconcile_connection(self, connection: AwsAccountConnection) -> None:
-        _, current, grants = self._snapshot(connection.workspace_id)
+        current, grants = self._snapshot_for_user(connection.user_id)
         if current is None or current.id != connection.id:
             return
         try:
@@ -92,25 +95,41 @@ class AwsDeploymentBucketAccessService:
                 "connected AWS bucket access could not be reconciled"
             ) from exc
 
-    def _snapshot(
+    def _snapshot_for_workspace(
         self,
-        workspace: str,
-    ) -> tuple[
-        str,
-        AwsAccountConnection | None,
-        tuple[ConnectedBucketAccessGrant, ...],
-    ]:
+        workspace_id: str,
+    ) -> tuple[AwsAccountConnection | None, tuple[ConnectedBucketAccessGrant, ...]]:
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-            deployments = DeploymentRepository(session).list(
-                workspace_id=workspace_id,
-                active=True,
-            )
+            owner = WorkspaceMemberRepository(session).owner(workspace_id)
+        if owner is None:
+            return None, ()
+        return self._snapshot_for_user(owner.user_id)
+
+    def _snapshot_for_user(
+        self,
+        user_id: str,
+    ) -> tuple[AwsAccountConnection | None, tuple[ConnectedBucketAccessGrant, ...]]:
+        """Every grant the account's connection should carry, across all its workspaces.
+
+        The controller applies the returned set as the connection's whole access
+        policy, so it has to be assembled from every workspace the account backs.
+        Snapshotting one workspace would revoke the grants belonging to the others.
+        """
+        with self.context.database.session() as session:
+            connection = AwsAccountConnectionRepository(session).get_for_user(user_id)
+            workspace_ids = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+            deployments = [
+                deployment
+                for workspace_id in workspace_ids
+                for deployment in DeploymentRepository(session).list(
+                    workspace_id=workspace_id,
+                    active=True,
+                )
+            ]
         grants = _deployment_bucket_access_grants(
             _deployments_on_connection(deployments, connection)
         )
-        return workspace_id, connection, grants
+        return connection, grants
 
     def _mark_pending(self, connection_id: str) -> None:
         now = utc_now()

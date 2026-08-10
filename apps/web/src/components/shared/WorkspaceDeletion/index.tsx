@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Loader2, Trash2 } from "lucide-react";
 
@@ -15,8 +14,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { adminAccessQueryOptions } from "@/lib/queries/compute";
-import { currentWorkspaceQueryOptions } from "@/lib/queries/workspace";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
 import { useWorkspaceDeletionController, type WorkspaceDeletionController } from "./controller";
@@ -24,19 +21,14 @@ import { WorkspaceDeletionContext } from "./context";
 
 export function WorkspaceDeletionProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { workspaces } = useSession();
+  const { user, workspaces } = useSession();
   const lastWorkspaceName = useWorkspaceSelection((state) => state.lastWorkspaceName);
   const rememberWorkspaceName = useWorkspaceSelection((state) => state.rememberWorkspaceName);
-  const authorityWorkspace =
-    workspaces.find((workspace) => workspace.status === "active") ?? workspaces[0];
-  const adminAccess = useQuery(adminAccessQueryOptions(authorityWorkspace.id));
-  const currentWorkspace = useQuery({
-    ...currentWorkspaceQueryOptions(),
-    enabled: adminAccess.data === true,
-  });
+  // The session states the role, so nothing here has to infer it from a 403 against
+  // a workspace picked arbitrarily to ask in.
+  const canManage = user.role === "administrator";
   const controller = useWorkspaceDeletionController({
-    canManage: adminAccess.data === true,
-    currentWorkspaceId: currentWorkspace.data?.id,
+    canManage,
     lastWorkspaceName,
     rememberWorkspaceName,
     replacePath: (path) => router.history.replace(path),

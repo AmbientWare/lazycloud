@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -11,6 +12,7 @@ from database.repositories.compute import (
     AwsAuthorizationCleanupTombstoneRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceMemberRepository
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.aws_connections import (
@@ -18,6 +20,7 @@ from shared.aws_connections import (
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
     AwsAccountAuthorizationPlan,
+    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
@@ -32,6 +35,7 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.timestamps import utc_now
 
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
+from compute.catalog import ComputeCatalogRegion, validate_aws_compute_configuration
 from compute.context import ComputeContext
 
 
@@ -39,7 +43,7 @@ class AwsAccountAuthorizationPlanner(Protocol):
     def plan(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         generation: int,
         account_id: str,
@@ -108,7 +112,7 @@ class AwsAccountPoolDrainer(Protocol):
         self,
         connection_id: str,
         *,
-        workspace: str,
+        workspace_ids: Sequence[str],
     ) -> AwsAccountPoolDrain: ...
 
 
@@ -152,6 +156,7 @@ class AwsAccountConnectionService:
     bucket_access_reconciler: AwsConnectionBucketAccessReconciler | None = None
     capacity_baseline: AwsConnectionCapacityBaseline | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
+    available_catalog: tuple[ComputeCatalogRegion, ...] = ()
     external_id_bytes: int = 48
     validation_lease_seconds: float = 300
     reconcile_claim_seconds: float = 120
@@ -166,23 +171,22 @@ class AwsAccountConnectionService:
         self,
         request: AwsConnectionCreateRequest,
         *,
-        workspace: str,
+        user_id: str,
     ) -> AwsAccountConnectionAuthorization:
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            existing = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            existing = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if existing is not None:
                 if self._matches_existing_draft(existing, request):
                     pending = existing.pending_authorization
                     if pending is None:
                         raise ConflictError("AWS account connection setup was superseded")
                     return self._authorization(existing, pending)
-                raise ConflictError("this workspace already has an AWS account connection")
+                raise ConflictError("this account already has an AWS account connection")
 
         connection_id = str(uuid4())
         external_id = self._external_id()
         plan = self._plan(
-            workspace_id=workspace_id,
+            user_id=user_id,
             connection_id=connection_id,
             generation=1,
             account_id=request.account_id,
@@ -202,7 +206,7 @@ class AwsAccountConnectionService:
         )
         connection = AwsAccountConnection(
             id=connection_id,
-            workspace_id=workspace_id,
+            user_id=user_id,
             account_id=request.account_id,
             external_id=external_id,
             phase=AwsAccountConnectionPhase.AwaitingAuthorization,
@@ -217,29 +221,66 @@ class AwsAccountConnectionService:
         )
         with self.context.database.session() as session:
             repository = AwsAccountConnectionRepository(session)
-            if repository.get_for_workspace(workspace_id, for_update=True) is not None:
-                raise ConflictError("this workspace already has an AWS account connection")
+            if repository.get_for_user(user_id, for_update=True) is not None:
+                raise ConflictError("this account already has an AWS account connection")
             connection = repository.create(connection)
         self._publish(connection, WorkspaceChangeType.Created)
         return self._authorization(connection, pending)
 
-    def current(self, *, workspace: str) -> AwsAccountConnection | None:
+    def current(self, *, user_id: str) -> AwsAccountConnection | None:
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            return AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            return AwsAccountConnectionRepository(session).get_for_user(user_id)
 
-    def get(self, *, workspace: str) -> AwsAccountConnection:
-        connection = self.current(workspace=workspace)
+    def get(self, *, user_id: str) -> AwsAccountConnection:
+        connection = self.current(user_id=user_id)
         if connection is None:
             raise NotFoundError("AWS account connection not found")
         return connection
 
-    def validate(self, *, workspace: str) -> AwsAccountConnection:
+    def update_compute_configuration(
+        self,
+        *,
+        user_id: str,
+        expected_revision: int,
+        configuration: AwsAccountComputeConfiguration,
+    ) -> AwsAccountConnection:
+        """Replace how capacity is provisioned in this account.
+
+        The warm baseline is then re-applied to every workspace the account
+        backs, because one set of numbers now describes all of them and applying
+        it to whichever workspace the caller happened to be in would leave the
+        rest holding capacity nobody asked for.
+        """
+        validate_aws_compute_configuration(configuration, catalog=self.available_catalog)
+        now = utc_now()
+        with self.context.database.session() as session:
+            repository = AwsAccountConnectionRepository(session)
+            current = repository.get_for_user(user_id, for_update=True)
+            if current is None:
+                raise NotFoundError("AWS account connection not found")
+            if current.compute.revision != expected_revision:
+                raise ConflictError("AWS compute configuration revision was superseded")
+            updated = current.model_copy(
+                update={
+                    "compute": configuration.model_copy(
+                        update={"revision": current.compute.revision + 1}
+                    ),
+                    "revision": current.revision + 1,
+                    "updated_at": now,
+                }
+            )
+            repository.save(updated)
+        if self.capacity_baseline is not None:
+            for workspace_id in self._owned_workspace_ids(user_id):
+                self.capacity_baseline.reconcile_workspace_baseline(workspace_id)
+        self._publish(updated, WorkspaceChangeType.Updated)
+        return updated
+
+    def validate(self, *, user_id: str) -> AwsAccountConnection:
         started_at = utc_now()
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
             repository = AwsAccountConnectionRepository(session)
-            current = repository.get_for_workspace(workspace_id, for_update=True)
+            current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
             target = self._validation_target(current)
@@ -276,11 +317,10 @@ class AwsAccountConnectionService:
         self,
         request: AwsConnectionReconnectRequest,
         *,
-        workspace: str,
+        user_id: str,
     ) -> AwsAccountConnectionAuthorization:
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            current = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            current = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
             if current.phase is AwsAccountConnectionPhase.ReconnectPending:
@@ -312,7 +352,7 @@ class AwsAccountConnectionService:
 
         generation = active.generation + 1
         plan = self._plan(
-            workspace_id=workspace_id,
+            user_id=user_id,
             connection_id=current.id,
             generation=generation,
             account_id=current.account_id,
@@ -337,7 +377,7 @@ class AwsAccountConnectionService:
         )
         with self.context.database.session() as session:
             repository = AwsAccountConnectionRepository(session)
-            durable = repository.get_for_workspace(workspace_id, for_update=True)
+            durable = repository.get_for_user(user_id, for_update=True)
             if (
                 durable is None
                 or durable.revision != current.revision
@@ -362,12 +402,11 @@ class AwsAccountConnectionService:
         self._publish(reconnecting, WorkspaceChangeType.Updated)
         return self._authorization(reconnecting, pending)
 
-    def cancel_reconnect(self, *, workspace: str) -> AwsAccountConnection:
+    def cancel_reconnect(self, *, user_id: str) -> AwsAccountConnection:
         now = utc_now()
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
             repository = AwsAccountConnectionRepository(session)
-            current = repository.get_for_workspace(workspace_id, for_update=True)
+            current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
             if current.phase is not AwsAccountConnectionPhase.ReconnectPending:
@@ -404,13 +443,12 @@ class AwsAccountConnectionService:
         self._publish(ready, WorkspaceChangeType.Updated)
         return ready
 
-    def remove(self, *, workspace: str) -> AwsAccountConnection | None:
+    def remove(self, *, user_id: str) -> AwsAccountConnection | None:
         now = utc_now()
         deleted: AwsAccountConnection | None = None
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
             repository = AwsAccountConnectionRepository(session)
-            current = repository.get_for_workspace(workspace_id, for_update=True)
+            current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 return None
             if current.active_authorization is None:
@@ -475,12 +513,11 @@ class AwsAccountConnectionService:
             self._publish(result, WorkspaceChangeType.Updated)
         return result
 
-    def retry(self, *, workspace: str) -> AwsAccountConnection:
+    def retry(self, *, user_id: str) -> AwsAccountConnection:
         now = utc_now()
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
             repository = AwsAccountConnectionRepository(session)
-            current = repository.get_for_workspace(workspace_id, for_update=True)
+            current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
             if current.phase is AwsAccountConnectionPhase.ActionRequired:
@@ -607,13 +644,17 @@ class AwsAccountConnectionService:
         }:
             return self._reconcile_cleanup(claimed, now)
         if claimed.phase is AwsAccountConnectionPhase.Ready and self.capacity_baseline is not None:
-            # The workspace policy is what decides how much warm capacity a
-            # workspace holds, and it is applied when the policy is written or
-            # at control-plane startup. A connection reaching Ready is the third
-            # moment that capacity can first become buildable, so without this
-            # a workspace that connects an account waits for its next policy
-            # write to get the baseline it already asked for.
-            self.capacity_baseline.reconcile_workspace_baseline(claimed.workspace_id)
+            # The account's compute configuration decides how much warm capacity
+            # each of its workspaces holds, and it is applied when that
+            # configuration is written or at control-plane startup. A connection
+            # reaching Ready is the third moment that capacity can first become
+            # buildable, so without this an account waits for its next
+            # configuration write to get the baseline it already asked for.
+            #
+            # Every workspace the account backs, not one: the connection became
+            # usable for all of them at the same instant.
+            for workspace_id in self._owned_workspace_ids(claimed.user_id):
+                self.capacity_baseline.reconcile_workspace_baseline(workspace_id)
         return self._release_unchanged_claim(claimed, now)
 
     def _reconcile_validation(self, claimed: AwsAccountConnection, now: datetime) -> bool:
@@ -659,7 +700,7 @@ class AwsAccountConnectionService:
         try:
             drain = self.pool_drainer.request_connection_drain(
                 claimed.id,
-                workspace=claimed.workspace_id,
+                workspace_ids=self._owned_workspace_ids(claimed.user_id),
             )
         except (ConflictError, UpstreamUnavailableError) as exc:
             return self._finish_claim_error(claimed, str(exc), now)
@@ -1162,7 +1203,7 @@ class AwsAccountConnectionService:
     ) -> AwsAuthorizationCleanupTombstone:
         tombstone = AwsAuthorizationCleanupTombstone(
             id=str(uuid4()),
-            workspace_id=connection.workspace_id,
+            user_id=connection.user_id,
             connection_id=connection.id,
             account_id=connection.account_id,
             external_id=connection.external_id,
@@ -1181,7 +1222,7 @@ class AwsAccountConnectionService:
     def _plan(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         generation: int,
         account_id: str,
@@ -1193,7 +1234,7 @@ class AwsAccountConnectionService:
     ) -> AwsAccountAuthorizationPlan:
         try:
             return self.authorization_planner.plan(
-                workspace_id=workspace_id,
+                user_id=user_id,
                 connection_id=connection_id,
                 generation=generation,
                 account_id=account_id,
@@ -1208,15 +1249,26 @@ class AwsAccountConnectionService:
         except AwsAccountConnectionValidationError as exc:
             raise UpstreamUnavailableError(exc.message) from exc
 
+    def _owned_workspace_ids(self, user_id: str) -> list[str]:
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+
     def _publish(self, connection: AwsAccountConnection, change: WorkspaceChangeType) -> None:
+        """Announce the change to every workspace the connection backs.
+
+        The dashboard subscribes per workspace, so an account-level change has to
+        reach each of them or a workspace watching its own compute would never see
+        that the account behind it moved.
+        """
         if self.workspace_changes is None:
             return
-        self.workspace_changes.emit_change(
-            workspace_id=connection.workspace_id,
-            topic=WorkspaceChangeTopic.ComputeConnections,
-            change=change,
-            resource_id=connection.id,
-        )
+        for workspace_id in self._owned_workspace_ids(connection.user_id):
+            self.workspace_changes.emit_change(
+                workspace_id=workspace_id,
+                topic=WorkspaceChangeTopic.ComputeConnections,
+                change=change,
+                resource_id=connection.id,
+            )
 
     def _backoff(self, attempt: int) -> timedelta:
         seconds = min(1 << max(attempt - 1, 0), self.maximum_backoff_seconds)
@@ -1408,13 +1460,20 @@ class AwsAccountConnectionService:
 class AwsAccountConnectionDirectory:
     context: ComputeContext
 
-    def current(self, *, workspace: str) -> AwsAccountConnection | None:
+    def current(self, *, user_id: str) -> AwsAccountConnection | None:
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            return AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            return AwsAccountConnectionRepository(session).get_for_user(user_id)
 
-    def list_for_workspace(self, workspace: str) -> tuple[AwsAccountConnection, ...]:
-        connection = self.current(workspace=workspace)
+    def list_for_workspace(self, workspace_id: str) -> tuple[AwsAccountConnection, ...]:
+        """Connections a workspace may place work on, reached through its owner.
+
+        Placement asks per workspace and always did; what changed is that the answer
+        now comes from the account behind it rather than the workspace itself.
+        """
+        with self.context.database.session() as session:
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         return (connection,) if connection is not None else ()
 
 

@@ -231,6 +231,14 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
 
 
 class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
+    """Authority to enroll one machine into an account's capacity.
+
+    `user_id` is the account the machine will belong to, resolved from the owner of
+    the workspace the credential was minted in. `workspace_id` records which of that
+    account's workspaces minted it and holds the unit the machine lands in; it is
+    provenance, not who the machine serves.
+    """
+
     __tablename__ = "compute_join_credentials"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("token_hash", name="uq_compute_join_credentials_token_hash"),
@@ -244,8 +252,14 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
             "capacity_owner_id",
             "status",
         ),
+        Index("ix_compute_join_credentials_user_status", "user_id", "status"),
     )
 
+    user_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),
@@ -267,6 +281,14 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
 
 
 class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
+    """A joined machine, owned by the account whose credential enrolled it.
+
+    The fingerprint is unique per account, not per workspace: one physical host is
+    one machine however many workspaces its owner holds, and admitting it twice
+    would advertise the same CPUs as two workers that then fight over them.
+    `workspace_id` is where the machine's unit and its durable machine row live.
+    """
+
     __tablename__ = "compute_machine_enrollments"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
@@ -275,7 +297,7 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="uq_compute_machine_enrollments_machine",
         ),
         UniqueConstraint(
-            "workspace_id",
+            "user_id",
             "machine_fingerprint_hash",
             name="uq_compute_machine_enrollments_fingerprint",
         ),
@@ -297,8 +319,14 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             "capacity_owner_id",
             "status",
         ),
+        Index("ix_compute_machine_enrollments_user_status", "user_id", "status"),
     )
 
+    user_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),
@@ -355,9 +383,16 @@ class TailnetCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
 
 
 class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
+    """The customer AWS account backing every workspace one user owns.
+
+    One per account rather than per workspace: an org running dev, staging, and prod
+    authorized the same account once, and re-authorizing it per workspace produced
+    three records that had to be kept in step by hand.
+    """
+
     __tablename__ = "aws_account_connections"
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("workspace_id", name="uq_aws_account_connections_workspace"),
+        UniqueConstraint("user_id", name="uq_aws_account_connections_user"),
         UniqueConstraint("external_id", name="uq_aws_account_connections_external_id"),
         Index(
             "ix_aws_account_connections_reconcile_due",
@@ -371,9 +406,9 @@ class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
         ),
     )
 
-    workspace_id: Mapped[str] = mapped_column(
+    user_id: Mapped[str] = mapped_column(
         uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
@@ -414,7 +449,9 @@ class AwsAuthorizationCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
         ),
     )
 
-    workspace_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    # No foreign key: the tombstone outlives the account whose authorization it is
+    # still tearing down, which is the whole reason it is written separately.
+    user_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     connection_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

@@ -20,7 +20,7 @@ from shared.http.deployments import (
 from shared.http.stubs import StubResponse
 from shared.identity import AuthScope
 
-from api.server.auth import read_token, read_workspace, write_token, write_workspace
+from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
 from api.server.response_mapping import deployment_response
@@ -184,17 +184,15 @@ def list_deployments(
 )
 def create_deployment(
     request: DeploymentSpec,
-    token: write_token,
+    workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
 ) -> DeploymentResponse:
-    deployment = services.deployments.deploy(request, workspace=token.workspace_id)
-    scaling = _deployment_scaling_responses(
-        [deployment], workspace=token.workspace_id, services=services
-    )
+    deployment = services.deployments.deploy(request, workspace=workspace_id)
+    scaling = _deployment_scaling_responses([deployment], workspace=workspace_id, services=services)
     return _deployment_response(
         deployment,
         can_write=True,
-        app_active=_deployment_app_active(deployment, token.workspace_id, services),
+        app_active=_deployment_app_active(deployment, workspace_id, services),
         scaling=scaling.get(deployment.id),
     )
 

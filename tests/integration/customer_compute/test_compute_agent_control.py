@@ -25,6 +25,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     token = ComputeJoinTokenState(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=hash_compute_token("join-token"),
+        owner_user_id="22222222-2222-4222-8222-222222222222",
         workspace_id="workspace-one",
         pool=MachinePool("gpu-pool"),
         machine_id="machine-fixed",

@@ -10,7 +10,6 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from observability.workspace_changes import (
     WorkspaceChangeRepository,
     WorkspaceChangeService,
@@ -21,8 +20,8 @@ from shared.http.workspace_changes import (
     WorkspaceChangeTopic,
     WorkspaceChangeType,
 )
-from shared.identity import TokenKind
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 
 
 def test_workspace_change_stream_requires_authentication(
@@ -43,11 +42,7 @@ def test_workspace_change_stream_resumes_and_isolates_workspaces(
     control = ControlPlaneService(isolated_services.context)
     default = control.upsert_workspace("default")
     tenant = control.upsert_workspace("tenant")
-    token, _ = AuthService(isolated_services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=default.id,
-    )
+    token, _ = administrator_credential(isolated_services, "admin")
     repository = isolated_services.workspace_changes.repository
     first_default_id = repository.append(
         _change(default.id, "default-first", event_id="event-default-first")
@@ -90,11 +85,7 @@ def test_workspace_change_stream_starts_at_current_tail(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    token, _ = AuthService(isolated_services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=workspace_id,
-    )
+    token, _ = administrator_credential(isolated_services, "admin")
     repository = isolated_services.workspace_changes.repository
     fake = FakeRedis()
     repository.redis = RedisClient(fake, key_prefix="test")
@@ -127,12 +118,8 @@ def test_workspace_change_stream_rejects_invalid_resume_cursor(
     client_stack: ExitStack,
 ) -> None:
     with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    token, _ = AuthService(isolated_services.context).create_token(
-        "admin",
-        kind=TokenKind.Admin,
-        workspace_id=workspace_id,
-    )
+        isolated_services.context.default_workspace_id(session)
+    token, _ = administrator_credential(isolated_services, "admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(

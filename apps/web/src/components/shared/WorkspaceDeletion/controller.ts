@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { Workspace } from "@/lib/api/schemas";
-import { deleteWorkspace, workspacesQueryOptions } from "@/lib/queries/workspace";
+import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { deleteWorkspace } from "@/lib/queries/workspace";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { workspaceDeleteAvailability } from "@/lib/workspace-deletion";
 
@@ -13,7 +14,6 @@ export type WorkspaceDeletionTarget = {
 
 type WorkspaceDeletionControllerOptions = {
   canManage: boolean;
-  currentWorkspaceId: string | undefined;
   lastWorkspaceName: string | null;
   rememberWorkspaceName: (workspaceName: string) => void;
   replacePath: (path: string) => void;
@@ -23,7 +23,6 @@ type WorkspaceDeletionControllerOptions = {
 
 export function useWorkspaceDeletionController({
   canManage,
-  currentWorkspaceId,
   lastWorkspaceName,
   rememberWorkspaceName,
   replacePath,
@@ -40,14 +39,23 @@ export function useWorkspaceDeletionController({
     onSuccess: async (_result, requested) => {
       const workspaceId = requested.workspace.id;
       const rootKey = workspaceQueryKeys.root(workspaceId);
-      const directoryKey = workspacesQueryOptions().queryKey;
+      const sessionKey = currentSessionQueryOptions().queryKey;
 
       await queryClient.cancelQueries({ queryKey: rootKey });
       queryClient.removeQueries({ queryKey: rootKey });
 
-      const latestDirectory = queryClient.getQueryData<Workspace[]>(directoryKey) ?? workspaces;
-      const remaining = latestDirectory.filter((item) => item.id !== workspaceId);
-      queryClient.setQueryData(directoryKey, remaining);
+      // The session owns the account's workspace list, so the deleted one has to
+      // leave it before anything navigates.
+      const session = queryClient.getQueryData<CurrentSession>(sessionKey);
+      const remaining = (session?.workspaces ?? workspaces).filter(
+        (item) => item.id !== workspaceId,
+      );
+      if (session) {
+        queryClient.setQueryData<CurrentSession>(sessionKey, {
+          ...session,
+          workspaces: remaining,
+        });
+      }
 
       const nextWorkspace = remaining.find((item) => item.status === "active") ?? remaining[0];
       if (nextWorkspace && (requested.selected || lastWorkspaceName === requested.workspace.name)) {
@@ -59,10 +67,7 @@ export function useWorkspaceDeletionController({
 
       setTarget(null);
       setConfirmation("");
-      void queryClient.invalidateQueries({
-        queryKey: directoryKey,
-        exact: true,
-      });
+      void queryClient.invalidateQueries({ queryKey: sessionKey, exact: true });
     },
     onSettled: () => {
       commandInFlight.current = false;
@@ -80,7 +85,7 @@ export function useWorkspaceDeletionController({
       return { allowed: true as const };
     }
     const activeWorkspaceCount = workspaces.filter((item) => item.status === "active").length;
-    return workspaceDeleteAvailability(workspace, currentWorkspaceId, activeWorkspaceCount);
+    return workspaceDeleteAvailability(workspace, activeWorkspaceCount);
   };
 
   const begin = (workspace: Workspace, selected: boolean) => {

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.identity import TokenKind
+from tests.service_fixtures import administrator_credential
 
 
 def test_source_cache_cleanup_status_is_admin_only_and_bounded(
@@ -38,11 +39,7 @@ def test_source_cache_cleanup_status_is_admin_only_and_bounded(
         )
 
     auth = AuthService(isolated_services.context)
-    admin_token, _admin = auth.create_token(
-        "cleanup-status-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default_workspace.id,
-    )
+    admin_token, _admin = administrator_credential(isolated_services, "cleanup-status-admin")
     workspace_token, _workspace = auth.create_token(
         "cleanup-status-workspace",
         kind=TokenKind.Workspace,
@@ -82,12 +79,8 @@ def test_source_cache_cleanup_status_returns_not_found_for_unknown_workspace(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    default_workspace = ControlPlaneService(isolated_services.context).get_workspace("default")
-    admin_token, _record = AuthService(isolated_services.context).create_token(
-        "cleanup-status-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default_workspace.id,
-    )
+    ControlPlaneService(isolated_services.context).get_workspace("default")
+    admin_token, _record = administrator_credential(isolated_services, "cleanup-status-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(

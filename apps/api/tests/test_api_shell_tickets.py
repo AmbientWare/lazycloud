@@ -226,4 +226,10 @@ def test_ticket_store_and_compensation_failure_surface_both_facts_safely(
 
 
 def _offline_admin_token(services: ApiServices, request_id: str) -> str:
-    return AuthService(services.context).bootstrap_admin_token(request_id=request_id).token
+    return (
+        AuthService(services.context)
+        .bootstrap_administrator(
+            request_id=request_id, username="admin", password="bootstrap-password"
+        )
+        .token
+    )

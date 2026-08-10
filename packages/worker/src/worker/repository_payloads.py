@@ -9,6 +9,7 @@ from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.identity import AuthTokenRecord, TokenKind
 from shared.image_building.credentials import normalize_registry_host
+from shared.logs import ContainerLogEntryKind
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -515,14 +516,6 @@ class AppendSandboxProcessLogResponse(WorkerRepositoryResponse):
 class ContainerLogStream(StrEnum):
     Stdout = "stdout"
     Stderr = "stderr"
-
-
-class ContainerLogEntryKind(StrEnum):
-    Output = "output"
-    Dropped = "dropped"
-    Flush = "flush"
-    # Worker-authored, never container output: why a container produced none.
-    Diagnostic = "diagnostic"
 
 
 class ContainerLogBatchEntry(ContractModel):

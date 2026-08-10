@@ -92,20 +92,22 @@ def test_postgresql_authorization_claims_are_atomic(tmp_path: Path) -> None:
         def bootstrap(index: int) -> tuple[bool, str]:
             bootstrap_barrier.wait(timeout=10)
             try:
-                result = AuthService(context).bootstrap_admin_token(
+                result = AuthService(context).bootstrap_administrator(
                     request_id=f"bootstrap:concurrent-{index}",
+                    username="admin",
+                    password="bootstrap-password",
                     name=f"admin-{index}",
                 )
             except AuthError:
                 return False, ""
-            return True, result.record.workspace_id
+            return True, result.record.user_id
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             bootstrap_results = list(executor.map(bootstrap, range(8)))
         bootstrap_winners = [item for item in bootstrap_results if item[0]]
         assert len(bootstrap_winners) == 1
         assert sum(not item[0] for item in bootstrap_results) == 7
-        workspace_id = bootstrap_winners[0][1]
+        user_id = bootstrap_winners[0][1]
         with database.session() as session:
             assert len(TokenRepository(session).list_across_workspaces()) == 1
 
@@ -116,7 +118,7 @@ def test_postgresql_authorization_claims_are_atomic(tmp_path: Path) -> None:
         def approve() -> str:
             decision_barrier.wait(timeout=10)
             try:
-                devices.approve(decision.record.user_code, workspace_id=workspace_id)
+                devices.approve(decision.record.user_code, user_id=user_id)
             except ConflictError:
                 return "conflict"
             return "approved"
@@ -136,7 +138,7 @@ def test_postgresql_authorization_claims_are_atomic(tmp_path: Path) -> None:
         assert sum(result in {"approved", "denied"} for result in decision_results) == 1
 
         claim = devices.start(client_name="claim-race")
-        devices.approve(claim.record.user_code, workspace_id=workspace_id)
+        devices.approve(claim.record.user_code, user_id=user_id)
         with database.session() as session:
             token_count_before = len(TokenRepository(session).list_across_workspaces())
         claim_barrier = Barrier(8)
@@ -212,7 +214,11 @@ def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
 ) -> None:
     with _postgres_test_context(tmp_path) as (context, database):
         auth = AuthService(context)
-        auth.bootstrap_admin_token(request_id="bootstrap:postgres-recovery-owner")
+        auth.bootstrap_administrator(
+            request_id="bootstrap:postgres-recovery-owner",
+            username="admin",
+            password="bootstrap-password",
+        )
         serving_fence = ControlPlaneRecoveryFence(database)
         serving_fence.start_serving()
         try:
@@ -229,12 +235,14 @@ def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
             assert acquired
             created = auth.recover_admin_token(
                 request_id="postgres-incident-001",
+                username="admin",
                 stage_token=publication.stage,
             )
             staged = publication.read_staged()
             assert staged is not None
             replay = auth.recover_admin_token(
                 request_id="postgres-incident-001",
+                username="admin",
                 staged_token=staged,
             )
             publication.publish(replace=False)

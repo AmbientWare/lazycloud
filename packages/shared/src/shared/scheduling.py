@@ -120,23 +120,31 @@ class WorkerUnavailableReason(StringEnum):
     ShuttingDown = "shutting_down"
 
 
-def worker_serves_workspace(
+def worker_serves_owner(
     *,
     private_worker: bool,
-    worker_workspace_id: str,
-    request_workspace_id: str,
+    worker_owner_user_id: str,
+    request_owner_user_id: str,
 ) -> bool:
-    """Whether a worker may run a request belonging to `request_workspace_id`.
+    """Whether a worker may run a request belonging to `request_owner_user_id`.
 
     The platform fleet is shared, which is what lets any workspace place work on it.
-    A private worker is one tenant's own machine, and a private record naming no
-    workspace was written without the authority to name one, so it serves none rather
-    than all.
+    A private worker is the account's own machine, so it serves every workspace that
+    account owns—the customer's data is on both sides of that boundary, and asking
+    them to connect the same hardware once per workspace answered nothing.
+
+    Accept the consequence deliberately: between an owner's own workspaces, private
+    capacity is no longer a hard isolation boundary, so a container escape on their
+    machine reaches their other environments. It stops there. Platform-managed
+    capacity is a different rule above, and no comparison here can widen it.
+
+    A private record naming no owner was written without the authority to name one,
+    so it serves none rather than all.
     """
 
     if not private_worker:
         return True
-    return bool(worker_workspace_id) and worker_workspace_id == request_workspace_id
+    return bool(worker_owner_user_id) and worker_owner_user_id == request_owner_user_id
 
 
 class SchedulerWorkerRecord(ContractModel):
@@ -144,11 +152,19 @@ class SchedulerWorkerRecord(ContractModel):
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     workspace_id: str = ""
-    """Workspace a private worker serves; empty on the shared platform fleet.
+    """Workspace that enrolled a private worker; empty on the shared platform fleet.
 
     Written from the authority that decides a worker's tenant—the machine's enrollment
     for an agent, the presented token at registration—never from what a worker says
-    about itself.
+    about itself. Records which workspace brought the machine in; it is not what
+    placement compares.
+    """
+
+    owner_user_id: str = ""
+    """Account whose machine this is, and the whole of the private-placement rule.
+
+    Stamped from the same authority as `workspace_id`. Compared rather than the
+    workspace because one account's capacity serves every workspace it owns.
     """
 
     machine_id: str = ""
@@ -187,11 +203,11 @@ class SchedulerWorkerRecord(ContractModel):
             raise ValueError(msg)
         return value
 
-    def serves_workspace(self, workspace_id: str) -> bool:
-        return worker_serves_workspace(
+    def serves_owner(self, owner_user_id: str) -> bool:
+        return worker_serves_owner(
             private_worker=self.private_worker,
-            worker_workspace_id=self.workspace_id,
-            request_workspace_id=workspace_id,
+            worker_owner_user_id=self.owner_user_id,
+            request_owner_user_id=owner_user_id,
         )
 
 

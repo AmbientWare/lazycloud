@@ -13,6 +13,7 @@ from shared.aws_connections import (
 )
 from shared.http.aws_connections import (
     AwsAuthorizationGenerationResponse,
+    AwsComputeConfigurationUpdateRequest,
     AwsConnectionAuthorization,
     AwsConnectionAuthorizationResponse,
     AwsConnectionCreateRequest,
@@ -23,7 +24,7 @@ from shared.http.aws_connections import (
     AwsManagedAuthorizationResponse,
 )
 
-from api.server.auth import read_workspace, write_workspace
+from api.server.auth import read_user, write_user
 from api.server.service_dependencies import (
     aws_account_connection_directory,
     aws_account_connection_service,
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/api/v1/aws-connection", tags=["compute"])
 _CONNECTION_DETAIL: dict[AwsAccountConnectionPhase, str] = {
     AwsAccountConnectionPhase.AwaitingAuthorization: "Complete authorization in AWS.",
     AwsAccountConnectionPhase.Validating: "Checking AWS authorization.",
-    AwsAccountConnectionPhase.Ready: "AWS compute is available for this workspace.",
+    AwsAccountConnectionPhase.Ready: "AWS compute is available for your workspaces.",
     AwsAccountConnectionPhase.Degraded: (
         "AWS authorization needs attention before new workloads can be placed."
     ),
@@ -100,6 +101,7 @@ def _response(connection: AwsAccountConnection) -> AwsConnectionResponse:
         account_id=connection.account_id,
         phase=connection.phase,
         revision=connection.revision,
+        compute=connection.compute,
         hosts_workloads=connection.hosts_workloads,
         can_manage_existing_capacity=connection.can_manage_existing_capacity,
         available_actions=connection.available_actions,
@@ -139,10 +141,10 @@ def _authorization_response(
     operation_id="get_current_aws_account_connection",
 )
 def get_current_aws_account_connection(
-    workspace_id: read_workspace,
+    user_id: read_user,
     directory: AwsAccountConnectionDirectory = Depends(aws_account_connection_directory),
 ) -> AwsConnectionCurrentResponse:
-    connection = directory.current(workspace=workspace_id)
+    connection = directory.current(user_id=user_id)
     return AwsConnectionCurrentResponse(
         connection=_response(connection) if connection is not None else None
     )
@@ -156,10 +158,30 @@ def get_current_aws_account_connection(
 )
 def connect_aws_account(
     request: AwsConnectionCreateRequest,
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionAuthorizationResponse:
-    return _authorization_response(service.connect(request, workspace=workspace_id))
+    return _authorization_response(service.connect(request, user_id=user_id))
+
+
+@router.put(
+    "/compute",
+    response_model=AwsConnectionResponse,
+    operation_id="update_aws_account_compute_configuration",
+)
+def update_aws_account_compute_configuration(
+    request: AwsComputeConfigurationUpdateRequest,
+    user_id: write_user,
+    service: AwsAccountConnectionService = Depends(aws_account_connection_service),
+) -> AwsConnectionResponse:
+    """Set how capacity is provisioned in this account, for every workspace it backs."""
+    return _response(
+        service.update_compute_configuration(
+            user_id=user_id,
+            expected_revision=request.expected_revision,
+            configuration=request.compute,
+        )
+    )
 
 
 @router.post(
@@ -168,10 +190,10 @@ def connect_aws_account(
     operation_id="validate_aws_account_connection",
 )
 def validate_aws_account_connection(
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionResponse:
-    return _response(service.validate(workspace=workspace_id))
+    return _response(service.validate(user_id=user_id))
 
 
 @router.post(
@@ -181,10 +203,10 @@ def validate_aws_account_connection(
 )
 def reconnect_aws_account(
     request: AwsConnectionReconnectRequest,
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionAuthorizationResponse:
-    return _authorization_response(service.reconnect(request, workspace=workspace_id))
+    return _authorization_response(service.reconnect(request, user_id=user_id))
 
 
 @router.delete(
@@ -194,10 +216,10 @@ def reconnect_aws_account(
     operation_id="remove_aws_account_connection",
 )
 def remove_aws_account_connection(
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionCurrentResponse:
-    connection = service.remove(workspace=workspace_id)
+    connection = service.remove(user_id=user_id)
     return AwsConnectionCurrentResponse(
         connection=_response(connection) if connection is not None else None
     )
@@ -209,10 +231,10 @@ def remove_aws_account_connection(
     operation_id="cancel_aws_account_reconnect",
 )
 def cancel_aws_account_reconnect(
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionResponse:
-    return _response(service.cancel_reconnect(workspace=workspace_id))
+    return _response(service.cancel_reconnect(user_id=user_id))
 
 
 @router.post(
@@ -221,10 +243,10 @@ def cancel_aws_account_reconnect(
     operation_id="retry_aws_account_connection",
 )
 def retry_aws_account_connection(
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionResponse:
-    return _response(service.retry(workspace=workspace_id))
+    return _response(service.retry(user_id=user_id))
 
 
 __all__ = ["router"]

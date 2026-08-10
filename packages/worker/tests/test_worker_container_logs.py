@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 
 from foundation.process import ProcessOutputChunk, ProcessOutputStream
+from shared.logs import ContainerLogEntryKind
 from worker.container_logs import (
     ContainerLogCaptureSettings,
     WorkerContainerLogCaptureService,
@@ -12,7 +13,6 @@ from worker.events import ContainerRequestContext
 from worker.repository_payloads import (
     AppendContainerLogsResponse,
     ContainerLogBatchEntry,
-    ContainerLogEntryKind,
     ContainerLogStream,
 )
 

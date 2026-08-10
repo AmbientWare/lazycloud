@@ -10,10 +10,9 @@ from fastapi.responses import PlainTextResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import AuthzRequirement, AuthzResourceKind
 from identity.device_auth import DeviceAuthorizationService
-from shared.errors import ConflictError
+from shared.errors import ConflictError, InvalidInputError
 from shared.http.device_auth import (
     DEVICE_AUTHORIZATION_VERIFICATION_PATH,
-    DeviceCodeApproveRequest,
     DeviceCodeCreateRequest,
     DeviceCodeCreateResponse,
     DeviceCodeResponse,
@@ -36,22 +35,28 @@ from shared.http.system import (
     TokenListResponse,
     WorkspaceSigningKeyResponse,
 )
-from shared.identity import AuthScope, AuthTokenRecord, TokenKind
+from shared.identity import (
+    USER_PRINCIPAL_TOKEN_KINDS,
+    AuthTokenRecord,
+    PlatformRole,
+    TokenKind,
+)
 from shared.usage import usage_to_prometheus
 
 from api.server.auth import (
     admin_access,
     read_token,
+    read_user,
     read_workspace,
     write_token,
-    write_workspace,
+    write_user,
 )
 from api.server.dependencies import (
     AuthorizationCredentials,
     api_services,
     authorization_header,
-    authorize_token_workspace,
     current_services,
+    require_user_principal,
 )
 from api.server.services import ApiServices
 
@@ -65,8 +70,28 @@ def _public_token(record: AuthTokenRecord) -> AuthTokenResponse:
     )
 
 
-def _authorize_token_issuance(issuer: AuthTokenRecord, requested_kind: TokenKind) -> None:
-    if requested_kind is not TokenKind.Workspace and issuer.kind is not TokenKind.Admin:
+def _authorize_token_issuance(
+    services: ApiServices,
+    issuer: AuthTokenRecord,
+    requested_kind: TokenKind,
+) -> None:
+    """This route mints workspace credentials, and only those.
+
+    A credential that names a person comes from signing in or from the offline
+    administrator bootstrap, both of which mint it against an account. Minting one
+    here would produce a token whose kind claims a person and whose row names a
+    workspace — administrator everywhere, owned by nobody, revocable with no account
+    to revoke it from. An account is made an administrator by its role instead.
+    """
+    if requested_kind in USER_PRINCIPAL_TOKEN_KINDS:
+        raise InvalidInputError(
+            f"{requested_kind.value} credentials name an account, not a workspace; "
+            f"they come from signing in or from the offline administrator bootstrap"
+        )
+    if (
+        requested_kind is not TokenKind.Workspace
+        and services.auth.platform_role(issuer) is not PlatformRole.Administrator
+    ):
         raise AuthorizationDeniedError("admin token required to issue non-workspace tokens")
 
 
@@ -170,13 +195,13 @@ def api_v1_workspace_signing_key(
 @router.get(
     "/api/v1/tokens",
     response_model=TokenListResponse,
-    operation_id="list_workspace_tokens",
+    operation_id="list_account_tokens",
 )
-def api_v1_list_workspace_tokens(
-    workspace_id: read_workspace,
+def api_v1_list_account_tokens(
+    user_id: read_user,
     services: ApiServices = Depends(current_services),
 ) -> TokenListResponse:
-    records = services.auth.list_workspace_tokens(workspace_id)
+    records = services.auth.list_account_tokens(user_id)
     return TokenListResponse(tokens=[_public_token(item) for item in records])
 
 
@@ -184,30 +209,17 @@ def api_v1_list_workspace_tokens(
     "/api/v1/tokens",
     response_model=TokenCreateResponse,
     status_code=status.HTTP_201_CREATED,
-    operation_id="create_workspace_token",
+    operation_id="create_account_token",
 )
-def api_v1_create_workspace_token(
+def api_v1_create_account_token(
     request: TokenCreateRequest,
-    *,
-    workspace_id: write_workspace,
-    token: write_token,
+    user_id: write_user,
     services: ApiServices = Depends(current_services),
 ) -> TokenCreateResponse:
-    _authorize_token_issuance(token, request.kind)
-    authorized_workspace_id = authorize_token_workspace(
-        services,
-        token,
-        request.workspace_id or workspace_id,
-        AuthScope.Write,
-    )
-    raw_token, record = services.auth.create_token(
+    raw_token, record = services.auth.create_account_token(
+        user_id,
         request.name,
-        scopes=request.scopes,
         expires_in_seconds=request.expires_in_seconds,
-        kind=request.kind,
-        workspace_id=authorized_workspace_id,
-        reusable=request.reusable,
-        audit_actor=token,
     )
     return TokenCreateResponse(token=raw_token, record=_public_token(record))
 
@@ -215,61 +227,32 @@ def api_v1_create_workspace_token(
 @router.post(
     "/api/v1/tokens/{token_id}/revoke",
     response_model=AuthTokenResponse,
-    operation_id="revoke_workspace_token",
+    operation_id="revoke_account_token",
 )
-def api_v1_revoke_workspace_token(
+def api_v1_revoke_account_token(
     token_id: str,
-    workspace_id: write_workspace,
+    user_id: write_user,
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> AuthTokenResponse:
     _reject_self_token_mutation(token, token_id, action="revoke")
-    record = services.auth.revoke_workspace_token(
-        workspace_id,
-        token_id,
-        audit_actor=token,
-    )
-    return _public_token(record)
-
-
-@router.post(
-    "/api/v1/tokens/{token_id}/toggle",
-    response_model=AuthTokenResponse,
-    operation_id="toggle_workspace_token",
-)
-def api_v1_toggle_workspace_token(
-    token_id: str,
-    workspace_id: write_workspace,
-    token: write_token,
-    services: ApiServices = Depends(current_services),
-) -> AuthTokenResponse:
-    _reject_self_token_mutation(token, token_id, action="toggle")
-    record = services.auth.toggle_workspace_token(
-        workspace_id,
-        token_id,
-        audit_actor=token,
-    )
-    return _public_token(record)
+    return _public_token(services.auth.revoke_account_token(user_id, token_id))
 
 
 @router.delete(
     "/api/v1/tokens/{token_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    operation_id="delete_workspace_token",
+    operation_id="delete_account_token",
 )
-def api_v1_delete_workspace_token(
+def api_v1_delete_account_token(
     token_id: str,
-    workspace_id: write_workspace,
+    user_id: write_user,
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> None:
     _reject_self_token_mutation(token, token_id, action="delete")
-    services.auth.delete_workspace_token(
-        workspace_id,
-        token_id,
-        audit_actor=token,
-    )
+    services.auth.delete_account_token(user_id, token_id)
 
 
 def _device_code_response(record: DeviceAuthorizationRecord) -> DeviceCodeResponse:
@@ -319,7 +302,7 @@ def claim_device_authorization(
     return DeviceCodeTokenResponse(
         status=claim.status,
         token=claim.token,
-        workspace=claim.workspace,
+        username=claim.username,
     )
 
 
@@ -344,21 +327,17 @@ def api_v1_get_device_code(
 )
 def api_v1_approve_device_code(
     user_code: str,
-    request: DeviceCodeApproveRequest,
     services: ApiServices = Depends(current_services),
     *,
     token: write_token,
 ) -> DeviceCodeResponse:
-    workspace_id = authorize_token_workspace(
-        services,
-        token,
-        request.workspace,
-        AuthScope.Write,
-    )
-    record = DeviceAuthorizationService(services.context).approve(
-        user_code,
-        workspace_id=workspace_id,
-    )
+    """Approve a waiting CLI for the signed-in account.
+
+    No workspace is chosen here: the credential the CLI claims reaches every
+    workspace the approving person belongs to, and the CLI picks its active one.
+    """
+    user_id = require_user_principal(services, token)
+    record = DeviceAuthorizationService(services.context).approve(user_code, user_id=user_id)
     return _device_code_response(record)
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from compute.policy import WorkspaceComputePolicyService
 from fastapi import APIRouter, Depends
-from shared.compute_policy import AwsWorkspaceComputePolicy, WorkspaceComputePolicy
+from shared.compute_policy import WorkspaceComputePolicy
 from shared.http.compute_policy import (
     ComputeCapacitySummaryResponse,
     ComputeCatalogInstanceResponse,
@@ -14,7 +14,6 @@ from shared.http.compute_policy import (
     MachinePoolResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeInstanceResponse,
-    WorkspaceComputePolicyPatchRequest,
     WorkspaceComputePolicyResponse,
     WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
@@ -22,8 +21,10 @@ from shared.http.compute_policy import (
     WorkspaceComputeWorkloadResponse,
 )
 
-from api.server.auth import read_workspace, write_workspace
+from api.server.auth import read_user, read_workspace, write_workspace
+from api.server.dependencies import current_services
 from api.server.service_dependencies import workspace_compute_policy_service
+from api.server.services import ApiServices
 
 router = APIRouter(prefix="/api/v1/compute", tags=["compute"])
 
@@ -59,30 +60,6 @@ def update_workspace_compute_policy(
             workspace=workspace_id,
             expected_revision=request.expected_revision,
             default_pool=request.default_pool,
-            aws=request.aws,
-        )
-    )
-
-
-@router.patch(
-    "/policy",
-    response_model=WorkspaceComputePolicyResponse,
-    operation_id="patch_workspace_compute_policy",
-)
-def patch_workspace_compute_policy(
-    request: WorkspaceComputePolicyPatchRequest,
-    workspace_id: write_workspace,
-    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
-) -> WorkspaceComputePolicyResponse:
-    current = service.get_policy(workspace=workspace_id)
-    changed = request.aws.model_dump(exclude_none=True)
-    merged = current.aws.model_copy(update=changed) if changed else current.aws
-    return _policy_response(
-        service.update_policy(
-            workspace=workspace_id,
-            expected_revision=request.expected_revision,
-            default_pool=request.default_pool or current.default_pool,
-            aws=AwsWorkspaceComputePolicy.model_validate(dict(merged)),
         )
     )
 
@@ -92,10 +69,11 @@ def patch_workspace_compute_policy(
     response_model=ComputeCatalogResponse,
     operation_id="get_workspace_compute_catalog",
 )
-def get_workspace_compute_catalog(
-    workspace_id: read_workspace,
+def get_compute_catalog(
+    _user_id: read_user,
     service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
 ) -> ComputeCatalogResponse:
+    """What may be launched in a connected cloud: provider inventory, not tenant state."""
     return ComputeCatalogResponse(
         data=[
             ComputeCatalogRegionResponse(
@@ -113,7 +91,7 @@ def get_workspace_compute_catalog(
                     for item in instances
                 ],
             )
-            for region, instances in service.catalog(workspace=workspace_id)
+            for region, instances in service.catalog()
         ],
         next="",
     )
@@ -156,12 +134,14 @@ def get_workspace_compute_summary(
 @router.get(
     "/instances",
     response_model=WorkspaceComputeInstanceListResponse,
-    operation_id="list_workspace_compute_instances",
+    operation_id="list_compute_instances",
 )
-def list_workspace_compute_instances(
-    workspace_id: read_workspace,
+def list_compute_instances(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
     service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
 ) -> WorkspaceComputeInstanceListResponse:
+    """Capacity running in this account's connected cloud, across its workspaces."""
     return WorkspaceComputeInstanceListResponse(
         data=[
             WorkspaceComputeInstanceResponse(
@@ -184,7 +164,9 @@ def list_workspace_compute_instances(
                 booted_template_version=item.booted_template_version,
                 created_at=item.record.created_at,
             )
-            for item in service.instances(workspace=workspace_id)
+            for item in service.instances_for_account(
+                workspace_ids=services.users.owned_workspace_ids(user_id)
+            )
         ],
         next="",
     )

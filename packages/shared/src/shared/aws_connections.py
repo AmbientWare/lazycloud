@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from pydantic import Field, field_validator, model_validator
@@ -24,6 +25,11 @@ def _bounded_authorization_error_message(value: object) -> object:
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _OPERATION_ID_PATTERN = r"^[A-Za-z][-A-Za-z0-9]{0,127}$"
+AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
+
+
+def _matches_aws_region(region: str) -> bool:
+    return re.fullmatch(AWS_REGION_PATTERN, region) is not None
 
 
 class AwsAccountConnectionPhase(StringEnum):
@@ -78,9 +84,57 @@ class AwsAccountConnectionErrorCode(StringEnum):
     UpstreamUnavailable = "upstream_unavailable"
 
 
+class AwsAccountComputeConfiguration(ContractModel):
+    """How capacity is provisioned in one connected AWS account.
+
+    One configuration per account rather than per workspace: the authorization it
+    governs is account-wide, so two workspaces of one owner cannot be allowed to
+    give the same account contradictory answers about where it may be used.
+    """
+
+    revision: int = Field(default=1, ge=1)
+    default_region: str = Field(default="us-east-1", pattern=AWS_REGION_PATTERN)
+    default_instance_type: str = Field(default="i4i.xlarge", min_length=1, max_length=64)
+    initial_cpu_workers: int = Field(default=1, ge=0, le=100)
+    min_cpu_workers: int = Field(default=1, ge=0, le=100)
+    max_cpu_instances: int = Field(default=10, ge=0, le=100)
+    max_gpu_instances: int = Field(default=2, ge=0, le=100)
+    min_free_cpu_millicores: int = Field(default=1_000, ge=0)
+    min_free_memory_mib: int = Field(default=1_024, ge=0)
+    allowed_regions: tuple[str, ...] = ("us-east-1",)
+    allowed_instance_types: tuple[str, ...] = ()
+    idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
+    root_volume_gib: int = Field(default=200, ge=50, le=2048)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> AwsAccountComputeConfiguration:
+        if not self.allowed_regions:
+            raise ValueError("AWS compute configuration requires at least one allowed region")
+        if len(set(self.allowed_regions)) != len(self.allowed_regions):
+            raise ValueError("AWS compute configuration allowed regions must be unique")
+        if any(not _matches_aws_region(region) for region in self.allowed_regions):
+            raise ValueError("AWS compute configuration contains an invalid region")
+        if self.default_region not in self.allowed_regions:
+            raise ValueError("AWS default region must be allowed")
+        if not self.min_cpu_workers <= self.initial_cpu_workers <= self.max_cpu_instances:
+            raise ValueError("AWS CPU worker capacity must satisfy min <= initial <= max")
+        if not self.default_instance_type.strip():
+            raise ValueError("AWS default instance type cannot be empty")
+        if len(set(self.allowed_instance_types)) != len(self.allowed_instance_types):
+            raise ValueError("AWS allowed instance types must be unique")
+        if any(not instance_type.strip() for instance_type in self.allowed_instance_types):
+            raise ValueError("AWS allowed instance types cannot contain empty values")
+        if (
+            self.allowed_instance_types
+            and self.default_instance_type not in self.allowed_instance_types
+        ):
+            raise ValueError("AWS default instance type must be allowed")
+        return self
+
+
 class AwsManagedAuthorizationReference(ContractModel):
     stack_name: str = Field(min_length=1, max_length=128)
-    region: str = Field(pattern=r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
+    region: str = Field(pattern=AWS_REGION_PATTERN)
     generation: int = Field(ge=1)
     stack_id: str | None = Field(default=None, min_length=1, max_length=2048)
     template_version: str = Field(min_length=1, max_length=128)
@@ -152,7 +206,7 @@ class AwsAccountAuthorizationGeneration(ContractModel):
 
 class AwsAccountConnection(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
-    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    user_id: str = Field(pattern=_UUID_PATTERN)
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     external_id: str = Field(
         min_length=32,
@@ -166,6 +220,8 @@ class AwsAccountConnection(ContractModel):
     The customer's override point: units are created on demand per capability
     key, so the pool they belong to cannot live on any one of them.
     """
+    compute: AwsAccountComputeConfiguration = Field(default_factory=AwsAccountComputeConfiguration)
+    """Provisioning limits and defaults applied to every workspace this account backs."""
     phase: AwsAccountConnectionPhase
     active_authorization: AwsAccountAuthorizationGeneration | None = None
     pending_authorization: AwsAccountAuthorizationGeneration | None = None
@@ -361,7 +417,7 @@ class AwsAccountConnection(ContractModel):
 
 class AwsAuthorizationCleanupTombstone(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
-    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    user_id: str = Field(pattern=_UUID_PATTERN)
     connection_id: str = Field(pattern=_UUID_PATTERN)
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     external_id: str = Field(
@@ -449,10 +505,12 @@ class AwsAccountValidationResult(ContractModel):
 
 
 __all__ = [
+    "AWS_REGION_PATTERN",
     "AwsAccountAuthorizationGeneration",
     "AwsAccountAuthorizationMode",
     "AwsAccountAuthorizationPhase",
     "AwsAccountAuthorizationPlan",
+    "AwsAccountComputeConfiguration",
     "AwsAccountConnection",
     "AwsAccountConnectionAvailableAction",
     "AwsAccountConnectionErrorCode",

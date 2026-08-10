@@ -3,19 +3,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError } from "@/lib/api/client";
 import type {
-  WorkspaceComputePolicy,
-  WorkspaceComputePolicyUpdateRequest,
+  AwsComputeConfiguration,
+  AwsComputeConfigurationUpdateRequest,
 } from "@/lib/api/schemas";
 import {
-  computePolicyQueryOptions,
-  computeQueryKeys,
-  getComputePolicy,
-  updateComputePolicy,
+  accountComputeQueryKeys,
+  awsConnectionQueryOptions,
+  getAwsConnection,
+  updateAwsComputeConfiguration,
 } from "@/lib/queries/compute";
 
 import { regionsEqual } from "../region-selection";
 
-export type ComputePolicyDraft = {
+const DISCONNECTED_MESSAGE = "The AWS account is no longer connected";
+
+export type AwsComputeDraft = {
   defaultRegion: string;
   defaultInstanceType: string;
   initialCpuWorkers: number;
@@ -30,9 +32,9 @@ export type ComputePolicyDraft = {
   rootVolumeGib: number;
 };
 
-export type ComputePolicyDraftField = keyof ComputePolicyDraft;
+export type AwsComputeDraftField = keyof AwsComputeDraft;
 
-export type ComputePolicyDraftUpdate =
+export type AwsComputeDraftUpdate =
   | { field: "defaultRegion"; value: string }
   | { field: "defaultInstanceType"; value: string }
   | { field: "initialCpuWorkers"; value: number }
@@ -50,28 +52,22 @@ type EditorMode =
   "loading" | "ready" | "saving" | "saved" | "error" | "review" | "recovering" | "recovery_error";
 
 type EditorState = {
-  workspaceId: string;
-  base: WorkspaceComputePolicy | null;
-  draft: ComputePolicyDraft | null;
-  dirtyFields: ComputePolicyDraftField[];
+  base: AwsComputeConfiguration | null;
+  draft: AwsComputeDraft | null;
+  dirtyFields: AwsComputeDraftField[];
   mode: EditorMode;
   error: Error | null;
 };
 
-type SaveCommand = {
-  workspaceId: string;
-  request: WorkspaceComputePolicyUpdateRequest;
-};
-
 type SaveOutcome =
-  | { kind: "saved"; workspaceId: string; policy: WorkspaceComputePolicy }
-  | { kind: "conflict"; workspaceId: string; policy: WorkspaceComputePolicy }
-  | { kind: "recovery_error"; workspaceId: string; error: Error };
+  | { kind: "saved"; configuration: AwsComputeConfiguration }
+  | { kind: "conflict"; configuration: AwsComputeConfiguration }
+  | { kind: "recovery_error"; error: Error };
 
-export type ComputePolicyController = {
-  policy: WorkspaceComputePolicy | null;
-  draft: ComputePolicyDraft | null;
-  dirtyFields: readonly ComputePolicyDraftField[];
+export type AwsComputeController = {
+  configuration: AwsComputeConfiguration | null;
+  draft: AwsComputeDraft | null;
+  dirtyFields: readonly AwsComputeDraftField[];
   isLoading: boolean;
   isSaving: boolean;
   isSaved: boolean;
@@ -81,81 +77,77 @@ export type ComputePolicyController = {
   canSave: boolean;
   loadError: Error | null;
   saveError: Error | null;
-  updateField: (update: ComputePolicyDraftUpdate) => void;
+  updateField: (update: AwsComputeDraftUpdate) => void;
   save: () => void;
   review: () => void;
   retryLoad: () => void;
 };
 
-export function useComputePolicyController(workspaceId: string): ComputePolicyController {
+/**
+ * Editor for the connected account's provisioning limits and defaults.
+ *
+ * The configuration is the account's, so there is no workspace dimension here.
+ * Its authority is the connection record the settings surface already polls;
+ * a field the person edited survives an authority change and is held for
+ * explicit review rather than being silently overwritten or silently kept.
+ */
+export function useAwsComputeController(): AwsComputeController {
   const queryClient = useQueryClient();
-  const query = useQuery(computePolicyQueryOptions(workspaceId));
-  const [state, setState] = useState<EditorState>(() => emptyState(workspaceId));
-  const activeSaves = useRef(new Set<string>());
-  const activeRecoveries = useRef(new Set<string>());
-  const currentState = currentEditorState(state, workspaceId, query.data);
-  if (state.workspaceId !== workspaceId) setState(currentState);
+  const query = useQuery(awsConnectionQueryOptions());
+  const [state, setState] = useState<EditorState>(emptyState);
+  const saveInFlight = useRef(false);
+  const recoveryInFlight = useRef(false);
+  const authority = query.data?.compute ?? null;
+  const currentState = authority ? rebaseAuthority(state, authority) : state;
 
   const mutation = useMutation({
-    mutationFn: async (command: SaveCommand): Promise<SaveOutcome> => {
+    mutationFn: async (request: AwsComputeConfigurationUpdateRequest): Promise<SaveOutcome> => {
       try {
-        return {
-          kind: "saved",
-          workspaceId: command.workspaceId,
-          policy: await updateComputePolicy(command.workspaceId, command.request),
-        };
+        const connection = await updateAwsComputeConfiguration(request);
+        queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), connection);
+        return { kind: "saved", configuration: connection.compute };
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 409) throw error;
         try {
-          const policy = await getComputePolicy(command.workspaceId);
-          queryClient.setQueryData(computeQueryKeys.policy(command.workspaceId), policy);
-          return { kind: "conflict", workspaceId: command.workspaceId, policy };
+          const connection = await getAwsConnection();
+          if (connection === null) {
+            return { kind: "recovery_error", error: new Error(DISCONNECTED_MESSAGE) };
+          }
+          queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), connection);
+          return { kind: "conflict", configuration: connection.compute };
         } catch (recoveryError) {
-          return {
-            kind: "recovery_error",
-            workspaceId: command.workspaceId,
-            error: asError(recoveryError),
-          };
+          return { kind: "recovery_error", error: asError(recoveryError) };
         }
       }
     },
     onSuccess: (outcome) => {
-      if (outcome.kind === "saved") {
-        queryClient.setQueryData(computeQueryKeys.policy(outcome.workspaceId), outcome.policy);
-      }
       setState((current) => {
-        if (current.workspaceId !== outcome.workspaceId) return current;
         if (outcome.kind === "saved") {
           return {
-            workspaceId: current.workspaceId,
-            base: outcome.policy,
-            draft: draftFromPolicy(outcome.policy),
+            base: outcome.configuration,
+            draft: draftFrom(outcome.configuration),
             dirtyFields: [],
             mode: "saved",
             error: null,
           };
         }
         if (outcome.kind === "conflict") {
-          return rebaseAuthority(current, outcome.policy, true);
+          return rebaseAuthority(current, outcome.configuration, true);
         }
         return { ...current, mode: "recovery_error", error: outcome.error };
       });
     },
-    onError: (error, command) => {
-      setState((current) =>
-        current.workspaceId === command.workspaceId
-          ? { ...current, mode: "error", error: asError(error) }
-          : current,
-      );
+    onError: (error) => {
+      setState((current) => ({ ...current, mode: "error", error: asError(error) }));
     },
-    onSettled: (_data, _error, command) => {
-      activeSaves.current.delete(command.workspaceId);
+    onSettled: () => {
+      saveInFlight.current = false;
     },
   });
 
-  const updateField = (update: ComputePolicyDraftUpdate) => {
+  const updateField = (update: AwsComputeDraftUpdate) => {
     setState((current) => {
-      const owned = currentEditorState(current, workspaceId, query.data);
+      const owned = authority ? rebaseAuthority(current, authority) : current;
       if (!owned.base || !owned.draft) return owned;
       const draft = applyDraftUpdate(owned.draft, update);
       return {
@@ -169,64 +161,68 @@ export function useComputePolicyController(workspaceId: string): ComputePolicyCo
   };
 
   const save = () => {
-    if (activeSaves.current.has(workspaceId)) return;
+    if (saveInFlight.current) return;
     const owned = currentState;
     if (!owned.base || !owned.draft || owned.dirtyFields.length === 0) return;
     if (owned.mode === "review" || owned.mode === "recovering" || owned.mode === "recovery_error") {
       return;
     }
     const request = updateRequest(owned.base, owned.draft);
-    activeSaves.current.add(workspaceId);
+    saveInFlight.current = true;
     setState((current) => ({
-      ...currentEditorState(current, workspaceId, query.data),
+      ...(authority ? rebaseAuthority(current, authority) : current),
       mode: "saving",
       error: null,
     }));
-    mutation.mutate({ workspaceId, request });
+    mutation.mutate(request);
   };
 
   const review = () => {
     setState((current) => {
-      const owned = currentEditorState(current, workspaceId, query.data);
+      const owned = authority ? rebaseAuthority(current, authority) : current;
       return owned.mode === "review" ? { ...owned, mode: "ready", error: null } : owned;
     });
   };
 
   const retryLoad = () => {
-    if (activeRecoveries.current.has(workspaceId) || activeSaves.current.has(workspaceId)) {
-      return;
-    }
-    activeRecoveries.current.add(workspaceId);
+    if (recoveryInFlight.current || saveInFlight.current) return;
+    recoveryInFlight.current = true;
     setState((current) => ({
-      ...currentEditorState(current, workspaceId, query.data),
+      ...(authority ? rebaseAuthority(current, authority) : current),
       mode: "recovering",
       error: null,
     }));
-    void getComputePolicy(workspaceId)
-      .then((policy) => {
-        queryClient.setQueryData(computeQueryKeys.policy(workspaceId), policy);
+    void getAwsConnection()
+      .then((connection) => {
+        if (connection === null) {
+          setState((current) => ({
+            ...current,
+            mode: "recovery_error",
+            error: new Error(DISCONNECTED_MESSAGE),
+          }));
+          return;
+        }
+        queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), connection);
         setState((current) =>
-          current.workspaceId === workspaceId
-            ? rebaseAuthority(current, policy, current.dirtyFields.length > 0)
-            : current,
+          rebaseAuthority(current, connection.compute, current.dirtyFields.length > 0),
         );
       })
       .catch((error: unknown) => {
-        setState((current) =>
-          current.workspaceId === workspaceId
-            ? { ...current, mode: "recovery_error", error: asError(error) }
-            : current,
-        );
+        setState((current) => ({
+          ...current,
+          mode: "recovery_error",
+          error: asError(error),
+        }));
       })
       .finally(() => {
-        activeRecoveries.current.delete(workspaceId);
+        recoveryInFlight.current = false;
       });
   };
 
   const hasDraft = currentState.draft !== null;
   const isDirty = currentState.dirtyFields.length > 0;
   return {
-    policy: currentState.base,
+    configuration: currentState.base,
     draft: currentState.draft,
     dirtyFields: currentState.dirtyFields,
     isLoading: !hasDraft && query.isPending,
@@ -253,33 +249,14 @@ export function useComputePolicyController(workspaceId: string): ComputePolicyCo
   };
 }
 
-function currentEditorState(
-  state: EditorState,
-  workspaceId: string,
-  authority: WorkspaceComputePolicy | undefined,
-): EditorState {
-  if (state.workspaceId !== workspaceId) {
-    return authority ? stateFromAuthority(workspaceId, authority) : emptyState(workspaceId);
-  }
-  return authority ? rebaseAuthority(state, authority) : state;
+function emptyState(): EditorState {
+  return { base: null, draft: null, dirtyFields: [], mode: "loading", error: null };
 }
 
-function emptyState(workspaceId: string): EditorState {
+function stateFromAuthority(configuration: AwsComputeConfiguration): EditorState {
   return {
-    workspaceId,
-    base: null,
-    draft: null,
-    dirtyFields: [],
-    mode: "loading",
-    error: null,
-  };
-}
-
-function stateFromAuthority(workspaceId: string, policy: WorkspaceComputePolicy): EditorState {
-  return {
-    workspaceId,
-    base: policy,
-    draft: draftFromPolicy(policy),
+    base: configuration,
+    draft: draftFrom(configuration),
     dirtyFields: [],
     mode: "ready",
     error: null,
@@ -288,23 +265,22 @@ function stateFromAuthority(workspaceId: string, policy: WorkspaceComputePolicy)
 
 function rebaseAuthority(
   state: EditorState,
-  policy: WorkspaceComputePolicy,
+  configuration: AwsComputeConfiguration,
   forceReview = false,
 ): EditorState {
-  if (!state.base || !state.draft) return stateFromAuthority(state.workspaceId, policy);
-  if (policiesEqual(state.base, policy)) return state;
+  if (!state.base || !state.draft) return stateFromAuthority(configuration);
+  if (configurationsEqual(state.base, configuration)) return state;
   if (state.mode === "saving" && !forceReview) return state;
-  if (state.dirtyFields.length === 0) return stateFromAuthority(state.workspaceId, policy);
+  if (state.dirtyFields.length === 0) return stateFromAuthority(configuration);
 
-  const authoritativeDraft = draftFromPolicy(policy);
-  let draft = authoritativeDraft;
+  let draft = draftFrom(configuration);
   for (const field of state.dirtyFields) {
     draft = copyDraftField(draft, state.draft, field);
   }
-  const dirtyFields = changedFields(draft, policy);
+  const dirtyFields = changedFields(draft, configuration);
   return {
     ...state,
-    base: policy,
+    base: configuration,
     draft,
     dirtyFields,
     mode: dirtyFields.length > 0 || forceReview ? "review" : "ready",
@@ -312,31 +288,31 @@ function rebaseAuthority(
   };
 }
 
-function draftFromPolicy(policy: WorkspaceComputePolicy): ComputePolicyDraft {
+function draftFrom(configuration: AwsComputeConfiguration): AwsComputeDraft {
   return {
-    defaultRegion: policy.aws.default_region,
-    defaultInstanceType: policy.aws.default_instance_type,
-    initialCpuWorkers: policy.aws.initial_cpu_workers,
-    minCpuWorkers: policy.aws.min_cpu_workers,
-    maxCpuInstances: policy.aws.max_cpu_instances,
-    maxGpuInstances: policy.aws.max_gpu_instances,
-    minFreeCpuMillicores: policy.aws.min_free_cpu_millicores,
-    minFreeMemoryMib: policy.aws.min_free_memory_mib,
-    allowedRegions: [...policy.aws.allowed_regions],
-    allowedInstanceTypes: policy.aws.allowed_instance_types.join(", "),
-    idleTimeoutSeconds: policy.aws.idle_timeout_seconds,
-    rootVolumeGib: policy.aws.root_volume_gib,
+    defaultRegion: configuration.default_region,
+    defaultInstanceType: configuration.default_instance_type,
+    initialCpuWorkers: configuration.initial_cpu_workers,
+    minCpuWorkers: configuration.min_cpu_workers,
+    maxCpuInstances: configuration.max_cpu_instances,
+    maxGpuInstances: configuration.max_gpu_instances,
+    minFreeCpuMillicores: configuration.min_free_cpu_millicores,
+    minFreeMemoryMib: configuration.min_free_memory_mib,
+    allowedRegions: [...configuration.allowed_regions],
+    allowedInstanceTypes: configuration.allowed_instance_types.join(", "),
+    idleTimeoutSeconds: configuration.idle_timeout_seconds,
+    rootVolumeGib: configuration.root_volume_gib,
   };
 }
 
 function updateRequest(
-  base: WorkspaceComputePolicy,
-  draft: ComputePolicyDraft,
-): WorkspaceComputePolicyUpdateRequest {
+  base: AwsComputeConfiguration,
+  draft: AwsComputeDraft,
+): AwsComputeConfigurationUpdateRequest {
   return {
     expected_revision: base.revision,
-    default_pool: base.default_pool,
-    aws: {
+    compute: {
+      revision: base.revision,
       default_region: draft.defaultRegion,
       default_instance_type: draft.defaultInstanceType,
       initial_cpu_workers: draft.initialCpuWorkers,
@@ -353,7 +329,7 @@ function updateRequest(
   };
 }
 
-const draftFields: readonly ComputePolicyDraftField[] = [
+const draftFields: readonly AwsComputeDraftField[] = [
   "defaultRegion",
   "defaultInstanceType",
   "initialCpuWorkers",
@@ -369,17 +345,17 @@ const draftFields: readonly ComputePolicyDraftField[] = [
 ];
 
 function changedFields(
-  draft: ComputePolicyDraft,
-  base: WorkspaceComputePolicy,
-): ComputePolicyDraftField[] {
-  const baseDraft = draftFromPolicy(base);
+  draft: AwsComputeDraft,
+  base: AwsComputeConfiguration,
+): AwsComputeDraftField[] {
+  const baseDraft = draftFrom(base);
   return draftFields.filter((field) => fieldChanged(field, draft, baseDraft));
 }
 
 function fieldChanged(
-  field: ComputePolicyDraftField,
-  draft: ComputePolicyDraft,
-  base: ComputePolicyDraft,
+  field: AwsComputeDraftField,
+  draft: AwsComputeDraft,
+  base: AwsComputeDraft,
 ): boolean {
   switch (field) {
     case "defaultRegion":
@@ -413,10 +389,10 @@ function fieldChanged(
 }
 
 function copyDraftField(
-  draft: ComputePolicyDraft,
-  source: ComputePolicyDraft,
-  field: ComputePolicyDraftField,
-): ComputePolicyDraft {
+  draft: AwsComputeDraft,
+  source: AwsComputeDraft,
+  field: AwsComputeDraftField,
+): AwsComputeDraft {
   switch (field) {
     case "defaultRegion":
       return { ...draft, defaultRegion: source.defaultRegion };
@@ -445,10 +421,7 @@ function copyDraftField(
   }
 }
 
-function applyDraftUpdate(
-  draft: ComputePolicyDraft,
-  update: ComputePolicyDraftUpdate,
-): ComputePolicyDraft {
+function applyDraftUpdate(draft: AwsComputeDraft, update: AwsComputeDraftUpdate): AwsComputeDraft {
   switch (update.field) {
     case "defaultRegion":
       return { ...draft, defaultRegion: update.value };
@@ -477,24 +450,24 @@ function applyDraftUpdate(
   }
 }
 
-function policiesEqual(left: WorkspaceComputePolicy, right: WorkspaceComputePolicy): boolean {
+function configurationsEqual(
+  left: AwsComputeConfiguration,
+  right: AwsComputeConfiguration,
+): boolean {
   return (
     left.revision === right.revision &&
-    left.default_pool === right.default_pool &&
-    left.created_at === right.created_at &&
-    left.updated_at === right.updated_at &&
-    left.aws.default_region === right.aws.default_region &&
-    left.aws.default_instance_type === right.aws.default_instance_type &&
-    left.aws.initial_cpu_workers === right.aws.initial_cpu_workers &&
-    left.aws.min_cpu_workers === right.aws.min_cpu_workers &&
-    left.aws.max_cpu_instances === right.aws.max_cpu_instances &&
-    left.aws.max_gpu_instances === right.aws.max_gpu_instances &&
-    left.aws.min_free_cpu_millicores === right.aws.min_free_cpu_millicores &&
-    left.aws.min_free_memory_mib === right.aws.min_free_memory_mib &&
-    left.aws.idle_timeout_seconds === right.aws.idle_timeout_seconds &&
-    left.aws.root_volume_gib === right.aws.root_volume_gib &&
-    regionsEqual(left.aws.allowed_regions, right.aws.allowed_regions) &&
-    regionsEqual(left.aws.allowed_instance_types, right.aws.allowed_instance_types)
+    left.default_region === right.default_region &&
+    left.default_instance_type === right.default_instance_type &&
+    left.initial_cpu_workers === right.initial_cpu_workers &&
+    left.min_cpu_workers === right.min_cpu_workers &&
+    left.max_cpu_instances === right.max_cpu_instances &&
+    left.max_gpu_instances === right.max_gpu_instances &&
+    left.min_free_cpu_millicores === right.min_free_cpu_millicores &&
+    left.min_free_memory_mib === right.min_free_memory_mib &&
+    left.idle_timeout_seconds === right.idle_timeout_seconds &&
+    left.root_volume_gib === right.root_volume_gib &&
+    regionsEqual(left.allowed_regions, right.allowed_regions) &&
+    regionsEqual(left.allowed_instance_types, right.allowed_instance_types)
   );
 }
 
@@ -510,5 +483,5 @@ function commaList(value: string): string[] {
 }
 
 function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error("Compute policy request failed");
+  return error instanceof Error ? error : new Error("AWS compute configuration request failed");
 }

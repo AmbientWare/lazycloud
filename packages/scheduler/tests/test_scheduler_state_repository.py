@@ -137,6 +137,18 @@ class RecordingContainerScheduler:
         )
 
 
+class _UnownedWorkspaces:
+    """No workspace here has an account behind it.
+
+    Every worker these cases build is shared capacity, which placement decides
+    without asking who owns the request.
+    """
+
+    def owner_user_id(self, workspace_id: str) -> str:
+        _ = workspace_id
+        return ""
+
+
 class _RecordingDispatchWake:
     def __init__(self, *, wake_results: list[bool] | None = None) -> None:
         self.signal_count = 0
@@ -253,6 +265,7 @@ def _request_service(
             lifecycle_events if lifecycle_events is not None else _RecordingLifecycleEvents()
         ),
         capacity_reservations=capacity_reservations,
+        workspace_owners=_UnownedWorkspaces(),
         requeue_delay_seconds=requeue_delay_seconds,
         max_retry_count=max_retry_count,
         claim_lease_seconds=claim_lease_seconds,

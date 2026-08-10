@@ -27,6 +27,7 @@ from database.repositories.observability import UsageRepository
 from fastapi.testclient import TestClient
 from gateway.http import AgentMetricSnapshot, AgentTelemetryRequest
 from identity.auth import AuthService
+from identity.users import UserService
 from observability.settings import UsagePricingSettings
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.billing import BillableMetric, BillingCoverageStatus
@@ -35,7 +36,7 @@ from shared.compute_policy import MachinePool, UnitName
 from shared.deployments import StubKind
 from shared.http.usage import UsageBillingPeriod
 from shared.http_transport import HttpChannel
-from shared.identity import TokenKind
+from shared.identity import WorkspaceRole
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -47,6 +48,7 @@ from shared.usage import (
 )
 from shared.usage_query import UsageQuery
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 
 cli = build_admin_cli()
 
@@ -828,9 +830,13 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
     )
     token_hash = hash_compute_token("agent-token")
     joined_at = utc_now() - timedelta(seconds=30)
+    users = UserService(isolated_services.context)
+    owner = users.create(username="usage-node-owner", password="usage-node-owner-password")
+    users.add_member(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.Owner)
     with isolated_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
+                user_id=owner.id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 pool=MachinePool("usage-managed"),
@@ -899,8 +905,5 @@ def _auth_headers(services: ApiServices, *, workspace_id: str = "default") -> di
 
 
 def _admin_auth_headers(services: ApiServices) -> dict[str, str]:
-    raw_token, _record = AuthService(services.context).create_token(
-        "usage-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _record = administrator_credential(services, "usage-admin")
     return {"Authorization": f"Bearer {raw_token}"}

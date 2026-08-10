@@ -283,7 +283,7 @@ def test_deployment_object_upload_uses_extended_timeout_for_payload(
 
         def post(self, path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
             channel_calls.append((path, self.timeout_seconds))
-            if path == "/gateway/objects/head":
+            if path.startswith("/gateway/objects/head"):
                 return {"ok": True, "exists": False}
             raise AssertionError(path)
 
@@ -300,18 +300,23 @@ def test_deployment_object_upload_uses_extended_timeout_for_payload(
         ControlClientConfig(
             endpoint="https://control.example",
             token="token",
-            workspace="default",
+            workspace="tenant-b",
             timeout_seconds=10,
         )
     ).upload_bytes(b"payload", name="sources/app.zip", bucket=SOURCE_PACKAGE_BUCKET)
 
     assert uploaded == {"object_id": "obj-source"}
+    # Both halves name the workspace the deploy selected. The upload and the
+    # existence probe that precedes it are separate requests, and a credential now
+    # reaches every workspace its account holds, so one of them omitting it lands the
+    # artifact in a workspace the stub cannot then reference.
     assert channel_calls == [
-        ("/gateway/objects/head", 10),
+        ("/gateway/objects/head?workspace=tenant-b", 10),
     ]
     assert len(stream_uploads) == 1
     assert stream_uploads[0]["data"] == b"payload"
     assert stream_uploads[0]["bucket"] == SOURCE_PACKAGE_BUCKET
+    assert stream_uploads[0]["workspace"] == "tenant-b"
     assert stream_uploads[0]["timeout_seconds"] == DEFAULT_OBJECT_UPLOAD_TIMEOUT_SECONDS
 
 

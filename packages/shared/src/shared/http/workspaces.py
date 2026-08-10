@@ -6,7 +6,7 @@ from pydantic import Field, JsonValue, field_validator
 
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
-from shared.identity import WorkspaceStatus, WorkspaceStorageConfig
+from shared.identity import WorkspaceRecord, WorkspaceStatus, WorkspaceStorageConfig
 
 
 class WorkspaceStorageResponse(HttpModel):
@@ -27,6 +27,21 @@ class WorkspaceResponse(HttpModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+def workspace_response(record: WorkspaceRecord) -> WorkspaceResponse:
+    """The public view of a workspace, with everything secret projected out.
+
+    One definition, because this is what decides which fields leave the API: a new
+    secret on the record has to become invisible everywhere at once, and a second
+    copy of the exclusion set is how one surface keeps leaking it.
+    """
+    return WorkspaceResponse.model_validate(
+        record.model_dump(
+            mode="json",
+            exclude={"signing_key": True, "storage": {"config"}},
+        )
+    )
 
 
 class WorkspaceSetRequest(HttpModel):
@@ -82,6 +97,7 @@ class WorkspaceAuditEventResponse(HttpModel):
     workspace_id: str
     action: WorkspaceAuditAction
     actor_token_id: str | None = None
+    actor_user_id: str | None = None
     actor_name: str
     target_type: WorkspaceAuditTarget
     target_id: str
@@ -153,4 +169,5 @@ __all__ = [
     "WorkspaceStorageRequest",
     "WorkspaceStorageResponse",
     "WorkspaceUpdateRequest",
+    "workspace_response",
 ]

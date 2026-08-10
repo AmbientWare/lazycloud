@@ -29,7 +29,9 @@ def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
     assert not output.exists()
     auth = AuthService(IdentityDatabaseContext(database))
     assert auth.bootstrap_required()
-    auth.bootstrap_admin_token(request_id="bootstrap:worker-token-test")
+    auth.bootstrap_administrator(
+        request_id="bootstrap:worker-token-test", username="admin", password="bootstrap-password"
+    )
     with pytest.raises(AuthError, match="bootstrap must complete"):
         write_worker_token(name="compose-container-worker", output=output)
     auth.mark_admin_token_published(

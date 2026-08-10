@@ -13,18 +13,19 @@ import {
   registerCustomDomain,
   removeCustomDomain,
 } from "@/lib/queries/domains";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-export function DomainSettings({ workspaceId }: { workspaceId: string }) {
+export function DomainSettings() {
   const queryClient = useQueryClient();
   const [hostname, setHostname] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
-  const domains = useQuery(customDomainsQueryOptions(workspaceId));
+  const domains = useQuery(customDomainsQueryOptions());
 
   const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["custom-domains", workspaceId] });
+    queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
 
   const register = useMutation({
-    mutationFn: (value: string) => registerCustomDomain(workspaceId, value),
+    mutationFn: (value: string) => registerCustomDomain(value),
     onSuccess: () => {
       setHostname("");
       setFailure(null);
@@ -34,7 +35,7 @@ export function DomainSettings({ workspaceId }: { workspaceId: string }) {
   });
 
   const remove = useMutation({
-    mutationFn: (value: string) => removeCustomDomain(workspaceId, value),
+    mutationFn: (value: string) => removeCustomDomain(value),
     onSuccess: () => {
       setFailure(null);
       void invalidate();
@@ -48,7 +49,7 @@ export function DomainSettings({ workspaceId }: { workspaceId: string }) {
   return (
     <Panel
       title="Domains"
-      description="Domains this workspace can serve deployments from"
+      description="Registered once for your account; any workspace you own can serve from them"
       action={
         <form
           className="flex items-center gap-2"

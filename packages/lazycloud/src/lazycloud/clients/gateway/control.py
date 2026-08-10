@@ -38,6 +38,13 @@ class GatewayControlChannel(Protocol):
 @dataclass
 class GatewayControlClient:
     channel: GatewayControlChannel
+    workspace: str = "default"
+    """Workspace every call acts in, named rather than inferred.
+
+    A user credential reaches every workspace its owner belongs to, so the request
+    has to say which one. Sending it here keeps deploying and deleting in agreement:
+    they previously disagreed, one reading the token and the other the profile.
+    """
 
     @classmethod
     def from_endpoint(
@@ -45,18 +52,24 @@ class GatewayControlClient:
         endpoint: str,
         *,
         token: str | None = None,
+        workspace: str = "default",
         timeout_seconds: float = 10.0,
     ) -> GatewayControlClient:
         return cls(
-            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds)
+            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds),
+            workspace=workspace,
         )
+
+    def _scoped(self, path: str) -> str:
+        separator = "&" if "?" in path else "?"
+        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
 
     def checkpoint_container(
         self,
         request: CheckpointContainerRequest,
     ) -> CheckpointContainerResponse:
         return CheckpointContainerResponse.model_validate(
-            self.channel.post("/gateway/containers/checkpoint", _payload(request))
+            self.channel.post(self._scoped("/gateway/containers/checkpoint"), _payload(request))
         )
 
     def attach_to_container(self, container_id: str) -> dict[str, Any]:
@@ -64,7 +77,7 @@ class GatewayControlClient:
 
     def attach_to_container_response(self, container_id: str) -> AttachToContainerResponse:
         response = self.channel.post(
-            "/gateway/containers/attach",
+            self._scoped("/gateway/containers/attach"),
             AttachToContainerRequest(container_id=container_id).model_dump(mode="json"),
         )
         return AttachToContainerResponse.model_validate(response)
@@ -82,7 +95,7 @@ class GatewayControlClient:
             }
         )
         for event, payload in _sse_json_events(
-            self.channel.stream_get(f"/gateway/containers/attach/stream?{query}")
+            self.channel.stream_get(self._scoped(f"/gateway/containers/attach/stream?{query}"))
         ):
             if event in {"output", "done"}:
                 yield AttachToContainerResponse.model_validate(payload)
@@ -92,7 +105,7 @@ class GatewayControlClient:
         body: SyncContainerWorkspaceBody,
     ) -> SyncContainerWorkspaceResponse:
         return SyncContainerWorkspaceResponse.model_validate(
-            self.channel.post("/gateway/containers/sync-workspace", _payload(body))
+            self.channel.post(self._scoped("/gateway/containers/sync-workspace"), _payload(body))
         )
 
     def get_or_create_stub(
@@ -100,17 +113,17 @@ class GatewayControlClient:
         request: GetOrCreateStubRequest,
     ) -> GetOrCreateStubResponse:
         return GetOrCreateStubResponse.model_validate(
-            self.channel.post("/gateway/stubs/get-or-create", _payload(request))
+            self.channel.post(self._scoped("/gateway/stubs/get-or-create"), _payload(request))
         )
 
     def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
         return DeployStubResponse.model_validate(
-            self.channel.post("/gateway/stubs/deploy", _payload(request))
+            self.channel.post(self._scoped("/gateway/stubs/deploy"), _payload(request))
         )
 
     def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
         return GetUrlResponse.model_validate(
-            self.channel.post("/gateway/stubs/url", _payload(request))
+            self.channel.post(self._scoped("/gateway/stubs/url"), _payload(request))
         )
 
     def resolve_deployment_target(
@@ -118,12 +131,15 @@ class GatewayControlClient:
         request: ResolveDeploymentTargetRequest,
     ) -> ResolveDeploymentTargetResponse:
         return ResolveDeploymentTargetResponse.model_validate(
-            self.channel.post("/gateway/deployments/resolve-target", _payload(request))
+            self.channel.post(
+                self._scoped("/gateway/deployments/resolve-target"),
+                _payload(request),
+            )
         )
 
     def client_manifest(self, request: ClientManifestRequest) -> ClientManifestResponse:
         return ClientManifestResponse.model_validate(
-            self.channel.post("/gateway/client-manifests", _payload(request))
+            self.channel.post(self._scoped("/gateway/client-manifests"), _payload(request))
         )
 
 

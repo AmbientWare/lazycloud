@@ -12,6 +12,7 @@ from uuid import uuid4
 from foundation.process import ProcessOutputChunk, ProcessOutputStream
 from pydantic import field_validator, model_validator
 from shared.contracts import ContractModel
+from shared.logs import ContainerLogEntryKind
 
 from worker.events import ContainerRequestContext
 from worker.repository_payloads import (
@@ -19,7 +20,6 @@ from worker.repository_payloads import (
     MAX_CONTAINER_LOG_MESSAGE_BYTES,
     AppendContainerLogsResponse,
     ContainerLogBatchEntry,
-    ContainerLogEntryKind,
     ContainerLogStream,
 )
 

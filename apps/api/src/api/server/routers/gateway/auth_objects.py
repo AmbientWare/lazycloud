@@ -20,7 +20,7 @@ from shared.http.objects import (
     PutObjectResponse,
 )
 
-from api.server.auth import read_token, write_token
+from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import AuthorizationCredentials, authorization_header
 from api.server.service_dependencies import gateway_service
 
@@ -39,25 +39,25 @@ def authorize(
 @router.post("/sign-payload", response_model=SignPayloadResponse)
 def sign_payload(
     request: SignPayloadRequest,
-    token: write_token,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> SignPayloadResponse:
-    return service.sign_payload(request.model_copy(update={"workspace": token.workspace_id}))
+    return service.sign_payload(request.model_copy(update={"workspace": workspace_id}))
 
 
 @router.post("/objects/head", response_model=HeadObjectResponse)
 def head_object(
     request: HeadObjectRequest,
-    token: read_token,
+    workspace_id: read_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> HeadObjectResponse:
-    return service.head_object(request, workspace_id=token.workspace_id)
+    return service.head_object(request, workspace_id=workspace_id)
 
 
 @router.post("/objects/stream", response_model=PutObjectResponse)
 async def put_object_stream(
     request: Request,
-    token: write_token,
+    workspace_id: write_workspace,
     name: str = Query("", max_length=1024),
     object_hash: str = Query(
         ...,
@@ -92,7 +92,7 @@ async def put_object_stream(
     return await service.put_object_chunks(
         upload_request,
         request.stream(),
-        workspace_id=token.workspace_id,
+        workspace_id=workspace_id,
     )
 
 
@@ -102,12 +102,12 @@ def download_object(
     key: str = Query(...),
     expires_seconds: int = Query(3600, ge=1, le=86_400),
     *,
-    token: read_token,
+    workspace_id: read_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> RedirectResponse:
     return RedirectResponse(
         service.object_download_url(
-            workspace_id=token.workspace_id,
+            workspace_id=workspace_id,
             bucket=bucket,
             key=key,
             expires_seconds=expires_seconds,

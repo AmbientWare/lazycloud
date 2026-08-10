@@ -9,17 +9,16 @@ from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from observability.stream_state import RedisEventStreamRepository
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.http.observability import ContainerMetricsTimeseriesResponse
-from shared.identity import TokenKind
 from shared.realtime.contracts import (
     ContainerMetricsData,
     ContainerMetricsPayload,
     EventRecordType,
 )
+from tests.service_fixtures import administrator_credential
 
 
 def _seed_container(services: ApiServices) -> ContainerRecord:
@@ -98,10 +97,7 @@ def test_container_metrics_timeseries_empty_and_missing(
 ) -> None:
     container = _seed_container(isolated_services)
 
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "metrics-reader",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "metrics-reader")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 

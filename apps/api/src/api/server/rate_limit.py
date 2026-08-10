@@ -20,6 +20,11 @@ class UnauthenticatedRouteLimit:
     prefix: str
     per_address_per_minute: int
     global_per_minute: int
+    # Empty means every method. Naming one keeps a budget meant for guessing a
+    # credential off the reads that share its prefix: /api/v1/sessions/current is
+    # fetched on every dashboard mount, and spending the anti-stuffing budget on it
+    # would let ordinary authenticated traffic refuse everyone else's sign-in.
+    methods: frozenset[str] = frozenset()
     # A limiter that cannot reach Redis either lets everything through or
     # nothing. For the routes that gate the platform's own liveness probes,
     # everything is the safer answer; for the routes an attacker can reach
@@ -31,6 +36,10 @@ DEFAULT_UNAUTHENTICATED_LIMITS: tuple[UnauthenticatedRouteLimit, ...] = (
     UnauthenticatedRouteLimit("/gateway/provider-nodes/", 30, 600),
     UnauthenticatedRouteLimit("/auth/device", 10, 200),
     UnauthenticatedRouteLimit("/auth/authorize", 10, 200),
+    # Password sign-in: the one route where guessing the credential is the attack.
+    # The global budget matters as much as the per-address one, because credential
+    # stuffing spreads a list across many addresses rather than hammering one.
+    UnauthenticatedRouteLimit("/api/v1/sessions", 10, 200, methods=frozenset({"POST"})),
     UnauthenticatedRouteLimit("/health", 60, 600, fail_open=True),
 )
 
@@ -58,15 +67,18 @@ class UnauthenticatedRateLimitMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        limit = self._limit_for(str(scope.get("path") or "/"))
+        limit = self._limit_for(
+            str(scope.get("path") or "/"),
+            str(scope.get("method") or ""),
+        )
         if limit is not None and not self._admit(scope, limit):
             await _refuse(send)
             return
         await self.app(scope, receive, send)
 
-    def _limit_for(self, path: str) -> UnauthenticatedRouteLimit | None:
+    def _limit_for(self, path: str, method: str) -> UnauthenticatedRouteLimit | None:
         for limit in self.limits:
-            if path.startswith(limit.prefix):
+            if path.startswith(limit.prefix) and (not limit.methods or method in limit.methods):
                 return limit
         return None
 

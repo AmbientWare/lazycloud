@@ -9,6 +9,7 @@ from uuid import uuid4
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.offers import ComputeOffer
+from compute.policy import AwsDefaultCapacityBaseline
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -21,11 +22,12 @@ from compute.service import ComputeService
 from control.service import ControlPlaneService
 from database.repositories.compute import AwsAccountConnectionRepository, ComputeUnitRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
+from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
+    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
@@ -37,7 +39,8 @@ from shared.compute_policy import (
     ComputeUnitRecord,
 )
 from shared.http.compute import UnitScaleResponse
-from shared.identity import TokenKind
+from shared.identity import WorkspaceRole
+from tests.service_fixtures import administrator_credential
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 _OFFER_ID = "us-east-1:i4i.xlarge"
@@ -169,6 +172,22 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         capacity_owner_mutations=mutations,
     )
     workspace_id = _seed_connection(isolated_services)
+    services_with_compute = replace(isolated_services, compute=compute)
+    # The graph's warm-baseline owner has to reach the same capacity service the
+    # request path uses, or control-plane startup reconciles through a different one.
+    services_with_compute.workspace_compute_policy_service.aws_default_capacity = (
+        AwsDefaultCapacityBaseline(compute)
+    )
+    gateway = replace(
+        services_with_compute.gateway_service,
+        services=services_with_compute,
+        capacity_reservations=mutations,
+    )
+    services = replace(services_with_compute, gateway_service=gateway)
+    raw_token, _record = administrator_credential(isolated_services, "pool-scale")
+    client = client_stack.enter_context(TestClient(create_app(services)))
+    # Provisioned after the control plane started, as in production: startup
+    # reconciles the baseline every connected account asks for.
     pool = compute.prepare_pooled_capacity(
         workspace="default",
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
@@ -177,18 +196,6 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         workspace_machine_limit=10,
         root_volume_gib=200,
     )
-    services_with_compute = replace(isolated_services, compute=compute)
-    gateway = replace(
-        services_with_compute.gateway_service,
-        services=services_with_compute,
-        capacity_reservations=mutations,
-    )
-    services = replace(services_with_compute, gateway_service=gateway)
-    raw_token, _record = AuthService(isolated_services.context).create_token(
-        "pool-scale",
-        kind=TokenKind.Admin,
-    )
-    client = client_stack.enter_context(TestClient(create_app(services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
     path = f"/api/v1/units/{pool.id}/scale"
     ControlPlaneService(isolated_services.context).upsert_workspace("other")
@@ -257,6 +264,15 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
 
 
 def _seed_connection(services: ApiServices) -> str:
+    users = UserService(services.context)
+    owner = users.create(username="pool-scale-owner", password="pool-scale-password")
+    with services.context.database.session() as session:
+        owner_workspace_id = services.context.default_workspace_id(session)
+    users.add_member(
+        workspace_id=owner_workspace_id,
+        user_id=owner.id,
+        role=WorkspaceRole.Owner,
+    )
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
         now = datetime.now(UTC)
@@ -264,9 +280,16 @@ def _seed_connection(services: ApiServices) -> str:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
-                workspace_id=workspace_id,
+                user_id=owner.id,
                 account_id=account_id,
                 external_id="x" * 48,
+                # No warm floor, and the account's ceiling is the one the unit
+                # under test is provisioned against.
+                compute=AwsAccountComputeConfiguration(
+                    initial_cpu_workers=0,
+                    min_cpu_workers=0,
+                    max_cpu_instances=10,
+                ),
                 phase=AwsAccountConnectionPhase.Ready,
                 active_authorization=AwsAccountAuthorizationGeneration(
                     id=str(uuid4()),

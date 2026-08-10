@@ -5,15 +5,8 @@ from control.service import ControlPlaneService, StubKind, StubRecord
 from fastapi import HTTPException
 from shared.deployments import DeploymentKind
 from shared.errors import NotFoundError
-from shared.identity import AuthTokenRecord
 
 from api.server.services import ApiServices
-
-
-def token_workspace(token: AuthTokenRecord | None) -> str:
-    if token is None:
-        raise HTTPException(status_code=401, detail="missing authorization principal")
-    return token.workspace_id
 
 
 def resolve_deployed_stub_id(

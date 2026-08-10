@@ -5,19 +5,15 @@ from contextlib import ExitStack
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from shared.http.secrets import GetSecretResponse, SecretMaskedListResponse
-from shared.identity import TokenKind
+from tests.service_fixtures import administrator_credential
 
 
 def test_secret_routes_mask_lists_and_reveal_only_explicit_detail(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "secret-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "secret-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 
@@ -51,10 +47,7 @@ def test_secret_mutations_return_exact_conflict_and_not_found_outcomes(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "secret-mutation-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "secret-mutation-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 

@@ -47,7 +47,7 @@ class _FakeFunctionChannel:
         path: str,
         payload: dict[str, JsonValue] | None = None,
     ) -> Iterator[dict[str, JsonValue]]:
-        assert path == "/api/v1/functions/invoke/stream"
+        assert path == "/api/v1/functions/invoke/stream?workspace=default"
         assert payload is not None
         assert payload["stub_id"] == "stub-contract"
         yield self.response

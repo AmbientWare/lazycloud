@@ -1,6 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  useNavigate,
+  useRouter,
+  useRouterState,
+  useSearch,
+} from "@tanstack/react-router";
 import {
   Activity,
   ChartNoAxesCombined,
@@ -19,11 +26,13 @@ import {
 import { shellBreadcrumbs } from "@/components/shared/AppShell/navigation";
 import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitcher";
 import { useSession } from "@/components/shared/AuthGate/session";
+import { SettingsDialog } from "@/components/shared/SettingsDialog";
+import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
 import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { adminAccessQueryOptions } from "@/lib/queries/compute";
 import { appQueryOptions } from "@/lib/queries/apps";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
@@ -32,8 +41,7 @@ type NavTarget =
   | "/w/$workspace/apps"
   | "/w/$workspace/tasks"
   | "/w/$workspace/storage"
-  | "/w/$workspace/usage"
-  | "/w/$workspace/settings";
+  | "/w/$workspace/usage";
 
 type NavItem = {
   label: string;
@@ -49,13 +57,6 @@ const primaryNav: NavItem[] = [
   { label: "Usage", segment: "usage", to: "/w/$workspace/usage", icon: ChartNoAxesCombined },
 ];
 
-const settingsNav: NavItem = {
-  label: "Settings",
-  segment: "settings",
-  to: "/w/$workspace/settings",
-  icon: Settings,
-};
-
 const GlobalSearch = lazy(() =>
   import("@/components/shared/AppShell/GlobalSearch").then((module) => ({
     default: module.GlobalSearch,
@@ -66,6 +67,19 @@ export function AppShell() {
   const { logout } = useSession();
   const { workspace } = useWorkspace();
   const routerState = useRouterState();
+  const navigate = useNavigate();
+  const settingsSearch = useSearch({ strict: false });
+  const openSettingsView = settingsView(settingsSearch.settings);
+  const setSettings = useCallback(
+    (next: SettingsView | undefined) => {
+      void navigate({
+        to: ".",
+        search: (previous: Record<string, unknown>) => ({ ...previous, settings: next }),
+        replace: next !== undefined && openSettingsView !== undefined,
+      });
+    },
+    [navigate, openSettingsView],
+  );
   const [searchOpen, setSearchOpen] = useState(false);
   const searchReturnFocus = useRef<HTMLElement | null>(null);
   const path = routerState.location.pathname;
@@ -115,10 +129,21 @@ export function AppShell() {
         Skip to content
       </a>
 
-      <DesktopRail path={path} basePath={basePath} onOpenSearch={openSearch} onLogout={logout} />
+      <DesktopRail
+        path={path}
+        basePath={basePath}
+        onOpenSearch={openSearch}
+        onOpenSettings={() => setSettings("general")}
+        settingsOpen={openSettingsView !== undefined}
+        onLogout={logout}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <MobileHeader onOpenSearch={openSearch} onLogout={logout} />
+        <MobileHeader
+          onOpenSearch={openSearch}
+          onOpenSettings={() => setSettings("general")}
+          onLogout={logout}
+        />
         <ContextBar path={path} basePath={basePath} onOpenSearch={openSearch} />
         <main
           id="workspace-content"
@@ -136,6 +161,15 @@ export function AppShell() {
           <GlobalSearch open onOpenChange={setSearchVisibility} />
         </Suspense>
       ) : null}
+
+      {openSettingsView ? (
+        <SettingsDialog
+          view={openSettingsView}
+          activeWorkspaceName={workspace.name}
+          onViewChange={setSettings}
+          onClose={() => setSettings(undefined)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -144,11 +178,15 @@ function DesktopRail({
   path,
   basePath,
   onOpenSearch,
+  onOpenSettings,
+  settingsOpen,
   onLogout,
 }: {
   path: string;
   basePath: string;
   onOpenSearch: () => void;
+  onOpenSettings: () => void;
+  settingsOpen: boolean;
   onLogout: () => void;
 }) {
   const { workspace } = useWorkspace();
@@ -194,12 +232,8 @@ function DesktopRail({
       </nav>
 
       <div className="mt-auto border-t border-sidebar-border px-3 py-3">
-        <nav aria-label="Workspace navigation" className="space-y-0.5">
-          <RailLink
-            item={settingsNav}
-            active={navItemActive(path, basePath, settingsNav.segment)}
-            workspaceName={workspace.name}
-          />
+        <nav aria-label="Account navigation" className="space-y-0.5">
+          <SettingsRailButton active={settingsOpen} onOpen={onOpenSettings} />
         </nav>
         <ThemeToggle className="mt-2" />
         <button
@@ -247,9 +281,11 @@ function RailLink({
 
 function MobileHeader({
   onOpenSearch,
+  onOpenSettings,
   onLogout,
 }: {
   onOpenSearch: () => void;
+  onOpenSettings: () => void;
   onLogout: () => void;
 }) {
   const { workspace } = useWorkspace();
@@ -273,12 +309,18 @@ function MobileHeader({
       >
         <Search className="size-4" />
       </Button>
-      <MobileMenu onLogout={onLogout} />
+      <MobileMenu onLogout={onLogout} onOpenSettings={onOpenSettings} />
     </header>
   );
 }
 
-function MobileMenu({ onLogout }: { onLogout: () => void }) {
+function MobileMenu({
+  onLogout,
+  onOpenSettings,
+}: {
+  onLogout: () => void;
+  onOpenSettings: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const { workspace } = useWorkspace();
   return (
@@ -296,12 +338,18 @@ function MobileMenu({ onLogout }: { onLogout: () => void }) {
         <header className="border-b border-border px-4 py-3 pr-12">
           <SheetTitle>{workspace.name}</SheetTitle>
         </header>
-        <nav aria-label="Workspace menu" className="p-3">
-          <MobileMenuLink
-            item={settingsNav}
-            workspaceName={workspace.name}
-            onSelect={() => setOpen(false)}
-          />
+        <nav aria-label="Account menu" className="p-3">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onOpenSettings();
+            }}
+            className="interactive-row flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
+          >
+            <Settings className="size-4" aria-hidden="true" />
+            Settings
+          </button>
           <ThemeToggle className="mt-0.5 h-10 gap-3 px-3 text-sm" />
         </nav>
         <div className="mt-auto border-t border-border p-3">
@@ -319,29 +367,6 @@ function MobileMenu({ onLogout }: { onLogout: () => void }) {
         </div>
       </SheetContent>
     </Sheet>
-  );
-}
-
-function MobileMenuLink({
-  item,
-  workspaceName,
-  onSelect,
-}: {
-  item: NavItem;
-  workspaceName: string;
-  onSelect: () => void;
-}) {
-  const Icon = item.icon;
-  return (
-    <Link
-      to={item.to}
-      params={{ workspace: workspaceName }}
-      onClick={onSelect}
-      className="interactive-row flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted-foreground hover:text-foreground"
-    >
-      <Icon className="size-4" aria-hidden="true" />
-      {item.label}
-    </Link>
   );
 }
 
@@ -463,10 +488,9 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
 }
 
 function CreateWorkspaceControl() {
-  const { workspace } = useWorkspace();
-  const adminAccess = useQuery(adminAccessQueryOptions(workspace.id));
+  const { user } = useSession();
   const [open, setOpen] = useState(false);
-  if (adminAccess.data !== true) return null;
+  if (user.role !== "administrator") return null;
   return (
     <>
       <Button
@@ -491,7 +515,9 @@ function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   const create = useMutation({
     mutationFn: () => createWorkspace(name.trim()),
     onSuccess: async (created) => {
-      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      // The shell resolves a workspace out of the session, so the session has to
+      // know about the new one before the route changes to it.
+      await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
       onClose();
       router.history.push(`/w/${encodeURIComponent(created.name)}/apps`);
     },
@@ -545,4 +571,24 @@ function navItemActive(path: string, basePath: string, segment: string): boolean
 function appIdFromPath(path: string, basePath: string): string | null {
   const [section, appId] = path.slice(basePath.length).split("/").filter(Boolean);
   return section === "apps" && appId ? decodeURIComponent(appId) : null;
+}
+
+
+function SettingsRailButton({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-selected={active}
+      className={cn(
+        "interactive-row flex h-9 w-full items-center gap-2.5 rounded-none border-l-2 border-transparent px-2.5 text-[13px] outline-none transition-[border-color,color] duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring",
+        active
+          ? "border-l-brand font-medium text-sidebar-foreground"
+          : "text-muted-foreground hover:text-sidebar-foreground",
+      )}
+    >
+      <Settings className="size-4" aria-hidden="true" />
+      Settings
+    </button>
+  );
 }

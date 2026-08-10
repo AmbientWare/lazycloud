@@ -7,24 +7,20 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.http.deployments import DeploymentListResponse
 from shared.http.stubs import StubListResponse
 from shared.http.tasks import TaskTimeWindowBucketListResponse
-from shared.identity import TokenKind
 from shared.tasks import TaskStatus
+from tests.service_fixtures import administrator_credential
 
 
 def _client(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> tuple[TestClient, dict[str, str]]:
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "filters-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "filters-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     return client, {"Authorization": f"Bearer {raw_token}"}
 

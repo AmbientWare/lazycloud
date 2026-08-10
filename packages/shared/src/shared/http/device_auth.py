@@ -32,12 +32,12 @@ class DeviceCodeTokenResponse(HttpModel):
 
     ``status`` is a domain outcome, not an error envelope: pending polls
     return 200 with ``pending`` until the user approves, denies, or the code
-    expires. ``token`` and ``workspace`` are only set once on approval.
+    expires. ``token`` and ``username`` are only set once on approval.
     """
 
     status: DeviceAuthorizationStatus
     token: str = ""
-    workspace: str = ""
+    username: str = ""
 
 
 class DeviceCodeResponse(HttpModel):
@@ -48,13 +48,8 @@ class DeviceCodeResponse(HttpModel):
     expires_at: datetime
 
 
-class DeviceCodeApproveRequest(HttpModel):
-    workspace: str
-
-
 __all__ = [
     "DEVICE_AUTHORIZATION_VERIFICATION_PATH",
-    "DeviceCodeApproveRequest",
     "DeviceCodeCreateRequest",
     "DeviceCodeCreateResponse",
     "DeviceCodeResponse",

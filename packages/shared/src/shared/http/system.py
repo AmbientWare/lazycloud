@@ -30,7 +30,10 @@ class AuthTokenResponse(HttpModel):
     name: str
     prefix: str
     kind: TokenKind = TokenKind.Workspace
-    workspace_id: str
+    # Exactly one is set: a credential names the person who holds it or the single
+    # workspace it was minted for.
+    user_id: str = ""
+    workspace_id: str = ""
     status: TokenStatus = TokenStatus.Active
     scopes: list[str] = Field(default_factory=lambda: ["*"])
     reusable: bool = True
@@ -42,12 +45,15 @@ class AuthTokenResponse(HttpModel):
 
 
 class TokenCreateRequest(HttpModel):
+    """Everything a person chooses when minting a credential for their account.
+
+    No workspace and no kind: a token names the account, reaches every workspace that
+    account belongs to, and is resolved per request from membership. The kinds that do
+    name a workspace are minted by the platform for workers and machines, never here.
+    """
+
     name: str = "default"
-    scopes: list[str] = Field(default_factory=lambda: ["*"])
     expires_in_seconds: int | None = None
-    kind: TokenKind = TokenKind.Workspace
-    workspace_id: str = "default"
-    reusable: bool = True
 
 
 class TokenAdminUpdateRequest(HttpModel):

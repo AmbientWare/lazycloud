@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.machine_lifecycle import MachineLifecycleService
-from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
+from gateway.service import GatewayControlService
 from shared.compute_policy import MachinePool
 from shared.http.compute import (
     MachineCreateRequest,
@@ -17,8 +17,10 @@ from shared.http.compute import (
 )
 
 from api.server.auth import (
+    read_user,
     read_workspace,
     write_token,
+    write_user,
     write_workspace,
 )
 from api.server.dependencies import current_services
@@ -42,26 +44,28 @@ def list_machines(
 
 
 @router.get(
-    "/api/v1/machines/pool",
+    "/api/v1/machines/self-hosted",
     response_model=UnitMachineListResponse,
-    operation_id="list_pool_machines_by_group",
+    operation_id="list_self_hosted_machines",
 )
-def list_machines_in_pool(
-    workspace_id: read_workspace,
-    pool: MachinePool = MachinePool(SELF_HOSTED_FLEET_POOL_NAME),
+def list_self_hosted_machines(
+    user_id: read_user,
+    pool: MachinePool = MachinePool(""),
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> UnitMachineListResponse:
-    """Machines in one pool, self-hosted by default."""
-    machines = sorted(
-        (
-            item
-            for item in gateway.machine_views(workspace_id)
-            if item.pool == pool and item.id > cursor
-        ),
-        key=lambda item: item.id,
-    )
+    """The account's joined machines, optionally narrowed to one pool.
+
+    Account-scoped rather than workspace-scoped: a joined host belongs to the person
+    who connected it and serves every workspace they own, so answering per workspace
+    would hide their own hardware from them.
+    """
+    machines = [
+        item
+        for item in gateway.account_machine_views(user_id)
+        if item.id > cursor and (not pool or item.pool == pool)
+    ]
     selected = machines[:limit]
     return UnitMachineListResponse(
         data=selected,
@@ -77,12 +81,12 @@ def list_machines_in_pool(
 def machine_join_command(
     request: MachineJoinCommandRequest,
     token: write_token,
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: GatewayControlService = Depends(gateway_service),
 ) -> MachineJoinCommandResponse:
     return service.machine_join_command(
         request,
-        workspace_id=workspace_id,
+        user_id=user_id,
         owner_token_id=token.id,
     )
 
@@ -95,12 +99,12 @@ def machine_join_command(
 def machine_join_token(
     request: MachineJoinCommandRequest,
     token: write_token,
-    workspace_id: write_workspace,
+    user_id: write_user,
     service: GatewayControlService = Depends(gateway_service),
 ) -> MachineJoinTokenResponse:
     return service.machine_join_token(
         request,
-        workspace_id=workspace_id,
+        user_id=user_id,
         owner_token_id=token.id,
     )
 

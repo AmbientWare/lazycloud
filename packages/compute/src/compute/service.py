@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from math import ceil
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -15,11 +11,9 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
-    ComputeJoinCredentialRecord,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    WorkspaceComputePolicyRepository,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
@@ -46,7 +40,6 @@ from shared.capacity import (
     capacity_owner_for_provider,
 )
 from shared.compute_enrollment import (
-    ComputeCredentialStatus,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
@@ -77,11 +70,6 @@ from shared.identity import WorkspaceStatus
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import utc_now
 
-from compute.agent_control import (
-    ComputePrincipal,
-    JoinTokenCreationPlan,
-    plan_join_token_creation,
-)
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
 from compute.offers import (
@@ -1339,7 +1327,9 @@ class ComputeService:
         """Whether this workspace has an account capacity can be built in."""
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         return connection is not None and connection.hosts_workloads
 
     def reconcile_aws_default_capacity(
@@ -1814,13 +1804,15 @@ class ComputeService:
                     }
                 )
             stored_workspace_limit = unit.workspace_machine_limit or unit.max_machines
-            policy = WorkspaceComputePolicyRepository(session).get_for_workspace(workspace_id)
-            if policy is None:
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
+            if connection is None:
                 workspace_limit = stored_workspace_limit
             elif _pool_gpu_capacity(unit):
-                workspace_limit = policy.aws.max_gpu_instances
+                workspace_limit = connection.compute.max_gpu_instances
             else:
-                workspace_limit = policy.aws.max_cpu_instances
+                workspace_limit = connection.compute.max_cpu_instances
             other_desired = sum(
                 item.desired_machines
                 for item in units.list_internal(workspace_id=workspace_id)
@@ -2163,19 +2155,26 @@ class ComputeService:
         self,
         connection_id: str,
         *,
-        workspace: str,
+        workspace_ids: Sequence[str],
     ) -> AwsAccountPoolDrain:
+        """Drain every pool the connection feeds, across all the owner's workspaces.
+
+        A connection backs each of them, so a unit in any one is capacity this
+        disconnect has to take down; a unit in none of them means the connection and
+        the capacity disagree about who owns them.
+        """
+        owned = set(workspace_ids)
         with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
             pools = ComputeUnitRepository(session).list_for_provider_connection(connection_id)
-        if any(unit.workspace_id != workspace_id for unit in pools):
+        if any(unit.workspace_id not in owned for unit in pools):
             raise UpstreamUnavailableError("AWS capacity ownership is inconsistent")
         with self.context.database.session() as session:
-            self._clear_other_internal_pool_floors(
-                session,
-                workspace_id=workspace_id,
-                keep_pool_id=None,
-            )
+            for workspace_id in owned:
+                self._clear_other_internal_pool_floors(
+                    session,
+                    workspace_id=workspace_id,
+                    keep_pool_id=None,
+                )
 
         for unit in pools:
             if unit.phase is ComputeUnitPhase.Deleted:
@@ -2197,7 +2196,9 @@ class ComputeService:
                     raise UpstreamUnavailableError("AWS capacity drain was superseded")
             try:
                 durable, provider, offer = self._internal_unit_provider(
-                    workspace_id,
+                    # The unit's own workspace: pools drained together may belong to
+                    # different workspaces of the same owner.
+                    current.workspace_id,
                     current.capacity_owner_id,
                 )
                 if provider.pooled is None:
@@ -2607,86 +2608,6 @@ def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:
         "priority": str(config.priority),
     }
     return {key: value for key, value in labels.items() if value}
-
-
-class _CapacityJoinReuse(Enum):
-    """Whether an existing provider-launch credential can still serve this operation."""
-
-    Usable = "usable"
-    Renew = "renew"
-    Rejected = "rejected"
-
-
-def _capacity_join_credential_reuse(
-    credential: ComputeJoinCredentialRecord | None,
-    *,
-    workspace_id: str,
-    pool: MachinePool,
-    machine_id: str,
-    now: datetime,
-) -> _CapacityJoinReuse:
-    if credential is None:
-        return _CapacityJoinReuse.Usable
-    scoped_to_operation = (
-        credential.workspace_id == workspace_id
-        and credential.pool == pool
-        and credential.machine_id == machine_id
-    )
-    if not scoped_to_operation or credential.use_count != 0:
-        # A consumed credential means a machine already enrolled on this authority;
-        # minting another would admit a second enrollment for the same machine.
-        return _CapacityJoinReuse.Rejected
-    if credential.status is not ComputeCredentialStatus.Active or credential.expires_at <= now:
-        return _CapacityJoinReuse.Renew
-    return _CapacityJoinReuse.Usable
-
-
-def _capacity_launch_idempotency_key(*, operation_id: str, join_attempt: int) -> str:
-    """Provider idempotency key for one launch attempt of a capacity operation.
-
-    Separate from the operation's logical identity: retries inside an attempt reuse
-    the key so the provider treats them as replays, while a compensated attempt
-    advances it so the next launch is a genuinely new side effect.
-    """
-    return f"{operation_id}\0{join_attempt}"
-
-
-def _plan_capacity_join_token(
-    signing_key: str,
-    *,
-    principal: ComputePrincipal,
-    pool: MachinePool,
-    capacity_owner_id: str,
-    operation_id: str,
-    machine_id: str,
-    join_attempt: int,
-) -> JoinTokenCreationPlan:
-    return plan_join_token_creation(
-        principal,
-        pool,
-        capacity_owner_id=capacity_owner_id,
-        machine_id=machine_id,
-        token=_capacity_join_token(
-            signing_key,
-            operation_id=operation_id,
-            machine_id=machine_id,
-            join_attempt=join_attempt,
-        ),
-    )
-
-
-def _capacity_join_token(
-    signing_key: str,
-    *,
-    operation_id: str,
-    machine_id: str,
-    join_attempt: int,
-) -> str:
-    payload = "\0".join(
-        ("capacity-provider-join-v1", operation_id, machine_id, str(join_attempt))
-    ).encode()
-    digest = hmac.new(signing_key.encode(), payload, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputeUnitRecord) -> bool:

@@ -179,6 +179,25 @@ class _WorkerRepo:
         self.workers[worker_id] = updated
         return updated
 
+    def update_worker_tenancy(
+        self,
+        worker_id: str,
+        *,
+        workspace_id: str,
+        owner_user_id: str,
+        now: datetime | None = None,
+    ) -> SchedulerWorkerRecord:
+        worker = self.workers[worker_id]
+        updated = worker.model_copy(
+            update={
+                "workspace_id": workspace_id,
+                "owner_user_id": owner_user_id,
+                "updated_at": now or worker.updated_at,
+            }
+        )
+        self.workers[worker_id] = updated
+        return updated
+
 
 def _agent_machine(
     *,

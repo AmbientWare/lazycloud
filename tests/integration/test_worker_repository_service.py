@@ -99,6 +99,7 @@ from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUp
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
+from tests.service_fixtures import workspace_owner_user_id
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,
@@ -224,6 +225,7 @@ def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(
     service = _worker_repository_service(isolated_services, redis)
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("default")
+    workspace_owner_user_id(isolated_services.context, workspace.id)
     stub = control.create_stub("automatic-checkpoint-lease", workspace=workspace.id)
     container_id = str(uuid4())
     service.containers.set_container_state(
@@ -296,8 +298,28 @@ def test_managed_image_build_credentials_use_assigned_workspace(
         worker_id="worker-1",
         token_kind=TokenKind.Worker,
     )
+    # A private worker belonging to another account: tenancy is compared by account,
+    # so the record has to exist for its owner to be read at all.
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            worker_id="worker-1",
+            pool=MachinePool("pool"),
+            status=SchedulerWorkerStatus.Available,
+            private_worker=True,
+            owner_user_id="22222222-2222-4222-8222-222222222222",
+            requires_pool_selector=True,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
 
-    with pytest.raises(AuthorizationDeniedError, match="workspace does not match worker"):
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="workspace does not belong to the worker's account",
+    ):
         service.get_image_build_credentials(
             request,
             principal=managed.model_copy(update={"token_kind": TokenKind.WorkerPrivate}),
@@ -339,8 +361,26 @@ def test_managed_container_credentials_use_assigned_workspace(
         worker_id="worker-1",
         token_kind=TokenKind.Worker,
     )
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            worker_id="worker-1",
+            pool=MachinePool("pool"),
+            status=SchedulerWorkerStatus.Available,
+            private_worker=True,
+            owner_user_id="22222222-2222-4222-8222-222222222222",
+            requires_pool_selector=True,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
 
-    with pytest.raises(AuthorizationDeniedError, match="workspace does not match worker"):
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="workspace does not belong to the worker's account",
+    ):
         service.get_container_credentials(
             request,
             principal=managed.model_copy(update={"token_kind": TokenKind.WorkerPrivate}),
@@ -412,8 +452,26 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
         worker_id="worker-1",
         token_kind=TokenKind.Worker,
     )
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            worker_id="worker-1",
+            pool=MachinePool("pool"),
+            status=SchedulerWorkerStatus.Available,
+            private_worker=True,
+            owner_user_id="22222222-2222-4222-8222-222222222222",
+            requires_pool_selector=True,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
 
-    with pytest.raises(AuthorizationDeniedError, match="workspace does not match worker"):
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="workspace does not belong to the worker's account",
+    ):
         service.get_image_archive_upload_credentials(
             request,
             principal=principal.model_copy(update={"token_kind": TokenKind.WorkerPrivate}),
@@ -522,8 +580,26 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
         worker_id="worker-1",
         token_kind=TokenKind.Worker,
     )
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            worker_id="worker-1",
+            pool=MachinePool("pool"),
+            status=SchedulerWorkerStatus.Available,
+            private_worker=True,
+            owner_user_id="22222222-2222-4222-8222-222222222222",
+            requires_pool_selector=True,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
 
-    with pytest.raises(AuthorizationDeniedError, match="workspace does not match worker"):
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="workspace does not belong to the worker's account",
+    ):
         service.prepare_image_build_context_download(
             request,
             principal=principal.model_copy(update={"token_kind": TokenKind.WorkerPrivate}),
@@ -806,6 +882,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     token = _worker_token(isolated_services, "workspace-a")
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("workspace-a")
+    workspace_owner_user_id(isolated_services.context, workspace.id)
     isolated_services.compute.create_unit(
         UnitName("pool"),
         workspace=workspace.id,
@@ -1191,6 +1268,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
     redis = real_redis_actors.client()
     control = ControlPlaneService(isolated_services.context)
     workspace = control.upsert_workspace("workspace-a")
+    workspace_owner_user_id(isolated_services.context, workspace.id)
     stub = control.create_stub("worker", workspace=workspace.id)
     isolated_services.secrets.set("API_TOKEN", "secret-value", workspace=workspace.id)
     RedisSchedulerContainerRepository(redis).set_container_state(
@@ -2052,6 +2130,20 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
     compute_states = RedisComputeStateRepository(redis)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id=_ROUTE_CAPACITY_OWNER,
+            worker_id="compose-container-worker",
+            workspace_id=workspace_id,
+            machine_id="compose-machine",
+            pool=MachinePool("default"),
+            status=SchedulerWorkerStatus.Available,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
     container_id = "531a1b89-6f97-4080-80b3-13122218a55b"
     containers.set_container_state(
         SchedulerContainerState(
@@ -2103,7 +2195,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
 
     before = compute_states.list_agent_route_states(
         workspace_id,
-        "default",
+        _ROUTE_CAPACITY_OWNER,
         "compose-machine",
     )
     response = service.delete_container_state(
@@ -2117,7 +2209,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
     assert (
         compute_states.list_agent_route_states(
             workspace_id,
-            "default",
+            _ROUTE_CAPACITY_OWNER,
             "compose-machine",
         )
         == []
@@ -2135,6 +2227,20 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     compute_states = RedisComputeStateRepository(redis)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id=_ROUTE_CAPACITY_OWNER,
+            worker_id="worker-1",
+            workspace_id=workspace_id,
+            machine_id="machine-1",
+            pool=MachinePool("default"),
+            status=SchedulerWorkerStatus.Available,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
     container_id = "531a1b89-6f97-4080-80b3-13122218a55b"
     active_route = AgentBackendRoute(
         route_id=f"machine-1:worker-1:{container_id}:container:9090",
@@ -2168,6 +2274,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     orphan_route = AgentBackendRoute(
         route_id="missing-worker:missing-container:container:9090",
         workspace_id=workspace_id,
+        capacity_owner_id=_ROUTE_CAPACITY_OWNER,
         pool=MachinePool("default"),
         machine_id="machine-1",
         worker_id="missing-worker",
@@ -2184,7 +2291,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     assert (
         compute_states.get_agent_route_state(
             workspace_id,
-            "default",
+            _ROUTE_CAPACITY_OWNER,
             "machine-1",
             active_route.route_id,
         )
@@ -2193,7 +2300,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     assert (
         compute_states.get_agent_route_state(
             workspace_id,
-            "default",
+            _ROUTE_CAPACITY_OWNER,
             "machine-1",
             orphan_route.route_id,
         )
@@ -2224,6 +2331,26 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         machine_fingerprint="route-machine",
     )
     worker_id = agent_machine_worker_id(machine_id)
+    # Routes are filed under the machine's own unit, so the worker record has to name
+    # the unit the agent actually joined rather than one invented here.
+    joined_unit = gateway.unit_state_coordinator.unit_by_name(
+        UnitName(MachinePool("pool-a")),
+        workspace_id=workspace_id,
+    )
+    RedisSchedulerWorkerRepository(redis).add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id=joined_unit.capacity_owner_id,
+            worker_id=worker_id,
+            workspace_id=workspace_id,
+            machine_id=machine_id,
+            pool=MachinePool("pool-a"),
+            status=SchedulerWorkerStatus.Available,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        )
+    )
     route = AgentBackendRoute(
         route_id=f"{machine_id}:{worker_id}:container-1:container:8001",
         workspace_id=workspace_id,
@@ -2315,13 +2442,22 @@ def _join_gateway_agent(
     return workspace_id, joined.machine_id, joined.agent_token
 
 
+_ROUTE_CAPACITY_OWNER = "33333333-3333-4333-8333-333333333333"
+"""Capacity owner the route tests register their worker under.
+
+Routes are filed under the machine's owner read from its worker record, so a read
+that names anything else finds nothing.
+"""
+
+
 def _worker_token(
     isolated_services: ApiServices,
     workspace_id: str,
     *,
     kind: TokenKind = TokenKind.Worker,
 ) -> str:
-    ControlPlaneService(isolated_services.context).upsert_workspace(workspace_id)
+    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(workspace_id)
+    workspace_owner_user_id(isolated_services.context, workspace.id)
     return AuthService(isolated_services.context).create_token(
         f"{workspace_id}-{kind.value}",
         kind=kind,

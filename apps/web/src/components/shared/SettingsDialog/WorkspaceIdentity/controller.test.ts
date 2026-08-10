@@ -3,12 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Workspace } from "@/lib/api/schemas";
-import {
-  currentWorkspaceQueryOptions,
-  updateWorkspace,
-  workspacesQueryOptions,
-} from "@/lib/queries/workspace";
+import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { currentWorkspaceQueryOptions, updateWorkspace } from "@/lib/queries/workspace";
 
 import { useWorkspaceIdentityController } from "./controller";
 
@@ -32,11 +29,14 @@ describe("workspace identity controller", () => {
     const sibling = workspace("workspace-2", "platform");
     const accepted = { ...target, name: "platform_team", updated_at: "2026-07-21T12:00:00Z" };
     const queryClient = testQueryClient();
-    const replacePath = vi.fn();
-    queryClient.setQueryData(workspacesQueryOptions().queryKey, [target, sibling]);
+    const onRenamed = vi.fn();
+    queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
+      user: sessionUser(),
+      workspaces: [target, sibling],
+    });
     queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, target);
     updateWorkspaceMock.mockResolvedValue(accepted);
-    const { result } = renderController({ queryClient, workspace: target, replacePath });
+    const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
     act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("  platform_team  "));
@@ -44,17 +44,17 @@ describe("workspace identity controller", () => {
 
     await waitFor(() => expect(result.current.mode).toBe("saved"));
     expect(updateWorkspaceMock).toHaveBeenCalledWith("workspace-1", "platform_team");
-    expect(queryClient.getQueryData(workspacesQueryOptions().queryKey)).toEqual([
-      accepted,
-      sibling,
-    ]);
+    expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
+      user: sessionUser(),
+      workspaces: [accepted, sibling],
+    });
     expect(queryClient.getQueryData(currentWorkspaceQueryOptions().queryKey)).toEqual(accepted);
-    expect(replacePath).toHaveBeenCalledWith("/w/platform_team/settings");
+    expect(onRenamed).toHaveBeenCalledWith("platform_team");
 
     const otherOwner = workspace("workspace-owner", "owner");
     queryClient.setQueryData(currentWorkspaceQueryOptions().queryKey, otherOwner);
     updateWorkspaceMock.mockResolvedValue({ ...accepted, name: "platform-next" });
-    const second = renderController({ queryClient, workspace: accepted, replacePath });
+    const second = renderController({ queryClient, workspace: accepted, onRenamed });
     act(() => second.result.current.beginEditing());
     act(() => second.result.current.setDraftName("platform-next"));
     act(() => second.result.current.save());
@@ -67,11 +67,11 @@ describe("workspace identity controller", () => {
     const target = workspace("workspace-1", "acme");
     const failure = new Error("workspace name is already in use: platform");
     updateWorkspaceMock.mockRejectedValue(failure);
-    const replacePath = vi.fn();
+    const onRenamed = vi.fn();
     const { result } = renderController({
       queryClient: testQueryClient(),
       workspace: target,
-      replacePath,
+      onRenamed,
     });
 
     act(() => result.current.beginEditing());
@@ -82,7 +82,7 @@ describe("workspace identity controller", () => {
     expect(result.current.draftName).toBe("platform");
     expect(result.current.error).toBe(failure);
     expect(result.current.canSave).toBe(true);
-    expect(replacePath).not.toHaveBeenCalled();
+    expect(onRenamed).not.toHaveBeenCalled();
   });
 
   it("rejects a duplicate submission synchronously and keeps cancel locked while saving", async () => {
@@ -91,7 +91,7 @@ describe("workspace identity controller", () => {
     const { result } = renderController({
       queryClient: testQueryClient(),
       workspace: workspace("workspace-1", "acme"),
-      replacePath: vi.fn(),
+      onRenamed: vi.fn(),
     });
 
     act(() => result.current.beginEditing());
@@ -115,7 +115,7 @@ describe("workspace identity controller", () => {
     const { result } = renderController({
       queryClient: testQueryClient(),
       workspace: target,
-      replacePath: vi.fn(),
+      onRenamed: vi.fn(),
     });
 
     act(() => result.current.beginEditing());
@@ -138,12 +138,12 @@ describe("workspace identity controller", () => {
     const failure = new Error("rename failed");
     updateWorkspaceMock.mockRejectedValue(failure);
     const queryClient = testQueryClient();
-    const replacePath = vi.fn();
+    const onRenamed = vi.fn();
     const { result, rerender } = renderHook(
       ({ workspaceValue }: { workspaceValue: Workspace }) =>
         useWorkspaceIdentityController({
           workspace: workspaceValue,
-          replacePath,
+          onRenamed,
         }),
       {
         initialProps: { workspaceValue: workspace("workspace-1", "acme") },
@@ -167,14 +167,14 @@ describe("workspace identity controller", () => {
 function renderController({
   queryClient,
   workspace: workspaceValue,
-  replacePath,
+  onRenamed,
 }: {
   queryClient: QueryClient;
   workspace: Workspace;
-  replacePath: (path: string) => void;
+  onRenamed: (name: string) => void;
 }) {
   return renderHook(
-    () => useWorkspaceIdentityController({ workspace: workspaceValue, replacePath }),
+    () => useWorkspaceIdentityController({ workspace: workspaceValue, onRenamed }),
     { wrapper: controllerWrapper(queryClient) },
   );
 }
@@ -191,6 +191,17 @@ function testQueryClient() {
       queries: { retry: false },
     },
   });
+}
+
+function sessionUser(): CurrentSession["user"] {
+  return {
+    id: "user-1",
+    username: "owner",
+    role: "administrator",
+    status: "active",
+    created_at: "2026-07-21T10:00:00Z",
+    updated_at: "2026-07-21T10:00:00Z",
+  };
 }
 
 function workspace(id: string, name: string): Workspace {

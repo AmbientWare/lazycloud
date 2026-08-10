@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -15,7 +16,8 @@ from compute.aws_connections import (
     AwsAuthorizationCleanupResult,
 )
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
+from identity.auth import TokenIssuer
+from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -30,6 +32,7 @@ from shared.http.aws_connections import (
     AwsConnectionCurrentResponse,
     AwsConnectionResponse,
 )
+from shared.identity import WorkspaceRole
 
 ACCOUNT_ID = "123456789012"
 VALIDATED_AT = datetime(2026, 7, 15, 12, tzinfo=UTC)
@@ -43,7 +46,7 @@ class _AuthorizationPlanner:
     def plan(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         generation: int,
         account_id: str,
@@ -53,7 +56,7 @@ class _AuthorizationPlanner:
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
     ) -> AwsAccountAuthorizationPlan:
-        del workspace_id, connection_id, external_id, active_authorization
+        del user_id, connection_id, external_id, active_authorization
         self.generations.append(generation)
         managed = role_arn is None
         suffix = account_id[-4:]
@@ -181,9 +184,9 @@ class _PoolDrainer:
         self,
         connection_id: str,
         *,
-        workspace: str,
+        workspace_ids: Sequence[str],
     ) -> AwsAccountPoolDrain:
-        del connection_id, workspace
+        del connection_id, workspace_ids
         remaining = self.remaining.pop(0) if self.remaining else 0
         return AwsAccountPoolDrain(total_pools=1, remaining_pools=remaining)
 
@@ -206,7 +209,7 @@ def _client(
         provider_poll_seconds=0,
     )
     services = replace(isolated_services, aws_connections=aws_connections)
-    token, _record = AuthService(isolated_services.context).create_token("aws-connection")
+    token = _account_token(isolated_services, "aws-connection")
     client_stack = ExitStack()
     request.addfinalizer(client_stack.close)
     client = client_stack.enter_context(
@@ -218,11 +221,25 @@ def _client(
     return client, aws_connections
 
 
+def _account_token(services: ApiServices, name: str) -> str:
+    """A credential that names a person: connecting an account is an account-level act."""
+    users = UserService(services.context)
+    user = users.create(username=name, password="aws-connection-password")
+    with services.context.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    issuer = TokenIssuer(services.context)
+    with services.context.database.session() as session:
+        raw_token, _ = issuer.issue_for_user(session, name, user_id=user.id)
+    issuer.committed()
+    return raw_token
+
+
 def test_connection_status_is_available_when_aws_mutations_are_disabled(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> None:
-    token, _record = AuthService(isolated_services.context).create_token("aws-status")
+    token = _account_token(isolated_services, "aws-status")
     client_stack = ExitStack()
     request.addfinalizer(client_stack.close)
     client = client_stack.enter_context(

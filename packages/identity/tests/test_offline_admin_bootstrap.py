@@ -52,16 +52,20 @@ def test_bootstrap_retry_publishes_the_exact_committed_token_once(
         tmp_path / "admin-token",
         "bootstrap:test-publication",
     )
-    created = auth.bootstrap_admin_token(
+    created = auth.bootstrap_administrator(
         request_id="bootstrap:test-publication",
+        username="admin",
+        password="bootstrap-password",
         stage_token=publication.stage,
     )
     staged = publication.read_staged()
 
     assert staged == created.token
     assert publication.read_published() is None
-    replay = auth.bootstrap_admin_token(
+    replay = auth.bootstrap_administrator(
         request_id="bootstrap:test-publication",
+        username="admin",
+        password="bootstrap-password",
         staged_token=staged,
     )
     publication.publish(replace=False)
@@ -77,8 +81,10 @@ def test_bootstrap_retry_publishes_the_exact_committed_token_once(
     assert publication.read_staged() is None
     with isolated_services.context.database.session() as session:
         tokens = TokenRepository(session).list_across_workspaces()
+        # The audit belongs to the workspace bootstrap created, not to the credential:
+        # an administrator credential names a person and carries no workspace.
         audits = WorkspaceAuditRepository(session).page(
-            workspace_id=created.record.workspace_id,
+            workspace_id=isolated_services.context.workspace(session, "default").id,
             limit=20,
         )
     assert [token.id for token in tokens if token.kind is TokenKind.Admin] == [created.record.id]
@@ -95,12 +101,16 @@ def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
     auth = AuthService(isolated_services.context)
     configured = _configured_token()
 
-    created = auth.bootstrap_admin_token(
+    created = auth.bootstrap_administrator(
         request_id="bootstrap:configured-authority",
+        username="admin",
+        password="bootstrap-password",
         configured_token=configured,
     )
-    replay = auth.bootstrap_admin_token(
+    replay = auth.bootstrap_administrator(
         request_id="bootstrap:configured-authority",
+        username="admin",
+        password="bootstrap-password",
         configured_token=configured,
     )
 
@@ -120,14 +130,18 @@ def test_configured_bootstrap_token_mismatch_fails_closed(
 ) -> None:
     auth = AuthService(isolated_services.context)
     configured = _configured_token()
-    created = auth.bootstrap_admin_token(
+    created = auth.bootstrap_administrator(
         request_id="bootstrap:configured-mismatch",
+        username="admin",
+        password="bootstrap-password",
         configured_token=configured,
     )
 
     with pytest.raises(AuthError, match="retry with its staged output"):
-        auth.bootstrap_admin_token(
+        auth.bootstrap_administrator(
             request_id="bootstrap:configured-mismatch",
+            username="admin",
+            password="bootstrap-password",
             configured_token=_configured_token(),
         )
 
@@ -140,8 +154,10 @@ def test_configured_bootstrap_token_requires_canonical_token(
     auth = AuthService(isolated_services.context)
 
     with pytest.raises(AuthError, match="configured administrator credential is invalid"):
-        auth.bootstrap_admin_token(
+        auth.bootstrap_administrator(
             request_id="bootstrap:configured-invalid",
+            username="admin",
+            password="bootstrap-password",
             configured_token=token_urlsafe(32),
         )
 
@@ -153,13 +169,16 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
     tmp_path: Path,
 ) -> None:
     auth = AuthService(isolated_services.context)
-    auth.bootstrap_admin_token(request_id="bootstrap:test-recovery-owner")
+    auth.bootstrap_administrator(
+        request_id="bootstrap:test-recovery-owner", username="admin", password="bootstrap-password"
+    )
     publication = CredentialFilePublication(
         tmp_path / "recovery-token",
         "recovery:incident-2026-07-19",
     )
     created = auth.recover_admin_token(
         request_id="incident-2026-07-19",
+        username="admin",
         stage_token=publication.stage,
     )
     staged = publication.read_staged()
@@ -167,6 +186,7 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
 
     replay = auth.recover_admin_token(
         request_id="incident-2026-07-19",
+        username="admin",
         staged_token=staged,
     )
     publication.publish(replace=False)
@@ -179,7 +199,7 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
     assert replay.record.id == created.record.id
     with isolated_services.context.database.session() as session:
         audits = WorkspaceAuditRepository(session).page(
-            workspace_id=created.record.workspace_id,
+            workspace_id=isolated_services.context.workspace(session, "default").id,
             limit=20,
         )
     recovered = [
@@ -195,7 +215,13 @@ def test_different_bootstrap_request_cannot_replay_committed_claim(
     isolated_services: ApiServices,
 ) -> None:
     auth = AuthService(isolated_services.context)
-    auth.bootstrap_admin_token(request_id="bootstrap:test-first-request")
+    auth.bootstrap_administrator(
+        request_id="bootstrap:test-first-request", username="admin", password="bootstrap-password"
+    )
 
     with pytest.raises(AuthError, match="already complete"):
-        auth.bootstrap_admin_token(request_id="bootstrap:test-other-request")
+        auth.bootstrap_administrator(
+            request_id="bootstrap:test-other-request",
+            username="admin",
+            password="bootstrap-password",
+        )

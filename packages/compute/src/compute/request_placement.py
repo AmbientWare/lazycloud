@@ -71,20 +71,21 @@ class ComputeCapacityPlacementService:
         if connection is None:
             return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
-        policy = self.policies.get_policy(workspace=request.workspace_id)
-        aws = policy.aws
+        configuration = connection.compute
         machine_limit = (
-            aws.max_gpu_instances if request.requirements.gpu_count > 0 else aws.max_cpu_instances
+            configuration.max_gpu_instances
+            if request.requirements.gpu_count > 0
+            else configuration.max_cpu_instances
         )
         self.compute.prepare_pooled_capacity(
             workspace=request.workspace_id,
             requirements=request.requirements,
-            region=aws.default_region,
+            region=configuration.default_region,
             desired_machines=0,
             workspace_machine_limit=machine_limit,
-            root_volume_gib=aws.root_volume_gib,
-            idle_timeout_seconds=aws.idle_timeout_seconds,
-            allowed_instance_types=aws.allowed_instance_types,
+            root_volume_gib=configuration.root_volume_gib,
+            idle_timeout_seconds=configuration.idle_timeout_seconds,
+            allowed_instance_types=configuration.allowed_instance_types,
         )
         return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
