@@ -2399,6 +2399,9 @@ def _join_gateway_agent(
 ) -> tuple[str, str, str]:
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
+    # The join credential names the account the machine belongs to, so the workspace
+    # needs the owner row production writes with it.
+    workspace_owner_user_id(services.context, workspace_id)
     services.compute.create_unit(
         UnitName(pool),
         provider="agent",

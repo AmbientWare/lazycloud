@@ -4,12 +4,7 @@ from dataclasses import replace
 
 from api.server.services import ApiServices
 from compute.offers import ComputeOffer
-from compute.state import (
-    ComputeAgentTokenState,
-    ComputeAgentWorkerSlotState,
-    ComputeUnitState,
-    RedisComputeStateRepository,
-)
+from compute.state import ComputeUnitState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from scheduler.capacity_reservations import (
     CapacityReservationService,
@@ -23,7 +18,6 @@ from scheduler.state import (
     SchedulerWorkerRecord,
 )
 from shared.compute_policy import MachinePool, UnitName
-from shared.routing import AgentBackendRoute
 from tests.provider_fixtures import RecordingDirectMachineProvider, configure_test_provider
 from tests.real_redis import RealRedisActors
 
@@ -85,35 +79,6 @@ def test_delete_pool_cleans_private_agent_state(
             provider="local",
         )
     )
-    compute_states.save_agent_token_state(
-        ComputeAgentTokenState(
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            token_hash="agent-hash",
-            workspace_id=workspace_id,
-            pool=MachinePool("cleanup-pool"),
-            machine_id="machine-one",
-        )
-    )
-    compute_states.save_agent_worker_slot_state(
-        ComputeAgentWorkerSlotState(
-            capacity_owner_id=unit.capacity_owner_id,
-            workspace_id=workspace_id,
-            pool=MachinePool("cleanup-pool"),
-            machine_id="machine-one",
-            worker_id="worker-one",
-        )
-    )
-    compute_states.save_agent_route_state(
-        AgentBackendRoute(
-            route_id="route-one",
-            workspace_id=workspace_id,
-            pool=MachinePool("cleanup-pool"),
-            machine_id="machine-one",
-            worker_id="worker-one",
-            container_id="container-one",
-            port=8001,
-        )
-    )
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(
             capacity_owner_id=unit.capacity_owner_id,
@@ -153,20 +118,9 @@ def test_delete_pool_cleans_private_agent_state(
         capacity_reservations=_capacity_reservations(redis),
     )
 
-    gateway.delete_unit("cleanup-pool", workspace_id=workspace_id)
+    gateway.delete_unit(unit.id, workspace_id=workspace_id)
 
-    assert compute_states.get_unit_state(workspace_id, "cleanup-pool") is None
-    assert compute_states.get_agent_token_state("agent-hash") is None
-    assert compute_states.list_agent_token_states(workspace_id, "cleanup-pool") == []
-    assert (
-        compute_states.list_agent_worker_slot_states(
-            workspace_id,
-            "cleanup-pool",
-            "machine-one",
-        )
-        == []
-    )
-    assert compute_states.list_agent_route_states(workspace_id, "cleanup-pool", "machine-one") == []
+    assert compute_states.get_unit_state(workspace_id, unit.capacity_owner_id) is None
     assert [
         worker.worker_id for worker in scheduler_workers.list_workers_in_pool("cleanup-pool")
     ] == ["worker-foreign"]

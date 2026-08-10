@@ -28,6 +28,7 @@ from gateway.http import (
     StreamAgentRequest,
 )
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
+from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from networking.tailnet_control import TailnetAuthKey, TailnetDevice
 from observability.usage import UsageService
 from pydantic import SecretStr
@@ -502,9 +503,9 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
 
     with pytest.raises(ConflictError, match="lazycloud-agent leave"):
-        gateway.delete_unit("deleted-machine-pool", workspace_id=workspace_id)
+        gateway.delete_unit(unit.id, workspace_id=workspace_id)
 
-    assert gateway.compute_states.get_unit_state(workspace_id, "deleted-machine-pool") is not None
+    assert gateway.compute_states.get_unit_state(workspace_id, unit.capacity_owner_id) is not None
     assert gateway.compute_states.get_join_token_state(join_token_hash) is not None
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
     with isolated_services.context.database.session() as session:
@@ -589,7 +590,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         )
 
     assert control.get_workspace(workspace.id).status is WorkspaceStatus.Active
-    assert gateway.compute_states.get_unit_state(workspace.id, "workspace-machine-pool") is not None
+    assert gateway.compute_states.get_unit_state(workspace.id, unit.capacity_owner_id) is not None
     assert gateway.compute_states.get_join_token_state(join_token_hash) is not None
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
     assert gateway.compute_states.redis.get(orphan_revision) == "1"
@@ -627,6 +628,11 @@ def _services_with_redis(
         binary_redis_client=redis,
         owns_redis_client=False,
         owns_binary_redis_client=False,
+    )
+    # Anything that hands a joining machine its callback address reads the origin a
+    # started control plane publishes, and this graph is built without that startup.
+    RedisControlPlaneOriginRepository(redis).publish(
+        services.gateway_settings.runtime_callback_http_url
     )
     request.addfinalizer(services.close)
     return services

@@ -1001,11 +1001,11 @@ def test_machine_and_pool_deletion_remove_tailnet_identity_and_key(
 
     with pytest.raises(ConflictError, match="lazycloud-agent leave"):
         gateway.delete_unit(
-            pool_machine.pool,
+            pool_machine.unit_id,
             workspace_id=pool_machine.workspace_id,
         )
     _leave(gateway, pool_machine)
-    gateway.delete_unit(pool_machine.pool, workspace_id=pool_machine.workspace_id)
+    gateway.delete_unit(pool_machine.unit_id, workspace_id=pool_machine.workspace_id)
     assert control.removed_device_ids == ["machine-device", "pool-device"]
     assert control.revoked_key_ids == [machine_key_id, pool_key_id]
 

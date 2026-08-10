@@ -133,7 +133,7 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
 
     assert response.status_code == 200
     created = CreatePodResponse.model_validate_json(response.content)
-    assert created.url == f"{BASE_URL}/pod/public/{stub.id}/8080"
+    assert created.url == f"https://{stub.id}-8080.lazycloud.test"
     assert created.timeout_seconds == 30
     assert created.expires_at is not None
     assert scheduler.requests[0].payload["entrypoint"] == ["python", "override.py"]
@@ -159,7 +159,7 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
     assert no_timeout.timeout_seconds == -1
     assert no_timeout.expires_at is None
     assert scheduler.requests[1].payload["entrypoint"] == ["python", "authored.py"]
-    never_lock = pod_keep_warm_lock_key("default", stub.id, no_timeout.container_id)
+    never_lock = pod_keep_warm_lock_key(stub.workspace_id, stub.id, no_timeout.container_id)
     assert service.redis.exists(service.redis.key(never_lock))
 
     scalable_response = client.post(
@@ -172,7 +172,7 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
         headers=headers,
     )
     scalable = CreatePodResponse.model_validate_json(scalable_response.content)
-    scalable_lock = pod_keep_warm_lock_key("default", stub.id, scalable.container_id)
+    scalable_lock = pod_keep_warm_lock_key(stub.workspace_id, stub.id, scalable.container_id)
     assert not service.redis.exists(service.redis.key(scalable_lock))
 
 
