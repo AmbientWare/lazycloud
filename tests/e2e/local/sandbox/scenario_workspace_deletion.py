@@ -60,6 +60,8 @@ SANDBOX_COMMAND_TIMEOUT_SECONDS = 60.0
 DELETION_TIMEOUT_SECONDS = 180.0
 DELETION_POLL_SECONDS = 1.0
 REJECTED_STATUS_CODES = frozenset({401, 403})
+DELETED_WORKSPACE_STATUS_CODE = 404
+"""A deleted workspace is not found; the account credential naming it stays valid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,13 +184,18 @@ def _await_workspace_deleted(admin: _AdminApi, workspace_id: str) -> WorkspaceRe
         time.sleep(DELETION_POLL_SECONDS)
 
 
-def _assert_credentials_rejected(
+def _assert_deleted_workspace_resolves_nothing(
     image_id: str,
     *,
     endpoint: str,
     access: _WorkspaceAccess,
 ) -> int:
-    """The deleted workspace resolves nothing: its credential no longer authorizes."""
+    """Naming the deleted workspace resolves nothing, whoever asks.
+
+    The credential names the account and outlives the workspace, so what has to stop
+    working is the workspace: the request is refused because there is no such
+    workspace, not because the caller stopped being who they are.
+    """
     client = ImageControlClient.from_endpoint(
         endpoint,
         token=access.token,
@@ -198,13 +205,12 @@ def _assert_credentials_rejected(
     try:
         client.verify_image_build(VerifyImageBuildRequest(image_id=image_id))
     except HttpApiError as exc:
-        if exc.status_code not in REJECTED_STATUS_CODES:
+        if exc.status_code != DELETED_WORKSPACE_STATUS_CODE:
             raise RuntimeError(
-                "the deleted workspace credential failed for the wrong reason "
-                f"(HTTP {exc.status_code})"
+                f"naming the deleted workspace failed for the wrong reason (HTTP {exc.status_code})"
             ) from exc
         return exc.status_code
-    raise RuntimeError("the deleted workspace credential still resolved the shared image")
+    raise RuntimeError("the deleted workspace still resolved the shared image")
 
 
 def _cleanup(
@@ -316,13 +322,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         instances.append(restored_instance)
         _assert_marker(restored_instance, marker, stage="surviving workspace after deletion")
 
-        rejected_status = _assert_credentials_rejected(image_id, endpoint=endpoint, access=doomed)
+        rejected_status = _assert_deleted_workspace_resolves_nothing(
+            image_id,
+            endpoint=endpoint,
+            access=doomed,
+        )
         print(
             json.dumps(
                 {
                     "capability": "workspace.deletion-preserves-shared-image-archive",
                     "deleted_workspace": doomed.name,
-                    "deleted_workspace_credential_status": rejected_status,
+                    "deleted_workspace_request_status": rejected_status,
                     "deleted_workspace_status": deleted_record.status.value,
                     "image_id": image_id,
                     "surviving_container_id": restored_instance.container_id,
