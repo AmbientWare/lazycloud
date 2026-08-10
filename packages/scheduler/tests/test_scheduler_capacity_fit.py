@@ -85,6 +85,29 @@ def test_a_private_worker_refuses_another_accounts_request() -> None:
     assert worker.can_fit(_account_request("account-a"))
 
 
+def test_the_shared_fleet_serves_an_account_it_does_not_belong_to() -> None:
+    """The shared fleet is what an unconfigured workspace lands on, so it serves anyone.
+
+    Its counterpart above refuses a foreign account. The pair is the whole rule: a
+    machine somebody connected is theirs, and platform capacity is not. Asserted with
+    a mismatched owner because equal owners would pass either way and prove nothing.
+    """
+    shared = WorkerCapacity(
+        worker_id="worker-1",
+        pool=MachinePool("lazycloud"),
+        owner_user_id="account-a",
+        private_worker=False,
+        free_cpu=4,
+        free_memory_mib=8192,
+        total_cpu=4,
+        total_memory_mib=8192,
+        total_gpu=0,
+    )
+
+    assert shared.can_fit(_account_request("account-b"))
+    assert shared.fit_rejection(_account_request("account-b")) == ""
+
+
 def test_a_private_worker_naming_no_account_serves_none() -> None:
     """A record written without the authority to name a tenant cannot serve every tenant."""
     assert not _private_worker("").can_fit(_account_request("account-a"))
