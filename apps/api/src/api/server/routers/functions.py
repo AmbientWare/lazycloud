@@ -21,12 +21,11 @@ from shared.http.functions import (
 )
 from shared.http.task_payload import serialize_http_task_payload
 
-from api.server.auth import read_app_token, write_token
+from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
     resolve_deployed_stub_id,
-    token_workspace,
 )
 from api.server.http import request_query_params
 from api.server.ownership import require_function_stub_workspace, require_task_workspace
@@ -39,22 +38,22 @@ router = APIRouter(prefix="/api/v1/functions", tags=["function"])
 @router.post("/invoke", response_model=FunctionInvokeResponse)
 def function_invoke(
     request: FunctionInvokeBody,
-    token: write_token,
+    workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionInvokeResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, token_workspace(token))
+    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     return service.function_invoke(request)
 
 
 @router.post("/invoke/stream", response_class=StreamingResponse)
 def function_invoke_stream(
     request: FunctionInvokeBody,
-    token: write_token,
+    workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, token_workspace(token))
+    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     return StreamingResponse(
         _function_ndjson(service.function_invoke_stream(request)),
         media_type="application/x-ndjson",
@@ -64,47 +63,46 @@ def function_invoke_stream(
 @router.post("/get-args", response_model=FunctionGetArgsResponse)
 def function_get_args(
     request: FunctionGetArgsRequest,
-    token: read_app_token,
+    workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionGetArgsResponse:
-    require_task_workspace(services, request.task_id, token_workspace(token))
+    require_task_workspace(services, request.task_id, workspace_id)
     return service.function_get_args(request)
 
 
 @router.post("/set-result", response_model=FunctionSetResultResponse)
 def function_set_result(
     request: FunctionSetResultBody,
-    token: write_token,
+    workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionSetResultResponse:
-    require_task_workspace(services, request.task_id, token_workspace(token))
+    require_task_workspace(services, request.task_id, workspace_id)
     return service.function_set_result(request)
 
 
 @router.post("/monitor", response_model=FunctionMonitorResponse)
 def function_monitor(
     request: FunctionMonitorRequest,
-    token: read_app_token,
+    workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionMonitorResponse:
-    workspace = token_workspace(token)
-    require_function_stub_workspace(control_plane, request.stub_id, workspace)
-    require_task_workspace(services, request.task_id, workspace)
+    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
+    require_task_workspace(services, request.task_id, workspace_id)
     return service.function_monitor(request)
 
 
 @router.post("/cron", response_model=FunctionCronResponse)
 def function_cron(
     request: FunctionCronRequest,
-    token: write_token,
+    workspace_id: write_workspace,
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionCronResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, token_workspace(token))
+    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     return service.function_cron(request)
 
 
@@ -112,7 +110,7 @@ def function_cron(
 async def deployed_function_invoke_by_id(
     stub_id: str,
     request: Request,
-    token: write_token,
+    workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -124,7 +122,7 @@ async def deployed_function_invoke_by_id(
         StubKind.Function,
         public=False,
         resource_name="function",
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     return await _invoke_deployed_function(stub, request, service)
 
@@ -152,7 +150,7 @@ async def deployed_public_function_invoke_by_id(
 async def deployed_function_invoke_by_latest_path(
     deployment_name: str,
     request: Request,
-    token: write_token,
+    workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -163,7 +161,7 @@ async def deployed_function_invoke_by_latest_path(
         deployment_name,
         StubKind.Function,
         version=None,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
         resource_name="function",
     )
     return await _invoke_deployed_function(stub, request, service)
@@ -174,7 +172,7 @@ async def deployed_function_invoke_by_version(
     deployment_name: str,
     version: int,
     request: Request,
-    token: write_token,
+    workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -185,7 +183,7 @@ async def deployed_function_invoke_by_version(
         deployment_name,
         StubKind.Function,
         version=version,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
         resource_name="function",
     )
     return await _invoke_deployed_function(stub, request, service)

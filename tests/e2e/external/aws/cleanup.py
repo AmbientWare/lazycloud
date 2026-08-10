@@ -1,6 +1,6 @@
 """Remove connected AWS through LazyCloud and corroborate scoped zero capacity.
 
-The stage zeroes the workspace compute policy, removes the public connection,
+The stage zeroes the account's AWS compute configuration, removes the public connection,
 applies any required customer cleanup action through the deployment-owned
 operator command, and then corroborates — read-only, tag-scoped — that every
 region capacity could have launched in reports zero LazyCloud EC2, EBS, and
@@ -19,12 +19,14 @@ from lazycloud.cli.control import compute_client, control_config
 from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
 from shared.aws_connections import (
+    AwsAccountComputeConfiguration,
     AwsAccountConnectionAvailableAction,
     AwsAccountConnectionPhase,
 )
-from shared.compute_policy import AwsWorkspaceComputePolicy
-from shared.http.aws_connections import AwsConnectionResponse
-from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
+from shared.http.aws_connections import (
+    AwsComputeConfigurationUpdateRequest,
+    AwsConnectionResponse,
+)
 from shared.http.errors import HttpApiError
 from tests.e2e.external import _support
 
@@ -46,54 +48,56 @@ def _managed_stacks(connection: AwsConnectionResponse) -> dict[str, str]:
     return stacks
 
 
-def _zero_policy(
+def _zero_compute_configuration(
     client: ComputeClient,
     deadline: _support.Deadline,
-) -> AwsWorkspaceComputePolicy:
-    """Zero the workspace policy, waiting out an in-flight reconcile.
+) -> AwsAccountComputeConfiguration:
+    """Zero the account's compute configuration, waiting out an in-flight reconcile.
 
-    The owner rejects a policy write while it is reconciling capacity, which is
-    exactly when a cleanup runs. Treating that as terminal aborts the stage and
-    leaves the capacity it was asked to release still running.
+    The owner rejects a configuration write while it is reconciling capacity,
+    which is exactly when a cleanup runs. Treating that as terminal aborts the
+    stage and leaves the capacity it was asked to release still running.
     """
 
-    def attempt() -> AwsWorkspaceComputePolicy | None:
+    def attempt() -> AwsAccountComputeConfiguration | None:
         try:
-            return _apply_zero_policy(client)
+            return _apply_zero_compute_configuration(client)
         except HttpApiError as exc:
             if exc.status_code in {409, 503}:
                 return None
             raise
 
-    return _support.poll_until(deadline, "the workspace compute policy to zero", attempt)
+    return _support.poll_until(deadline, "the AWS compute configuration to zero", attempt)
 
 
-def _apply_zero_policy(client: ComputeClient) -> AwsWorkspaceComputePolicy:
-    current = client.policy()
-    aws = current.aws
-    zero = AwsWorkspaceComputePolicy(
-        default_region=aws.default_region,
-        default_instance_type=aws.default_instance_type,
+def _apply_zero_compute_configuration(client: ComputeClient) -> AwsAccountComputeConfiguration:
+    connection = client.current_connection()
+    if connection is None:
+        raise RuntimeError("no AWS account is connected")
+    current = connection.compute
+    zero = AwsAccountComputeConfiguration(
+        revision=current.revision,
+        default_region=current.default_region,
+        default_instance_type=current.default_instance_type,
         initial_cpu_workers=0,
         min_cpu_workers=0,
         max_cpu_instances=0,
         max_gpu_instances=0,
         min_free_cpu_millicores=0,
         min_free_memory_mib=0,
-        allowed_regions=aws.allowed_regions,
-        allowed_instance_types=aws.allowed_instance_types,
-        idle_timeout_seconds=aws.idle_timeout_seconds,
-        root_volume_gib=aws.root_volume_gib,
+        allowed_regions=current.allowed_regions,
+        allowed_instance_types=current.allowed_instance_types,
+        idle_timeout_seconds=current.idle_timeout_seconds,
+        root_volume_gib=current.root_volume_gib,
     )
-    # Zero under the group the workspace already has. Flipping to another
-    # first would release capacity through a different branch than the one a user
-    # takes, and zeroing the policy is the only control they are given.
-    if current.aws != zero:
-        client.update_policy(
-            WorkspaceComputePolicyUpdateRequest(
+    # Zero under the pool the account already has. Flipping to another first
+    # would release capacity through a different branch than the one a user
+    # takes, and zeroing the configuration is the only control they are given.
+    if current != zero:
+        client.update_compute_configuration(
+            AwsComputeConfigurationUpdateRequest(
                 expected_revision=current.revision,
-                default_pool=current.default_pool,
-                aws=zero,
+                compute=zero,
             )
         )
     return zero
@@ -270,7 +274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("the workspace is connected to a different AWS account")
 
     stacks = _managed_stacks(connection) if connection is not None else {}
-    zero = _zero_policy(client, deadline)
+    zero = _zero_compute_configuration(client, deadline)
     _wait_public_zero(client, deadline)
     if connection is not None:
         _wait_disconnected(client, stacks, args, deadline)

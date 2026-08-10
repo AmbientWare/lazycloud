@@ -484,6 +484,7 @@ def test_gateway_control_client_streams_attach_events() -> None:
     ]
     assert channel.paths == [
         "/gateway/containers/attach/stream?container_id=ctr-1&poll_interval_seconds=0.5"
+        "&workspace=default"
     ]
 
 

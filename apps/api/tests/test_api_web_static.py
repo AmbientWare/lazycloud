@@ -59,3 +59,37 @@ def test_web_static_serves_spa_without_masking_api_routes(
         retired_bootstrap_post = client.post("/auth/bootstrap", json={"name": "root"})
         assert retired_bootstrap_post.status_code == 404
         assert "web-shell" not in retired_bootstrap_post.text
+
+
+def test_a_retired_build_asset_is_not_answered_with_the_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_services: ApiServices,
+) -> None:
+    """A deploy replaces the whole asset set, and a client may still ask for the old one.
+
+    Answering that with index.html hands the browser HTML where it asked for a
+    module, so it fails to start reporting neither the file nor the reason. The
+    document must also never be cached, or an intermediary keeps serving one that
+    names assets this deploy no longer has.
+    """
+    static_dir = tmp_path / "web"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html><body>web-shell</body></html>")
+    (static_dir / "assets" / "app-abc123.js").write_text("export const ok = 1")
+    monkeypatch.setenv("LAZYCLOUD_WEB_STATIC_DIR", str(static_dir))
+
+    with TestClient(create_app(isolated_services)) as client:
+        retired = client.get("/assets/app-oldhash.js", headers={"accept": "*/*"})
+        assert retired.status_code == 404
+        assert "web-shell" not in retired.text
+
+        current = client.get("/assets/app-abc123.js")
+        assert current.status_code == 200
+        assert "immutable" in current.headers["cache-control"]
+
+        # A client-side route still resolves to the app.
+        document = client.get("/w/default/apps", headers={"accept": "text/html"})
+        assert document.status_code == 200
+        assert "web-shell" in document.text
+        assert document.headers["cache-control"] == "no-cache"

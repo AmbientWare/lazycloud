@@ -3,24 +3,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { WorkspaceComputePolicy } from "@/lib/api/schemas";
-import { computeQueryKeys } from "@/lib/queries/compute";
+import type { AwsComputeConfiguration, AwsConnection } from "@/lib/api/schemas";
+import { accountComputeQueryKeys } from "@/lib/queries/compute";
 
-import { useComputePolicyController } from "./controller";
+import { useAwsComputeController } from "./controller";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("compute policy controller", () => {
+describe("AWS compute configuration controller", () => {
   it("replaces a clean draft and field-rebases a dirty draft for explicit review", async () => {
-    let authority = policy(1);
-    mockPolicyApi(() => authority);
+    let authority = connection(1);
+    mockConnectionApi(() => authority);
     const queryClient = testQueryClient();
     const { result } = renderController(queryClient);
     await waitFor(() => expect(result.current.draft?.maxCpuInstances).toBe(10));
 
-    authority = policy(2, { maxGpuInstances: 7 });
+    authority = connection(2, { maxGpuInstances: 7 });
     act(() => {
-      queryClient.setQueryData(computeQueryKeys.policy("workspace-1"), authority);
+      queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), authority);
     });
     await waitFor(() => expect(result.current.draft?.maxGpuInstances).toBe(7));
     expect(result.current.isDirty).toBe(false);
@@ -29,9 +29,9 @@ describe("compute policy controller", () => {
       result.current.updateField({ field: "maxCpuInstances", value: 42 });
       result.current.updateField({ field: "allowedInstanceTypes", value: "g5.xlarge" });
     });
-    authority = policy(3, { maxCpuInstances: 12, maxGpuInstances: 9 });
+    authority = connection(3, { maxCpuInstances: 12, maxGpuInstances: 9 });
     act(() => {
-      queryClient.setQueryData(computeQueryKeys.policy("workspace-1"), authority);
+      queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), authority);
     });
 
     await waitFor(() => expect(result.current.requiresReview).toBe(true));
@@ -40,7 +40,7 @@ describe("compute policy controller", () => {
       maxGpuInstances: 9,
       allowedInstanceTypes: "g5.xlarge",
     });
-    expect(result.current.policy?.revision).toBe(3);
+    expect(result.current.configuration?.revision).toBe(3);
     expect(result.current.dirtyFields).toEqual(["maxCpuInstances", "allowedInstanceTypes"]);
     expect(result.current.canSave).toBe(false);
 
@@ -51,7 +51,7 @@ describe("compute policy controller", () => {
 
   it("treats an ordered-array reorder as one atomic dirty field during rebase", async () => {
     const queryClient = testQueryClient();
-    mockPolicyApi(() => policy(1));
+    mockConnectionApi(() => connection(1));
     const { result } = renderController(queryClient);
     await waitFor(() => expect(result.current.draft?.allowedRegions).toHaveLength(2));
 
@@ -65,8 +65,8 @@ describe("compute policy controller", () => {
 
     act(() => {
       queryClient.setQueryData(
-        computeQueryKeys.policy("workspace-1"),
-        policy(2, { maxGpuInstances: 5 }),
+        accountComputeQueryKeys.awsConnection(),
+        connection(2, { maxGpuInstances: 5 }),
       );
     });
     await waitFor(() => expect(result.current.requiresReview).toBe(true));
@@ -83,11 +83,11 @@ describe("compute policy controller", () => {
         requests.push(init);
         return pending.promise;
       }
-      return jsonResponse(policy(4));
+      return jsonResponse({ connection: connection(4) });
     });
     const queryClient = testQueryClient();
-    const authoritative = policy(4);
-    queryClient.setQueryData(computeQueryKeys.policy("workspace-1"), authoritative);
+    const authoritative = connection(4);
+    queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), authoritative);
     const { result } = renderController(queryClient);
     await waitFor(() => expect(result.current.draft?.maxCpuInstances).toBe(10));
 
@@ -101,34 +101,29 @@ describe("compute policy controller", () => {
     expect(requests[0]?.body).toBe(
       JSON.stringify({
         expected_revision: 4,
-        default_pool: "lazycloud",
-        aws: {
-          ...authoritative.aws,
-          max_cpu_instances: 44,
-        },
+        compute: { ...authoritative.compute, max_cpu_instances: 44 },
       }),
     );
-    expect(queryClient.getQueryData(computeQueryKeys.policy("workspace-1"))).toEqual(authoritative);
+    expect(queryClient.getQueryData(accountComputeQueryKeys.awsConnection())).toEqual(
+      authoritative,
+    );
 
-    const accepted = policy(5, { maxCpuInstances: 44, maxGpuInstances: 8 });
+    const accepted = connection(5, { maxCpuInstances: 44, maxGpuInstances: 8 });
     pending.resolve(jsonResponse(accepted));
     await waitFor(() => expect(result.current.isSaved).toBe(true));
 
-    expect(result.current.draft).toMatchObject({
-      maxCpuInstances: 44,
-      maxGpuInstances: 8,
-    });
-    expect(queryClient.getQueryData(computeQueryKeys.policy("workspace-1"))).toEqual(accepted);
+    expect(result.current.draft).toMatchObject({ maxCpuInstances: 44, maxGpuInstances: 8 });
+    expect(queryClient.getQueryData(accountComputeQueryKeys.awsConnection())).toEqual(accepted);
   });
 
   it("keeps an ordinary failure retryable", async () => {
     let updates = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      if (init?.method !== "PUT") return jsonResponse(policy(1));
+      if (init?.method !== "PUT") return jsonResponse({ connection: connection(1) });
       updates += 1;
       return updates === 1
-        ? jsonResponse({ detail: "policy service unavailable" }, 503)
-        : jsonResponse(policy(2, { maxCpuInstances: 24 }));
+        ? jsonResponse({ detail: "compute service unavailable" }, 503)
+        : jsonResponse(connection(2, { maxCpuInstances: 24 }));
     });
     const { result } = renderController(testQueryClient());
     await waitFor(() => expect(result.current.draft).not.toBeNull());
@@ -136,7 +131,7 @@ describe("compute policy controller", () => {
 
     act(() => result.current.save());
     await waitFor(() =>
-      expect(result.current.saveError?.message).toBe("policy service unavailable"),
+      expect(result.current.saveError?.message).toBe("compute service unavailable"),
     );
     expect(result.current.canSave).toBe(true);
 
@@ -146,16 +141,16 @@ describe("compute policy controller", () => {
   });
 
   it("loads authority after a conflict and waits for review before one explicit retry", async () => {
-    let authority = policy(1);
+    let authority = connection(1);
     const updateBodies: BodyInit[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      if (init?.method !== "PUT") return jsonResponse(authority);
+      if (init?.method !== "PUT") return jsonResponse({ connection: authority });
       if (init.body) updateBodies.push(init.body);
       if (updateBodies.length === 1) {
-        authority = policy(2, { maxCpuInstances: 12, maxGpuInstances: 7 });
-        return jsonResponse({ detail: "policy revision changed" }, 409);
+        authority = connection(2, { maxCpuInstances: 12, maxGpuInstances: 7 });
+        return jsonResponse({ detail: "compute configuration revision changed" }, 409);
       }
-      return jsonResponse(policy(3, { maxCpuInstances: 30, maxGpuInstances: 7 }));
+      return jsonResponse(connection(3, { maxCpuInstances: 30, maxGpuInstances: 7 }));
     });
     const { result } = renderController(testQueryClient());
     await waitFor(() => expect(result.current.draft).not.toBeNull());
@@ -166,11 +161,8 @@ describe("compute policy controller", () => {
 
     expect(updateBodies).toHaveLength(1);
     expect(updateBodies[0]).toContain('"expected_revision":1');
-    expect(result.current.draft).toMatchObject({
-      maxCpuInstances: 30,
-      maxGpuInstances: 7,
-    });
-    expect(result.current.policy?.revision).toBe(2);
+    expect(result.current.draft).toMatchObject({ maxCpuInstances: 30, maxGpuInstances: 7 });
+    expect(result.current.configuration?.revision).toBe(2);
     expect(result.current.canSave).toBe(false);
 
     act(() => result.current.review());
@@ -186,13 +178,15 @@ describe("compute policy controller", () => {
     let recoveryCanSucceed = false;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
       if (init?.method === "PUT") {
-        return jsonResponse({ detail: "policy revision changed" }, 409);
+        return jsonResponse({ detail: "compute configuration revision changed" }, 409);
       }
       getCount += 1;
       if (getCount > 1 && !recoveryCanSucceed) {
-        return jsonResponse({ detail: "could not load policy" }, 503);
+        return jsonResponse({ detail: "could not load the AWS connection" }, 503);
       }
-      return jsonResponse(getCount === 1 ? policy(1) : policy(2, { maxGpuInstances: 6 }));
+      return jsonResponse({
+        connection: getCount === 1 ? connection(1) : connection(2, { maxGpuInstances: 6 }),
+      });
     });
     const { result } = renderController(testQueryClient());
     await waitFor(() => expect(result.current.draft).not.toBeNull());
@@ -202,58 +196,21 @@ describe("compute policy controller", () => {
     await waitFor(() => expect(result.current.recoveryFailed).toBe(true));
     expect(result.current.draft?.maxCpuInstances).toBe(35);
     expect(result.current.canSave).toBe(false);
-    expect(result.current.saveError?.message).toBe("could not load policy");
+    expect(result.current.saveError?.message).toBe("could not load the AWS connection");
 
     recoveryCanSucceed = true;
     act(() => result.current.retryLoad());
     await waitFor(() => expect(result.current.requiresReview).toBe(true));
-    expect(result.current.draft).toMatchObject({
-      maxCpuInstances: 35,
-      maxGpuInstances: 6,
-    });
-    expect(result.current.policy?.revision).toBe(2);
-  });
-
-  it("drops another workspace's base, draft, and errors on workspace change", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-      jsonResponse(
-        String(input).includes("workspace-2") ? policy(8, { maxCpuInstances: 80 }) : policy(1),
-      ),
-    );
-    const queryClient = testQueryClient();
-    const { result, rerender } = renderHook(
-      ({ workspaceId }: { workspaceId: string }) => useComputePolicyController(workspaceId),
-      {
-        initialProps: { workspaceId: "workspace-1" },
-        wrapper: controllerWrapper(queryClient),
-      },
-    );
-    await waitFor(() => expect(result.current.draft?.maxCpuInstances).toBe(10));
-    act(() => result.current.updateField({ field: "maxCpuInstances", value: 77 }));
-    expect(result.current.isDirty).toBe(true);
-
-    rerender({ workspaceId: "workspace-2" });
-    expect(result.current.draft?.maxCpuInstances).not.toBe(77);
-    await waitFor(() => expect(result.current.draft?.maxCpuInstances).toBe(80));
-    expect(result.current.policy?.revision).toBe(8);
-    expect(result.current.isDirty).toBe(false);
-    expect(result.current.saveError).toBeNull();
-
-    rerender({ workspaceId: "workspace-1" });
-    await waitFor(() => expect(result.current.draft?.maxCpuInstances).toBe(10));
-    expect(result.current.isDirty).toBe(false);
+    expect(result.current.draft).toMatchObject({ maxCpuInstances: 35, maxGpuInstances: 6 });
+    expect(result.current.configuration?.revision).toBe(2);
   });
 });
 
 function renderController(queryClient: QueryClient) {
-  return renderHook(() => useComputePolicyController("workspace-1"), {
-    wrapper: controllerWrapper(queryClient),
+  return renderHook(() => useAwsComputeController(), {
+    wrapper: ({ children }: PropsWithChildren) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
   });
-}
-
-function controllerWrapper(queryClient: QueryClient) {
-  return ({ children }: PropsWithChildren) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
 function testQueryClient() {
@@ -265,34 +222,52 @@ function testQueryClient() {
   });
 }
 
-function mockPolicyApi(authority: () => WorkspaceComputePolicy) {
-  vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(authority()));
+function mockConnectionApi(authority: () => AwsConnection) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    jsonResponse({ connection: authority() }),
+  );
 }
 
-function policy(
+function compute(
   revision: number,
-  overrides: {
-    maxCpuInstances?: number;
-    maxGpuInstances?: number;
-  } = {},
-): WorkspaceComputePolicy {
+  overrides: { maxCpuInstances?: number; maxGpuInstances?: number },
+): AwsComputeConfiguration {
   return {
     revision,
-    default_pool: "lazycloud",
-    aws: {
-      default_region: "us-east-1",
-      default_instance_type: "i4i.xlarge",
-      initial_cpu_workers: 1,
-      min_cpu_workers: 1,
-      max_cpu_instances: overrides.maxCpuInstances ?? 10,
-      max_gpu_instances: overrides.maxGpuInstances ?? 2,
-      min_free_cpu_millicores: 1_000,
-      min_free_memory_mib: 1_024,
-      allowed_regions: ["us-east-1", "us-west-2"],
-      allowed_instance_types: [],
-      idle_timeout_seconds: 300,
-      root_volume_gib: 200,
-    },
+    default_region: "us-east-1",
+    default_instance_type: "i4i.xlarge",
+    initial_cpu_workers: 1,
+    min_cpu_workers: 1,
+    max_cpu_instances: overrides.maxCpuInstances ?? 10,
+    max_gpu_instances: overrides.maxGpuInstances ?? 2,
+    min_free_cpu_millicores: 1_000,
+    min_free_memory_mib: 1_024,
+    allowed_regions: ["us-east-1", "us-west-2"],
+    allowed_instance_types: [],
+    idle_timeout_seconds: 300,
+    root_volume_gib: 200,
+  };
+}
+
+function connection(
+  revision: number,
+  overrides: { maxCpuInstances?: number; maxGpuInstances?: number } = {},
+): AwsConnection {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    account_id: "123456789012",
+    phase: "ready",
+    active_authorization: null,
+    pending_authorization: null,
+    retiring_authorization: null,
+    revision,
+    compute: compute(revision, overrides),
+    hosts_workloads: true,
+    can_manage_existing_capacity: true,
+    available_actions: ["reconnect", "remove"],
+    detail: "AWS compute is available for your workspaces.",
+    customer_action: null,
+    next_retry_at: null,
     created_at: "2026-07-14T12:00:00Z",
     updated_at: `2026-07-14T12:00:0${revision}Z`,
   };

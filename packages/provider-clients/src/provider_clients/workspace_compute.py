@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from agent.binary import AgentBinarySettings
-from compute.policy import ComputeCatalogInstance, ComputeCatalogRegion
+from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.providers import ComputeProviderResolver, ResolvedComputeProvider
 from networking.settings import (
     BackendRouteSettings,

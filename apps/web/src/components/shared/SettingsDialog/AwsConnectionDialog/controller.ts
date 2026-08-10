@@ -3,8 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { AwsConnection } from "@/lib/api/schemas";
 import {
+  accountComputeQueryKeys,
   cancelAwsConnectionReconnect,
-  computeQueryKeys,
   createAwsConnection,
   reconnectAwsConnection,
   removeAwsConnection,
@@ -51,11 +51,9 @@ export type AwsConnectionController = {
 };
 
 export function useAwsConnectionController({
-  workspaceId,
   onClose,
   openAuthorizationPopup = openAwsAuthorizationPopup,
 }: {
-  workspaceId: string;
   onClose: () => void;
   openAuthorizationPopup?: () => AwsAuthorizationPopup;
 }): AwsConnectionController {
@@ -69,9 +67,7 @@ export function useAwsConnectionController({
     mutationFn: async (command: AwsConnectionCommand): Promise<AwsConnectionMutationOutcome> => {
       switch (command.action) {
         case "create": {
-          const result = await createAwsConnection(workspaceId, {
-            accountId: command.accountId,
-          });
+          const result = await createAwsConnection({ accountId: command.accountId });
           return {
             action: command.action,
             connection: result.connection,
@@ -80,9 +76,9 @@ export function useAwsConnectionController({
           };
         }
         case "validate":
-          return connectionOutcome(command.action, await validateAwsConnection(workspaceId));
+          return connectionOutcome(command.action, await validateAwsConnection());
         case "reconnect": {
-          const result = await reconnectAwsConnection(workspaceId);
+          const result = await reconnectAwsConnection();
           return {
             action: command.action,
             connection: result.connection,
@@ -91,15 +87,15 @@ export function useAwsConnectionController({
           };
         }
         case "cancel_reconnect":
-          return connectionOutcome(command.action, await cancelAwsConnectionReconnect(workspaceId));
+          return connectionOutcome(command.action, await cancelAwsConnectionReconnect());
         case "retry":
-          return connectionOutcome(command.action, await retryAwsConnection(workspaceId));
+          return connectionOutcome(command.action, await retryAwsConnection());
         case "remove":
-          return connectionOutcome(command.action, await removeAwsConnection(workspaceId));
+          return connectionOutcome(command.action, await removeAwsConnection());
       }
     },
     onSuccess: (outcome) => {
-      queryClient.setQueryData(computeQueryKeys.awsConnection(workspaceId), outcome.connection);
+      queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), outcome.connection);
 
       if (outcome.action === "create" || outcome.action === "reconnect") {
         completeAwsAuthorizationHandoff(outcome.authorizationPopup, outcome.authorizationUrl);
@@ -107,17 +103,9 @@ export function useAwsConnectionController({
 
       if (outcome.action === "remove") {
         setRemoveOpen(false);
-        void Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: computeQueryKeys.awsConnection(workspaceId),
-          }),
-          queryClient.invalidateQueries({
-            queryKey: computeQueryKeys.policy(workspaceId),
-          }),
-          queryClient.invalidateQueries({
-            queryKey: computeQueryKeys.instances(workspaceId),
-          }),
-        ]);
+        // The whole account-level compute root: the connection is gone, and so is
+        // the capacity, the inventory, and the catalog that were read through it.
+        void queryClient.invalidateQueries({ queryKey: accountComputeQueryKeys.root() });
       }
 
       onClose();

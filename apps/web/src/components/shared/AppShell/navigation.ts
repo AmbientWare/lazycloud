@@ -3,7 +3,7 @@ export type ShellBreadcrumb = {
   href?: string;
 };
 
-const topLevelDestinations = new Set(["apps", "tasks", "storage", "usage", "settings"]);
+const topLevelDestinations = new Set(["apps", "tasks", "storage", "usage"]);
 
 /** Workspace switches keep the current product area, but never carry scoped resource ids. */
 export function workspaceLandingPath(
@@ -57,7 +57,6 @@ export function shellBreadcrumbs(
   const sectionLabels: Record<string, string> = {
     storage: "Storage",
     usage: "Usage",
-    settings: "Settings",
   };
   return [{ label: sectionLabels[section] ?? section }];
 }

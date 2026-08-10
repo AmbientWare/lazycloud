@@ -38,6 +38,7 @@ def _connection(
             "account_id": "123456789012",
             "phase": phase,
             "revision": 2,
+            "compute": {},
             "hosts_workloads": phase == "ready",
             "can_manage_existing_capacity": phase == "ready",
             "available_actions": ["retry"] if phase == "action_required" else [],

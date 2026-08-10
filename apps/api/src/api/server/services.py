@@ -69,6 +69,7 @@ from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from gateway.shell_proxy import connect_shell_backend
 from identity.auth import AuthService, AuthTokenCache
+from identity.users import SessionService, UserService
 from images.control import ImageControlService
 from images.execution import (
     ImageBuildExecutor,
@@ -165,6 +166,7 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
 )
 from scheduler.workers import SchedulerWorkerAdminService
+from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.container_requests import StopContainerReason
 from shared.http.endpoints import (
     EndpointForwardRequest,
@@ -451,6 +453,8 @@ class _RuntimeWorkspaceBucketClient(Protocol):
 class ApiServiceCore:
     context: ServiceContext
     auth: AuthService
+    users: UserService
+    sessions: SessionService
     auth_token_cache: AuthTokenCache
     tcp_ingress_settings: TcpIngressSettings
     agent_route_reconciliation_settings: AgentRouteReconciliationSettings
@@ -611,6 +615,8 @@ class ApiServices(ApiServiceCore):
         context = ServiceContext.create(database, root=root, create_schema=create_schema)
         auth_token_cache = AuthTokenCache()
         auth = AuthService(context, token_cache=auth_token_cache)
+        users = UserService(context)
+        sessions = SessionService(context)
         tcp_ingress_config = tcp_ingress_settings or TcpIngressSettings()
         agent_route_reconciliation_config = (
             agent_route_reconciliation_settings or AgentRouteReconciliationSettings()
@@ -658,23 +664,23 @@ class ApiServices(ApiServiceCore):
         tasks = TaskService(
             context,
             events,
-            log_streams=stream_events,
             workspace_changes=workspace_changes,
         )
         secrets = SecretService(context, events, workspace_changes=workspace_changes)
+        # Same decision as the provider resolver below: a deployment without
+        # connected AWS advertises no AWS catalog, and building one would demand
+        # the capacity and agent-artifact configuration it has no reason to hold.
+        aws_compute_catalog = (
+            configured_aws_compute_catalog(
+                aws_capacity_config,
+                agent_artifact_config,
+            )
+            if aws_account_connection_config.configured
+            else ()
+        )
         compute_policies = WorkspaceComputePolicyService(
             context,
-            # Same decision as the provider resolver below: a deployment without
-            # connected AWS advertises no AWS catalog, and building one would demand
-            # the capacity and agent-artifact configuration it has no reason to hold.
-            available_catalog=(
-                configured_aws_compute_catalog(
-                    aws_capacity_config,
-                    agent_artifact_config,
-                )
-                if aws_account_connection_config.configured
-                else ()
-            ),
+            available_catalog=aws_compute_catalog,
         )
         routes = RouteService(context)
         cache_storage = CacheStorage(context)
@@ -831,6 +837,7 @@ class ApiServices(ApiServiceCore):
             backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
             capacity_baseline=compute_policies,
+            available_catalog=aws_compute_catalog,
         )
         placement_resources = (
             aws_composition.deployment_bucket_access if aws_composition is not None else None
@@ -857,6 +864,7 @@ class ApiServices(ApiServiceCore):
             usage=usage,
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
             lifecycle_events=stream_events,
+            workspace_owners=DatabaseWorkspaceOwners(context),
         )
         containers = ContainerService(
             context,
@@ -968,6 +976,8 @@ class ApiServices(ApiServiceCore):
         core = ApiServiceCore(
             context=context,
             auth=auth,
+            users=users,
+            sessions=sessions,
             auth_token_cache=auth_token_cache,
             tcp_ingress_settings=tcp_ingress_config,
             agent_route_reconciliation_settings=agent_route_reconciliation_config,
@@ -1285,6 +1295,8 @@ def _compose_api_services(
     return ApiServices(
         context=core.context,
         auth=core.auth,
+        users=core.users,
+        sessions=core.sessions,
         auth_token_cache=core.auth_token_cache,
         tcp_ingress_settings=core.tcp_ingress_settings,
         agent_route_reconciliation_settings=core.agent_route_reconciliation_settings,

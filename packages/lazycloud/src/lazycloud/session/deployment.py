@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlencode
 
 from pydantic import JsonValue
 from shared.compute_policy import MachinePool
@@ -624,6 +625,7 @@ def _default_image_client(config: ControlClientConfig) -> ImageControlClient:
     return ImageControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=max(config.timeout_seconds, DEFAULT_IMAGE_BUILD_TIMEOUT_SECONDS),
     )
 
@@ -652,7 +654,7 @@ class _DefaultObjectUploadClient:
         upload_timeout_seconds = object_upload_timeout_seconds(self.config.timeout_seconds)
         if not overwrite:
             response = channel.post(
-                "/gateway/objects/head",
+                f"/gateway/objects/head?{urlencode({'workspace': self.config.workspace})}",
                 {"hash": object_hash, "bucket": bucket},
             )
             if (
@@ -666,6 +668,7 @@ class _DefaultObjectUploadClient:
         uploaded = stream_object_bytes(
             endpoint=self.config.endpoint,
             token=self.config.token,
+            workspace=self.config.workspace,
             timeout_seconds=upload_timeout_seconds,
             data=data,
             name=name,

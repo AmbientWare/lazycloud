@@ -6,7 +6,6 @@ import shlex
 from pathlib import Path
 
 from benchmarks.harness.latency import (
-    DEFAULT_COMPOSE_CLI,
     DEFAULT_ENDPOINT,
     DEFAULT_RUNS,
     LatencyConfig,
@@ -63,8 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--admin-token",
-        help="Admin token for the latency benchmark. Prefer BENCHMARK_ADMIN_TOKEN; "
-        "omit to mint one via the Compose tools profile.",
+        help="Administrator credential for the latency benchmark, required because the "
+        "workspace it creates is owned by the account that creates it. Prefer "
+        "BENCHMARK_ADMIN_TOKEN.",
     )
     parser.add_argument(
         "--invoke-timeout-seconds",
@@ -182,12 +182,10 @@ def main(argv: list[str] | None = None) -> None:
 
 def _latency_config(args: argparse.Namespace) -> LatencyConfig:
     admin_token = args.admin_token or os.getenv("BENCHMARK_ADMIN_TOKEN")
-    compose_cli = os.getenv("BENCHMARK_COMPOSE_CLI")
     defaults = LatencyConfig()
     return LatencyConfig(
         run_live=bool(args.run_live),
         endpoint=(args.endpoint or os.getenv("BENCHMARK_ENDPOINT") or DEFAULT_ENDPOINT).rstrip("/"),
-        compose_cli=tuple(shlex.split(compose_cli)) if compose_cli else DEFAULT_COMPOSE_CLI,
         runs=args.runs if args.runs is not None else DEFAULT_RUNS,
         admin_token=_secret_token(admin_token),
         idle_seconds=(

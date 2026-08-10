@@ -86,7 +86,7 @@ def _active(generation: int = 1) -> AwsActiveAccountAuthorization:
     initial = (
         _planner()
         .plan_initial(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr(_EXTERNAL_ID),
@@ -127,7 +127,7 @@ def _quick_create_parameters(url: str) -> dict[str, list[str]]:
 def test_replacement_creates_new_generation_without_mutating_active() -> None:
     active = _active()
     replacement = _planner().plan_replacement(
-        workspace_id=_WORKSPACE_ID,
+        user_id=_WORKSPACE_ID,
         connection_id=_CONNECTION_ID,
         account_id=_ACCOUNT_ID,
         external_id=SecretStr(_EXTERNAL_ID),
@@ -145,7 +145,7 @@ def test_replacement_creates_new_generation_without_mutating_active() -> None:
 
     with pytest.raises(ValueError, match="retain the connection external ID"):
         _planner().plan_replacement(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr("different-external-id-0123456789abcdef"),
@@ -155,7 +155,7 @@ def test_replacement_creates_new_generation_without_mutating_active() -> None:
 
 def test_customer_quick_create_action_is_bound_to_exact_account_and_generation() -> None:
     plan = _planner().plan_initial(
-        workspace_id=_WORKSPACE_ID,
+        user_id=_WORKSPACE_ID,
         connection_id=_CONNECTION_ID,
         account_id=_ACCOUNT_ID,
         external_id=SecretStr(_EXTERNAL_ID),
@@ -712,7 +712,7 @@ def test_validation_accepts_ready_stack_and_ensures_node_identity(stack_status: 
     pending = (
         _planner()
         .plan_initial(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr(_EXTERNAL_ID),
@@ -746,7 +746,7 @@ def test_validation_rejects_stack_without_managed_network_outputs() -> None:
     pending = (
         _planner()
         .plan_initial(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr(_EXTERNAL_ID),
@@ -782,7 +782,7 @@ def test_validation_rejects_non_ready_stack_states(stack_status: str) -> None:
     pending = (
         _planner()
         .plan_initial(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr(_EXTERNAL_ID),
@@ -808,7 +808,7 @@ def test_validation_rejects_role_that_does_not_enforce_external_id() -> None:
     pending = (
         _planner()
         .plan_initial(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr(_EXTERNAL_ID),
@@ -831,7 +831,7 @@ def test_validation_rejects_role_that_does_not_enforce_external_id() -> None:
 
 def test_existing_role_uses_same_exact_node_identity_lifecycle() -> None:
     authorization = _planner().plan_existing_role(
-        workspace_id=_WORKSPACE_ID,
+        user_id=_WORKSPACE_ID,
         connection_id=_CONNECTION_ID,
         account_id=_ACCOUNT_ID,
         role_arn=f"arn:aws:iam::{_ACCOUNT_ID}:role/customer-managed-compute",
@@ -936,7 +936,7 @@ def test_abandoned_pending_cleanup_waits_until_role_is_assumable() -> None:
     pending = (
         _planner()
         .plan_initial(
-            workspace_id=_WORKSPACE_ID,
+            user_id=_WORKSPACE_ID,
             connection_id=_CONNECTION_ID,
             account_id=_ACCOUNT_ID,
             external_id=SecretStr(_EXTERNAL_ID),

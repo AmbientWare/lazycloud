@@ -185,22 +185,13 @@ run acceptance.
 
 A node whose bootstrap failed keeps running and holds the pool's slot. The
 reclaim path handles the deadline case; to clear a pool by hand, drive the
-policy to zero rather than terminating instances directly — the control plane
-owns those writes and will otherwise relaunch.
+connected account's compute configuration to zero rather than terminating
+instances directly — the control plane owns those writes and will otherwise
+relaunch. This zeroes capacity in every workspace that account backs.
 
 ```bash
-uv run python - <<'PY'
-from lazycloud.cli.control import compute_client
-from shared.http.compute_policy import AwsWorkspaceComputePolicyPatch, WorkspaceComputePolicyPatchRequest
-c = compute_client(timeout_seconds=30)
-cur = c.policy()
-c.patch_policy(WorkspaceComputePolicyPatchRequest(
-    expected_revision=cur.revision,
-    aws=AwsWorkspaceComputePolicyPatch(
-        initial_cpu_workers=0, min_cpu_workers=0, max_cpu_instances=0
-    ),
-))
-PY
+uv run lazycloud cloud compute update \
+  --initial-cpu-workers 0 --min-cpu-workers 0 --max-cpu 0
 ```
 
 Expect a `409` while a reconcile is in flight; retry. Watch it drain with

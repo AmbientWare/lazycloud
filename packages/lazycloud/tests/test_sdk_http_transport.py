@@ -177,6 +177,7 @@ def test_object_upload_streams_with_progress_and_validates_response() -> None:
         response = stream_object_bytes(
             endpoint=endpoint,
             token="test-token",
+            workspace="tenant-a",
             data=data,
             name="source.tar.gz",
             object_hash=hashlib.sha256(data).hexdigest(),
@@ -205,6 +206,7 @@ def test_object_file_upload_streams_without_loading_a_second_copy(
         response = stream_object_file(
             endpoint=endpoint,
             token="test-token",
+            workspace="tenant-a",
             source=source,
             size=len(data),
             name=source.name,
@@ -231,6 +233,7 @@ def test_object_upload_maps_http_failures_and_rejects_invalid_success() -> None:
             stream_object_bytes(
                 endpoint=endpoint,
                 token="test-token",
+                workspace="tenant-a",
                 data=data,
                 name="denied",
                 object_hash=digest,
@@ -245,6 +248,7 @@ def test_object_upload_maps_http_failures_and_rejects_invalid_success() -> None:
             stream_object_bytes(
                 endpoint=endpoint,
                 token="test-token",
+                workspace="tenant-a",
                 data=data,
                 name="invalid-response",
                 object_hash=digest,

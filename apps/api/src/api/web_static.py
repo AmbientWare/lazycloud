@@ -13,20 +13,55 @@ WEB_STATIC_DIR_ENV = "LAZYCLOUD_WEB_STATIC_DIR"
 
 _DEFAULT_STATIC_DIR = Path(__file__).parent / "web_static"
 _BACKEND_PATH_NAMESPACES = frozenset({"api", "auth", "gateway"})
+_BUILD_ASSET_NAMESPACE = "assets"
 
 
 class _SpaStaticFiles(StaticFiles):
-    """Static files with an index.html fallback for non-API SPA routes."""
+    """Static files with an index.html fallback for non-API SPA routes.
+
+    Caching is the load-bearing part. A build names each asset by its content, and a
+    deploy replaces the whole set, so the previous build's names stop existing. The
+    document that references them therefore must never be cached: a stale one asks
+    for modules this deploy does not have, and the app fails to start for a client
+    that did nothing wrong. The assets themselves are safe to keep forever, because
+    a change to one changes its name.
+    """
 
     async def get_response(self, path: str, scope: Scope) -> Response:
-        if path.partition("/")[0] in _BACKEND_PATH_NAMESPACES:
+        namespace = path.partition("/")[0]
+        if namespace in _BACKEND_PATH_NAMESPACES:
             raise HTTPException(status_code=404)
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
-            return await super().get_response("index.html", scope)
+            # A build asset is not a client-side route. Its name carries a content
+            # hash, so a miss means that exact file is gone; answering with the
+            # document hands the browser HTML where it asked for a module, and the
+            # failure it then reports names neither the file nor the reason.
+            if namespace == _BUILD_ASSET_NAMESPACE:
+                raise
+            response = await super().get_response("index.html", scope)
+        return _with_cache_policy(response, namespace=namespace)
+
+
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_REVALIDATE_CACHE_CONTROL = "no-cache"
+
+
+def _with_cache_policy(response: Response, *, namespace: str) -> Response:
+    """Say how long an answer may be reused, since an intermediary otherwise guesses.
+
+    Without this the responses carry only a validator, and a cache is free to decide
+    a freshness lifetime heuristically. Doing that to the document is what turns one
+    deploy into an app that will not start until the client clears its cache.
+    """
+    immutable = namespace == _BUILD_ASSET_NAMESPACE and response.status_code == 200
+    response.headers["cache-control"] = (
+        _IMMUTABLE_CACHE_CONTROL if immutable else _REVALIDATE_CACHE_CONTROL
+    )
+    return response
 
 
 def web_static_dir() -> Path:

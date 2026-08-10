@@ -10,7 +10,7 @@ from shared.http.custom_domains import (
     custom_domain_response,
 )
 
-from api.server.auth import read_workspace, write_workspace
+from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
 from api.server.services import ApiServices
 
@@ -53,10 +53,10 @@ def _refreshed(services: ApiServices, domain: CustomDomain) -> CustomDomain:
 )
 def register_custom_domain(
     request: CustomDomainRegisterRequest,
-    workspace_id: write_workspace,
+    user_id: write_user,
     services: ApiServices = Depends(current_services),
 ) -> CustomDomainResponse:
-    domain = services.custom_domains.register(request.domain, workspace=workspace_id)
+    domain = services.custom_domains.register(request.domain, user_id=user_id)
     return custom_domain_response(domain, cname_target=_cname_target(services))
 
 
@@ -66,10 +66,10 @@ def register_custom_domain(
     operation_id="list_custom_domains",
 )
 def list_custom_domains(
-    workspace_id: read_workspace,
+    user_id: read_user,
     services: ApiServices = Depends(current_services),
 ) -> CustomDomainListResponse:
-    domains = services.custom_domains.list(workspace=workspace_id)
+    domains = services.custom_domains.list(user_id=user_id)
     target = _cname_target(services)
     return CustomDomainListResponse(
         data=[
@@ -86,10 +86,10 @@ def list_custom_domains(
 )
 def get_custom_domain(
     hostname: str,
-    workspace_id: read_workspace,
+    user_id: read_user,
     services: ApiServices = Depends(current_services),
 ) -> CustomDomainResponse:
-    domain = services.custom_domains.get(hostname, workspace=workspace_id)
+    domain = services.custom_domains.get(hostname, user_id=user_id)
     return custom_domain_response(
         _refreshed(services, domain),
         cname_target=_cname_target(services),
@@ -103,8 +103,8 @@ def get_custom_domain(
 )
 def remove_custom_domain(
     hostname: str,
-    workspace_id: write_workspace,
+    user_id: write_user,
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    services.custom_domains.remove(hostname, workspace=workspace_id)
+    services.custom_domains.remove(hostname, user_id=user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -26,7 +26,7 @@ class RecordingChannel:
 
 def test_pod_file_routes_preserve_absolute_container_paths() -> None:
     channel = RecordingChannel()
-    client = PodControlClient(channel)
+    client = PodControlClient(channel, workspace="tenant-b")
 
     response = client.sandbox_download_file("container-1", "/workspace/a file.txt")
     client.sandbox_delete_file("container-1", "/workspace/a file.txt")
@@ -34,9 +34,12 @@ def test_pod_file_routes_preserve_absolute_container_paths() -> None:
 
     assert response.data == b"payload"
     assert channel.gets == [
-        "/api/v1/pods/container-1/files/download?container_path=%2Fworkspace%2Fa%20file.txt"
+        "/api/v1/pods/container-1/files/download"
+        "?container_path=%2Fworkspace%2Fa%20file.txt&workspace=tenant-b"
     ]
     assert channel.deletes == [
-        "/api/v1/pods/container-1/files?container_path=%2Fworkspace%2Fa%20file.txt",
-        "/api/v1/pods/container-1/directories?container_path=%2Fworkspace%2Fa%20directory",
+        "/api/v1/pods/container-1/files"
+        "?container_path=%2Fworkspace%2Fa%20file.txt&workspace=tenant-b",
+        "/api/v1/pods/container-1/directories"
+        "?container_path=%2Fworkspace%2Fa%20directory&workspace=tenant-b",
     ]

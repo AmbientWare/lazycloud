@@ -17,7 +17,11 @@ from database.repositories.common import (
     TableRepositoryConfig,
     WorkspaceTableRepository,
 )
-from database.repositories.identity import SecretRepository, new_signing_key
+from database.repositories.identity import (
+    SecretRepository,
+    WorkspaceMemberRepository,
+    new_signing_key,
+)
 from database.repositories.orchestration import ContainerRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.tables.apps import StubTable
@@ -126,6 +130,54 @@ def _workspace_records(session: Session) -> GlobalTableRepository[WorkspaceRecor
     return GlobalTableRepository(
         session,
         TableRepositoryConfig(WorkspaceTable, WorkspaceRecord),
+    )
+
+
+def _upsert_workspace_row(
+    session: Session,
+    name: str,
+    *,
+    storage: WorkspaceStorageConfig | None = None,
+    signing_key_prefix: str | None = None,
+    primary_token_id: str | None = None,
+    labels: dict[str, str] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
+) -> WorkspaceRecord:
+    repository = _workspace_records(session)
+    existing = _workspace_by_name(repository.list(), name)
+    now = utc_now()
+    metadata_payload = dict(metadata) if metadata is not None else {}
+    if existing is None:
+        return repository.create(
+            {
+                "name": name,
+                "status": WorkspaceStatus.Active.value,
+                "signing_key_prefix": signing_key_prefix,
+                "signing_key": new_signing_key(signing_key_prefix),
+                "primary_token_id": primary_token_id,
+                "storage": (storage or WorkspaceStorageConfig()).model_dump(mode="json"),
+                "labels": labels or {},
+                "metadata": metadata_payload,
+                "created_at": now,
+                "updated_at": now,
+            },
+            name=name,
+            status=WorkspaceStatus.Active.value,
+        )
+    if existing.status is not WorkspaceStatus.Active:
+        raise ConflictError(f"workspace name is retained after deletion: {name}")
+    existing.storage = storage or existing.storage
+    existing.signing_key_prefix = signing_key_prefix or existing.signing_key_prefix
+    if not existing.signing_key:
+        existing.signing_key = new_signing_key(existing.signing_key_prefix)
+    existing.primary_token_id = primary_token_id or existing.primary_token_id
+    existing.labels.update(labels or {})
+    existing.metadata.update(metadata_payload)
+    existing.updated_at = now
+    return repository.upsert(
+        existing,
+        name=existing.name,
+        status=existing.status.value,
     )
 
 
@@ -266,52 +318,72 @@ class ControlPlaneService:
         labels: dict[str, str] | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> WorkspaceRecord:
+        """Write the workspace row and nothing else.
+
+        Ownership is not written here, so this is not a way to bring a workspace into
+        existence for somebody: `set_workspace` and `create_workspace` are, and they
+        name the account the workspace resolves its compute and domains through.
+        """
         with self.context.database.session() as session:
-            repository = _workspace_records(session)
-            existing = _workspace_by_name(repository.list(), name)
-            now = utc_now()
-            metadata_payload = dict(metadata) if metadata is not None else {}
-            if existing is None:
-                return repository.create(
-                    {
-                        "name": name,
-                        "status": WorkspaceStatus.Active.value,
-                        "signing_key_prefix": signing_key_prefix,
-                        "signing_key": new_signing_key(signing_key_prefix),
-                        "primary_token_id": primary_token_id,
-                        "storage": (storage or WorkspaceStorageConfig()).model_dump(mode="json"),
-                        "labels": labels or {},
-                        "metadata": metadata_payload,
-                        "created_at": now,
-                        "updated_at": now,
-                    },
-                    name=name,
-                    status=WorkspaceStatus.Active.value,
-                )
-            if existing.status is not WorkspaceStatus.Active:
-                raise ConflictError(f"workspace name is retained after deletion: {name}")
-            existing.storage = storage or existing.storage
-            existing.signing_key_prefix = signing_key_prefix or existing.signing_key_prefix
-            if not existing.signing_key:
-                existing.signing_key = new_signing_key(existing.signing_key_prefix)
-            existing.primary_token_id = primary_token_id or existing.primary_token_id
-            existing.labels.update(labels or {})
-            existing.metadata.update(metadata_payload)
-            existing.updated_at = now
-            return repository.upsert(
-                existing,
-                name=existing.name,
-                status=existing.status.value,
+            return _upsert_workspace_row(
+                session,
+                name,
+                storage=storage,
+                signing_key_prefix=signing_key_prefix,
+                primary_token_id=primary_token_id,
+                labels=labels,
+                metadata=metadata,
             )
+
+    def set_workspace(
+        self,
+        name: str,
+        *,
+        owner_user_id: str,
+        storage: WorkspaceStorageConfig | None = None,
+        signing_key_prefix: str | None = None,
+        primary_token_id: str | None = None,
+        labels: dict[str, str] | None = None,
+        metadata: Mapping[str, JsonValue] | None = None,
+    ) -> WorkspaceRecord:
+        """Write a workspace's settings, and its owner when this call creates it.
+
+        The owner row goes in the same transaction as the workspace row because a
+        workspace without one is reachable by nobody and resolves to no compute
+        account—there is no useful moment between the two writes.
+        """
+        if not owner_user_id:
+            msg = "a workspace is owned by the account that creates it"
+            raise InvalidInputError(msg)
+        with self.context.database.session() as session:
+            record = _upsert_workspace_row(
+                session,
+                name,
+                storage=storage,
+                signing_key_prefix=signing_key_prefix,
+                primary_token_id=primary_token_id,
+                labels=labels,
+                metadata=metadata,
+            )
+            WorkspaceMemberRepository(session).ensure_owner(
+                workspace_id=record.id,
+                user_id=owner_user_id,
+            )
+            return record
 
     def create_workspace(
         self,
         name: str | None = None,
         *,
+        owner_user_id: str,
         storage: WorkspaceStorageConfig | None = None,
     ) -> WorkspaceCreateResult:
         workspace_name = name or f"workspace-{uuid4()}"
-        workspace = self.upsert_workspace(workspace_name, storage=storage)
+        workspace = self.set_workspace(
+            workspace_name,
+            owner_user_id=owner_user_id,
+            storage=storage,
+        )
         # Adopting an existing workspace keeps the credential it already has. Minting
         # unconditionally repointed `primary_token_id` at a new token on every call, so
         # asking for a workspace that was already there re-keyed it and left the
@@ -371,14 +443,10 @@ class ControlPlaneService:
         bucket_prefix: str = "workspace",
         backend: str = "s3",
         config: dict[str, JsonValue] | None = None,
-        actor_workspace_id: str | None = None,
         token_id_for_cache_invalidation: str | None = None,
     ) -> WorkspaceRecord:
         workspace_record = self.get_workspace(workspace)
-        self._validate_storage_attach_allowed(
-            workspace_record,
-            actor_workspace_id=actor_workspace_id,
-        )
+        self._validate_storage_attach_allowed(workspace_record)
         client = self._default_workspace_storage_client()
         bucket = f"{bucket_prefix}-{workspace_record.id}".replace("_", "-")
         storage = self._default_workspace_storage(
@@ -405,14 +473,10 @@ class ControlPlaneService:
         workspace: str,
         storage: WorkspaceStorageConfig,
         *,
-        actor_workspace_id: str | None = None,
         token_id_for_cache_invalidation: str | None = None,
     ) -> WorkspaceRecord:
         workspace_record = self.get_workspace(workspace)
-        self._validate_storage_attach_allowed(
-            workspace_record,
-            actor_workspace_id=actor_workspace_id,
-        )
+        self._validate_storage_attach_allowed(workspace_record)
         if not storage.bucket:
             msg = "workspace storage bucket is required"
             raise WorkspaceStorageError(msg)
@@ -445,15 +509,11 @@ class ControlPlaneService:
         self._invalidate_token_cache_if_present(token_id_for_cache_invalidation)
         return updated
 
-    def _validate_storage_attach_allowed(
-        self,
-        workspace: WorkspaceRecord,
-        *,
-        actor_workspace_id: str | None = None,
-    ) -> None:
-        if actor_workspace_id is not None and actor_workspace_id != workspace.id:
-            msg = "invalid token for workspace"
-            raise WorkspaceStorageAuthorizationError(msg)
+    def _validate_storage_attach_allowed(self, workspace: WorkspaceRecord) -> None:
+        # Who may act on this workspace is settled before the call: the route's
+        # workspace dependency resolved and authorized it. A second comparison here
+        # could only ask a narrower question, and asked it of a credential that no
+        # longer names a workspace at all.
         if _workspace_storage_available(workspace.storage):
             msg = "workspace storage already exists"
             raise WorkspaceStorageAlreadyExistsError(msg)

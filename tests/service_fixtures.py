@@ -3,16 +3,26 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from agent.binary import AgentBinarySettings
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
+from database.context import ServiceContext
+from database.repositories.identity import WorkspaceMemberRepository
 from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
+from identity.auth import TokenIssuer
+from identity.users import UserService
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
+from shared.identity import (
+    AuthTokenRecord,
+    PlatformRole,
+    TokenKind,
+)
 from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
 
@@ -95,3 +105,54 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         yield services
     finally:
         services.close()
+
+
+def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
+    """The account that owns a workspace, created on first ask.
+
+    Production writes the owner row with the workspace, so anything resolving compute
+    or domains through the account finds one. Tests that build a workspace through a
+    lower-level path need the same row before they can join a machine to it.
+    """
+    with context.database.session() as session:
+        existing = WorkspaceMemberRepository(session).owner(workspace_id)
+    if existing is not None:
+        return existing.user_id
+    user = UserService(context).create(
+        username=f"owner-{uuid4().hex[:12]}",
+        password="workspace-owner-fixture-password",
+    )
+    with context.database.session() as session:
+        WorkspaceMemberRepository(session).ensure_owner(
+            workspace_id=workspace_id,
+            user_id=user.id,
+        )
+    return user.id
+
+
+def administrator_credential(
+    services: ApiServices,
+    name: str = "administrator",
+) -> tuple[str, AuthTokenRecord]:
+    """An administrator credential, made the only way production makes one.
+
+    Administrator standing belongs to the account, not to the shape of a token, so
+    this creates a user whose role says so and mints a credential naming them. No
+    membership: a platform administrator reaches every workspace without one, and
+    granting it would collide with whatever owner the test set up itself.
+    """
+    user = UserService(services.context).create(
+        username=f"admin-{uuid4().hex[:12]}",
+        password="administrator-fixture-password",
+        role=PlatformRole.Administrator,
+    )
+    issuer = TokenIssuer(services.context)
+    with services.context.database.session() as session:
+        raw_token, record = issuer.issue_for_user(
+            session,
+            name,
+            user_id=user.id,
+            kind=TokenKind.Admin,
+        )
+    issuer.committed()
+    return raw_token, record

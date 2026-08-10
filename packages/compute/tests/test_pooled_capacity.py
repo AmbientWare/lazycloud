@@ -12,8 +12,6 @@ from compute.agent_control import agent_machine_worker_id
 from compute.offers import ComputeOffer
 from compute.policy import (
     AwsDefaultCapacityBaseline,
-    ComputeCatalogInstance,
-    ComputeCatalogRegion,
     WorkspaceComputePolicyService,
 )
 from compute.projection import PrivateUnitState
@@ -39,7 +37,6 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
     TailnetCleanupTombstoneRepository,
-    WorkspaceComputePolicyRepository,
 )
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -47,6 +44,7 @@ from database.repositories.orchestration import (
     WorkerRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
+from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -76,10 +74,10 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
     UnitName,
-    WorkspaceComputePolicy,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.identity import WorkspaceRole
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
@@ -1002,11 +1000,11 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
 
     drained = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
     repeated = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
     reconciled = compute.reconcile_pooled_capacity()
 
@@ -1207,12 +1205,15 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     compute.reconcile_pooled_capacity()
     first = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
     machine_id = "33333333-3333-4333-8333-333333333333"
     worker_id = agent_machine_worker_id(machine_id)
     now = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
+        connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id or "")
+        assert connection is not None
+        owner_user_id = connection.user_id
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
@@ -1233,6 +1234,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         )
         credential = ComputeJoinCredentialRepository(session).create(
             token_hash="a" * 64,
+            user_id=owner_user_id,
             workspace_id=pool.workspace_id,
             capacity_owner_id=pool.capacity_owner_id,
             pool=pool.pool,
@@ -1242,6 +1244,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         )
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
+                user_id=owner_user_id,
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
                 pool=pool.pool,
@@ -1270,7 +1273,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
 
     repeated = compute.request_connection_drain(
         pool.provider_connection_id or "",
-        workspace=pool.workspace_id,
+        workspace_ids=[pool.workspace_id],
     )
 
     assert first.remaining_pools == 0
@@ -1444,39 +1447,13 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     assert baseline.desired_machines == 1
     assert provider.desired == 1
 
-    policies = WorkspaceComputePolicyService(
+    # AWS stays the default placement: zeroing the account's configuration is the
+    # only control the user is given, and it has to release the machine on its own.
+    _zero_account_capacity(isolated_services, workspace_id=baseline.workspace_id)
+    WorkspaceComputePolicyService(
         isolated_services.context,
-        available_catalog=(
-            ComputeCatalogRegion(
-                region="us-east-1",
-                instances=(
-                    ComputeCatalogInstance(
-                        instance_type="i4i.xlarge",
-                        kind="cpu",
-                        cpu_millicores=4_000,
-                        memory_mb=32 * 1024,
-                    ),
-                ),
-            ),
-        ),
         aws_default_capacity=AwsDefaultCapacityBaseline(capacity=compute),
-    )
-    current = policies.get_policy(workspace="default")
-    policies.update_policy(
-        workspace="default",
-        expected_revision=current.revision,
-        # AWS stays the default placement: zeroing the policy is the only control
-        # the user is given, and it has to release the machine on its own.
-        default_pool="aws",
-        aws=current.aws.model_copy(
-            update={
-                "initial_cpu_workers": 0,
-                "min_cpu_workers": 0,
-                "max_cpu_instances": 0,
-                "max_gpu_instances": 0,
-            }
-        ),
-    )
+    ).reconcile_workspace_baseline(baseline.workspace_id)
 
     with isolated_services.context.database.session() as session:
         drained = ComputeUnitRepository(session).get(baseline.id)
@@ -1590,37 +1567,11 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
             )
         )
 
-    policies = WorkspaceComputePolicyService(
+    _zero_account_capacity(isolated_services, workspace_id=pool.workspace_id)
+    WorkspaceComputePolicyService(
         isolated_services.context,
-        available_catalog=(
-            ComputeCatalogRegion(
-                region="us-east-1",
-                instances=(
-                    ComputeCatalogInstance(
-                        instance_type="i4i.xlarge",
-                        kind="cpu",
-                        cpu_millicores=4_000,
-                        memory_mb=32 * 1024,
-                    ),
-                ),
-            ),
-        ),
         aws_default_capacity=AwsDefaultCapacityBaseline(capacity=compute),
-    )
-    current = policies.get_policy(workspace="default")
-    policies.update_policy(
-        workspace="default",
-        expected_revision=current.revision,
-        default_pool="aws",
-        aws=current.aws.model_copy(
-            update={
-                "initial_cpu_workers": 0,
-                "min_cpu_workers": 0,
-                "max_cpu_instances": 0,
-                "max_gpu_instances": 0,
-            }
-        ),
-    )
+    ).reconcile_workspace_baseline(pool.workspace_id)
 
     with isolated_services.context.database.session() as session:
         held = ComputeUnitRepository(session).get(pool.id)
@@ -1716,29 +1667,48 @@ def _set_cpu_limit(
     workspace_id: str,
     limit: int,
 ) -> None:
-    now = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
-        policies = WorkspaceComputePolicyRepository(session)
-        policy = policies.ensure_default(
-            WorkspaceComputePolicy(
-                id=str(uuid4()),
-                workspace_id=workspace_id,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        policies.save(
-            policy.model_copy(
+        connections = AwsAccountConnectionRepository(session)
+        connection = connections.get_for_workspace_owner(workspace_id, for_update=True)
+        assert connection is not None
+        current = connection.compute
+        connections.save(
+            connection.model_copy(
                 update={
-                    "revision": policy.revision + 1,
-                    "aws": policy.aws.model_copy(
+                    "compute": current.model_copy(
                         update={
-                            "initial_cpu_workers": min(policy.aws.initial_cpu_workers, limit),
-                            "min_cpu_workers": min(policy.aws.min_cpu_workers, limit),
+                            "revision": current.revision + 1,
+                            "initial_cpu_workers": min(current.initial_cpu_workers, limit),
+                            "min_cpu_workers": min(current.min_cpu_workers, limit),
                             "max_cpu_instances": limit,
                         }
                     ),
-                    "updated_at": now,
+                    "revision": connection.revision + 1,
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+        )
+
+
+def _zero_account_capacity(isolated_services: ApiServices, *, workspace_id: str) -> None:
+    with isolated_services.context.database.session() as session:
+        connections = AwsAccountConnectionRepository(session)
+        connection = connections.get_for_workspace_owner(workspace_id, for_update=True)
+        assert connection is not None
+        connections.save(
+            connection.model_copy(
+                update={
+                    "compute": connection.compute.model_copy(
+                        update={
+                            "revision": connection.compute.revision + 1,
+                            "initial_cpu_workers": 0,
+                            "min_cpu_workers": 0,
+                            "max_cpu_instances": 0,
+                            "max_gpu_instances": 0,
+                        }
+                    ),
+                    "revision": connection.revision + 1,
+                    "updated_at": datetime.now(UTC),
                 }
             )
         )
@@ -1757,12 +1727,16 @@ def _seed_connection(isolated_services: ApiServices) -> None:
         created_at=now,
         updated_at=now,
     )
+    users = UserService(isolated_services.context)
+    owner = users.create(username="pooled-capacity-owner", password="pooled-capacity-password")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    users.add_member(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.Owner)
+    with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
-                workspace_id=workspace_id,
+                user_id=owner.id,
                 account_id=account_id,
                 external_id="x" * 48,
                 phase=AwsAccountConnectionPhase.Ready,

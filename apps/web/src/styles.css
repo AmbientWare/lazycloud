@@ -406,8 +406,39 @@
   animation: pulse-soft 2s ease-in-out infinite;
 }
 
+/* Accordion open and close. Radix measures the panel and publishes the height as
+   --radix-accordion-content-height, so the section can animate to its own size
+   rather than to a guess that would clip or overshoot it. */
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+.animate-accordion-down {
+  animation: accordion-down 0.2s ease-out;
+}
+
+.animate-accordion-up {
+  animation: accordion-up 0.2s ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pulse-live,
+  .animate-accordion-down,
+  .animate-accordion-up,
   .interactive-panel,
   .interactive-row,
   .interactive-link,

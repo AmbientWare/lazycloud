@@ -783,6 +783,7 @@ def _default_task_queue_client(config: ControlClientConfig) -> TaskQueueControlC
     return TaskQueueControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
 

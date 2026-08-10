@@ -32,6 +32,7 @@ from database.repositories.compute import (
     ComputeUnitRepository,
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
+from identity.users import UserService
 from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from scheduler.state import SchedulerWorkerRecord
@@ -64,6 +65,7 @@ from shared.http.provider_nodes import (
     ProviderNodeCapacity,
     ProviderNodeEnrollmentRequest,
 )
+from shared.identity import WorkspaceRole
 from shared.provider_config import ProviderKind
 
 _ACCOUNT_ID = "123456789012"
@@ -223,6 +225,16 @@ class _Workers:
         raise AssertionError("no worker should be disabled during enrollment")
 
 
+def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
+    """The account that owns the default workspace; connections hang off it."""
+    users = UserService(services.context)
+    user = users.create(username=username, password="connection-owner-password")
+    with services.context.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    return user.id
+
+
 def test_provider_node_enrollment_rejects_cross_workspace_connection(
     isolated_services: ApiServices,
 ) -> None:
@@ -375,6 +387,7 @@ def _seed_connection_and_pool(
     reconnecting: bool = False,
 ) -> ComputeUnitRecord:
     now = datetime.now(UTC)
+    owner_id = _workspace_owner_id(isolated_services, username="enrollment-owner")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         authorization = AwsAccountAuthorizationGeneration(
@@ -403,7 +416,7 @@ def _seed_connection_and_pool(
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
-                workspace_id=workspace_id,
+                user_id=owner_id,
                 account_id=_ACCOUNT_ID,
                 external_id="x" * 48,
                 phase=(

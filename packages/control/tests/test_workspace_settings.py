@@ -13,10 +13,11 @@ from shared.identity import AuthScope
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
-def test_workspace_rename_and_token_actions_write_attributed_audit_history(
+def test_workspace_audit_attributes_each_change_and_pages_in_order(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
+    """Every workspace change names who made it, newest first, across a cursor."""
     workspace = ControlPlaneService(isolated_services.context).upsert_workspace("default")
     auth = AuthService(isolated_services.context)
     token, record = auth.create_token(
@@ -27,64 +28,29 @@ def test_workspace_rename_and_token_actions_write_attributed_audit_history(
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = _auth(token)
 
-    renamed = client.patch(
-        "/api/v1/workspaces/current",
-        headers=headers,
-        json={"name": "platform_team"},
-    )
-    assert renamed.status_code == 200
-    renamed_payload = _JSON_OBJECT_ADAPTER.validate_json(renamed.content)
-    assert renamed_payload["id"] == workspace.id
-    assert renamed_payload["name"] == "platform_team"
+    for name in ("platform_team", "platform_ops", "platform_core"):
+        renamed = client.patch("/api/v1/workspaces/current", headers=headers, json={"name": name})
+        assert renamed.status_code == 200
+        renamed_payload = _JSON_OBJECT_ADAPTER.validate_json(renamed.content)
+        assert renamed_payload["id"] == workspace.id
+        assert renamed_payload["name"] == name
 
-    created = client.post(
-        "/api/v1/tokens",
-        headers=headers,
-        json={
-            "name": "deploy",
-            "scopes": ["read", "write"],
-            "workspace_id": workspace.id,
-        },
-    )
-    assert created.status_code == 201
-    created_payload = _JSON_OBJECT_ADAPTER.validate_json(created.content)
-    created_record = created_payload["record"]
-    assert isinstance(created_record, dict)
-    created_id = created_record["id"]
-    assert isinstance(created_id, str)
-    assert (
-        client.post(
-            f"/api/v1/tokens/{created_id}/toggle",
-            headers=headers,
-        ).status_code
-        == 200
-    )
-    assert (
-        client.delete(
-            f"/api/v1/tokens/{created_id}",
-            headers=headers,
-        ).status_code
-        == 204
-    )
-
-    first_page = client.get(
-        "/api/v1/workspaces/audit?limit=2",
-        headers=headers,
-    )
+    first_page = client.get("/api/v1/workspaces/audit?limit=2", headers=headers)
     assert first_page.status_code == 200
     first_payload = _JSON_OBJECT_ADAPTER.validate_json(first_page.content)
     assert _event_field_values(first_payload, "action") == [
-        "token_deleted",
-        "token_disabled",
+        "workspace_renamed",
+        "workspace_renamed",
     ]
-    cursor = first_payload["next"]
-    assert isinstance(cursor, str) and cursor
     assert _event_field_values(first_payload, "actor_token_id") == [record.id, record.id]
     assert _event_field_values(first_payload, "actor_name") == [
         "settings-owner",
         "settings-owner",
     ]
+    assert _event_field_values(first_payload, "new_value") == ["platform_core", "platform_ops"]
 
+    cursor = first_payload["next"]
+    assert isinstance(cursor, str) and cursor
     second_page = client.get(
         "/api/v1/workspaces/audit",
         headers=headers,
@@ -92,10 +58,7 @@ def test_workspace_rename_and_token_actions_write_attributed_audit_history(
     )
     assert second_page.status_code == 200, second_page.text
     second_payload = _JSON_OBJECT_ADAPTER.validate_json(second_page.content)
-    assert _event_field_values(second_payload, "action") == [
-        "token_created",
-        "workspace_renamed",
-    ]
+    assert _event_field_values(second_payload, "new_value") == ["platform_team"]
 
 
 def test_workspace_rename_requires_write_scope_and_valid_name(

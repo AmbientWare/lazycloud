@@ -6,9 +6,10 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from coordination.redis_client import RedisClient
+from database.repositories.identity import WorkspaceMemberRepository
 from pydantic import ValidationError
 from shared.contracts import ContractModel
-from shared.identity import AuthScope, AuthTokenRecord
+from shared.identity import AuthScope, AuthTokenRecord, WorkspaceMemberRecord
 
 from identity.auth import AuthError, AuthorizationDeniedError, AuthService, IdentityContext
 from identity.authz import decide_authorization, workspace_requirement
@@ -30,7 +31,10 @@ class WebSocketTicketStoreError(RuntimeError):
 
 class _WebSocketTicketPayload(ContractModel):
     token_id: str
-    token_workspace_id: str
+    # The principal is recorded so redemption reloads the same credential it was
+    # minted for; exactly one of these is set, as on the token itself.
+    token_user_id: str = ""
+    token_workspace_id: str = ""
     required_scope: AuthScope
     audience: ShellWebSocketAudience
 
@@ -56,12 +60,18 @@ class WebSocketTicketService:
         requirement = workspace_requirement(
             audience.workspace_id,
             action=required_scope,
+            membership=self._membership(token, audience.workspace_id),
         )
-        decision = decide_authorization(token, requirement)
+        decision = decide_authorization(
+            token,
+            requirement,
+            platform_role=AuthService(self.context).platform_role(token),
+        )
         if not decision.allowed:
             raise AuthorizationDeniedError(decision.message)
         payload = _WebSocketTicketPayload(
             token_id=token.id,
+            token_user_id=token.user_id,
             token_workspace_id=token.workspace_id,
             required_scope=required_scope,
             audience=audience,
@@ -108,13 +118,38 @@ class WebSocketTicketService:
             raise AuthError("WebSocket ticket scope does not match")
         token = AuthService(self.context).authorize_token_identity(
             payload.token_id,
+            token_user_id=payload.token_user_id,
             token_workspace_id=payload.token_workspace_id,
             requirement=workspace_requirement(
                 payload.audience.workspace_id,
                 action=payload.required_scope,
+                membership=self._membership_for(
+                    payload.token_user_id,
+                    payload.audience.workspace_id,
+                ),
             ),
         )
         return ShellWebSocketAuthorization(token=token, audience=payload.audience)
+
+    def _membership(
+        self,
+        token: AuthTokenRecord,
+        workspace_id: str,
+    ) -> WorkspaceMemberRecord | None:
+        return self._membership_for(token.user_id if token.names_user else "", workspace_id)
+
+    def _membership_for(
+        self,
+        user_id: str,
+        workspace_id: str,
+    ) -> WorkspaceMemberRecord | None:
+        if not user_id:
+            return None
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).membership(
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
 
     def _ticket_key(self, ticket: str) -> str:
         digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { errorResponseSchema, workspaceListSchema, type Workspace } from "@/lib/api/schemas";
+import { errorResponseSchema } from "@/lib/api/schemas";
 import { clearStoredAuthToken, getStoredAuthToken, setStoredAuthToken } from "@/lib/auth";
 
 export class ApiError extends Error {
@@ -190,16 +190,6 @@ export function setAuthToken(token: string): void {
 
 export function clearAuthToken(): void {
   clearStoredAuthToken();
-}
-
-export async function listWorkspaces(
-  options: { includeDeleting?: boolean } = {},
-): Promise<Workspace[]> {
-  const path = options.includeDeleting
-    ? "/api/v1/workspaces?include_deleting=true"
-    : "/api/v1/workspaces";
-  const response = await apiRequest(path, workspaceListSchema);
-  return response.workspaces;
 }
 
 export async function postJson<T>(

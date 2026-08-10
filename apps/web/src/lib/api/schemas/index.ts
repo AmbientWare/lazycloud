@@ -18,4 +18,5 @@ export * from "./stubs";
 export * from "./system";
 export * from "./tasks";
 export * from "./usage";
+export * from "./users";
 export * from "./workspaces";

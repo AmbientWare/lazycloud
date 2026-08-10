@@ -46,7 +46,7 @@ from shared.http.workspaces import (
     WorkspaceResponse,
 )
 from shared.http_transport import HttpChannel
-from shared.identity import TokenKind, WorkspaceStatus
+from shared.identity import WorkspaceStatus
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
 from lazycloud import App, Image
@@ -64,7 +64,12 @@ REJECTED_STATUS_CODES = frozenset({401, 403})
 
 @dataclass(frozen=True, slots=True)
 class _WorkspaceAccess:
-    """One created workspace and the credential that acts inside it."""
+    """One created workspace, and the account credential used to act inside it.
+
+    The credential names the account, so both workspaces are reached with the same
+    one and the workspace is named per request. What deletion has to revoke is
+    therefore the workspace's own resources, not a credential bound to it.
+    """
 
     id: str
     name: str
@@ -85,15 +90,11 @@ class _AdminApi:
             )
         )
 
-    def create_workspace_token(self, workspace_id: str, *, name: str) -> str:
+    def create_account_token(self, *, name: str) -> str:
         response = TokenCreateResponse.model_validate(
             self.channel.post(
-                f"/api/v1/tokens?workspace={quote(workspace_id, safe='')}",
-                TokenCreateRequest(
-                    name=name,
-                    kind=TokenKind.Workspace,
-                    workspace_id=workspace_id,
-                ).model_dump(mode="json"),
+                "/api/v1/tokens",
+                TokenCreateRequest(name=name).model_dump(mode="json"),
             )
         )
         return response.token
@@ -124,6 +125,7 @@ def _build_shared_image(marker: str, *, endpoint: str, access: _WorkspaceAccess)
         ImageControlClient.from_endpoint(
             endpoint,
             token=access.token,
+            workspace=access.name,
             timeout_seconds=IMAGE_BUILD_TIMEOUT_SECONDS,
         )
     )
@@ -190,6 +192,7 @@ def _assert_credentials_rejected(
     client = ImageControlClient.from_endpoint(
         endpoint,
         token=access.token,
+        workspace=access.name,
         timeout_seconds=ADMIN_TIMEOUT_SECONDS,
     )
     try:
@@ -255,21 +258,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         workspace_ids.append(doomed_workspace.id)
         surviving_workspace = admin.create_workspace(f"e2e-archive-surviving-{suffix}")
         workspace_ids.append(surviving_workspace.id)
+        account_token = admin.create_account_token(name=f"e2e-archive-{suffix}")
         doomed = _WorkspaceAccess(
             id=doomed_workspace.id,
             name=doomed_workspace.name,
-            token=admin.create_workspace_token(
-                doomed_workspace.id,
-                name=f"e2e-archive-deleted-{suffix}",
-            ),
+            token=account_token,
         )
         surviving = _WorkspaceAccess(
             id=surviving_workspace.id,
             name=surviving_workspace.name,
-            token=admin.create_workspace_token(
-                surviving_workspace.id,
-                name=f"e2e-archive-surviving-{suffix}",
-            ),
+            token=account_token,
         )
 
         doomed_image_id = _build_shared_image(marker, endpoint=endpoint, access=doomed)

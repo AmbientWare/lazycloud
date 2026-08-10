@@ -6,15 +6,14 @@ from datetime import timedelta
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from shared.http.tasks import (
     TaskMetricsSummaryResponse,
     TaskPageResponse,
     TaskTimeWindowBucketListResponse,
 )
-from shared.identity import TokenKind
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
+from tests.service_fixtures import administrator_credential
 
 
 def _seed_task(
@@ -50,10 +49,7 @@ def test_task_metrics_api_exposes_percentiles_and_app_filter(
     )
     _seed_task(isolated_services, "unscoped", status=TaskStatus.Failed)
 
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "metrics-reader",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "metrics-reader")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
     window = {

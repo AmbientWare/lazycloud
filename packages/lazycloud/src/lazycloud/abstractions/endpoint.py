@@ -1125,8 +1125,8 @@ def _resolve_endpoint_invocation_target(
     preview_client = owner.resource_client or ResourceControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
-        timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
+        timeout_seconds=config.timeout_seconds,
     )
     try:
         return resolve_invocation_target(
@@ -1247,13 +1247,14 @@ def _serve_endpoint(
     gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
     resource_client = owner.resource_client or ResourceControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
-        timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
+        timeout_seconds=config.timeout_seconds,
     )
     serve_url = resolve_serve_url(
         gateway_client,
@@ -1264,6 +1265,7 @@ def _serve_endpoint(
     response = EndpointControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     ).start_serve(stub_id, timeout=timeout)
     selected_container_id = container_id or response.container_id
@@ -1358,6 +1360,7 @@ def _sync_shell_dir(
     gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
     sync_local_workspace(

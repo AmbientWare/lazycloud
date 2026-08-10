@@ -4,11 +4,11 @@ from datetime import timedelta
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from database.repositories.identity import (
     DeviceAuthorizationRepository,
 )
 from database.tables.identity import DeviceAuthorizationTable
+from identity.users import UserService
 from shared.identity import DeviceAuthorizationStatus
 from shared.timestamps import utc_now
 from sqlalchemy import update
@@ -46,28 +46,29 @@ def test_device_authorization_unique_collision_preserves_transaction(
 
 
 @pytest.mark.parametrize(
-    ("status", "workspace", "consumed"),
+    ("status", "user", "consumed"),
     (
-        (DeviceAuthorizationStatus.Pending, "workspace", False),
+        (DeviceAuthorizationStatus.Pending, "user", False),
         (DeviceAuthorizationStatus.Pending, None, True),
         (DeviceAuthorizationStatus.Approved, None, False),
-        (DeviceAuthorizationStatus.Denied, "workspace", False),
+        (DeviceAuthorizationStatus.Denied, "user", False),
         (DeviceAuthorizationStatus.Expired, None, False),
     ),
 )
 def test_device_authorization_constraints_reject_invalid_state(
     isolated_services: ApiServices,
     status: DeviceAuthorizationStatus,
-    workspace: str | None,
+    user: str | None,
     consumed: bool,
 ) -> None:
-    owned_workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "device-invariant-owner"
+    approver = UserService(isolated_services.context).create(
+        username="device-invariant-owner",
+        password="device-invariant-password",
     )
     expires_at = utc_now() + timedelta(minutes=15)
     with isolated_services.context.database.session() as session:
         created = DeviceAuthorizationRepository(session).create_pending(
-            device_code_hash=f"device-invariant-{status.value}-{workspace}-{consumed}",
+            device_code_hash=f"device-invariant-{status.value}-{user}-{consumed}",
             user_code="BCDF-GHJK",
             client_name="invariant-client",
             expires_at=expires_at,
@@ -79,7 +80,7 @@ def test_device_authorization_constraints_reject_invalid_state(
         .where(DeviceAuthorizationTable.id == created.id)
         .values(
             status=status.value,
-            workspace_id=owned_workspace.id if workspace is not None else None,
+            user_id=approver.id if user is not None else None,
         )
     )
     if consumed:

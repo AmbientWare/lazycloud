@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -14,11 +15,11 @@ from database.repositories.compute import (
     ComputeUnitRepository,
     WorkspaceComputePolicyRepository,
 )
-from database.repositories.identity import WorkspaceRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
 from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue
-from shared.aws_connections import AwsAccountConnection
+from shared.aws_connections import AwsAccountComputeConfiguration, AwsAccountConnection
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
@@ -26,7 +27,6 @@ from shared.compute_enrollment import (
     MachineServiceState,
 )
 from shared.compute_policy import (
-    AwsWorkspaceComputePolicy,
     ComputeResourceRequirements,
     ComputeUnitPhase,
     ComputeUnitRecord,
@@ -35,7 +35,7 @@ from shared.compute_policy import (
 )
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment, DeploymentSpec
-from shared.errors import ConflictError, InvalidInputError
+from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.timestamps import utc_now
 
@@ -43,6 +43,7 @@ from compute.agent_control import (
     MachineWorkerState,
     machine_serves_workloads,
 )
+from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
 from compute.provider_machines import _provider_booted_template_version
@@ -52,22 +53,6 @@ class _DeploymentPoolMetadata(ContractModel):
     model_config = ConfigDict(extra="ignore")
 
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class ComputeCatalogInstance:
-    instance_type: str
-    kind: str
-    cpu_millicores: int
-    memory_mb: int
-    gpu: str | None = None
-    gpu_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ComputeCatalogRegion:
-    region: str
-    instances: tuple[ComputeCatalogInstance, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,52 +118,61 @@ class AwsDefaultCapacityOwner(Protocol):
     def clear_aws_default_capacity(self, *, workspace: str, release_capacity: bool) -> None: ...
 
 
-def _aws_capacity_is_zero(aws: AwsWorkspaceComputePolicy) -> bool:
+def _aws_capacity_is_zero(configuration: AwsAccountComputeConfiguration) -> bool:
     """Whether this baseline should hold no machines.
 
     Only the CPU knobs answer that. This owner provisions CPU machines and
     nothing else — `reconcile_aws_default_capacity` takes no GPU argument — and
-    `max_gpu_instances` is a placement ceiling, not a floor, so a workspace that
+    `max_gpu_instances` is a placement ceiling, not a floor, so an account that
     zeroed every control it was given kept paying while that ceiling sat at its
     default.
     """
-    return aws.min_cpu_workers == 0 and aws.initial_cpu_workers == 0 and aws.max_cpu_instances == 0
+    return (
+        configuration.min_cpu_workers == 0
+        and configuration.initial_cpu_workers == 0
+        and configuration.max_cpu_instances == 0
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class AwsDefaultCapacityBaseline:
     capacity: AwsDefaultCapacityOwner
 
-    def reconcile(self, policy: WorkspaceComputePolicy) -> ComputeUnitRecord | None:
-        """Hold the warm baseline a connected workspace's policy asks for.
+    def reconcile(
+        self,
+        *,
+        workspace_id: str,
+        configuration: AwsAccountComputeConfiguration,
+    ) -> ComputeUnitRecord | None:
+        """Hold the warm baseline the connected account asks for in one workspace.
 
-        The policy applies the same way whether the machines are LazyCloud's own
-        fleet or the customer's account, so nothing here asks where workloads
-        are scheduled. Two preconditions do gate it: a workspace with no ready
-        connection has no account to build in, and a workspace that zeroed every
-        capacity control it was given wants no machines. Clearing floors without
-        releasing would leave durable desired capacity, and its billing, behind.
+        Capacity is still provisioned per workspace; only the configuration it
+        reads belongs to the account, so one account's numbers are applied to
+        each workspace it backs. Two preconditions gate it: a workspace with no
+        ready connection has no account to build in, and an account that zeroed
+        every capacity control it was given wants no machines. Clearing floors
+        without releasing would leave durable desired capacity, and its billing,
+        behind.
         """
-        if not self.capacity.workspace_has_ready_connection(policy.workspace_id):
+        if not self.capacity.workspace_has_ready_connection(workspace_id):
             return None
-        if _aws_capacity_is_zero(policy.aws):
+        if _aws_capacity_is_zero(configuration):
             self.capacity.clear_aws_default_capacity(
-                workspace=policy.workspace_id,
+                workspace=workspace_id,
                 release_capacity=True,
             )
             return None
-        aws = policy.aws
         return self.capacity.reconcile_aws_default_capacity(
-            workspace=policy.workspace_id,
-            region=aws.default_region,
-            instance_type=aws.default_instance_type,
-            initial_machines=aws.initial_cpu_workers,
-            min_machines=aws.min_cpu_workers,
-            max_machines=aws.max_cpu_instances,
-            min_free_cpu_millicores=aws.min_free_cpu_millicores,
-            min_free_memory_mib=aws.min_free_memory_mib,
-            root_volume_gib=aws.root_volume_gib,
-            idle_timeout_seconds=aws.idle_timeout_seconds,
+            workspace=workspace_id,
+            region=configuration.default_region,
+            instance_type=configuration.default_instance_type,
+            initial_machines=configuration.initial_cpu_workers,
+            min_machines=configuration.min_cpu_workers,
+            max_machines=configuration.max_cpu_instances,
+            min_free_cpu_millicores=configuration.min_free_cpu_millicores,
+            min_free_memory_mib=configuration.min_free_memory_mib,
+            root_volume_gib=configuration.root_volume_gib,
+            idle_timeout_seconds=configuration.idle_timeout_seconds,
         )
 
 
@@ -212,9 +206,7 @@ class WorkspaceComputePolicyService:
         workspace: str,
         expected_revision: int,
         default_pool: str,
-        aws: AwsWorkspaceComputePolicy,
     ) -> WorkspaceComputePolicy:
-        self._validate_aws_policy(aws)
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             repository = WorkspaceComputePolicyRepository(session)
@@ -234,29 +226,39 @@ class WorkspaceComputePolicyService:
                     raise RuntimeError("workspace compute policy is unavailable")
             if current.revision != expected_revision:
                 raise ConflictError("workspace compute policy revision was superseded")
-            saved = repository.save(
+            return repository.save(
                 current.model_copy(
                     update={
                         "revision": current.revision + 1,
                         "default_pool": default_pool or current.default_pool,
-                        "aws": aws,
                         "updated_at": utc_now(),
                     }
                 )
             )
-        if self.aws_default_capacity is not None:
-            self.aws_default_capacity.reconcile(saved)
-        return saved
 
     def reconcile_workspace_baseline(self, workspace_id: str) -> None:
-        """Apply the workspace's warm baseline now that it can be built."""
+        """Apply the connected account's warm baseline in one workspace it backs."""
         if self.aws_default_capacity is None:
             return
         with self.context.database.session() as session:
-            policy = self._policy_in_session(session, workspace_id)
-        self.aws_default_capacity.reconcile(policy)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
+        if connection is None:
+            return
+        self.aws_default_capacity.reconcile(
+            workspace_id=workspace_id,
+            configuration=connection.compute,
+        )
 
     def reconcile_capacity_at_startup(self) -> tuple[ComputeUnitRecord, ...]:
+        """Rebuild every warm baseline the connected accounts still ask for.
+
+        Iterating connections rather than workspaces is what the configuration's
+        ownership now dictates: one account's numbers apply to every active
+        workspace its owner holds, and a workspace whose owner connected nothing
+        has no baseline to restore.
+        """
         baseline = self.aws_default_capacity
         if baseline is None:
             return ()
@@ -266,15 +268,23 @@ class WorkspaceComputePolicyService:
                 for workspace in WorkspaceRepository(session).list()
                 if workspace.status is WorkspaceStatus.Active
             }
-            policies = [
-                policy
-                for policy in WorkspaceComputePolicyRepository(
-                    session
-                ).records.list_across_workspaces()
-                if policy.workspace_id in active_workspace_ids
+            members = WorkspaceMemberRepository(session)
+            targets = [
+                (workspace_id, connection.compute)
+                for connection in AwsAccountConnectionRepository(session).list_all()
+                for workspace_id in members.owned_workspace_ids(connection.user_id)
+                if workspace_id in active_workspace_ids
             ]
         return tuple(
-            pool for policy in policies if (pool := baseline.reconcile(policy)) is not None
+            pool
+            for workspace_id, configuration in targets
+            if (
+                pool := baseline.reconcile(
+                    workspace_id=workspace_id,
+                    configuration=configuration,
+                )
+            )
+            is not None
         )
 
     def default_machine_pool(self, *, workspace: str) -> MachinePool:
@@ -297,7 +307,9 @@ class WorkspaceComputePolicyService:
         """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         if connection is None or not connection.hosts_workloads:
             return None
         return connection if connection.pool == pool else None
@@ -339,13 +351,26 @@ class WorkspaceComputePolicyService:
             for name, members in sorted(grouped.items())
         )
 
-    def catalog(
+    def catalog(self) -> tuple[tuple[str, tuple[ComputeCatalogInstance, ...]], ...]:
+        """Provider inventory: what may be launched, independent of who is asking."""
+        return tuple((item.region, item.instances) for item in self.available_catalog)
+
+    def instances_for_account(
         self,
         *,
-        workspace: str,
-    ) -> tuple[tuple[str, tuple[ComputeCatalogInstance, ...]], ...]:
-        self.get_policy(workspace=workspace)
-        return tuple((item.region, item.instances) for item in self.available_catalog)
+        workspace_ids: Sequence[str],
+    ) -> tuple[ComputeInstanceView, ...]:
+        """Provider capacity running in one account's connected cloud.
+
+        Gathered across every workspace the account owns, because the connection is
+        the account's and a customer looking at their own cloud spend should see all
+        of it rather than the slice one workspace happens to have provisioned.
+        """
+        views = [
+            view for workspace in workspace_ids for view in self.instances(workspace=workspace)
+        ]
+        views.sort(key=lambda item: (item.record.status, item.record.id))
+        return tuple(views)
 
     def instances(self, *, workspace: str) -> tuple[ComputeInstanceView, ...]:
         with self.context.database.session() as session:
@@ -402,7 +427,9 @@ class WorkspaceComputePolicyService:
         workloads = self.workloads(workspace=workspace)
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
         ready_instance_count = sum(
             item.service_state is MachineServiceState.Serving for item in instances
         )
@@ -427,16 +454,6 @@ class WorkspaceComputePolicyService:
             hourly_cost_micros=sum(item.record.hourly_cost_micros for item in instances),
         )
 
-    def assert_workspace_deletable(self, *, workspace: str) -> None:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
-            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-        if connection is not None or any(
-            pool.phase is not ComputeUnitPhase.Deleted for pool in pools
-        ):
-            raise ConflictError("disconnect AWS compute before deleting this workspace")
-
     @staticmethod
     def _requirements(deployment: Deployment) -> ComputeResourceRequirements:
         return WorkspaceComputePolicyService._requirements_for_spec(deployment.spec)
@@ -450,35 +467,6 @@ class WorkspaceComputePolicyService:
             gpu=resources.gpu,
             gpu_count=resources.gpu_count,
         )
-
-    def _validate_aws_policy(self, policy: AwsWorkspaceComputePolicy) -> None:
-        instances_by_region = {
-            region.region: {instance.instance_type for instance in region.instances}
-            for region in self.available_catalog
-        }
-        unavailable_regions = set(policy.allowed_regions) - instances_by_region.keys()
-        if unavailable_regions:
-            raise InvalidInputError(
-                "AWS regions are not available for configured capacity: "
-                + ", ".join(sorted(unavailable_regions))
-            )
-        available_types = {
-            instance_type
-            for region in policy.allowed_regions
-            for instance_type in instances_by_region[region]
-        }
-        unavailable_types = set(policy.allowed_instance_types) - available_types
-        if unavailable_types:
-            raise InvalidInputError(
-                "AWS instance types are not available in allowed regions: "
-                + ", ".join(sorted(unavailable_types))
-            )
-        default_region_types = instances_by_region[policy.default_region]
-        if policy.default_instance_type not in default_region_types:
-            raise InvalidInputError(
-                "AWS default instance type is not available in the default region: "
-                f"{policy.default_instance_type}"
-            )
 
     @staticmethod
     def _policy_in_session(
@@ -599,8 +587,6 @@ def _deployment_pool_name(spec: DeploymentSpec) -> str:
 
 __all__ = [
     "AwsDefaultCapacityBaseline",
-    "ComputeCatalogInstance",
-    "ComputeCatalogRegion",
     "ComputeInstanceView",
     "ComputeSummary",
     "ComputeWorkloadView",

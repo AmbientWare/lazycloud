@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -15,6 +16,7 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
 )
+from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -28,6 +30,7 @@ from shared.aws_connections import (
 )
 from shared.errors import UpstreamUnavailableError
 from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
+from shared.identity import WorkspaceRole
 from shared.timestamps import utc_now
 
 ACCOUNT_ID = "123456789012"
@@ -39,7 +42,7 @@ class _Planner:
     def plan(
         self,
         *,
-        workspace_id: str,
+        user_id: str,
         connection_id: str,
         generation: int,
         account_id: str,
@@ -49,7 +52,7 @@ class _Planner:
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
     ) -> AwsAccountAuthorizationPlan:
-        del workspace_id, connection_id, external_id, active_authorization
+        del user_id, connection_id, external_id, active_authorization
         managed = role_arn is None
         return AwsAccountAuthorizationPlan(
             role_arn=role_arn or f"arn:aws:iam::{account_id}:role/control-g{generation}",
@@ -148,9 +151,9 @@ class _Drainer:
         self,
         connection_id: str,
         *,
-        workspace: str,
+        workspace_ids: Sequence[str],
     ) -> AwsAccountPoolDrain:
-        del connection_id, workspace
+        del connection_id, workspace_ids
         return AwsAccountPoolDrain(total_pools=1, remaining_pools=self.remaining)
 
 
@@ -165,6 +168,22 @@ class _BucketAccessReconciler:
         if self.failures:
             self.failures -= 1
             raise UpstreamUnavailableError("temporary IAM failure")
+
+
+def _owner(services: ApiServices, *, workspace: str = "default") -> str:
+    """The account that owns a workspace, which is what a connection now belongs to."""
+    user = UserService(services.context).create(
+        username="connection-owner",
+        password="connection-owner-password",
+    )
+    with services.context.database.session() as session:
+        workspace_id = services.context.workspace(session, workspace).id
+    UserService(services.context).add_member(
+        workspace_id=workspace_id,
+        user_id=user.id,
+        role=WorkspaceRole.Owner,
+    )
+    return user.id
 
 
 def _service(
@@ -188,9 +207,10 @@ def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
     isolated_services: ApiServices,
 ) -> None:
     bucket_access = _BucketAccessReconciler(failures=1)
+    owner = _owner(isolated_services)
     service = _service(isolated_services, bucket_access=bucket_access)
-    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default")
-    ready = service.validate(workspace="default")
+    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
+    ready = service.validate(user_id=owner)
     with isolated_services.context.database.session() as session:
         repository = AwsAccountConnectionRepository(session)
         current = repository.get(ready.id, for_update=True)
@@ -208,7 +228,7 @@ def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
 
     assert failed.processed_count == 1
     assert failed.completed_count == 0
-    pending = service.get(workspace="default")
+    pending = service.get(user_id=owner)
     assert pending.bucket_access_reconcile_pending
     assert pending.next_reconcile_at is not None
     with isolated_services.context.database.session() as session:
@@ -220,7 +240,7 @@ def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
     completed = service.reconcile_due()
 
     assert completed.completed_count == 1
-    reconciled = service.get(workspace="default")
+    reconciled = service.get(user_id=owner)
     assert not reconciled.bucket_access_reconcile_pending
     assert reconciled.next_reconcile_at is None
     assert bucket_access.calls == 2
@@ -230,16 +250,15 @@ def test_uncompleted_setup_removal_hides_connection_and_reconciles_tombstone(
     isolated_services: ApiServices,
 ) -> None:
     lifecycle = _Lifecycle()
+    owner = _owner(isolated_services)
     service = _service(isolated_services, lifecycle=lifecycle)
-    created = service.connect(
-        AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default"
-    )
+    created = service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
 
     assert created.connection.phase is AwsAccountConnectionPhase.AwaitingAuthorization
     assert created.connection.customer_action_url == created.authorization_url
     assert created.connection.customer_action_label == "Continue in AWS"
-    assert service.remove(workspace="default") is None
-    assert service.current(workspace="default") is None
+    assert service.remove(user_id=owner) is None
+    assert service.current(user_id=owner) is None
     with isolated_services.context.database.session() as session:
         assert AwsAuthorizationCleanupTombstoneRepository(session).pending_count() == 1
 
@@ -254,16 +273,17 @@ def test_uncompleted_setup_removal_hides_connection_and_reconciles_tombstone(
 def test_cancel_reconnect_preserves_ready_generation_and_placement(
     isolated_services: ApiServices,
 ) -> None:
+    owner = _owner(isolated_services)
     service = _service(isolated_services)
-    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default")
-    ready = service.validate(workspace="default")
+    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
+    ready = service.validate(user_id=owner)
     assert ready.hosts_workloads is True
 
-    reconnecting = service.reconnect(AwsConnectionReconnectRequest(), workspace="default")
+    reconnecting = service.reconnect(AwsConnectionReconnectRequest(), user_id=owner)
     assert reconnecting.connection.hosts_workloads is True
     assert reconnecting.connection.pending_authorization is not None
 
-    canceled = service.cancel_reconnect(workspace="default")
+    canceled = service.cancel_reconnect(user_id=owner)
 
     assert canceled.phase is AwsAccountConnectionPhase.Ready
     assert canceled.hosts_workloads is True
@@ -277,15 +297,14 @@ def test_cancel_reconnect_preserves_ready_generation_and_placement(
 def test_initial_assume_role_miss_remains_authorization_required(
     isolated_services: ApiServices,
 ) -> None:
+    owner = _owner(isolated_services)
     service = _service(
         isolated_services,
         validator=_Validator(failures=[AwsAccountConnectionErrorCode.AssumeRoleDenied]),
     )
-    created = service.connect(
-        AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default"
-    )
+    created = service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
 
-    failed = service.validate(workspace="default")
+    failed = service.validate(user_id=owner)
 
     assert failed.phase is AwsAccountConnectionPhase.AwaitingAuthorization
     assert failed.hosts_workloads is False
@@ -304,18 +323,19 @@ def test_active_removal_reuses_provider_operation_across_restart_safe_observatio
             AwsAuthorizationCleanupStatus.Complete,
         ]
     )
+    owner = _owner(isolated_services)
     service = _service(isolated_services, lifecycle=lifecycle)
-    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default")
-    service.validate(workspace="default")
+    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
+    service.validate(user_id=owner)
 
-    removing = service.remove(workspace="default")
+    removing = service.remove(user_id=owner)
     assert removing is not None
     assert removing.phase is AwsAccountConnectionPhase.DisconnectDraining
     assert removing.hosts_workloads is False
     assert service.reconcile_due().processed_count == 1
 
     for _ in range(3):
-        current = service.get(workspace="default")
+        current = service.get(user_id=owner)
         assert current.next_reconcile_at is not None
         with isolated_services.context.database.session() as session:
             row = AwsAccountConnectionRepository(session).get(current.id, for_update=True)
@@ -325,7 +345,7 @@ def test_active_removal_reuses_provider_operation_across_restart_safe_observatio
             )
         service.reconcile_due()
 
-    assert service.current(workspace="default") is None
+    assert service.current(user_id=owner) is None
     assert len(set(lifecycle.operation_ids)) == 1
     assert lifecycle.remove_node_identity == [True, True, True]
 
@@ -339,15 +359,16 @@ def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
             AwsAuthorizationCleanupStatus.Pending,
         ]
     )
+    owner = _owner(isolated_services)
     service = _service(isolated_services, lifecycle=lifecycle)
     service.cleanup_max_attempts = 2
-    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default")
-    service.validate(workspace="default")
-    service.remove(workspace="default")
+    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
+    service.validate(user_id=owner)
+    service.remove(user_id=owner)
     service.reconcile_due()
 
     for _ in range(2):
-        current = service.get(workspace="default")
+        current = service.get(user_id=owner)
         with isolated_services.context.database.session() as session:
             row = AwsAccountConnectionRepository(session).get(current.id, for_update=True)
             assert row is not None
@@ -356,7 +377,7 @@ def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
             )
         service.reconcile_due()
 
-    stuck = service.get(workspace="default")
+    stuck = service.get(user_id=owner)
     assert stuck.phase is AwsAccountConnectionPhase.ActionRequired
     assert stuck.next_reconcile_at is None
     assert stuck.customer_action_label == "Review AWS cleanup"
@@ -366,9 +387,10 @@ def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
 def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
     isolated_services: ApiServices,
 ) -> None:
+    owner = _owner(isolated_services)
     service = _service(isolated_services)
     connection = service.connect(
-        AwsConnectionCreateRequest(account_id=ACCOUNT_ID), workspace="default"
+        AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner
     ).connection
     now = utc_now()
     lease_until = now + timedelta(seconds=30)
@@ -403,4 +425,4 @@ def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
             first[0].model_copy(update={"next_reconcile_at": None}),
         )
     assert stale is None
-    assert service.get(workspace="default").id == connection.id
+    assert service.get(user_id=owner).id == connection.id

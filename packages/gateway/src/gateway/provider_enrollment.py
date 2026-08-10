@@ -17,6 +17,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceMemberRepository
 from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
 from redis.exceptions import RedisError
@@ -93,6 +94,7 @@ class ProviderNodeEnrollmentService:
             pool.workspace_id,
             pool.pool,
             pool.capacity_owner_id,
+            owner_user_id=connection.user_id,
         )
         joined = self.gateway.join_agent(
             JoinAgentRequest(
@@ -356,10 +358,15 @@ class ProviderNodeEnrollmentService:
             ):
                 raise InvalidInputError("provider node enrollment request is not active")
             connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
+            # The account behind the unit's workspace, not the workspace itself: one
+            # connection backs every workspace its owner holds, so the tenancy check
+            # is that the unit and the connection answer to the same owner.
+            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
         if (
             connection is None
             or connection.id != pool.provider_ref.removeprefix("aws:")
-            or connection.workspace_id != pool.workspace_id
+            or owner is None
+            or connection.user_id != owner.user_id
             or not connection.hosts_workloads
             or connection.active_authorization is None
             or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
@@ -373,7 +380,12 @@ class ProviderNodeEnrollmentService:
         workspace_id: str,
         pool: MachinePool,
         capacity_owner_id: str,
+        *,
+        owner_user_id: str,
     ) -> SecretStr:
+        # The account is the connection's, which `_enrollment_target` has already
+        # proved is the owner of this unit's workspace. An instance the customer's
+        # own account launched belongs to that customer, exactly as a joined host does.
         plan = plan_join_token_creation(
             ComputePrincipal(
                 workspace_id=workspace_id,
@@ -381,6 +393,7 @@ class ProviderNodeEnrollmentService:
             ),
             pool,
             capacity_owner_id=capacity_owner_id,
+            owner_user_id=owner_user_id,
             ttl="2m",
             max_uses=1,
         )
@@ -397,6 +410,7 @@ class ProviderNodeEnrollmentService:
             credentials = ComputeJoinCredentialRepository(session)
             durable = credentials.create(
                 token_hash=plan.token_hash,
+                user_id=owner_user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 pool=unit.pool,

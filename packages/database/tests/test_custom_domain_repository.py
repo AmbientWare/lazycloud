@@ -4,45 +4,54 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from database.repositories.custom_domains import CustomDomainRepository
+from identity.users import UserService
 from shared.custom_domains import CustomDomain
 from shared.errors import ConflictError
 
 
-def _register(services: ApiServices, *, workspace_id: str, hostname: str) -> None:
+def _account(services: ApiServices, username: str) -> str:
+    return (
+        UserService(services.context)
+        .create(
+            username=username,
+            password="domain-owner-password",
+        )
+        .id
+    )
+
+
+def _register(services: ApiServices, *, user_id: str, hostname: str) -> None:
     with services.context.database.session() as session:
         CustomDomainRepository(session).create(
-            CustomDomain(id=str(uuid4()), workspace_id=workspace_id, hostname=hostname),
-            workspace_id=workspace_id,
+            CustomDomain(id=str(uuid4()), user_id=user_id, hostname=hostname),
+            user_id=user_id,
         )
 
 
-def test_one_workspaces_registration_never_covers_anothers_hostname(
+def test_one_accounts_registration_never_covers_anothers_hostname(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("domain-owner")
-    intruder = control.upsert_workspace("domain-intruder")
-    _register(isolated_services, workspace_id=owner.id, hostname="*.acme.com")
+    owner = _account(isolated_services, "domain-owner")
+    intruder = _account(isolated_services, "domain-intruder")
+    _register(isolated_services, user_id=owner, hostname="*.acme.com")
 
     with isolated_services.context.database.session() as session:
         repository = CustomDomainRepository(session)
 
-        assert repository.covering("api.acme.com", workspace_id=owner.id) is not None
-        assert repository.covering("api.acme.com", workspace_id=intruder.id) is None
+        assert repository.covering("api.acme.com", user_id=owner) is not None
+        assert repository.covering("api.acme.com", user_id=intruder) is None
 
 
-def test_a_hostname_can_be_registered_by_only_one_workspace(
+def test_a_hostname_can_be_registered_by_only_one_account(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    owner = control.upsert_workspace("first-claimant")
-    rival = control.upsert_workspace("second-claimant")
-    _register(isolated_services, workspace_id=owner.id, hostname="acme.com")
+    owner = _account(isolated_services, "first-claimant")
+    rival = _account(isolated_services, "second-claimant")
+    _register(isolated_services, user_id=owner, hostname="acme.com")
 
     with pytest.raises(ConflictError):
-        _register(isolated_services, workspace_id=rival.id, hostname="acme.com")
+        _register(isolated_services, user_id=rival, hostname="acme.com")
 
 
 @pytest.mark.parametrize(
@@ -64,11 +73,10 @@ def test_a_registration_covers_exactly_what_its_certificate_would(
     requested: str,
     covered: bool,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("coverage")
-    _register(isolated_services, workspace_id=workspace.id, hostname=registered)
+    owner = _account(isolated_services, "coverage")
+    _register(isolated_services, user_id=owner, hostname=registered)
 
     with isolated_services.context.database.session() as session:
-        found = CustomDomainRepository(session).covering(requested, workspace_id=workspace.id)
+        found = CustomDomainRepository(session).covering(requested, user_id=owner)
 
     assert (found is not None) is covered

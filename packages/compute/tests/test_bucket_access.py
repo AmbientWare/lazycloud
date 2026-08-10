@@ -11,6 +11,7 @@ from compute.bucket_access import (
 )
 from compute.policy import WorkspaceComputePolicyService
 from database.repositories.compute import AwsAccountConnectionRepository
+from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -19,6 +20,7 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.deployment_records import DeploymentSpec, VolumeMount
+from shared.identity import WorkspaceRole
 from shared.mounts import MountAuthMode
 
 
@@ -110,6 +112,7 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
 
 
 def _seed_ready_connection(isolated_services: ApiServices) -> None:
+    """A ready connection owned by the account that owns the default workspace."""
     now = datetime.now(UTC)
     account_id = "123456789012"
     authorization = AwsAccountAuthorizationGeneration(
@@ -122,12 +125,16 @@ def _seed_ready_connection(isolated_services: ApiServices) -> None:
         created_at=now,
         updated_at=now,
     )
+    users = UserService(isolated_services.context)
+    owner = users.create(username="bucket-access-owner", password="bucket-access-password")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    users.add_member(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.Owner)
+    with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=str(uuid4()),
-                workspace_id=workspace_id,
+                user_id=owner.id,
                 account_id=account_id,
                 external_id="x" * 48,
                 phase=AwsAccountConnectionPhase.Ready,

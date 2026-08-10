@@ -278,7 +278,7 @@ def _validating_connection(
     now = datetime(2026, 7, 16, tzinfo=UTC)
     return AwsAccountConnection(
         id="12345678-1234-4123-8123-123456789abd",
-        workspace_id="12345678-1234-4123-8123-123456789abe",
+        user_id="12345678-1234-4123-8123-123456789abe",
         account_id=_ACCOUNT_ID,
         external_id=_EXTERNAL_ID,
         phase=AwsAccountConnectionPhase.Validating,

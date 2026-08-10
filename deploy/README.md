@@ -62,44 +62,57 @@ client only when that identity is missing or expired. Its healthcheck resolves
 the host it advertises to workers, so a control plane that came up unable to
 reach the tailnet reports unhealthy rather than serving nothing quietly.
 
-### Two tenants
+### Shared fleet and one customer machine
 
-The stack runs two workspaces so multi-tenant behaviour is exercised by the
-ordinary local stack rather than assembled by hand. Nothing coordinates the two
-agents; four values must differ, and none of them fails visibly when it does not:
+The stack runs the two kinds of capacity a workload can land on, so the choice
+between them is exercised by the ordinary local stack rather than assembled by hand.
 
-| | agent | agent-2 |
+| | `container-worker` | `agent` |
 | --- | --- | --- |
-| Workspace | `default` | `tenant-b` |
-| Pool | `lazycloud` | `lazycloud-b` |
-| Fingerprint | `compose-agent` | `compose-agent-2` |
-| State directory | `/var/lib/lazycloud/agent` | `/var/lib/lazycloud/agent-2` |
-| Container bridge | `rt_br0`, `192.168.0.0/20` | `rt_br1`, `192.168.16.0/20` |
+| Is | the shared LazyCloud fleet | one customer's own machine |
+| Runs as | a platform service with a `worker` service token | an agent joining with a join token |
+| Owned by | nobody; shared capacity has no account | the `customer` account |
+| Pool | `lazycloud` | `self-hosted` |
+| Private | no — serves every account | yes — serves only its owner's workspaces |
+| Reached by | any workspace that names no pool | `tenant-customer`, whose `default_pool` names it |
+| Container bridge | `rt_br2`, `192.168.32.0/20` | `rt_br0`, `192.168.0.0/20` |
 
-The fingerprint decides the machine id, so two agents sharing one derive the same
-machine and evict each other's credentials. The bridge decides which addresses
-their workers hand out, and each agent allocates inside its own control-plane
-scope, so a shared bridge is two allocators issuing the same address with no lock
-between them; a bridge already holding an address outside its configured subnet is
-refused rather than taken over. Each workspace's pool must match its own agent's,
-because a workspace whose `default_pool` names the other agent's pool has its work
-placed where the worker will refuse it.
+`default` is left with no compute policy on purpose: a workspace that names no pool
+gets one written for it pointing at `lazycloud`, which is what a real new signup
+gets, and it lands on the shared fleet. The customer's workspace names
+`self-hosted`, so its work goes to the machine its account connected. Placement
+compares accounts rather than workspaces, so the shared worker takes anyone's work
+while the joined machine refuses everyone but its owner.
 
-Both state directories want daemon-local storage with room for their own image
-cache and build scratch — nothing is shared between them.
+Three things must differ between the two workers, and none of them fails visibly
+when it does not: the machine fingerprint, which decides the machine id, so a shared
+one makes them evict each other's credentials; the bridge name and subnet, because
+each allocator issues addresses inside its own control-plane scope and a shared
+bridge is two allocators handing out one address with no lock between them; and the
+pool, because a workspace whose `default_pool` names the other's pool has its work
+placed where that worker will refuse it.
+
+The customer account is created as a platform administrator only because creating a
+workspace is an administrator action. What the stack is exercising is that a second
+*account* owns the machine, not what that account may do elsewhere.
+
+Both state directories want daemon-local storage with room for their own image cache
+and build scratch — nothing is shared between them.
 
 ### Resetting local state
 
-Resetting means Postgres, Redis, and **both** agents together. Redis is keyed by
-durable IDs, so a recreated database leaves the scheduler refusing every
-reconcile against capacity owners the new database does not know.
+Resetting means Postgres, Redis, and the agent together. Redis is keyed by durable
+IDs, so a recreated database leaves the scheduler refusing every reconcile against
+capacity owners the new database does not know.
 
-Each agent's state directory is a host bind mount whose enrollment and worker
-slots outlive both. Clear `slots/`, `agent-state.json`,
-`active-worker-slots.json`, and `runtime-ready.json` in each. Clearing one and
-not the other leaves that tenant's enrollment pointing at a database with no
-record of its machine. Leave `images/` alone unless the image cache is the thing
-being tested.
+The agent's state directory is a host bind mount whose enrollment and worker slots
+outlive both. Clear `slots/`, `agent-state.json`, `active-worker-slots.json`, and
+`runtime-ready.json`. Leaving it while resetting the database points that
+enrollment at a database with no record of its machine. Leave `images/` alone
+unless the image cache is the thing being tested.
+
+The shared fleet needs nothing cleared: its unit, token, and worker record are all
+derived on start, and its volumes hold only caches.
 
 ### Naming the control plane
 

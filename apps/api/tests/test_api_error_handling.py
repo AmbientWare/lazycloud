@@ -8,9 +8,8 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from shared.http.errors import ErrorResponse
-from shared.identity import TokenKind
+from tests.service_fixtures import administrator_credential
 
 
 def _client(
@@ -19,10 +18,7 @@ def _client(
     *,
     raise_server_exceptions: bool = True,
 ) -> tuple[FastAPI, TestClient, dict[str, str]]:
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "error-handling-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "error-handling-admin")
     app = create_app(isolated_services)
     client = client_stack.enter_context(
         TestClient(app, raise_server_exceptions=raise_server_exceptions)

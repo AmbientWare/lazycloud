@@ -21,7 +21,6 @@ from database.repositories.cleanup import (
 )
 from database.repositories.storage import ObjectRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import FUNCTION_IMAGE
@@ -35,12 +34,12 @@ from shared.http.client_manifests import (
     ClientOperationName,
     ClientParameter,
 )
-from shared.identity import TokenKind
 from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
+from tests.service_fixtures import administrator_credential
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
@@ -540,10 +539,7 @@ def test_deployment_manifest_route_serves_invoke_schema(
         )
     )
 
-    raw_token, _ = AuthService(isolated_services.context).create_token(
-        "manifest-admin",
-        kind=TokenKind.Admin,
-    )
+    raw_token, _ = administrator_credential(isolated_services, "manifest-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 

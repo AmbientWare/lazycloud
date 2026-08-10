@@ -333,6 +333,7 @@ def _container_requests_with_capacity(
         assignments=base.assignments,
         dispatch_wake=base.dispatch_wake,
         lifecycle_events=base.lifecycle_events,
+        workspace_owners=base.workspace_owners,
         capacity_reservations=capacity_reservations,
         usage=base.usage,
         requeue_delay_seconds=base.requeue_delay_seconds,

@@ -19,6 +19,7 @@ from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
 )
+from database.repositories.identity import WorkspaceMemberRepository
 from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import ComputeCredentialStatus
@@ -246,6 +247,7 @@ class GatewayUnitStateCoordinator:
                     credentials.save(credential.revoke(now=current_time))
             durable = credentials.create(
                 token_hash=plan.token_hash,
+                user_id=plan.state.owner_user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 pool=unit.pool,
@@ -309,11 +311,22 @@ class GatewayUnitStateCoordinator:
                 ),
                 unit.pool,
                 capacity_owner_id=unit.capacity_owner_id,
+                owner_user_id=self.workspace_owner_user_id(workspace_id),
                 ttl=ttl,
                 max_uses=1,
             )
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
+
+    def workspace_owner_user_id(self, workspace_id: str) -> str:
+        """The account a joined machine will belong to.
+
+        Read at mint time rather than taken from the caller: the credential decides
+        the machine's tenancy, and the account that owns the workspace is what a
+        member acting inside it can attach hardware to.
+        """
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).owner_user_id(workspace_id)
 
     def save_compute_pool_config_update(
         self,

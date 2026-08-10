@@ -201,22 +201,33 @@ export const workspaceQueryKeys = {
   settings: {
     concurrency: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "settings", "concurrency"] as const,
-    tokens: (workspaceId: string) => [...workspaceRoot(workspaceId), "settings", "tokens"] as const,
   },
   compute: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "compute"] as const,
-    policy: (workspaceId: string) => [...workspaceRoot(workspaceId), "compute", "policy"] as const,
-    catalog: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "catalog"] as const,
-    awsConnection: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "aws-connection"] as const,
-    instances: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "instances"] as const,
-    machines: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "machines"] as const,
-    adminAccess: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "compute", "admin-access"] as const,
   },
+} as const;
+
+const accountRoot = ["account"] as const;
+
+/**
+ * Keys for records a person owns rather than a workspace.
+ *
+ * Deliberately outside `workspaceRoot`: the connected cloud, its instances, the
+ * joined machines, the registered domains, and the access tokens answer the same
+ * in every workspace the account holds. Keying them per workspace would cache one
+ * answer N times and refetch all of it on a switch that cannot have changed it.
+ */
+export const accountQueryKeys = {
+  root: () => accountRoot,
+  compute: {
+    root: () => [...accountRoot, "compute"] as const,
+    catalog: () => [...accountRoot, "compute", "catalog"] as const,
+    awsConnection: () => [...accountRoot, "compute", "aws-connection"] as const,
+    instances: () => [...accountRoot, "compute", "instances"] as const,
+    machines: () => [...accountRoot, "compute", "machines"] as const,
+  },
+  domains: () => [...accountRoot, "custom-domains"] as const,
+  tokens: () => [...accountRoot, "tokens"] as const,
 } as const;
 
 export type WorkspaceLiveQueryMeta = {

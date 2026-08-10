@@ -5,7 +5,17 @@ from enum import StrEnum
 
 from pydantic import Field, JsonValue, computed_field
 from shared.contracts import ContractModel
-from shared.identity import AuthScope, AuthTokenRecord, TokenKind, TokenStatus
+from shared.identity import (
+    USER_PRINCIPAL_TOKEN_KINDS,
+    AuthScope,
+    AuthTokenRecord,
+    PlatformRole,
+    TokenKind,
+    TokenStatus,
+    WorkspaceMemberRecord,
+    WorkspaceRole,
+    workspace_role_covers,
+)
 from shared.timestamps import utc_now
 
 
@@ -35,6 +45,8 @@ class AuthzDecisionReason(StrEnum):
     DisabledToken = "disabled-token"
     MissingScope = "missing-scope"
     WrongWorkspace = "wrong-workspace"
+    NotAMember = "not-a-member"
+    InsufficientRole = "insufficient-role"
     RestrictedToken = "restricted-token"
     WrongTokenKind = "wrong-token-kind"
 
@@ -47,19 +59,32 @@ class AuthzPrincipal(ContractModel):
     token_id: str
     token_name: str
     token_kind: TokenKind
-    workspace_id: str
+    user_id: str = ""
+    workspace_id: str = ""
+    platform_role: PlatformRole = PlatformRole.Member
     scopes: list[str] = Field(default_factory=list)
     reusable: bool = True
     disabled_by_admin: bool = False
     status: TokenStatus = TokenStatus.Active
 
+    @property
+    def names_user(self) -> bool:
+        return self.token_kind in USER_PRINCIPAL_TOKEN_KINDS
+
     @classmethod
-    def from_token(cls, token: AuthTokenRecord) -> AuthzPrincipal:
+    def from_token(
+        cls,
+        token: AuthTokenRecord,
+        *,
+        platform_role: PlatformRole = PlatformRole.Member,
+    ) -> AuthzPrincipal:
         return cls(
             token_id=token.id,
             token_name=token.name,
             token_kind=token.kind,
+            user_id=token.user_id,
             workspace_id=token.workspace_id,
+            platform_role=platform_role,
             scopes=list(token.scopes),
             reusable=token.reusable,
             disabled_by_admin=token.disabled_by_admin,
@@ -72,6 +97,15 @@ class AuthzRequirement(ContractModel):
     resource_kind: AuthzResourceKind = AuthzResourceKind.ControlPlane
     resource_id: str | None = None
     workspace_id: str | None = None
+    membership: WorkspaceMemberRecord | None = None
+    """The caller's membership in ``workspace_id``, already read by the caller.
+
+    The decision stays a pure function of principal and requirement: whoever builds
+    the requirement does the lookup, so the same inputs always yield the same answer
+    and the decision can be logged and replayed without a database.
+    """
+
+    required_role: WorkspaceRole = WorkspaceRole.Member
     allowed_token_kinds: list[TokenKind] | None = None
     strict_workspace: bool = False
     require_admin: bool = False
@@ -119,12 +153,16 @@ def workspace_requirement(
     action: AuthScope = AuthScope.Read,
     strict: bool = False,
     resource_id: str | None = None,
+    membership: WorkspaceMemberRecord | None = None,
+    required_role: WorkspaceRole = WorkspaceRole.Member,
 ) -> AuthzRequirement:
     return AuthzRequirement(
         action=action,
         resource_kind=AuthzResourceKind.Workspace,
         resource_id=resource_id or workspace_id,
         workspace_id=workspace_id,
+        membership=membership,
+        required_role=required_role,
         strict_workspace=strict,
     )
 
@@ -193,6 +231,8 @@ def build_policy_input(
 def decide_authorization(
     token: AuthTokenRecord | None,
     requirement: AuthzRequirement,
+    *,
+    platform_role: PlatformRole = PlatformRole.Member,
 ) -> AuthzDecision:
     if token is None:
         return _deny(
@@ -202,7 +242,7 @@ def decide_authorization(
             None,
         )
 
-    principal = AuthzPrincipal.from_token(token)
+    principal = AuthzPrincipal.from_token(token, platform_role=platform_role)
     if token.status != TokenStatus.Active:
         return _deny(
             AuthzDecisionReason.InactiveToken, "token is not active", requirement, principal
@@ -214,7 +254,7 @@ def decide_authorization(
             requirement,
             principal,
         )
-    if requirement.require_admin and token.kind != TokenKind.Admin:
+    if requirement.require_admin and not _is_administrator(principal):
         return _deny(
             AuthzDecisionReason.WrongTokenKind, "admin token required", requirement, principal
         )
@@ -236,17 +276,14 @@ def decide_authorization(
             requirement,
             principal,
         )
-    if (
-        requirement.workspace_id is not None
-        and token.kind != TokenKind.Admin
-        and token.workspace_id != requirement.workspace_id
-    ):
-        return _deny(
-            AuthzDecisionReason.WrongWorkspace,
-            "token is not authorized for this workspace",
-            requirement,
-            principal,
+    if requirement.workspace_id is not None and not _is_administrator(principal):
+        denial = (
+            _membership_denial(requirement, principal)
+            if principal.names_user
+            else _workspace_scope_denial(requirement, principal)
         )
+        if denial is not None:
+            return denial
     if requirement.strict_workspace and token.kind == TokenKind.WorkspaceRestricted:
         return _deny(
             AuthzDecisionReason.RestrictedToken,
@@ -254,7 +291,7 @@ def decide_authorization(
             requirement,
             principal,
         )
-    if token.kind != TokenKind.Admin and not token_has_scope(token, requirement.action):
+    if not _is_administrator(principal) and not token_has_scope(token, requirement.action):
         return _deny(
             AuthzDecisionReason.MissingScope,
             f"token is missing scope: {requirement.action.value}",
@@ -269,6 +306,74 @@ def decide_authorization(
         requirement=requirement,
         principal=principal,
     )
+
+
+def _is_administrator(principal: AuthzPrincipal) -> bool:
+    """Administrator standing belongs to the person, not to the credential's kind.
+
+    The admin token kind still counts so platform-minted administrator credentials
+    keep working, but a user whose platform role is administrator is one whichever
+    token they present.
+    """
+    return (
+        principal.token_kind is TokenKind.Admin
+        or principal.platform_role is PlatformRole.Administrator
+    )
+
+
+def _membership_denial(
+    requirement: AuthzRequirement,
+    principal: AuthzPrincipal,
+) -> AuthzDecision | None:
+    """A person reaches a workspace only through a membership row naming them."""
+    membership = requirement.membership
+    # The row has to name this person and this workspace: one resolved for another
+    # workspace cannot authorize this one, however it reached the requirement.
+    if (
+        membership is None
+        or membership.user_id != principal.user_id
+        or membership.workspace_id != requirement.workspace_id
+    ):
+        return _deny(
+            AuthzDecisionReason.NotAMember,
+            "token is not authorized for this workspace",
+            requirement,
+            principal,
+        )
+    if not workspace_role_covers(membership.role, requirement.required_role):
+        return _deny(
+            AuthzDecisionReason.InsufficientRole,
+            f"this action requires the {requirement.required_role.value} role",
+            requirement,
+            principal,
+        )
+    return None
+
+
+def _workspace_scope_denial(
+    requirement: AuthzRequirement,
+    principal: AuthzPrincipal,
+) -> AuthzDecision | None:
+    """A workspace-scoped credential reaches the one workspace it was minted for."""
+    if principal.workspace_id != requirement.workspace_id:
+        return _deny(
+            AuthzDecisionReason.WrongWorkspace,
+            "token is not authorized for this workspace",
+            requirement,
+            principal,
+        )
+    if not workspace_role_covers(WorkspaceRole.Member, requirement.required_role):
+        # A workspace credential is automation, not a person, so it holds no role in
+        # the workspace and carries the least authority any member has. Letting it
+        # satisfy a role gate would put every such action one self-minted token away
+        # from any member who can reach this workspace at all.
+        return _deny(
+            AuthzDecisionReason.InsufficientRole,
+            f"this action requires the {requirement.required_role.value} role",
+            requirement,
+            principal,
+        )
+    return None
 
 
 def _deny(

@@ -220,6 +220,7 @@ class Client:
         response = stream_object_bytes(
             endpoint=config.endpoint,
             token=config.token,
+            workspace=config.workspace,
             data=data,
             name=name,
             object_hash=object_hash,
@@ -266,6 +267,7 @@ class Client:
         response = stream_object_file(
             endpoint=config.endpoint,
             token=config.token,
+            workspace=config.workspace,
             source=source,
             size=size,
             name=selected_name,

@@ -18,7 +18,6 @@ from database.repositories.compute import TailnetCleanupTombstoneRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.compute import TailnetCleanupTombstoneTable
 from database.tailnet_cleanup import DatabaseTailnetCleanupStore
-from identity.auth import AuthService
 from networking.tailnet_cleanup import TailnetCleanupCoordinator
 from networking.tailnet_control import TailnetAuthKey, TailnetDevice, tailnet_machine_hostname
 from scheduler.service import (
@@ -30,9 +29,10 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
-from shared.identity import TokenKind, WorkspaceStatus
+from shared.identity import WorkspaceStatus
 from sqlalchemy import delete
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import administrator_credential
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -68,12 +68,8 @@ def test_tombstone_survives_ownership_deletion_and_scheduler_removes_late_device
     isolated_services: ApiServices,
 ) -> None:
     control_plane = ControlPlaneService(isolated_services.context)
-    default_workspace = control_plane.upsert_workspace("default")
-    _raw_token, audit_actor = AuthService(isolated_services.context).create_token(
-        "workspace-delete-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default_workspace.id,
-    )
+    control_plane.upsert_workspace("default")
+    _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
     workspace = control_plane.upsert_workspace("tailnet-tombstone-owner")
     pool = "tailnet-tombstone-pool"
     isolated_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace.id)

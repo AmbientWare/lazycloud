@@ -11,7 +11,6 @@ from api.server.services import ApiServices
 from control.service import (
     ControlPlaneService,
     WorkspaceStorageAlreadyExistsError,
-    WorkspaceStorageAuthorizationError,
     WorkspaceStorageError,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -133,7 +132,9 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
         workspace_storage_client=bucket_client,
     )
 
-    created = service.create_workspace("tenant")
+    owner = isolated_services.users.create(username="tenant-owner", password="tenant-owner-pass")
+
+    created = service.create_workspace("tenant", owner_user_id=owner.id)
     workspace = service.get_workspace(created.workspace_id)
 
     assert created.workspace.storage.bucket == f"workspace-{created.workspace_id}"
@@ -170,7 +171,7 @@ def test_workspace_storage_creation_validates_before_persisting(
     assert bucket_client.validated == [f"workspace-{workspace.id}"]
 
 
-def test_external_workspace_storage_validates_rejects_duplicates_and_checks_scope(
+def test_external_workspace_storage_validates_and_rejects_duplicates(
     isolated_services: ApiServices,
 ) -> None:
     external_client = BucketClient()
@@ -185,7 +186,6 @@ def test_external_workspace_storage_validates_rejects_duplicates_and_checks_scop
         workspace_storage_client_factory=client_factory,
     )
     workspace = service.upsert_workspace("tenant")
-    other = service.upsert_workspace("other")
     storage = WorkspaceStorageConfig(
         backend="s3",
         bucket="external-bucket",
@@ -197,18 +197,7 @@ def test_external_workspace_storage_validates_rejects_duplicates_and_checks_scop
         },
     )
 
-    with pytest.raises(WorkspaceStorageAuthorizationError, match="invalid token"):
-        service.attach_external_workspace_storage(
-            workspace.id,
-            storage,
-            actor_workspace_id=other.id,
-        )
-
-    updated = service.attach_external_workspace_storage(
-        workspace.id,
-        storage,
-        actor_workspace_id=workspace.id,
-    )
+    updated = service.attach_external_workspace_storage(workspace.id, storage)
 
     assert updated.storage.bucket == "external-bucket"
     assert external_client.created == []
@@ -216,11 +205,7 @@ def test_external_workspace_storage_validates_rejects_duplicates_and_checks_scop
     assert external_client.close_count == 1
     assert validated_configs == [storage]
     with pytest.raises(WorkspaceStorageAlreadyExistsError, match="already exists"):
-        service.attach_external_workspace_storage(
-            workspace.id,
-            storage,
-            actor_workspace_id=workspace.id,
-        )
+        service.attach_external_workspace_storage(workspace.id, storage)
 
 
 def test_workspace_storage_api_keeps_token_active_after_cache_invalidation_hook(

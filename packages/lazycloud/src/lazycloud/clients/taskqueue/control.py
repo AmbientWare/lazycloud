@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
+from urllib.parse import urlencode
 
 from pydantic import BaseModel
 from shared.http.errors import HttpResponseDecodeError
@@ -33,6 +34,14 @@ ResponseT = TypeVar("ResponseT", bound=BaseModel)
 @dataclass
 class TaskQueueControlClient:
     channel: TaskQueueControlChannel
+    workspace: str = "default"
+    """Workspace every call acts in, named rather than inferred.
+
+    A user credential reaches every workspace its owner belongs to, so the request
+    has to say which one; inside a container the workspace comes from the environment
+    the runner pins. Either way the caller states it rather than letting the server
+    pick one.
+    """
 
     @classmethod
     def from_endpoint(
@@ -40,11 +49,17 @@ class TaskQueueControlClient:
         endpoint: str,
         *,
         token: str | None = None,
+        workspace: str = "default",
         timeout_seconds: float = 10.0,
     ) -> TaskQueueControlClient:
         return cls(
-            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds)
+            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds),
+            workspace=workspace,
         )
+
+    def _scoped(self, path: str) -> str:
+        separator = "&" if "?" in path else "?"
+        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
 
     def put(self, stub_id: str, payload: bytes) -> TaskQueuePutResponse:
         body = TaskQueuePutBody(
@@ -53,14 +68,16 @@ class TaskQueueControlClient:
         )
         return _validate_response(
             TaskQueuePutResponse,
-            self.channel.post("/api/v1/taskqueues/put", body.model_dump(mode="json")),
+            self.channel.post(self._scoped("/api/v1/taskqueues/put"), body.model_dump(mode="json")),
         )
 
     def pop(self, stub_id: str, container_id: str) -> TaskQueuePopResponse:
         request = TaskQueuePopRequest(stub_id=stub_id, container_id=container_id)
         return _validate_response(
             TaskQueuePopResponse,
-            self.channel.post("/api/v1/taskqueues/pop", request.model_dump(mode="json")),
+            self.channel.post(
+                self._scoped("/api/v1/taskqueues/pop"), request.model_dump(mode="json")
+            ),
         )
 
     def monitor_once(
@@ -73,7 +90,7 @@ class TaskQueueControlClient:
         return _validate_response(
             TaskQueueMonitorResponse,
             self.channel.post(
-                "/api/v1/taskqueues/monitor",
+                self._scoped("/api/v1/taskqueues/monitor"),
                 TaskQueueMonitorRequest(
                     task_id=task_id,
                     stub_id=stub_id,
@@ -85,7 +102,9 @@ class TaskQueueControlClient:
     def complete(self, body: TaskQueueCompleteBody) -> TaskQueueCompleteResponse:
         return _validate_response(
             TaskQueueCompleteResponse,
-            self.channel.post("/api/v1/taskqueues/complete", body.model_dump(mode="json")),
+            self.channel.post(
+                self._scoped("/api/v1/taskqueues/complete"), body.model_dump(mode="json")
+            ),
         )
 
     def start_serve(
@@ -97,7 +116,9 @@ class TaskQueueControlClient:
         request = StartTaskQueueServeRequest(stub_id=stub_id, timeout=timeout)
         return _validate_response(
             StartTaskQueueServeResponse,
-            self.channel.post("/api/v1/taskqueues/serve", request.model_dump(mode="json")),
+            self.channel.post(
+                self._scoped("/api/v1/taskqueues/serve"), request.model_dump(mode="json")
+            ),
         )
 
     def task_queue_monitor(
@@ -106,7 +127,9 @@ class TaskQueueControlClient:
     ) -> Iterator[TaskQueueMonitorResponse]:
         yield _validate_response(
             TaskQueueMonitorResponse,
-            self.channel.post("/api/v1/taskqueues/monitor", request.model_dump(mode="json")),
+            self.channel.post(
+                self._scoped("/api/v1/taskqueues/monitor"), request.model_dump(mode="json")
+            ),
         )
 
 

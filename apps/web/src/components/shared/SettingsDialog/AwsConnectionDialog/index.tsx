@@ -45,12 +45,10 @@ import {
 const AWS_CONNECT_FORM_ID = "aws-connect-form";
 
 export function AwsConnectionDialog({
-  workspaceId,
   connection,
   open,
   onOpenChange,
 }: {
-  workspaceId: string;
   connection: AwsConnection | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -58,30 +56,21 @@ export function AwsConnectionDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {open ? (
-        <AwsConnectionFlow
-          workspaceId={workspaceId}
-          connection={connection}
-          onClose={() => onOpenChange(false)}
-        />
+        <AwsConnectionFlow connection={connection} onClose={() => onOpenChange(false)} />
       ) : null}
     </Dialog>
   );
 }
 
 function AwsConnectionFlow({
-  workspaceId,
   connection,
   onClose,
 }: {
-  workspaceId: string;
   connection: AwsConnection | null;
   onClose: () => void;
 }) {
   const [accountId, setAccountId] = useState("");
-  const controller = useAwsConnectionController({
-    workspaceId,
-    onClose,
-  });
+  const controller = useAwsConnectionController({ onClose });
 
   const pendingAction: AwsConnectionDialogRecoveryAction | null =
     controller.activeAction !== "create" && controller.activeAction !== "remove"
@@ -100,7 +89,7 @@ function AwsConnectionFlow({
           <DialogDescription>
             {connection
               ? awsConnectionDialogDescription(connection)
-              : "Authorize this workspace to provision compute in your AWS account."}
+              : "Authorize LazyCloud to provision compute in your AWS account."}
           </DialogDescription>
         </DialogHeader>
 

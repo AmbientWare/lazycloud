@@ -86,12 +86,14 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
         client.delete(f"/api/v1/containers/{container_id}", headers=intruder_headers).status_code
         == 404
     )
+    # 403 rather than 404: a token names an account, and this credential names a
+    # workspace, so it is refused before anything is looked up by id at all.
     assert (
         client.delete(
             f"/api/v1/tokens/{owned_token_record.id}",
             headers=intruder_headers,
         ).status_code
-        == 404
+        == 403
     )
     assert (
         client.post(

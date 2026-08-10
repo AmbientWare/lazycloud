@@ -30,6 +30,8 @@ class DeviceAuthorizationStatus(StringEnum):
 
 class TokenKind(StringEnum):
     Admin = "admin"
+    User = "user"
+    Session = "session"
     WorkspacePrimary = "workspace-primary"
     Workspace = "workspace"
     WorkspaceRestricted = "workspace-restricted"
@@ -48,6 +50,21 @@ SYSTEM_TOKEN_KINDS: frozenset[TokenKind] = frozenset(
 )
 """Platform-minted token kinds eligible for expiry pruning and dashboard hiding."""
 
+USER_PRINCIPAL_TOKEN_KINDS: frozenset[TokenKind] = frozenset(
+    {
+        TokenKind.Admin,
+        TokenKind.User,
+        TokenKind.Session,
+    }
+)
+"""Kinds that name a person; their workspace reach is the account's memberships.
+
+Everything else names one workspace and reaches only that workspace. Keeping both
+is deliberate: an account-wide credential that leaked would reach production as
+readily as a scratch workspace, so automation keeps a token whose blast radius is
+a single workspace.
+"""
+
 
 class AuthScope(StringEnum):
     Read = "read"
@@ -62,6 +79,37 @@ class WorkspaceStatus(StringEnum):
     Disabled = "disabled"
     Deleting = "deleting"
     Deleted = "deleted"
+
+
+class UserStatus(StringEnum):
+    Active = "active"
+    Disabled = "disabled"
+
+
+class PlatformRole(StringEnum):
+    """Platform-wide standing, independent of any one workspace."""
+
+    Administrator = "administrator"
+    Member = "member"
+
+
+class WorkspaceRole(StringEnum):
+    """A user's standing inside one workspace, ordered least to most authority."""
+
+    Member = "member"
+    Administrator = "administrator"
+    Owner = "owner"
+
+
+_WORKSPACE_ROLE_RANK: dict[WorkspaceRole, int] = {
+    WorkspaceRole.Member: 0,
+    WorkspaceRole.Administrator: 1,
+    WorkspaceRole.Owner: 2,
+}
+
+
+def workspace_role_covers(held: WorkspaceRole, required: WorkspaceRole) -> bool:
+    return _WORKSPACE_ROLE_RANK[held] >= _WORKSPACE_ROLE_RANK[required]
 
 
 class WorkspaceStorageConfig(ContractModel):
@@ -168,13 +216,37 @@ class ConcurrencyLimitRecord(ContractModel):
         return self.available == 0
 
 
+class UserRecord(ContractModel):
+    id: str
+    username: str
+    password_hash: str = Field(default="", repr=False)
+    role: PlatformRole = PlatformRole.Member
+    status: UserStatus = UserStatus.Active
+    password_changed_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class WorkspaceMemberRecord(ContractModel):
+    id: str
+    workspace_id: str
+    user_id: str
+    role: WorkspaceRole = WorkspaceRole.Member
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AuthTokenRecord(ContractModel):
     id: str
     name: str
     token_hash: str
     prefix: str
     kind: TokenKind = TokenKind.Workspace
-    workspace_id: str
+    # Exactly one of these names the token's principal, which the schema enforces.
+    # Empty rather than None because a UUID column round-trips "" as NULL here, and
+    # every existing reader already treats an absent scope id as empty.
+    user_id: str = ""
+    workspace_id: str = ""
     worker_id: str = ""
     status: TokenStatus = TokenStatus.Active
     scopes: list[str] = Field(default_factory=lambda: ["*"])
@@ -185,16 +257,27 @@ class AuthTokenRecord(ContractModel):
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
 
+    @property
+    def names_user(self) -> bool:
+        return self.kind in USER_PRINCIPAL_TOKEN_KINDS
+
 
 __all__ = [
     "SYSTEM_TOKEN_KINDS",
+    "USER_PRINCIPAL_TOKEN_KINDS",
     "AuthScope",
     "AuthTokenRecord",
     "ConcurrencyLimitRecord",
     "DeviceAuthorizationStatus",
+    "PlatformRole",
     "TokenKind",
     "TokenStatus",
+    "UserRecord",
+    "UserStatus",
+    "WorkspaceMemberRecord",
     "WorkspaceRecord",
+    "WorkspaceRole",
     "WorkspaceStatus",
     "WorkspaceStorageConfig",
+    "workspace_role_covers",
 ]

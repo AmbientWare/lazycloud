@@ -16,7 +16,7 @@ class DeviceAuthorizationRecord(ContractModel):
     user_code: str
     client_name: str = "cli"
     status: DeviceAuthorizationStatus = DeviceAuthorizationStatus.Pending
-    workspace_id: str | None = None
+    user_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime

@@ -17,6 +17,10 @@ authentication and provides workspace context to everything beneath it. One
 shell owns navigation, workspace switching, breadcrumbs, responsive layout, and
 global search.
 
+The signed-in person and the workspaces they reach come from one request, so the
+two cannot disagree. Switching workspace never means switching credentials: a
+session reaches every workspace its account belongs to.
+
 Give each resource one owning surface. A detail view for a child does not
 duplicate the logs, lifecycle, telemetry, or actions its parent already owns, and
 an internal implementation step never becomes a customer-visible phase. Internal
@@ -34,7 +38,9 @@ broad barrel, and delete the old re-export path.
 ## Data And Security
 
 - Requests are same-origin, carry the auth-store bearer token, and are scoped to
-  the active workspace.
+  the active workspace. Sign-in is a username and password exchanged for a session
+  credential; there is no paste-a-token path, because two ways in means two ways to
+  keep working.
 - Validate every JSON response against the hand-maintained Zod schemas that
   mirror the server contracts. A contract change updates both halves together.
 - TanStack Query is authoritative for server records: option builders live in

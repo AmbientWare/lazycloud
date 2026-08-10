@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from database.repositories.apps import DeploymentResourceRepository
 from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.identity import WorkspaceMemberRepository
 from shared.custom_domains import (
     CustomDomain,
     CustomDomainErrorCode,
@@ -31,11 +32,15 @@ RECHECK_INTERVAL = timedelta(minutes=5)
 
 @dataclass(frozen=True, slots=True)
 class CustomDomainService:
-    """Registering, verifying, and retiring the domains a workspace owns.
+    """Registering, verifying, and retiring the domains an account owns.
 
     The provider is the authority on whether a hostname is serving; this service is
-    the authority on whether the workspace asked for it. Keeping those apart is what
+    the authority on whether the account asked for it. Keeping those apart is what
     lets a verification take as long as DNS takes without any request waiting on it.
+
+    Registration is per account rather than per workspace because DNS control was
+    proven once by whoever owns the domain. Which deployment serves the hostname
+    stays a separate decision, made in whichever workspace that deployment lives.
     """
 
     context: ControlContext
@@ -58,21 +63,19 @@ class CustomDomainService:
         except ValueError as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def register(self, domain: str, *, workspace: str = "default") -> CustomDomain:
+    def register(self, domain: str, *, user_id: str) -> CustomDomain:
         try:
             hostname = normalize_registrable_domain(domain)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         self._reject_platform_domain(hostname)
         with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
             existing = CustomDomainRepository(session).get_by_hostname(
                 hostname,
-                workspace_id=workspace_record.id,
+                user_id=user_id,
             )
             if existing is not None:
                 return existing
-            workspace_id = workspace_record.id
 
         # Outside the transaction: the provider call is a network round trip, and a
         # session held across it holds a row lock for as long as the edge takes.
@@ -80,7 +83,7 @@ class CustomDomainService:
         now = utc_now()
         record = CustomDomain(
             id=str(uuid4()),
-            workspace_id=workspace_id,
+            user_id=user_id,
             hostname=hostname,
             phase=state.phase,
             provider_hostname_id=state.provider_hostname_id,
@@ -93,30 +96,28 @@ class CustomDomainService:
         )
         with self.context.database.session() as session:
             try:
-                return CustomDomainRepository(session).create(record, workspace_id=workspace_id)
+                return CustomDomainRepository(session).create(record, user_id=user_id)
             except ConflictError:
-                # Another workspace won the name between the check and the write. The
+                # Another account won the name between the check and the write. The
                 # provider hostname we just made is ours to clean up, not theirs.
                 self.provider.delete_hostname(state.provider_hostname_id)
                 raise
 
-    def list(self, *, workspace: str = "default") -> list[CustomDomain]:
+    def list(self, *, user_id: str) -> list[CustomDomain]:
         with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
-            return CustomDomainRepository(session).list(workspace_id=workspace_record.id)
+            return CustomDomainRepository(session).list(user_id=user_id)
 
-    def get(self, hostname: str, *, workspace: str = "default") -> CustomDomain:
+    def get(self, hostname: str, *, user_id: str) -> CustomDomain:
         with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
             found = CustomDomainRepository(session).get_by_hostname(
                 hostname.strip().lower(),
-                workspace_id=workspace_record.id,
+                user_id=user_id,
             )
         if found is None:
             raise NotFoundError(f"domain is not registered: {hostname}")
         return found
 
-    def remove(self, hostname: str, *, workspace: str = "default") -> None:
+    def remove(self, hostname: str, *, user_id: str) -> None:
         """Retire a registration, refusing while a deployment still serves under it.
 
         The only destructive step in this feature: it discards a certificate and
@@ -124,11 +125,19 @@ class CustomDomainService:
         so it cannot happen as a surprise consequence of tidying up.
         """
 
-        domain = self.get(hostname, workspace=workspace)
+        domain = self.get(hostname, user_id=user_id)
         with self.context.database.session() as session:
-            claimants = DeploymentResourceRepository(session).hostnames_claimed_under(
-                workspace_id=domain.workspace_id,
-            )
+            workspace_ids = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+            # Every workspace the account owns, because the registration serves all of
+            # them: a deployment in one would go dark if another workspace's tidy-up
+            # retired the domain out from under it.
+            claimants = {
+                name
+                for workspace_id in workspace_ids
+                for name in DeploymentResourceRepository(session).hostnames_claimed_under(
+                    workspace_id=workspace_id,
+                )
+            }
         serving = sorted(name for name in claimants if domain.covers(name))
         if serving:
             raise ConflictError(
@@ -140,7 +149,7 @@ class CustomDomainService:
         with self.context.database.session() as session:
             CustomDomainRepository(session).soft_delete(
                 domain,
-                workspace_id=domain.workspace_id,
+                user_id=domain.user_id,
             )
 
     def refresh(self, domain: CustomDomain) -> CustomDomain:
@@ -219,7 +228,7 @@ class CustomDomainService:
         with self.context.database.session() as session:
             return CustomDomainRepository(session).upsert(
                 updated,
-                workspace_id=domain.workspace_id,
+                user_id=domain.user_id,
             )
 
     def _reject_platform_domain(self, hostname: str) -> None:

@@ -14,10 +14,9 @@ from coordination.event_bus import EventBusEventType
 from coordination.redis_client import RedisClient, redis_text
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.identity import TokenKind
+from tests.service_fixtures import administrator_credential
 
 _WORKLOAD_KEY_ROOTS: tuple[tuple[str, ...], ...] = (
     ("endpoint",),
@@ -52,7 +51,7 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default_workspace = control.get_workspace("default")
+    control.get_workspace("default")
     deleted_workspace = control.upsert_workspace("ephemeral-cleanup")
     peer_workspace = control.upsert_workspace("ephemeral-cleanup-peer")
     redis = isolated_services.redis()
@@ -67,11 +66,7 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
     for key in deleted_keys | peer_keys | {unrelated_key}:
         assert redis.set(key, "present")
 
-    admin_token, _record = AuthService(isolated_services.context).create_token(
-        "ephemeral-cleanup-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default_workspace.id,
-    )
+    admin_token, _record = administrator_credential(isolated_services, "ephemeral-cleanup-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     response = client.delete(
         f"/api/v1/workspaces/{deleted_workspace.id}",
@@ -93,7 +88,7 @@ def test_workspace_deletion_ignores_terminal_container_history_with_stale_worker
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default_workspace = control.get_workspace("default")
+    control.get_workspace("default")
     deleted_workspace = control.upsert_workspace("terminal-container-cleanup")
     peer_workspace = control.upsert_workspace("terminal-container-peer")
     peer_container_id = str(uuid4())
@@ -155,10 +150,8 @@ def test_workspace_deletion_ignores_terminal_container_history_with_stale_worker
     )
     delivery_keys_before = {pattern: set(redis.scan(pattern)) for pattern in delivery_patterns}
     event_bus_pattern = redis.key("event", "*")
-    admin_token, _record = AuthService(isolated_services.context).create_token(
-        "terminal-container-cleanup-admin",
-        kind=TokenKind.Admin,
-        workspace_id=default_workspace.id,
+    admin_token, _record = administrator_credential(
+        isolated_services, "terminal-container-cleanup-admin"
     )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 

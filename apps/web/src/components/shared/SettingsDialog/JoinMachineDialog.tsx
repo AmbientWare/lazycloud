@@ -18,27 +18,25 @@ import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/co
 import { cn } from "@/lib/utils";
 
 export function JoinMachineDialog({
-  workspaceId,
   open,
   onOpenChange,
 }: {
-  workspaceId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {open ? <JoinMachineFlow workspaceId={workspaceId} /> : null}
+      {open ? <JoinMachineFlow /> : null}
     </Dialog>
   );
 }
 
-function JoinMachineFlow({ workspaceId }: { workspaceId: string }) {
-  const machinesQuery = useQuery(machinesQueryOptions(workspaceId));
+function JoinMachineFlow() {
+  const machinesQuery = useQuery(machinesQueryOptions());
   const [generatedAt, setGeneratedAt] = useState<number | null>(null);
   const [baselineMachineIds, setBaselineMachineIds] = useState<ReadonlySet<string>>(new Set());
   const join = useMutation({
-    mutationFn: () => createMachineJoinCommand(workspaceId),
+    mutationFn: () => createMachineJoinCommand(),
     onMutate: () => {
       setGeneratedAt(Date.now());
       setBaselineMachineIds(new Set((machinesQuery.data?.data ?? []).map((machine) => machine.id)));
@@ -59,7 +57,7 @@ function JoinMachineFlow({ workspaceId }: { workspaceId: string }) {
           Join a machine
         </DialogTitle>
         <DialogDescription>
-          Connect a prepared Linux amd64 or arm64 host to this workspace.
+          Connect a prepared Linux amd64 or arm64 host to your account.
         </DialogDescription>
       </DialogHeader>
 

@@ -77,6 +77,12 @@ from shared.http.system import (
     TokenListResponse,
 )
 from shared.http.usage import UsageRecordListResponse, UsageSummaryResponse
+from shared.http.users import (
+    SessionCreateRequest,
+    SessionResponse,
+    UserCreateRequest,
+    UserResponse,
+)
 from shared.http.workspaces import (
     WorkspaceConfigExportResponse,
     WorkspaceCreateRequest,
@@ -210,26 +216,31 @@ class AdminApiClient:
             )
         )
 
+    def create_user(self, request: UserCreateRequest) -> UserResponse:
+        return UserResponse.model_validate(
+            self.channel.post("/api/v1/users", request.model_dump(mode="json"))
+        )
+
+    def sign_in(self, request: SessionCreateRequest) -> SessionResponse:
+        return SessionResponse.model_validate(
+            self.channel.post("/api/v1/sessions", request.model_dump(mode="json"))
+        )
+
     def list_tokens(self) -> TokenListResponse:
         return TokenListResponse.model_validate(self.channel.get("/api/v1/tokens/all"))
 
     def create_token(self, request: TokenCreateRequest) -> TokenCreateResponse:
         return TokenCreateResponse.model_validate(
-            self.channel.post(
-                self._workspace_path("/api/v1/tokens"),
-                request.model_dump(mode="json"),
-            )
+            self.channel.post("/api/v1/tokens", request.model_dump(mode="json"))
         )
 
     def revoke_token(self, token_id: str) -> AuthTokenResponse:
         return AuthTokenResponse.model_validate(
-            self.channel.post(
-                self._workspace_path(f"/api/v1/tokens/{url_path_segment(token_id)}/revoke")
-            )
+            self.channel.post(f"/api/v1/tokens/{url_path_segment(token_id)}/revoke")
         )
 
     def delete_token(self, token_id: str) -> None:
-        self.channel.delete(self._workspace_path(f"/api/v1/tokens/{url_path_segment(token_id)}"))
+        self.channel.delete(f"/api/v1/tokens/{url_path_segment(token_id)}")
 
     def run_container(self, request: ContainerRunRequest) -> ContainerResponse:
         return ContainerResponse.model_validate(

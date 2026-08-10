@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AwsConnection } from "@/lib/api/schemas";
 import {
-  computeQueryKeys,
+  accountComputeQueryKeys,
   createAwsConnection,
   reconnectAwsConnection,
   removeAwsConnection,
@@ -110,9 +110,9 @@ describe("AWS connection controller", () => {
     const queryClient = testQueryClient();
     const onClose = vi.fn();
     const projections = [
-      computeQueryKeys.awsConnection("workspace-1"),
-      computeQueryKeys.policy("workspace-1"),
-      computeQueryKeys.instances("workspace-1"),
+      accountComputeQueryKeys.awsConnection(),
+      accountComputeQueryKeys.instances(),
+      accountComputeQueryKeys.machines(),
     ];
     for (const queryKey of projections) {
       queryClient.setQueryData(queryKey, { stale: true });
@@ -142,7 +142,6 @@ function renderController(
   return renderHook(
     () =>
       useAwsConnectionController({
-        workspaceId: "workspace-1",
         onClose,
         openAuthorizationPopup,
       }),
@@ -193,6 +192,21 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsCon
     id: "00000000-0000-4000-8000-000000000001",
     account_id: "123456789012",
     phase,
+    compute: {
+      revision: 1,
+      default_region: "us-east-1",
+      default_instance_type: "i4i.xlarge",
+      initial_cpu_workers: 1,
+      min_cpu_workers: 1,
+      max_cpu_instances: 10,
+      max_gpu_instances: 2,
+      min_free_cpu_millicores: 1_000,
+      min_free_memory_mib: 1_024,
+      allowed_regions: ["us-east-1"],
+      allowed_instance_types: [],
+      idle_timeout_seconds: 300,
+      root_volume_gib: 200,
+    },
     active_authorization: {
       generation: 1,
       authorization_mode: "managed_stack",

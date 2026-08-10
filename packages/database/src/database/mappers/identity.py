@@ -3,13 +3,29 @@ from __future__ import annotations
 from shared.identity import (
     AuthTokenRecord,
     DeviceAuthorizationStatus,
+    PlatformRole,
     TokenKind,
     TokenStatus,
+    UserRecord,
+    UserStatus,
+    WorkspaceMemberRecord,
+    WorkspaceRole,
 )
 from shared.timestamps import to_utc, to_utc_or_none
 
 from database.records.identity import DeviceAuthorizationRecord, SecretStorageRecord
-from database.tables.identity import DeviceAuthorizationTable, SecretTable, TokenTable
+from database.tables.identity import (
+    DeviceAuthorizationTable,
+    SecretTable,
+    TokenTable,
+    UserTable,
+    WorkspaceMemberTable,
+)
+
+
+def _optional_id(value: str | None) -> str:
+    """A nullable owner column as the empty string every reader already expects."""
+    return str(value) if value is not None else ""
 
 
 def auth_token_record_from_table(row: TokenTable) -> AuthTokenRecord:
@@ -20,7 +36,8 @@ def auth_token_record_from_table(row: TokenTable) -> AuthTokenRecord:
         token_hash=row.token_hash,
         prefix=row.prefix,
         kind=TokenKind(row.kind),
-        workspace_id=str(row.workspace_id),
+        user_id=_optional_id(row.user_id),
+        workspace_id=_optional_id(row.workspace_id),
         worker_id=row.worker_id,
         status=TokenStatus(row.status),
         scopes=list(row.scopes),
@@ -43,11 +60,36 @@ def device_authorization_record_from_table(
         user_code=row.user_code,
         client_name=row.client_name,
         status=DeviceAuthorizationStatus(row.status),
-        workspace_id=str(row.workspace_id) if row.workspace_id is not None else None,
+        user_id=str(row.user_id) if row.user_id is not None else None,
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
         expires_at=to_utc(row.expires_at),
         consumed_at=to_utc_or_none(row.consumed_at),
+    )
+
+
+def user_record_from_table(row: UserTable) -> UserRecord:
+    """Map the relational user aggregate without consulting a JSON shadow."""
+    return UserRecord(
+        id=str(row.id),
+        username=row.username,
+        password_hash=row.password_hash,
+        role=PlatformRole(row.role),
+        status=UserStatus(row.status),
+        password_changed_at=to_utc(row.password_changed_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+    )
+
+
+def workspace_member_record_from_table(row: WorkspaceMemberTable) -> WorkspaceMemberRecord:
+    return WorkspaceMemberRecord(
+        id=str(row.id),
+        workspace_id=str(row.workspace_id),
+        user_id=str(row.user_id),
+        role=WorkspaceRole(row.role),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
     )
 
 
@@ -67,4 +109,6 @@ __all__ = [
     "auth_token_record_from_table",
     "device_authorization_record_from_table",
     "secret_storage_record_from_table",
+    "user_record_from_table",
+    "workspace_member_record_from_table",
 ]

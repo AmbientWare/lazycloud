@@ -50,15 +50,16 @@ class DnsRecord(ContractModel):
 
 
 class CustomDomain(ContractModel):
-    """A domain a workspace has registered and may serve resources under.
+    """A domain a user has registered and may serve resources under.
 
-    Registered once and verified once, rather than per resource: the provider
-    hostname and its certificate belong here, so assigning or unassigning a name to a
-    deployment never revokes anything.
+    Registered once and verified once, rather than per resource or per workspace: the
+    provider hostname and its certificate belong here, so assigning or unassigning a
+    name to a deployment never revokes anything, and any workspace the owner belongs
+    to can serve under it.
     """
 
     id: str = Field(pattern=_UUID_PATTERN)
-    workspace_id: str = Field(pattern=_UUID_PATTERN)
+    user_id: str = Field(pattern=_UUID_PATTERN)
     hostname: str = Field(min_length=3, max_length=MAX_HOSTNAME_LENGTH)
     phase: CustomDomainPhase = CustomDomainPhase.AwaitingVerification
     provider_hostname_id: str | None = Field(default=None, min_length=1, max_length=128)

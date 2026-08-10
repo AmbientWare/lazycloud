@@ -4,10 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
-from database.repositories.compute import (
-    AwsAccountConnectionRepository,
-    ComputeUnitRepository,
-)
+from database.repositories.compute import ComputeUnitRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.types import DatabaseSession
@@ -65,7 +62,7 @@ class WorkspaceDeletionService:
             if workspace.status is WorkspaceStatus.Deleted:
                 return workspace
 
-            self.services.auth.workspace_credentials_revoked()
+            self.services.auth.credentials_revoked()
             self._wake_source_cache_cleanup(workspace.id)
             self._delete_external_and_ephemeral_state(workspace)
             deleted = self._finalize(identity, workspace.id, audit_actor=audit_actor)
@@ -86,7 +83,7 @@ class WorkspaceDeletionService:
             )
             if workspace.status is WorkspaceStatus.Deleted:
                 return workspace
-            self._assert_compute_disconnected(session, workspace.id)
+            self._assert_compute_released(session, workspace.id)
             source_object_ids = ObjectRepository(session).list_source_object_ids_for_deletion(
                 workspace_id=workspace.id,
                 source_bucket=SOURCE_PACKAGE_BUCKET,
@@ -99,11 +96,15 @@ class WorkspaceDeletionService:
             return identity.mark_deleting(session, workspace)
 
     @staticmethod
-    def _assert_compute_disconnected(session: DatabaseSession, workspace_id: str) -> None:
-        connection = AwsAccountConnectionRepository(session).get_for_workspace(workspace_id)
+    def _assert_compute_released(session: DatabaseSession, workspace_id: str) -> None:
+        """Refuse while this workspace still holds capacity, but never mind the account.
+
+        The connected AWS account belongs to the owner and backs their other
+        workspaces, so requiring a disconnect here would make deleting a scratch
+        workspace tear down production. What has to be released is the capacity this
+        workspace itself holds.
+        """
         pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-        if connection is not None:
-            raise ConflictError("disconnect AWS compute before deleting this workspace")
         live = sorted(pool.name for pool in pools if pool.phase is not ComputeUnitPhase.Deleted)
         if live:
             # Deletion drains drained pools; it never terminates running capacity

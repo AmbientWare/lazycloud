@@ -5,7 +5,7 @@ from datetime import datetime
 
 from database.repositories.common import (
     TableRepositoryConfig,
-    WorkspaceTableRepository,
+    UserTableRepository,
 )
 from database.tables.custom_domains import CustomDomainTable
 from shared.custom_domains import CustomDomain, CustomDomainPhase
@@ -21,58 +21,58 @@ class CustomDomainRepository:
     session: Session
 
     @property
-    def records(self) -> WorkspaceTableRepository[CustomDomain]:
-        return WorkspaceTableRepository(
+    def records(self) -> UserTableRepository[CustomDomain]:
+        return UserTableRepository(
             self.session,
             TableRepositoryConfig(CustomDomainTable, CustomDomain),
         )
 
-    def create(self, domain: CustomDomain, *, workspace_id: str) -> CustomDomain:
+    def create(self, domain: CustomDomain, *, user_id: str) -> CustomDomain:
         try:
             return self.records.upsert(
                 domain,
-                workspace_id=workspace_id,
+                user_id=user_id,
                 status=domain.phase.value,
             )
         except IntegrityError as exc:
             raise ConflictError(f"domain is already registered: {domain.hostname}") from exc
 
-    def upsert(self, domain: CustomDomain, *, workspace_id: str) -> CustomDomain:
+    def upsert(self, domain: CustomDomain, *, user_id: str) -> CustomDomain:
         return self.records.upsert(
             domain,
-            workspace_id=workspace_id,
+            user_id=user_id,
             status=domain.phase.value,
         )
 
-    def get(self, domain_id: str, *, workspace_id: str) -> CustomDomain | None:
-        return self.records.get(domain_id, workspace_id=workspace_id)
+    def get(self, domain_id: str, *, user_id: str) -> CustomDomain | None:
+        return self.records.get(domain_id, user_id=user_id)
 
-    def list(self, *, workspace_id: str) -> list[CustomDomain]:
+    def list(self, *, user_id: str) -> list[CustomDomain]:
         return [
-            domain
-            for domain in self.records.list(workspace_id=workspace_id)
-            if domain.deleted_at is None
+            domain for domain in self.records.list(user_id=user_id) if domain.deleted_at is None
         ]
 
-    def get_by_hostname(self, hostname: str, *, workspace_id: str) -> CustomDomain | None:
+    def get_by_hostname(self, hostname: str, *, user_id: str) -> CustomDomain | None:
         row = self.session.execute(
             select(CustomDomainTable)
-            .where(CustomDomainTable.workspace_id == workspace_id)
+            .where(CustomDomainTable.user_id == user_id)
             .where(CustomDomainTable.hostname == hostname)
             .where(CustomDomainTable.deleted_at.is_(None))
             .limit(1)
         ).scalar_one_or_none()
         return CustomDomain.model_validate(row.payload) if row is not None else None
 
-    def covering(self, hostname: str, *, workspace_id: str) -> CustomDomain | None:
-        """The workspace's registration a concrete hostname may be served under.
+    def covering(self, hostname: str, *, user_id: str) -> CustomDomain | None:
+        """The account's registration a concrete hostname may be served under.
 
-        Scoped to one workspace on purpose: this answers whether *this* tenant may
-        claim the name, so another tenant's registration must not satisfy it.
+        Scoped to one account on purpose: this answers whether *this* owner may claim
+        the name, so another owner's registration must not satisfy it. Any workspace
+        the owner belongs to satisfies it, which is what makes one registration serve
+        all of them.
         """
         candidates = self.session.execute(
             select(CustomDomainTable)
-            .where(CustomDomainTable.workspace_id == workspace_id)
+            .where(CustomDomainTable.user_id == user_id)
             .where(CustomDomainTable.deleted_at.is_(None))
         ).scalars()
         for row in candidates:
@@ -84,8 +84,8 @@ class CustomDomainRepository:
     def due_for_check(self, *, before: datetime, limit: int = 50) -> list[CustomDomain]:
         """Registrations the reconciler should re-read from the provider.
 
-        System listing across workspaces: verification is the provider's answer about
-        a global namespace, so it is not any one tenant's query.
+        System listing across accounts: verification is the provider's answer about a
+        global namespace, so it is not any one owner's query.
         """
         unsettled = (
             CustomDomainPhase.AwaitingVerification.value,
@@ -104,11 +104,11 @@ class CustomDomainRepository:
         ).scalars()
         return [CustomDomain.model_validate(row.payload) for row in rows]
 
-    def soft_delete(self, domain: CustomDomain, *, workspace_id: str) -> CustomDomain:
+    def soft_delete(self, domain: CustomDomain, *, user_id: str) -> CustomDomain:
         now = utc_now()
         return self.upsert(
             domain.model_copy(update={"deleted_at": now, "updated_at": now}),
-            workspace_id=workspace_id,
+            user_id=user_id,
         )
 
 

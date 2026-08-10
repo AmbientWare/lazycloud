@@ -8,20 +8,19 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
 from observability.stream_state import (
     RealtimeStreamRetention,
     RedisEventStreamRepository,
 )
 from pydantic import JsonValue
 from shared.errors import ExpiredCursorError
-from shared.identity import TokenKind
 from shared.realtime.contracts import (
     EventRecordType,
     create_cloud_event_record,
 )
 from shared.realtime.streams import EventHistoryQuery, LogStreamQuery
 from tests.real_redis import RealRedisActors
+from tests.service_fixtures import administrator_credential
 
 
 def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
@@ -219,10 +218,7 @@ def test_api_maps_expired_log_and_event_cursors_to_409(
         )
 
     client = client_stack.enter_context(TestClient(create_app(services)))
-    token, _record = AuthService(services.context).create_token(
-        "cursor-admin",
-        kind=TokenKind.Admin,
-    )
+    token, _record = administrator_credential(isolated_services, "cursor-admin")
     headers = {"Authorization": f"Bearer {token}"}
     log_response = client.get(
         "/api/v1/logs",

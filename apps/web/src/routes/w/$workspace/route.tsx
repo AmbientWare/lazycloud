@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Trash2, TriangleAlert } from "lucide-react";
 
 import { AppShell } from "@/components/shared/AppShell";
+import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { WorkspaceDeletionProvider } from "@/components/shared/WorkspaceDeletion";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
@@ -13,6 +14,14 @@ import { WorkspaceContext, type WorkspaceContextValue } from "@/lib/workspace-co
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
 export const Route = createFileRoute("/w/$workspace")({
+  // Settings opens as a layer over whichever page you were on, so it is addressed by
+  // a search param rather than a route: a link still reaches it, back closes it, and
+  // you keep your place underneath. Declared on the layout so every page below can
+  // carry it.
+  validateSearch: (search: Record<string, unknown>): { settings?: SettingsView } => {
+    const view = settingsView(search.settings);
+    return view ? { settings: view } : {};
+  },
   component: WorkspaceLayout,
 });
 

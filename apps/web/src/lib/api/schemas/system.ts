@@ -4,6 +4,8 @@ const timestampSchema = z.string().datetime({ offset: true });
 
 export const tokenKindSchema = z.enum([
   "admin",
+  "user",
+  "session",
   "workspace-primary",
   "workspace",
   "workspace-restricted",
@@ -22,6 +24,9 @@ export const authTokenSchema = z
     name: z.string(),
     prefix: z.string(),
     kind: tokenKindSchema,
+    // Exactly one is set: a credential names the person holding it or the single
+    // workspace it was minted for.
+    user_id: z.string(),
     workspace_id: z.string(),
     status: tokenStatusSchema,
     scopes: z.array(z.string()),
@@ -42,17 +47,15 @@ export const tokenListSchema = z
   .strict();
 export type TokenListResponse = z.infer<typeof tokenListSchema>;
 
-export const workspaceTokenCreateRequestSchema = z
+export const tokenCreateRequestSchema = z
   .object({
     name: z.string().trim().min(1),
-    scopes: z.array(z.enum(["read", "write"])).min(1),
-    expires_in_seconds: z.number().int().positive().nullable(),
-    kind: z.literal("workspace"),
-    workspace_id: z.string().min(1),
-    reusable: z.literal(true),
+    // Omitted and null both mean "no expiry"; a positive number is a lifetime in
+    // seconds, so zero is never a valid request rather than a silent "immediately".
+    expires_in_seconds: z.number().int().positive().nullable().optional(),
   })
   .strict();
-export type WorkspaceTokenCreateRequest = z.infer<typeof workspaceTokenCreateRequestSchema>;
+export type TokenCreateRequest = z.infer<typeof tokenCreateRequestSchema>;
 
 export const tokenCreateResponseSchema = z
   .object({

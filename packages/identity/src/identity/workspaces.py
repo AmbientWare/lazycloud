@@ -139,9 +139,7 @@ class WorkspaceDeletionIdentityService:
     ) -> WorkspaceRecord:
         now = utc_now()
         TokenRepository(session).revoke_workspace_for_deletion(workspace.id, now=now)
-        repository = WorkspaceRepository(session)
-        repository.delete_device_authorizations_for_deletion(workspace.id)
-        return repository.mark_deleting(workspace)
+        return WorkspaceRepository(session).mark_deleting(workspace)
 
     def finalize(
         self,

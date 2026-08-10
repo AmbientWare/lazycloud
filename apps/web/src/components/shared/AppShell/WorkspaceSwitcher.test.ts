@@ -19,30 +19,19 @@ const workspace = (id: string, name: string): Workspace => ({
 });
 
 describe("workspaceDeleteAvailability", () => {
-  it("protects the default and token-owning workspaces", () => {
-    expect(workspaceDeleteAvailability(workspace("one", "default"), "two", 2)).toEqual({
+  it("protects the default workspace and the last remaining one", () => {
+    expect(workspaceDeleteAvailability(workspace("one", "default"), 2)).toEqual({
       allowed: false,
       reason: "The default workspace is protected",
     });
-    expect(workspaceDeleteAvailability(workspace("one", "acme"), "one", 2)).toEqual({
-      allowed: false,
-      reason: "The workspace that owns this admin token is protected",
-    });
-  });
-
-  it("waits for the protection owner and preserves the final workspace", () => {
-    expect(workspaceDeleteAvailability(workspace("one", "acme"), undefined, 2)).toEqual({
-      allowed: false,
-      reason: "Checking workspace protection",
-    });
-    expect(workspaceDeleteAvailability(workspace("one", "acme"), "two", 1)).toEqual({
+    expect(workspaceDeleteAvailability(workspace("one", "acme"), 1)).toEqual({
       allowed: false,
       reason: "The final workspace is protected",
     });
   });
 
-  it("allows an admin to remove another non-default workspace", () => {
-    expect(workspaceDeleteAvailability(workspace("two", "beta"), "one", 2)).toEqual({
+  it("offers deletion for another non-default workspace", () => {
+    expect(workspaceDeleteAvailability(workspace("two", "beta"), 2)).toEqual({
       allowed: true,
     });
   });

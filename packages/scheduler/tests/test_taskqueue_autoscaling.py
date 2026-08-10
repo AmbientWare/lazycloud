@@ -21,6 +21,7 @@ from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
 )
+from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.container_requests import WorkerContainerRequestPayload, WorkerStartupKind
 from shared.containers import ContainerRecord, ContainerStatus
@@ -493,4 +494,5 @@ def _scheduler_request_service(
         assignments=persistence,
         dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
         lifecycle_events=RedisEventStreamRepository(redis),
+        workspace_owners=DatabaseWorkspaceOwners(services.context),
     )

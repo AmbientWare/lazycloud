@@ -34,16 +34,15 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 from websockets.typing import Data
 
-from api.server.auth import write_app_token
+from api.server.auth import write_app_token, write_workspace
 from api.server.dependencies import (
-    authorize_websocket,
+    authorize_websocket_workspace,
     current_services,
     current_websocket_services,
 )
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
     resolve_deployed_stub_id,
-    token_workspace,
 )
 from api.server.http import (
     backend_websocket_headers,
@@ -85,7 +84,7 @@ async def deployed_pod_proxy_by_id(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
+    workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -96,7 +95,7 @@ async def deployed_pod_proxy_by_id(
         stub_id,
         StubKind.Pod,
         public=False,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     return await _forward_proxy_request(stub, port, request, subpath, service)
 
@@ -146,7 +145,7 @@ async def deployed_pod_proxy_by_latest_path(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
+    workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -157,7 +156,7 @@ async def deployed_pod_proxy_by_latest_path(
         deployment_name,
         StubKind.Pod,
         version=None,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     return await _forward_proxy_request(stub, port, request, subpath, service)
 
@@ -179,7 +178,7 @@ async def deployed_pod_proxy_by_version(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
+    workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -190,7 +189,7 @@ async def deployed_pod_proxy_by_version(
         deployment_name,
         StubKind.Pod,
         version=version,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     return await _forward_proxy_request(stub, port, request, subpath, service)
 
@@ -206,14 +205,14 @@ async def deployed_pod_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = authorize_websocket(services, websocket)
+    workspace_id = authorize_websocket_workspace(services, websocket)
     stub = resolve_deployed_stub_id(
         control_plane,
         services.apps,
         stub_id,
         StubKind.Pod,
         public=False,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     await _forward_pod_websocket(stub, port, websocket, subpath, service)
 
@@ -250,14 +249,14 @@ async def deployed_pod_websocket_by_latest_path(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = authorize_websocket(services, websocket)
+    workspace_id = authorize_websocket_workspace(services, websocket)
     stub = resolve_deployed_stub(
         control_plane,
         services,
         deployment_name,
         StubKind.Pod,
         version=None,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     await _forward_pod_websocket(stub, port, websocket, subpath, service)
 
@@ -274,14 +273,14 @@ async def deployed_pod_websocket_by_version(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = authorize_websocket(services, websocket)
+    workspace_id = authorize_websocket_workspace(services, websocket)
     stub = resolve_deployed_stub(
         control_plane,
         services,
         deployment_name,
         StubKind.Pod,
         version=version,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     await _forward_pod_websocket(stub, port, websocket, subpath, service)
 
@@ -302,14 +301,14 @@ async def deployed_sandbox_proxy_by_id(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
+    workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
     container, stub = _resolve_sandbox_container(
         container_id,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
         public=False,
         control_plane=control_plane,
         services=services,
@@ -371,10 +370,10 @@ async def deployed_sandbox_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    token = authorize_websocket(services, websocket)
+    workspace_id = authorize_websocket_workspace(services, websocket)
     container, stub = _resolve_sandbox_container(
         container_id,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
         public=False,
         control_plane=control_plane,
         services=services,
@@ -433,7 +432,7 @@ async def deployed_sandbox_proxy_by_latest_path(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
+    workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -444,7 +443,7 @@ async def deployed_sandbox_proxy_by_latest_path(
         deployment_name,
         StubKind.Sandbox,
         version=None,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     return await _forward_proxy_request(stub, port, request, subpath, service)
 
@@ -466,7 +465,7 @@ async def deployed_sandbox_proxy_by_version(
     request: Request,
     subpath: str = "",
     *,
-    token: write_token,
+    workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
@@ -477,7 +476,7 @@ async def deployed_sandbox_proxy_by_version(
         deployment_name,
         StubKind.Sandbox,
         version=version,
-        workspace=token_workspace(token),
+        workspace=workspace_id,
     )
     return await _forward_proxy_request(stub, port, request, subpath, service)
 

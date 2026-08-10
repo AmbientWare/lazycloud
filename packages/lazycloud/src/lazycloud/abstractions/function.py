@@ -1011,6 +1011,7 @@ def _default_function_client(config: ControlClientConfig) -> FunctionControlClie
     return FunctionControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
+        workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
 

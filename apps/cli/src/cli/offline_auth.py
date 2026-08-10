@@ -14,10 +14,13 @@ from database.context import ServiceContext
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from lazycloud.cli.components.output import print_payload
+from pydantic import SecretStr
 from shared.errors import ConflictError
+from shared.http.users import SessionCreateRequest
 from shared.identity import WorkspaceStorageConfig
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
+from cli.api_client import admin_api_client
 from database import (
     ControlPlaneRecoveryFence,
     DatabaseApplicationName,
@@ -31,6 +34,15 @@ auth_app = typer.Typer(help="Bootstrap or recover control-plane administrator ac
 @auth_app.command("bootstrap")
 def bootstrap_admin(
     ctx: typer.Context,
+    password_file: Annotated[
+        Path,
+        typer.Option(
+            "--password-file",
+            dir_okay=False,
+            resolve_path=True,
+            help="Private file holding the first administrator's password.",
+        ),
+    ],
     output: Annotated[
         Path | None,
         typer.Option(
@@ -42,6 +54,10 @@ def bootstrap_admin(
     ] = None,
     name: Annotated[str, typer.Option("--name")] = "first-admin",
     workspace: Annotated[str, typer.Option("--workspace")] = "default",
+    username: Annotated[
+        str,
+        typer.Option("--username", help="Username for the first administrator account."),
+    ] = "admin",
     token_file: Annotated[
         Path | None,
         typer.Option(
@@ -52,6 +68,9 @@ def bootstrap_admin(
         ),
     ] = None,
 ) -> None:
+    # Read from a file rather than an option value: a password on argv is visible in
+    # the process list and lands in shell history.
+    password = _read_password(password_file)
     configured_token = _read_configured_token(token_file) if token_file is not None else None
     if output is None and configured_token is None:
         raise CredentialFileError("--output is required without a configured credential file")
@@ -67,8 +86,10 @@ def bootstrap_admin(
     try:
         service = AuthService(IdentityDatabaseContext(database))
         if configured_token is not None:
-            result = service.bootstrap_admin_token(
+            result = service.bootstrap_administrator(
                 request_id=request_id,
+                username=username,
+                password=password,
                 name=name,
                 workspace=workspace,
                 configured_token=configured_token,
@@ -84,8 +105,10 @@ def bootstrap_admin(
             result = _publish_admin_credential(
                 publication=publication,
                 request_exists=current_request == request_id,
-                create=lambda staged, stage: service.bootstrap_admin_token(
+                create=lambda staged, stage: service.bootstrap_administrator(
                     request_id=request_id,
+                    username=username,
+                    password=password,
                     name=name,
                     workspace=workspace,
                     staged_token=staged,
@@ -93,8 +116,10 @@ def bootstrap_admin(
                 ),
             )
         service.mark_admin_token_published(request_id=request_id, recovery=False)
-        # After the token, because this is the call that creates the workspace.
-        storage = _provision_workspace_storage(database, storage_client, result.record.workspace_id)
+        # After the credential, because that is the call that creates the workspace.
+        # Named rather than taken from the token: an administrator credential belongs
+        # to a person now, so it carries no workspace of its own.
+        storage = _provision_workspace_storage(database, storage_client, workspace)
     finally:
         storage_client.close()
         database.dispose()
@@ -103,7 +128,8 @@ def bootstrap_admin(
         {
             "status": "already_published" if result.replayed else "created",
             "request_id": request_id,
-            "workspace_id": result.record.workspace_id,
+            "workspace": workspace,
+            "username": result.username,
             "token_id": result.record.id,
             "credential_source": "configured_file" if configured_token is not None else "generated",
             "output": str(publication.resolved_output) if publication is not None else None,
@@ -133,6 +159,32 @@ def _provision_workspace_storage(
     return record.storage
 
 
+@auth_app.command("login")
+def auth_login(
+    ctx: typer.Context,
+    username: Annotated[str, typer.Option("--username")],
+    password_file: Annotated[
+        Path,
+        typer.Option(
+            "--password-file",
+            dir_okay=False,
+            resolve_path=True,
+            help="Private file holding that account's password.",
+        ),
+    ],
+) -> None:
+    """Sign in and print a credential for that account.
+
+    What it prints is what the account itself holds, which is the point: anything
+    minted with it belongs to them rather than to the administrator who ran this.
+    """
+    password = read_private_file(password_file, description="password file")
+    response = admin_api_client().sign_in(
+        SessionCreateRequest(username=username, password=SecretStr(password))
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
 @auth_app.command("recover")
 def recover_admin(
     ctx: typer.Context,
@@ -154,7 +206,21 @@ def recover_admin(
     ],
     name: Annotated[str, typer.Option("--name")] = "recovery-admin",
     workspace: Annotated[str, typer.Option("--workspace")] = "default",
+    username: Annotated[
+        str,
+        typer.Option("--username", help="Administrator account to restore access for."),
+    ] = "admin",
+    password_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--password-file",
+            dir_okay=False,
+            resolve_path=True,
+            help="Optional private file with a replacement password for that account.",
+        ),
+    ] = None,
 ) -> None:
+    password = _read_password(password_file) if password_file is not None else None
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin)
     )
@@ -174,6 +240,8 @@ def recover_admin(
                 request_exists=service.recovery_request_exists(request_id),
                 create=lambda staged, stage: service.recover_admin_token(
                     request_id=request_id,
+                    username=username,
+                    password=password,
                     name=name,
                     workspace=workspace,
                     staged_token=staged,
@@ -188,7 +256,8 @@ def recover_admin(
         {
             "status": "already_published" if result.replayed else "created",
             "request_id": request_id,
-            "workspace_id": result.record.workspace_id,
+            "workspace": workspace,
+            "username": result.username,
             "token_id": result.record.id,
             "output": str(publication.resolved_output),
             "mode": "0600",
@@ -232,7 +301,13 @@ def _publish_admin_credential(
     return result
 
 
-def _read_configured_token(path: Path) -> str | None:
+def read_private_file(path: Path, *, description: str) -> str:
+    """Read a secret from a file the caller alone can read.
+
+    Refuses a symlink, a non-regular file, group/world-readable modes, and anything
+    unexpectedly large, so pointing this at the wrong path fails instead of quietly
+    loading whatever was there.
+    """
     resolved = Path(os.path.abspath(os.fspath(path.expanduser())))
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -240,28 +315,37 @@ def _read_configured_token(path: Path) -> str | None:
     try:
         descriptor = os.open(resolved, flags)
     except FileNotFoundError as exc:
-        raise CredentialFileError(f"configured credential file does not exist: {resolved}") from exc
+        raise CredentialFileError(f"{description} does not exist: {resolved}") from exc
     except OSError as exc:
-        raise CredentialFileError("configured credential path cannot be opened safely") from exc
+        raise CredentialFileError(f"{description} cannot be opened safely") from exc
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
-            raise CredentialFileError("configured credential path is not a regular file")
+            raise CredentialFileError(f"{description} is not a regular file")
         if stat.S_IMODE(metadata.st_mode) & 0o077:
-            raise CredentialFileError(
-                "configured credential file must not be group/world accessible"
-            )
+            raise CredentialFileError(f"{description} must not be group/world accessible")
         if metadata.st_size > 4096:
-            raise CredentialFileError("configured credential file is unexpectedly large")
+            raise CredentialFileError(f"{description} is unexpectedly large")
         payload = os.read(descriptor, 4097)
     finally:
         os.close(descriptor)
     if len(payload) > 4096:
-        raise CredentialFileError("configured credential file is unexpectedly large")
+        raise CredentialFileError(f"{description} is unexpectedly large")
     try:
-        value = payload.decode("utf-8").strip()
+        return payload.decode("utf-8").strip()
     except UnicodeDecodeError as exc:
-        raise CredentialFileError("configured credential file is not UTF-8 text") from exc
+        raise CredentialFileError(f"{description} is not UTF-8 text") from exc
+
+
+def _read_password(path: Path) -> str:
+    value = read_private_file(path, description="administrator password file")
+    if not value:
+        raise CredentialFileError("administrator password file is empty")
+    return value
+
+
+def _read_configured_token(path: Path) -> str | None:
+    value = read_private_file(path, description="configured credential file")
     if not value:
         return None
     if re.fullmatch(r"rt_[A-Za-z0-9_-]{43}", value) is None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlencode
 
 from shared.http.endpoints import (
     StartEndpointServeRequest,
@@ -17,6 +18,14 @@ class EndpointControlChannel(Protocol):
 @dataclass
 class EndpointControlClient:
     channel: EndpointControlChannel
+    workspace: str = "default"
+    """Workspace every call acts in, named rather than inferred.
+
+    A user credential reaches every workspace its owner belongs to, so the request
+    has to say which one; inside a container the workspace comes from the environment
+    the runner pins. Either way the caller states it rather than letting the server
+    pick one.
+    """
 
     @classmethod
     def from_endpoint(
@@ -24,16 +33,24 @@ class EndpointControlClient:
         endpoint: str,
         *,
         token: str | None = None,
+        workspace: str = "default",
         timeout_seconds: float = 10.0,
     ) -> EndpointControlClient:
         return cls(
-            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds)
+            channel=HttpChannel(endpoint=endpoint, token=token, timeout_seconds=timeout_seconds),
+            workspace=workspace,
         )
+
+    def _scoped(self, path: str) -> str:
+        separator = "&" if "?" in path else "?"
+        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
 
     def start_serve(self, stub_id: str, *, timeout: int = 0) -> StartEndpointServeResponse:
         request = StartEndpointServeRequest(stub_id=stub_id, timeout=timeout)
         return StartEndpointServeResponse.model_validate(
-            self.channel.post("/api/v1/endpoints/serve", request.model_dump(mode="json"))
+            self.channel.post(
+                self._scoped("/api/v1/endpoints/serve"), request.model_dump(mode="json")
+            )
         )
 
 

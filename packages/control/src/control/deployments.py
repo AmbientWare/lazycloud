@@ -6,6 +6,7 @@ from typing import Protocol
 
 from database.repositories.apps import AppRepository, CronJobRepository, DeploymentRepository
 from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.identity import WorkspaceMemberRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
@@ -345,21 +346,27 @@ def _claimed_hostname(
     *,
     workspace_id: str,
 ) -> str | None:
-    """Resolve the hostname a spec claims, refusing one the workspace cannot serve.
+    """Resolve the hostname a spec claims, refusing one the deployer cannot serve.
 
-    Checked against the workspace's own registrations, so a spec cannot claim a name
-    under a domain another tenant proved it owns. A registration still short of
-    `ready` is accepted: the certificate arrives on the provider's schedule, and a
-    deploy that failed until it did would make an ordinary redeploy depend on DNS
-    propagation.
+    Checked against the registrations held by the account that owns this workspace,
+    so a spec cannot claim a name under a domain another tenant proved it owns, and a
+    domain registered once serves deployments in any workspace that account owns. A
+    registration still short of `ready` is accepted: the certificate arrives on the
+    provider's schedule, and a deploy that failed until it did would make an ordinary
+    redeploy depend on DNS propagation.
     """
 
     if domain is None:
         return None
-    covering = CustomDomainRepository(session).covering(domain, workspace_id=workspace_id)
+    owner = WorkspaceMemberRepository(session).owner(workspace_id)
+    covering = (
+        CustomDomainRepository(session).covering(domain, user_id=owner.user_id)
+        if owner is not None
+        else None
+    )
     if covering is None:
         raise InvalidInputError(
-            f"no registered domain in this workspace covers {domain}; "
+            f"no domain registered to this account covers {domain}; "
             f"register it before a deployment can serve it"
         )
     return domain

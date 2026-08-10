@@ -764,6 +764,42 @@ class RedisSchedulerWorkerRepository:
 
         return self._with_worker_lock(worker_id, write)
 
+    def update_worker_tenancy(
+        self,
+        worker_id: str,
+        *,
+        workspace_id: str,
+        owner_user_id: str,
+        ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
+        now: datetime | None = None,
+    ) -> SchedulerWorkerRecord:
+        """Restate who a worker belongs to without touching what it is doing.
+
+        Two fields only. Re-adding the worker would reset its resource version and
+        overwrite the capacity and status a running worker is concurrently
+        changing, which is how a reconcile pass would hand a busy machine back its
+        idle capacity.
+        """
+
+        def write() -> SchedulerWorkerRecord:
+            worker = self.get_worker(worker_id)
+            if worker is None:
+                raise WorkerStateNotFoundError(worker_id)
+            updated = worker.model_copy(
+                update={
+                    "workspace_id": workspace_id,
+                    "owner_user_id": owner_user_id,
+                    "resource_version": worker.resource_version + 1,
+                    "updated_at": now or utc_now(),
+                }
+            )
+            state_key = self.keys.worker_state(worker_id)
+            self.redis.hash_set(state_key, mapping=redis_serialization.dump_model_hash(updated))
+            self.redis.expire(state_key, ttl_seconds)
+            return updated
+
+        return self._with_worker_lock(worker_id, write)
+
     def toggle_worker_available(
         self,
         worker_id: str,

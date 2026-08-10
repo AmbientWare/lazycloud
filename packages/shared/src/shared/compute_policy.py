@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from datetime import datetime
 
@@ -18,7 +17,6 @@ _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 
 LAZYCLOUD_MACHINE_POOL = "lazycloud"
 """Pool the platform's own fleet stamps on its machines."""
-_AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
 
 
 class ComputeCapacityMode(StringEnum):
@@ -56,47 +54,14 @@ class ComputeResourceRequirements(ContractModel):
         return self
 
 
-class AwsWorkspaceComputePolicy(ContractModel):
-    default_region: str = Field(default="us-east-1", pattern=_AWS_REGION_PATTERN)
-    default_instance_type: str = Field(default="i4i.xlarge", min_length=1, max_length=64)
-    initial_cpu_workers: int = Field(default=1, ge=0, le=100)
-    min_cpu_workers: int = Field(default=1, ge=0, le=100)
-    max_cpu_instances: int = Field(default=10, ge=0, le=100)
-    max_gpu_instances: int = Field(default=2, ge=0, le=100)
-    min_free_cpu_millicores: int = Field(default=1_000, ge=0)
-    min_free_memory_mib: int = Field(default=1_024, ge=0)
-    allowed_regions: tuple[str, ...] = ("us-east-1",)
-    allowed_instance_types: tuple[str, ...] = ()
-    idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
-    root_volume_gib: int = Field(default=200, ge=50, le=2048)
-
-    @model_validator(mode="after")
-    def validate_limits(self) -> AwsWorkspaceComputePolicy:
-        if not self.allowed_regions:
-            raise ValueError("AWS compute policy requires at least one allowed region")
-        if len(set(self.allowed_regions)) != len(self.allowed_regions):
-            raise ValueError("AWS compute policy allowed regions must be unique")
-        if any(not _matches_aws_region(region) for region in self.allowed_regions):
-            raise ValueError("AWS compute policy contains an invalid region")
-        if self.default_region not in self.allowed_regions:
-            raise ValueError("AWS default region must be allowed")
-        if not self.min_cpu_workers <= self.initial_cpu_workers <= self.max_cpu_instances:
-            raise ValueError("AWS CPU worker capacity must satisfy min <= initial <= max")
-        if not self.default_instance_type.strip():
-            raise ValueError("AWS default instance type cannot be empty")
-        if len(set(self.allowed_instance_types)) != len(self.allowed_instance_types):
-            raise ValueError("AWS allowed instance types must be unique")
-        if any(not instance_type.strip() for instance_type in self.allowed_instance_types):
-            raise ValueError("AWS allowed instance types cannot contain empty values")
-        if (
-            self.allowed_instance_types
-            and self.default_instance_type not in self.allowed_instance_types
-        ):
-            raise ValueError("AWS default instance type must be allowed")
-        return self
-
-
 class WorkspaceComputePolicy(ContractModel):
+    """The scheduling decisions a workspace makes for itself.
+
+    Provisioning limits and defaults are not among them: those belong to the
+    connected account that provides the capacity, one configuration for every
+    workspace that account backs.
+    """
+
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     revision: int = Field(default=1, ge=1)
@@ -104,7 +69,6 @@ class WorkspaceComputePolicy(ContractModel):
         default=MachinePool(LAZYCLOUD_MACHINE_POOL), min_length=1, max_length=240
     )
     """Pool workloads land in when they name none."""
-    aws: AwsWorkspaceComputePolicy = Field(default_factory=AwsWorkspaceComputePolicy)
     created_at: datetime
     updated_at: datetime
 
@@ -116,7 +80,7 @@ class ComputeUnitProviderState(ContractModel):
     """Durable reason the control plane stopped restoring pool capacity.
 
     Set when bootstrap relaunch attempts are exhausted; cleared by an explicit
-    capacity mutation (public scale or workspace policy update).
+    capacity mutation (public scale or an account compute configuration update).
     """
     launch_attempt_baseline: int = Field(default=0, ge=0)
     """Attempt ordinal the current failure streak counts from.
@@ -245,10 +209,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
         return self
 
 
-def _matches_aws_region(region: str) -> bool:
-    return re.fullmatch(_AWS_REGION_PATTERN, region) is not None
-
-
 def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
     normalized = tuple(value.strip() for value in values)
     return tuple(dict.fromkeys(value for value in normalized if value))
@@ -256,7 +216,6 @@ def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
 
 __all__ = [
     "LAZYCLOUD_MACHINE_POOL",
-    "AwsWorkspaceComputePolicy",
     "ComputeCapacityMode",
     "ComputeResourceRequirements",
     "ComputeUnitPhase",

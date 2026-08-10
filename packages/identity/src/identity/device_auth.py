@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from database.records.identity import DeviceAuthorizationRecord
-from database.repositories.identity import DeviceAuthorizationRepository, WorkspaceRepository
+from database.repositories.identity import DeviceAuthorizationRepository, UserRepository
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
-from shared.identity import DeviceAuthorizationStatus, TokenKind
+from shared.identity import DeviceAuthorizationStatus, TokenKind, UserStatus
 from shared.timestamps import utc_now
 
 from identity.auth import IdentityContext, TokenIssuer
@@ -35,7 +35,7 @@ class DeviceAuthorizationStart:
 class DeviceAuthorizationClaim:
     status: DeviceAuthorizationStatus
     token: str = ""
-    workspace: str = ""
+    username: str = ""
 
 
 def normalize_user_code(value: str) -> str:
@@ -59,10 +59,10 @@ def _hash_device_code(device_code: str) -> str:
 
 
 class DeviceAuthorizationService:
-    """Device-code login: a CLI requests a code, a signed-in web user approves
-    it for one workspace, and the CLI poll exchanges the code for a workspace
-    token. Codes are short-lived, single-use, and pruned after expiry; the
-    minted token is never persisted in the device row."""
+    """Device-code login: a CLI requests a code, a signed-in user approves it for
+    their account, and the CLI poll exchanges the code for a user token reaching
+    every workspace they belong to. Codes are short-lived, single-use, and pruned
+    after expiry; the minted token is never persisted in the device row."""
 
     def __init__(self, context: IdentityContext) -> None:
         self.context = context
@@ -98,11 +98,11 @@ class DeviceAuthorizationService:
                 return record.model_copy(update={"status": DeviceAuthorizationStatus.Expired})
             return record
 
-    def approve(self, user_code: str, *, workspace_id: str) -> DeviceAuthorizationRecord:
+    def approve(self, user_code: str, *, user_id: str) -> DeviceAuthorizationRecord:
         return self._decide(
             user_code,
             status=DeviceAuthorizationStatus.Approved,
-            workspace_id=workspace_id,
+            user_id=user_id,
         )
 
     def deny(self, user_code: str) -> DeviceAuthorizationRecord:
@@ -129,8 +129,8 @@ class DeviceAuthorizationService:
             if record.consumed_at is not None:
                 msg = "device code was already consumed"
                 raise ConflictError(msg)
-            if record.workspace_id is None and record.status is DeviceAuthorizationStatus.Approved:
-                msg = "approved device code is missing a workspace"
+            if record.user_id is None and record.status is DeviceAuthorizationStatus.Approved:
+                msg = "approved device code is missing a user"
                 raise ConflictError(msg)
             consumed = repository.consume_decided(record, consumed_at=now)
             if consumed is None:
@@ -138,18 +138,18 @@ class DeviceAuthorizationService:
                 raise ConflictError(msg)
             if consumed.status is DeviceAuthorizationStatus.Denied:
                 return DeviceAuthorizationClaim(status=DeviceAuthorizationStatus.Denied)
-            if consumed.workspace_id is None:
-                msg = "approved device code is missing a workspace"
+            if consumed.user_id is None:
+                msg = "approved device code is missing a user"
                 raise ConflictError(msg)
-            workspace = WorkspaceRepository(session).get(consumed.workspace_id)
-            if workspace is None:
-                msg = "approved workspace no longer exists"
+            user = UserRepository(session).get(consumed.user_id)
+            if user is None or user.status is not UserStatus.Active:
+                msg = "the approving account is no longer active"
                 raise ConflictError(msg)
-            raw_token, _ = issuer.issue(
+            raw_token, _ = issuer.issue_for_user(
                 session,
                 consumed.client_name,
-                kind=TokenKind.Workspace,
-                workspace_id=workspace.id,
+                kind=TokenKind.User,
+                user_id=user.id,
                 reusable=True,
             )
             issued = True
@@ -158,7 +158,7 @@ class DeviceAuthorizationService:
         return DeviceAuthorizationClaim(
             status=DeviceAuthorizationStatus.Approved,
             token=raw_token,
-            workspace=workspace.name,
+            username=user.username,
         )
 
     def prune_expired(self, *, now: datetime | None = None) -> int:
@@ -171,7 +171,7 @@ class DeviceAuthorizationService:
         user_code: str,
         *,
         status: DeviceAuthorizationStatus,
-        workspace_id: str | None = None,
+        user_id: str | None = None,
     ) -> DeviceAuthorizationRecord:
         current = utc_now()
         with self.context.database.session() as session:
@@ -187,7 +187,7 @@ class DeviceAuthorizationService:
             updated = repository.decide_pending(
                 record,
                 status=status,
-                workspace_id=workspace_id,
+                user_id=user_id,
                 decided_at=current,
             )
             if updated is None:

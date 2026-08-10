@@ -20,7 +20,13 @@ from cli.components.errors import ADMIN_ERROR_POLICY
 from cli.control_plane import concurrency_app, stub_app, workspace_app
 from cli.database import database_app
 from cli.execution import events, invoke
-from cli.identity import profile_export, token_create, token_list, token_revoke
+from cli.identity import (
+    profile_export,
+    token_create,
+    token_list,
+    token_revoke,
+    user_app,
+)
 from cli.offline_auth import auth_app
 from cli.operations import cron_app, image_app, scheduler_app
 from cli.resources import (
@@ -53,6 +59,7 @@ _ADMIN_ROOT_ORDER = (
 )
 _ADMIN_GROUP_ORDER = (
     "profile",
+    "user",
     "token",
     "task",
     "deployment",
@@ -130,6 +137,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("concurrency", concurrency_app)
     registry.add_group("database", database_app)
     registry.add_group("auth", auth_app)
+    registry.add_group("user", user_app)
     registry.add_group("usage", usage_app)
 
     registry.order_root_commands(_ADMIN_ROOT_ORDER)
