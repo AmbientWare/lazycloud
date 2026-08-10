@@ -133,6 +133,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         volume_metering=app_services.volume_metering,
         retention=app_services.retention,
         tailnet_cleanup=app_services.tailnet_cleanup,
+        custom_domains=app_services.custom_domains,
     )
     runtime.owned_services = app_services
     close_calls: list[SchedulerAppServices] = []

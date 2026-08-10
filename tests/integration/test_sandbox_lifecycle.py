@@ -44,7 +44,7 @@ def test_sandbox_create_refresh_and_terminate_own_the_durable_ttl_lock(
     service = PodControlService(services, redis=redis)
 
     created = service.create_pod(CreatePodRequest(stub_id=stub.id))
-    lock_key = redis.key(pod_keep_warm_lock_key("default", stub.id, created.container_id))
+    lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, created.container_id))
 
     assert redis.exists(lock_key)
     assert 0 < redis.ttl(lock_key) <= 60
@@ -112,7 +112,7 @@ def test_scheduler_expires_prepared_sandbox_without_a_deployment(
     assert held[0].actions == []
     assert services.containers.get(container.id).status is ContainerStatus.Running
 
-    lock_key = redis.key(pod_keep_warm_lock_key("default", stub.id, container.id))
+    lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container.id))
     pod_service.sandbox_update_ttl(
         container.id,
         PodSandboxUpdateTTLRequest(ttl=1),
