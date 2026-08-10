@@ -39,8 +39,8 @@ lazycloud deploy api_demo.py:predict
 ```
 
 The deploy output includes the public invoke URL for the endpoint. Requests
-require your workspace token by default (`authorized=True`); pass it as a
-bearer token:
+require an access token by default (`authorized=True`); pass it as a bearer
+token:
 
 ```bash
 curl -X POST "<invoke-url>" \

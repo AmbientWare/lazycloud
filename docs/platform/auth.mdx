@@ -1,14 +1,21 @@
 ---
 title: "Authentication and workspaces"
-description: "Endpoints, workspaces, tokens, profiles, and environment configuration."
+description: "Accounts, sign-in, workspaces, tokens, profiles, and environment configuration."
 ---
 
-## Workspaces
+## Accounts and workspaces
 
 A **workspace** is the isolation boundary: apps, deployments, tasks, secrets,
-volumes, machines, and compute policy all belong to a workspace, and a token
-is scoped to one. Cross-workspace access is denied by construction; only admin
-tokens may target another workspace with the `--workspace` override.
+volumes, and compute policy all belong to a workspace.
+
+Credentials belong to your **account**. A session or an access token reaches
+every workspace your account is a member of, so choosing a workspace selects
+which one a command acts in rather than which credential it uses. Only a
+platform administrator can act on a workspace they are not a member of.
+
+Your access tokens, your connected AWS account, your registered domains, and the
+machines you join belong to the account too, and apply to every workspace you
+own.
 
 ```bash
 lazycloud workspace show
@@ -16,7 +23,20 @@ lazycloud workspace rename <name>
 lazycloud workspace audit          # recent audit events, --limit/--cursor
 ```
 
-## Logging in
+## Signing in to the dashboard
+
+The dashboard asks for a username and password and exchanges them for a session
+credential held by the browser. Accounts are created by an administrator; there
+is no self-service sign-up.
+
+- A session lasts 12 hours. Repeated sign-in attempts are rate limited.
+- Signing out ends that session only — other browsers and CLI logins keep
+  working.
+- Change your password under **Settings → General**. A password is at least 8
+  characters. Changing your own requires the current one, and every session
+  minted under the old password stops working.
+
+## Logging in with the CLI
 
 Plain `lazycloud login` signs in to the hosted LazyCloud platform. The control
 plane **endpoint** resolves in this order:
@@ -29,10 +49,11 @@ plane **endpoint** resolves in this order:
 Hosted customers need neither `--endpoint` nor `LAZYCLOUD_ENDPOINT`; both
 override the default when a command must reach a different control plane.
 
-Without `--token`, login runs a device-code flow: the CLI prints a
-verification URL and confirmation code, you approve it in the web dashboard,
-and the minted workspace token is stored in the profile. With `--token`, the
-token is stored directly — use this for CI and scripts.
+Without `--token`, login runs a device-code flow: the CLI prints a verification
+URL and confirmation code, you approve it in the web dashboard, and the token it
+mints is stored in the profile. That token carries the approving account's own
+reach, so `--workspace` chooses which of your workspaces the profile acts in.
+With `--token`, the token is stored directly — use this for CI and scripts.
 
 ```bash
 lazycloud login
@@ -40,8 +61,8 @@ lazycloud login --endpoint https://control-plane.example.com
 lazycloud login --token <token>
 ```
 
-`--tls/--no-tls` controls TLS for the stored endpoint, `--workspace` selects
-the workspace name, and `--profile`/`--activate` control profile placement.
+`--tls/--no-tls` controls TLS for the stored endpoint, and
+`--profile`/`--activate` control profile placement.
 
 ## Profiles
 
@@ -58,16 +79,21 @@ lazycloud profile activate staging
 lazycloud profile delete staging
 ```
 
-## Tokens
+## Access tokens
+
+Create access tokens in the dashboard under **Settings → Tokens**, with an
+optional expiry. A token is account-scoped: it reaches every workspace you
+belong to, so treat it like your password.
 
 ```bash
-lazycloud token show     # the active profile's token
+lazycloud token show     # whether the active profile holds one
 lazycloud token set <value>
 ```
 
 Tokens are bearer credentials: send them as `Authorization: Bearer <token>`
-when calling authorized endpoints directly. Treat them like passwords. Revoked
-or disabled tokens stop working immediately across the platform.
+when calling authorized endpoints directly. Revoking a token is permanent — it
+stops working across the platform immediately and is never reactivated — and
+disabling an account revokes the credentials it holds.
 
 ## Environment variables
 
@@ -77,7 +103,7 @@ suits CI:
 | Variable | Purpose |
 | --- | --- |
 | `LAZYCLOUD_ENDPOINT` | Control plane endpoint URL. |
-| `LAZYCLOUD_TOKEN` | Workspace token. |
+| `LAZYCLOUD_TOKEN` | Access token. |
 | `LAZYCLOUD_WORKSPACE` | Workspace name. |
 | `LAZYCLOUD_PROFILE` | Profile to use instead of the active one. |
 | `LAZYCLOUD_TLS` | Force TLS on or off. |
@@ -86,6 +112,6 @@ suits CI:
 
 ## Workload authorization
 
-HTTP workloads default to `authorized=True`: requests must carry a workspace
-bearer token. Set `authorized=False` on an endpoint, ASGI app, or pod to make
-it publicly reachable at its invoke URL.
+HTTP workloads default to `authorized=True`: requests must carry a bearer token
+authorized for the workspace. Set `authorized=False` on an endpoint, ASGI app,
+or pod to make it publicly reachable at its invoke URL.

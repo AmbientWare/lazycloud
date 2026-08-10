@@ -4,8 +4,9 @@ description: "Lightweight distributed primitives for coordinating work across co
 ---
 
 These primitives coordinate state between workloads, local processes, and
-anything else holding a workspace token. They are name-addressed: two objects
-constructed with the same name share the same underlying state.
+anything else holding a token authorized for the workspace. They are
+name-addressed: two objects constructed with the same name share the same
+underlying state.
 
 ## Queue
 

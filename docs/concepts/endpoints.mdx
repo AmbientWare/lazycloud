@@ -58,7 +58,8 @@ def infer(prompt: str) -> str: ...
 ### Calling endpoints
 
 Deployed endpoints get a stable invoke URL (printed by `lazycloud deploy`).
-Requests require a workspace bearer token unless `authorized=False`.
+Requests require a bearer token authorized for the workspace unless
+`authorized=False`.
 
 The decorated object is also a typed client:
 

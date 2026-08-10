@@ -264,10 +264,9 @@ def cloud_connect_aws(
         bool,
         typer.Option("--open/--no-open", help="Open AWS authorization in a browser."),
     ] = False,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    """Connect an AWS account to this workspace."""
-    response = compute_client(workspace=workspace).connect_account(
+    """Connect an AWS account, which backs every workspace you own."""
+    response = compute_client().connect_account(
         account_id=account_id,
         role_arn=role_arn,
     )
@@ -298,10 +297,9 @@ def cloud_reconnect(
         bool,
         typer.Option("--open/--no-open", help="Open AWS authorization in a browser."),
     ] = False,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Start replacement authorization for the connected account."""
-    response = compute_client(workspace=workspace).reconnect_account(role_arn=role_arn)
+    response = compute_client().reconnect_account(role_arn=role_arn)
     account_id = response.connection.account_id
     if open_console and response.authorization.url is not None:
         webbrowser.open(response.authorization.url)
@@ -320,10 +318,9 @@ def cloud_reconnect(
 @cloud_app.command("validate")
 def cloud_validate(
     ctx: typer.Context,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Validate the pending or active cloud authorization."""
-    response = compute_client(workspace=workspace).validate_connection()
+    response = compute_client().validate_connection()
     account_id = response.account_id
     failure = _aws_validation_failure(response)
     if json_output_enabled(ctx):
@@ -352,14 +349,13 @@ def cloud_status(
     ] = None,
     interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 2.0,
     timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 600.0,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Show the workspace's cloud connection status."""
     if until is not None and not watch:
         raise typer.BadParameter("--until requires --watch")
     if watch and until is None:
         raise typer.BadParameter("--watch requires --until")
-    client = compute_client(workspace=workspace)
+    client = compute_client()
     response = client.current_connection()
     if response is None:
         if json_output_enabled(ctx):
@@ -409,10 +405,9 @@ def cloud_disconnect(
     ] = False,
     interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 2.0,
     timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 600.0,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Disconnect the cloud account and remove its managed compute."""
-    client = compute_client(workspace=workspace)
+    client = compute_client()
     current = client.current_connection()
     if current is None:
         raise RuntimeError("this workspace does not have an AWS account connection")
@@ -472,20 +467,18 @@ def cloud_disconnect(
 @cloud_app.command("cancel-reconnect")
 def cloud_cancel_reconnect(
     ctx: typer.Context,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Cancel a pending replacement authorization."""
-    response = compute_client(workspace=workspace).cancel_reconnect()
+    response = compute_client().cancel_reconnect()
     print_payload(ctx, response.model_dump(mode="json"))
 
 
 @cloud_app.command("retry")
 def cloud_retry(
     ctx: typer.Context,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Retry the connection's current pending action."""
-    response = compute_client(workspace=workspace).retry_connection()
+    response = compute_client().retry_connection()
     print_payload(ctx, response.model_dump(mode="json"))
 
 
@@ -699,7 +692,7 @@ def machine_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    """List this workspace's self-hosted machines."""
+    """List the machines this account has joined."""
     machines = resource_client(workspace=workspace).list_machines().machines
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in machines])
@@ -811,7 +804,7 @@ def machine_remove(
     machine_id: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    """Remove a machine from the workspace's self-hosted compute."""
+    """Remove a machine this account joined."""
     compute_client(workspace=workspace).remove_machine(machine_id)
     if json_output_enabled(ctx):
         print_payload(ctx, {"machine_id": machine_id})

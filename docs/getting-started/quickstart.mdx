@@ -13,7 +13,8 @@ lazycloud login
 
 Login starts a device-code flow: the CLI prints a verification URL and a
 confirmation code, you approve it in the web dashboard, and the CLI stores the
-minted workspace token in its profile.
+token it mints in its profile. That token reaches every workspace your account
+belongs to.
 
 `lazycloud login` targets the hosted LazyCloud platform by default. To reach a
 different control plane, point at it with `--endpoint` or the

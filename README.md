@@ -59,7 +59,7 @@ task and the production boundaries changed since the previous release.
 ## CLI Examples
 
 ```bash
-lazycloud login --endpoint http://127.0.0.1:9000   # approve the code in the web app
+lazycloud login --endpoint http://127.0.0.1:8000   # approve the code in the web app
 lazycloud quickstart                               # write quickstart.py
 lazycloud deploy quickstart.py:hello               # deploy the starter function
 lazycloud run quickstart.py:hello 'LazyCloud'         # invoke it
@@ -68,8 +68,12 @@ lazycloud task result <run-id>
 lazycloud task logs <run-id>
 ```
 
-`lazycloud login` requires an endpoint: pass `--endpoint <url>` or enter one at the
-interactive prompt; the endpoint is stored in the profile. Without `--token` it
-starts a device-code flow: the CLI prints a verification URL and confirmation
-code, you approve it in the web dashboard, and the CLI stores the minted
-workspace token in its profile. Pass `--token` for non-interactive logins.
+`lazycloud login` resolves its endpoint from `--endpoint <url>`, then
+`LAZYCLOUD_ENDPOINT`, then the stored profile, then the packaged hosted default;
+a local stack needs the flag or the variable. Without `--token` it starts a
+device-code flow: the CLI prints a verification URL and confirmation code, you
+sign in to the web dashboard with your username and password to approve it, and
+the CLI stores the token it mints in its profile. That token belongs to the
+approving account and reaches every workspace that account belongs to, so
+`--workspace` selects which one the profile acts in. Pass `--token` for
+non-interactive logins.

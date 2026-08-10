@@ -17,7 +17,7 @@ from scheduler.state import (
 )
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
 from shared.compute_policy import MachinePool
-from shared.identity import TokenKind
+from shared.identity import AuthScope, TokenKind
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -106,6 +106,7 @@ def create_worker_token(*, name: str, workspace_id: str = "default") -> str:
         raw_token, _record = AuthService(IdentityDatabaseContext(database)).create_service_token(
             name,
             kind=TokenKind.Worker,
+            scopes=[AuthScope.Worker.value],
             workspace_id=workspace_id,
         )
         return raw_token
@@ -150,6 +151,7 @@ def write_worker_token(*, name: str, output: Path, workspace_id: str = "default"
         service.create_service_token(
             name,
             kind=TokenKind.Worker,
+            scopes=[AuthScope.Worker.value],
             workspace_id=workspace_id,
             stage_token=publication.stage,
         )
