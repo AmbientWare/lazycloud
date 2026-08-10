@@ -121,6 +121,77 @@ x-database-bootstrap-env: &database-bootstrap-env
 x-lazycloud-build-args: &lazycloud-build-args
   TAILSCALE_IMAGE: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
 
+x-container-worker-settings: &container-worker-settings
+  restart: unless-stopped
+  privileged: true
+  cgroup: host
+  cap_add:
+    - NET_ADMIN
+    - SYS_ADMIN
+    - SYS_PTRACE
+    - MKNOD
+  security_opt:
+    - seccomp=unconfined
+    - apparmor=unconfined
+  devices:
+    - /dev/fuse:/dev/fuse
+  tmpfs:
+    - /tmp:exec
+    - /run
+    - /run/gvisor
+    - /dev/shm:rw,exec,nosuid,nodev,size=1g
+  stop_grace_period: 90s
+  ulimits:
+    nofile:
+      soft: 1048576
+      hard: 1048576
+  entrypoint:
+    - /bin/sh
+    - -ec
+    - |
+      # The worker's containers live behind its own bridge and cannot resolve a
+      # Compose service name, so the in-stack origin is rewritten to the address the
+      # daemon routes to. WORKER_REPOSITORY_URL and GATEWAY_HTTP_URL must stay the
+      # same string; when they diverged the worker never reported itself available.
+      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane:9000" ]; then
+        compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
+        if [ -z "$$compose_gateway" ]; then
+          echo "Docker gateway is required for the public worker repository URL" >&2
+          exit 2
+        fi
+        export WORKER_REPOSITORY_URL="http://$${compose_gateway}:$${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
+        export GATEWAY_HTTP_URL="$$WORKER_REPOSITORY_URL"
+      fi
+      if [ -z "$${WORKER_TOKEN:-}" ] && [ -s /var/lib/lazycloud/tokens/worker-token ]; then
+        export WORKER_TOKEN="$$(cat /var/lib/lazycloud/tokens/worker-token)"
+      fi
+      # Registration is refused unless the worker names a unit that feeds its pool,
+      # and the id is assigned when that unit is created rather than derived.
+      if [ -z "$${WORKER_CAPACITY_OWNER_ID:-}" ] && [ -s /var/lib/lazycloud/tokens/worker-capacity-owner ]; then
+        export WORKER_CAPACITY_OWNER_ID="$$(cat /var/lib/lazycloud/tokens/worker-capacity-owner)"
+      fi
+      if [ -z "$${WORKER_TOKEN:-}" ] || [ -z "$${WORKER_CAPACITY_OWNER_ID:-}" ]; then
+        echo "WORKER_TOKEN and WORKER_CAPACITY_OWNER_ID are required" >&2
+        exit 2
+      fi
+      exec /usr/bin/tini -- "$$0" "$$@"
+
+x-container-worker-healthcheck: &container-worker-healthcheck
+  test:
+    [
+      "CMD",
+      "python",
+      "-m",
+      "shared.process_liveness",
+      "/tmp/lazycloud-container-worker.heartbeat",
+      "--max-age-seconds",
+      "45",
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 120s
+
 x-lazycloud-depends: &lazycloud-depends
   postgres:
     condition: service_healthy
@@ -754,20 +825,149 @@ services:
       - lazycloud-files:/var/lib/lazycloud
       - *platform-aws-config
 
+  platform-unit:
+    # The capacity owner the shared fleet registers against. A worker is admitted
+    # only into a pool some unit already feeds, and the id is assigned when the unit
+    # is created rather than derived from the pool name, so it is read back here and
+    # handed to the worker through a file.
+    image: cli:local
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
+        pool="${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}"
+        owner_path=/var/lib/lazycloud/tokens/worker-capacity-owner
+        mkdir -p "$$(dirname "$$owner_path")"
+        umask 077
+        # Looked up by name rather than by pool: a joined machine also files a unit
+        # feeding this pool, and the shared fleet must not register against the unit
+        # that belongs to somebody's hardware.
+        owner="$$(lazycloud-admin --json unit list \
+          | python -c 'import json,sys; name=sys.argv[1]; print(next((u["capacity_owner_id"] for u in json.load(sys.stdin) if u.get("name") == name), ""))' \
+          "$$pool-shared")"
+        if [ -z "$$owner" ]; then
+          owner="$$(lazycloud-admin --json unit create "$$pool-shared" --pool "$$pool" --provider local \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["capacity_owner_id"])')"
+        fi
+        printf '%s' "$$owner" > "$$owner_path"
+        echo "shared fleet capacity owner ready: $$owner"
+    environment:
+      GATEWAY_HTTP_URL: "http://control-plane:9000"
+      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
+      WORKSPACE_ID: "default"
+    depends_on:
+      <<: *lazycloud-role-depends
+    secrets:
+      - source: lazycloud-bootstrap-administrator-token
+        target: lazycloud-administrator-token
+        mode: 0400
+    volumes:
+      - lazycloud-worker-tokens:/var/lib/lazycloud/tokens
+
+  worker-token:
+    # The shared fleet authenticates as the platform, not as a machine somebody
+    # joined, so its credential is a service token rather than an agent slot token.
+    # Reused when one is already published, so restarts do not mint a second.
+    image: worker-bootstrap:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: worker-bootstrap
+      args: *lazycloud-build-args
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        token_path=/var/lib/lazycloud/tokens/worker-token
+        mkdir -p "$$(dirname "$$token_path")"
+        umask 077
+        lazycloud-worker-bootstrap worker-token \
+          "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}" \
+          --output "$$token_path"
+        echo "shared fleet worker token initialized"
+    environment:
+      <<: [*process-env, *database-env, *redis-env]
+      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
+    depends_on:
+      <<: *lazycloud-depends
+      administrator-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - lazycloud-worker-tokens:/var/lib/lazycloud/tokens
+
   container-worker:
-    # Built here, run by the agent. Every worker container is created by the
-    # agent from this image with the identity, capacity, and credentials the
-    # control plane assigned that slot, so nothing here can be a second worker:
-    # a replica count of zero is what makes `up` produce the image without also
-    # starting a process that has no slot to serve.
+    # The shared SaaS fleet: public capacity any account's work can land on, which is
+    # what an unconfigured workspace gets. The agents beside it are joined machines
+    # and serve only the account that connected them.
+    <<: *container-worker-settings
     image: container-worker:local
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
       target: container-worker
       args: *lazycloud-build-args
-    deploy:
-      replicas: 0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "object-store.localhost:host-gateway"
+    command:
+      [
+        "lazycloud-container-worker",
+        "--worker-id",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}",
+        "--machine-id",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}",
+        "--pool",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}",
+        "--pod-address",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}",
+        "--container-service-port",
+        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}",
+        "--checkpoint-bucket",
+        "lazycloud-objects",
+      ]
+    environment:
+      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
+      LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
+      LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT: "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
+      WORKER_REPOSITORY_URL: "http://control-plane:9000"
+      GATEWAY_HTTP_URL: "http://control-plane:9000"
+      BUILDAH_ISOLATION: "chroot"
+      BUILDAH_LAYERS: "true"
+      REGISTRY_AUTH_FILE: "/var/lib/lazycloud/registry/auth.json"
+      WORKER_ID: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}"
+      WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
+      WORKER_POOL: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}"
+      WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
+      WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}"
+      WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
+      WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_NETWORK_PREFIX:-compose-shared}"
+      WORKER_CHECKPOINT_BUCKET: "lazycloud-objects"
+      DATA_STORAGE_BUCKET: "lazycloud-data"
+      DATA_STORAGE_ENDPOINT_URL: "http://object-store:9000"
+      DATA_STORAGE_REGION_NAME: "us-east-1"
+      DATA_STORAGE_ACCESS_KEY_ID: "lazycloud-local"
+      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
+      DATA_STORAGE_FORCE_PATH_STYLE: "true"
+      WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
+      LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "/var/lib/lazycloud/cache-token/cache-service-token"
+    depends_on:
+      <<: *lazycloud-role-depends
+      platform-unit:
+        condition: service_completed_successfully
+      worker-token:
+        condition: service_completed_successfully
+      cache-server:
+        condition: service_healthy
+    healthcheck: *container-worker-healthcheck
+    volumes:
+      - lazycloud-shared-worker:/var/lib/lazycloud
+      - lazycloud-worker-tokens:/var/lib/lazycloud/tokens:ro
+      - lazycloud-cache-token:/var/lib/lazycloud/cache-token:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /var/run/netns:/var/run/netns
+    configs:
+      - source: container-worker-configuration
+        target: /etc/lazycloud/worker/worker.yaml
+        mode: 0444
 
   cache-token:
     image: cache-server:local
@@ -828,6 +1028,40 @@ services:
       retries: 12
       start_period: 5s
 
+configs:
+  container-worker-configuration:
+    content: |
+      configuration:
+        execution:
+          runtime: runsc
+          runtimes: [runsc]
+          capacity:
+            cpu_millicores: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CPU_MILLICORES:-4000}
+            memory_mib: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}
+            gpu_type: ""
+            gpu_count: 0
+          pool_mode: public
+          requires_pool_selector: false
+          preemptible: false
+          persistent: true
+          agent_worker: true
+        network:
+          route_transport: direct
+          agent_bridge_network: true
+          bridge_name: ${LAZYCLOUD_COMPOSE_SHARED_WORKER_BRIDGE:-rt_br2}
+          bridge_subnet: ${LAZYCLOUD_COMPOSE_SHARED_WORKER_SUBNET:-192.168.32.0/20}
+          bridge_ipv6_subnet: ${LAZYCLOUD_COMPOSE_SHARED_WORKER_IPV6_SUBNET:-fd00:abcf::/64}
+        paths:
+          bundle_root: /var/lib/lazycloud/bundles
+          image_cache_path: /var/lib/lazycloud/images
+          image_mount_root: /var/lib/lazycloud/image-mounts
+          image_build_root: /var/lib/lazycloud/builds
+          source_cache_root: /var/lib/lazycloud/source-cache
+          checkpoint_root: /var/lib/lazycloud/checkpoints
+        monitoring:
+          metrics_enabled: true
+          metrics_interval_seconds: 5
+
 volumes:
   postgres-data:
   redis-data:
@@ -836,6 +1070,8 @@ volumes:
   lazycloud-administrator-token:
   lazycloud-cache-token:
   lazycloud-cache:
+  lazycloud-worker-tokens:
+  lazycloud-shared-worker:
   tcp-ingress-tls:
 
 secrets:
