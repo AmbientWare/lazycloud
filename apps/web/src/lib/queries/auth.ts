@@ -22,6 +22,11 @@ export function currentSessionQueryOptions() {
   });
 }
 
+/** End the session this browser holds, so signing out stops the credential working. */
+export function signOut(): Promise<null> {
+  return apiRequest("/api/v1/sessions/current", z.null(), { method: "DELETE" });
+}
+
 export function changePasswordMutationOptions() {
   return mutationOptions({
     mutationFn: ({

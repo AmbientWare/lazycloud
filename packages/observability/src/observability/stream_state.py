@@ -162,34 +162,6 @@ class RedisEventStreamRepository:
     planner: EventStreamPlanner = field(default_factory=EventStreamPlanner)
     retention: RealtimeStreamRetention = field(default_factory=RealtimeStreamRetention)
 
-    def publish_container_log(
-        self,
-        *,
-        message: str,
-        stream: str,
-        workspace_id: str,
-        task_id: str = "",
-        stub_id: str = "",
-        app_id: str = "",
-        container_id: str = "",
-        timestamp: datetime | None = None,
-    ) -> CloudEventRecord:
-        moment = timestamp or datetime.now(UTC)
-        return self.append_event(
-            EventRecordType.ContainerLog,
-            {
-                "message": message,
-                "stream": stream,
-                "workspace_id": workspace_id,
-                "task_id": task_id,
-                "stub_id": stub_id,
-                "app_id": app_id,
-                "container_id": container_id,
-                "timestamp": moment.isoformat(),
-                "stored_at_ns": int(moment.timestamp() * 1_000_000_000),
-            },
-        )
-
     def append_container_log_batch(
         self,
         *,

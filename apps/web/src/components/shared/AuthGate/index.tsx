@@ -6,7 +6,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ApiError, clearAuthToken, setAuthToken } from "@/lib/api/client";
 import { getStoredAuthToken } from "@/lib/auth";
-import { currentSessionQueryOptions, signInMutationOptions } from "@/lib/queries/auth";
+import { currentSessionQueryOptions, signInMutationOptions, signOut } from "@/lib/queries/auth";
 import { SessionContext, type SessionContextValue } from "@/components/shared/AuthGate/session";
 
 const PUBLIC_MARKETING_PATHS = new Set(["/"]);
@@ -29,6 +29,10 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
   });
 
   const logout = useCallback(() => {
+    // The request names the session by the credential it carries, so it has to be
+    // issued before the browser forgets that credential. A failure to reach the
+    // server still signs the person out here; the session then ends at expiry.
+    void signOut().catch(() => undefined);
     clearAuthToken();
     setToken(null);
     queryClient.clear();
