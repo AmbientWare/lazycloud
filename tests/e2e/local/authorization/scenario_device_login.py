@@ -135,13 +135,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         with tempfile.TemporaryDirectory(prefix="lazycloud-device-login-") as home:
             child_environment = dict(os.environ)
             child_environment["LAZYCLOUD_HOME"] = home
-            for name in (
-                "GATEWAY_TOKEN",
-                "LAZYCLOUD_CONFIG",
-                "LAZYCLOUD_PROFILE",
-                "LAZYCLOUD_TOKEN",
-            ):
+            for name in ("LAZYCLOUD_CONFIG", "LAZYCLOUD_PROFILE"):
                 child_environment.pop(name, None)
+            # Emptied rather than removed: settings read a dotenv from the working
+            # directory too, and a credential from there would send the CLI straight
+            # past the device flow this scenario exists to exercise.
+            child_environment["GATEWAY_TOKEN"] = ""
+            child_environment["LAZYCLOUD_TOKEN"] = ""
             tls_flag = "--tls" if urlsplit(endpoint).scheme == "https" else "--no-tls"
             process = subprocess.Popen(
                 (
