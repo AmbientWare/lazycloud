@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import Field, SecretStr
 
-from shared.http.base import HttpModel
+from shared.http.base import HttpModel, SecretRequestModel
 from shared.http.workspaces import WorkspaceResponse
 from shared.identity import PlatformRole, UserStatus, WorkspaceRole
 
@@ -25,13 +25,13 @@ class UserListResponse(HttpModel):
     next: str = ""
 
 
-class UserCreateRequest(HttpModel):
+class UserCreateRequest(SecretRequestModel):
     username: str = Field(min_length=3, max_length=64)
     password: SecretStr
     role: PlatformRole = PlatformRole.Member
 
 
-class PasswordChangeRequest(HttpModel):
+class PasswordChangeRequest(SecretRequestModel):
     current_password: SecretStr | None = None
     """Required when changing your own password; omitted for an administrator reset."""
 
@@ -42,7 +42,7 @@ class UserStatusRequest(HttpModel):
     status: UserStatus
 
 
-class SessionCreateRequest(HttpModel):
+class SessionCreateRequest(SecretRequestModel):
     username: str
     password: SecretStr
 
