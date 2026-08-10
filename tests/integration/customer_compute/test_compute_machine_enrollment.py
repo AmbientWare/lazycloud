@@ -62,7 +62,11 @@ from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential, workspace_owner_user_id
+from tests.service_fixtures import (
+    administrator_credential,
+    owned_workspace,
+    workspace_owner_user_id,
+)
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
@@ -540,9 +544,9 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
     redis = real_redis_actors.client()
     services = _services_with_redis(isolated_services, redis, request)
     control = ControlPlaneService(services.context)
-    control.upsert_workspace("default")
+    owned_workspace(control, "default")
     _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
-    workspace = control.upsert_workspace("enrolled-customer")
+    workspace = owned_workspace(control, "enrolled-customer")
     unit = services.compute.create_unit(
         UnitName("workspace-machine-pool"),
         provider="agent",

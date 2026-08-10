@@ -16,7 +16,7 @@ from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.containers import ContainerRecord, ContainerStatus
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 _WORKLOAD_KEY_ROOTS: tuple[tuple[str, ...], ...] = (
     ("endpoint",),
@@ -52,8 +52,8 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     control.get_workspace("default")
-    deleted_workspace = control.upsert_workspace("ephemeral-cleanup")
-    peer_workspace = control.upsert_workspace("ephemeral-cleanup-peer")
+    deleted_workspace = owned_workspace(control, "ephemeral-cleanup")
+    peer_workspace = owned_workspace(control, "ephemeral-cleanup-peer")
     redis = isolated_services.redis()
 
     deleted_keys = {
@@ -89,8 +89,8 @@ def test_workspace_deletion_ignores_terminal_container_history_with_stale_worker
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     control.get_workspace("default")
-    deleted_workspace = control.upsert_workspace("terminal-container-cleanup")
-    peer_workspace = control.upsert_workspace("terminal-container-peer")
+    deleted_workspace = owned_workspace(control, "terminal-container-cleanup")
+    peer_workspace = owned_workspace(control, "terminal-container-peer")
     peer_container_id = str(uuid4())
     deleted_container_ids: set[str] = set()
 

@@ -29,7 +29,6 @@ from database.repositories.orchestration import MachineRepository, WorkerReposit
 from fastapi.testclient import TestClient
 from gateway.settings import GatewaySettings
 from identity.auth import AuthService, TokenIssuer
-from identity.users import UserService
 from networking.settings import (
     BackendRouteSettings,
     TailnetControlSettings,
@@ -72,19 +71,18 @@ from shared.http.compute_policy import (
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind, WorkspaceRole
+from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 from tests.url_constants import EXAMPLE_COM_URL
 
 
 def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
     """The account that owns the default workspace; connections hang off it."""
-    users = UserService(services.context)
-    user = users.create(username=username, password="connection-owner-password")
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
-    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
-    return user.id
+    user_id = workspace_owner_user_id(services.context, workspace_id)
+    return user_id
 
 
 def _account_client(
@@ -518,8 +516,8 @@ def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
     would hand one tenant the names of another tenant's capacity.
     """
     control = ControlPlaneService(isolated_services.context)
-    caller = control.upsert_workspace("pool-listing-caller")
-    other = control.upsert_workspace("pool-listing-other")
+    caller = owned_workspace(control, "pool-listing-caller")
+    other = owned_workspace(control, "pool-listing-other")
     isolated_services.compute.create_unit(
         UnitName("caller-unit"),
         workspace=caller.id,

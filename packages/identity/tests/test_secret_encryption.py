@@ -11,6 +11,7 @@ from execution.secrets.crypto import (
     WorkspaceSecretCipher,
 )
 from shared.identity import WorkspaceRecord
+from tests.service_fixtures import owned_workspace
 
 
 def test_secrets_encrypt_before_persistence_and_read_plaintext(
@@ -149,7 +150,7 @@ def _stored_secret(services: ApiServices, name: str) -> SecretStorageRecord:
 
 
 def _workspace(services: ApiServices, name: str) -> WorkspaceRecord:
-    return ControlPlaneService(services.context).upsert_workspace(name)
+    return owned_workspace(ControlPlaneService(services.context), name)
 
 
 def _tamper(value: str) -> str:

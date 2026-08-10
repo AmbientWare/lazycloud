@@ -16,18 +16,13 @@ def test_a_workspace_has_at_most_one_owner(isolated_services: ApiServices) -> No
     Adding members stays open, so the refusal has to be specific to the owner role
     rather than to membership.
     """
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("sole-owner")
     users = UserService(isolated_services.context)
     first = users.create(username="first-owner", password="first-owner-password")
     second = users.create(username="second-owner", password="second-owner-password")
-
-    with isolated_services.context.database.session() as session:
-        repository = WorkspaceMemberRepository(session)
-        repository.add(
-            workspace_id=workspace.id,
-            user_id=first.id,
-            role=WorkspaceRole.Owner,
-        )
+    workspace = ControlPlaneService(isolated_services.context).set_workspace(
+        "sole-owner",
+        owner_user_id=first.id,
+    )
 
     with (
         pytest.raises(ConflictError, match="already has an owner"),

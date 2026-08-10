@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -8,20 +8,29 @@ from uuid import uuid4
 import pytest
 from agent.binary import AgentBinarySettings
 from api.server.services import ApiServices
+from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
-from database.repositories.identity import WorkspaceMemberRepository
+from database.repositories.identity import (
+    UserRepository,
+    WorkspaceMemberRepository,
+    WorkspaceRepository,
+)
 from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
 from identity.auth import TokenIssuer
+from identity.passwords import hash_password
 from identity.users import UserService
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
+from pydantic import JsonValue
 from shared.identity import (
     AuthTokenRecord,
     PlatformRole,
     TokenKind,
+    WorkspaceRecord,
+    WorkspaceStorageConfig,
 )
 from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
@@ -29,6 +38,22 @@ from storage_client.s3 import S3ObjectStoreSettings
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from tests.fakes import FakeObjectClient
 from tests.redis_fakes import FakeRedis
+
+_FIXTURE_PASSWORD = "workspace-owner-fixture-password"
+_FIXTURE_PASSWORD_HASH = hash_password(_FIXTURE_PASSWORD)
+"""Hashed once for the whole session: the work factor is a production cost, not a test one."""
+
+
+def _fixture_account(database: DatabaseClient, username: str) -> str:
+    with database.session() as session:
+        return (
+            UserRepository(session)
+            .create(
+                username=username,
+                password_hash=_FIXTURE_PASSWORD_HASH,
+            )
+            .id
+        )
 
 
 @dataclass(slots=True)
@@ -99,12 +124,51 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
     RedisControlPlaneOriginRepository(redis).publish(
         services.gateway_settings.runtime_callback_http_url
     )
-    services.control_plane_service.upsert_workspace("default")
+    services.control_plane_service.set_workspace(
+        "default",
+        owner_user_id=_fixture_account(services.context.database, "default-workspace-owner"),
+    )
     services.control_plane_service.ensure_workspace_storage("default")
     try:
         yield services
     finally:
         services.close()
+
+
+def owned_workspace(
+    control: ControlPlaneService,
+    name: str = "default",
+    *,
+    storage: WorkspaceStorageConfig | None = None,
+    labels: dict[str, str] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
+) -> WorkspaceRecord:
+    """A workspace with the owner row production writes in the same transaction.
+
+    Tests that only need a workspace to exist go through here rather than writing the
+    row alone: everything a workspace resolves through its account—compute, domains,
+    credentials—needs that row, and a workspace without one exists nowhere else.
+    """
+    owner_user_id = _existing_owner(control, name) or _fixture_account(
+        control.context.database,
+        f"{name}-owner-{uuid4().hex[:8]}",
+    )
+    return control.set_workspace(
+        name,
+        owner_user_id=owner_user_id,
+        storage=storage,
+        labels=labels,
+        metadata=metadata,
+    )
+
+
+def _existing_owner(control: ControlPlaneService, name: str) -> str | None:
+    with control.context.database.session() as session:
+        record = WorkspaceRepository(session).by_name(name)
+        if record is None:
+            return None
+        owner = WorkspaceMemberRepository(session).owner(record.id)
+    return owner.user_id if owner is not None else None
 
 
 def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
@@ -118,16 +182,13 @@ def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
         existing = WorkspaceMemberRepository(session).owner(workspace_id)
     if existing is not None:
         return existing.user_id
-    user = UserService(context).create(
-        username=f"owner-{uuid4().hex[:12]}",
-        password="workspace-owner-fixture-password",
-    )
+    user_id = _fixture_account(context.database, f"owner-{uuid4().hex[:12]}")
     with context.database.session() as session:
         WorkspaceMemberRepository(session).ensure_owner(
             workspace_id=workspace_id,
-            user_id=user.id,
+            user_id=user_id,
         )
-    return user.id
+    return user_id
 
 
 def administrator_credential(

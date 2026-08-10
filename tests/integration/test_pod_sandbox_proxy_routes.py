@@ -38,6 +38,7 @@ from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.routing import AgentBackendRoute, BackendRouteState
 from starlette.websockets import WebSocketDisconnect
+from tests.service_fixtures import owned_workspace
 from tests.url_constants import TEST_DOMAIN, TEST_URL
 from websockets.sync.server import ServerConnection, serve
 from websockets.typing import Subprotocol
@@ -660,9 +661,9 @@ def test_pod_and_sandbox_private_routes_use_token_workspace(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    control.upsert_workspace("pod-owner")
-    control.upsert_workspace("pod-other")
-    control.upsert_workspace("pod-public")
+    owned_workspace(control, "pod-owner")
+    owned_workspace(control, "pod-other")
+    owned_workspace(control, "pod-public")
     pod_stub = control.create_stub("owner-pod", workspace="pod-owner", kind=StubKind.Pod)
     sandbox_stub = control.create_stub(
         "owner-sandbox",
@@ -733,8 +734,8 @@ def test_cross_workspace_public_app_does_not_publish_a_private_sandbox(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    control.upsert_workspace("sandbox-owner")
-    foreign_workspace = control.upsert_workspace("foreign-app-owner")
+    owned_workspace(control, "sandbox-owner")
+    foreign_workspace = owned_workspace(control, "foreign-app-owner")
     stub = control.create_stub(
         "private-sandbox",
         workspace="sandbox-owner",

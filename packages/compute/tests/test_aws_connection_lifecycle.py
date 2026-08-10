@@ -16,7 +16,6 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
 )
-from identity.users import UserService
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -30,8 +29,8 @@ from shared.aws_connections import (
 )
 from shared.errors import UpstreamUnavailableError
 from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
-from shared.identity import WorkspaceRole
 from shared.timestamps import utc_now
+from tests.service_fixtures import workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 TEMPLATE_SHA256 = "a" * 64
@@ -172,18 +171,9 @@ class _BucketAccessReconciler:
 
 def _owner(services: ApiServices, *, workspace: str = "default") -> str:
     """The account that owns a workspace, which is what a connection now belongs to."""
-    user = UserService(services.context).create(
-        username="connection-owner",
-        password="connection-owner-password",
-    )
     with services.context.database.session() as session:
         workspace_id = services.context.workspace(session, workspace).id
-    UserService(services.context).add_member(
-        workspace_id=workspace_id,
-        user_id=user.id,
-        role=WorkspaceRole.Owner,
-    )
-    return user.id
+    return workspace_owner_user_id(services.context, workspace_id)
 
 
 def _service(

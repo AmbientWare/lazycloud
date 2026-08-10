@@ -25,6 +25,7 @@ from shared.scheduling import (
     SchedulerContainerState,
 )
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import owned_workspace
 
 CONTAINER_ID = "00000000-0000-4000-8000-000000000101"
 
@@ -153,7 +154,7 @@ def test_sandbox_exposure_rejects_cross_workspace_stub_before_worker_callback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    control.upsert_workspace("other-workspace")
+    owned_workspace(control, "other-workspace")
     foreign_stub = control.create_stub(
         "foreign-sandbox",
         workspace="other-workspace",

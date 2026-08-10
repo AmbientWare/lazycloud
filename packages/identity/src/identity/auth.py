@@ -35,7 +35,6 @@ from shared.identity import (
     UserRecord,
     UserStatus,
     WorkspaceRecord,
-    WorkspaceRole,
     WorkspaceStatus,
 )
 from shared.timestamps import utc_now
@@ -574,10 +573,13 @@ class AuthService:
                 password=password,
             )
             workspace_record = WorkspaceRepository(session).ensure_named(workspace)
-            WorkspaceMemberRepository(session).add(
+            # Bootstrapping into a workspace that already has an owner leaves that
+            # owner in place: this creates the administrator credential, and an
+            # administrator reaches every workspace through their platform role
+            # without owning one.
+            WorkspaceMemberRepository(session).ensure_owner(
                 workspace_id=workspace_record.id,
                 user_id=administrator.id,
-                role=WorkspaceRole.Owner,
             )
             if configured_token is None:
                 raw_token, record = issuer.issue_for_user(

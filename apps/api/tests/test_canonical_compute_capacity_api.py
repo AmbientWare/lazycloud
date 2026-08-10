@@ -6,11 +6,10 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from identity.auth import AuthService, TokenIssuer
-from identity.users import UserService
 from shared.compute_policy import MachinePool, UnitName
 from shared.http.compute import UnitMachineListResponse
-from shared.identity import TokenKind, WorkspaceRole
-from tests.service_fixtures import administrator_credential
+from shared.identity import TokenKind
+from tests.service_fixtures import administrator_credential, workspace_owner_user_id
 
 
 def test_self_hosted_collection_is_account_scoped_and_excludes_managed_pools(
@@ -18,17 +17,15 @@ def test_self_hosted_collection_is_account_scoped_and_excludes_managed_pools(
     client_stack: ExitStack,
 ) -> None:
     """A person reads their own hardware; a workspace credential carries no account."""
-    users = UserService(isolated_services.context)
-    user = users.create(username="self-hosted-owner", password="self-hosted-owner-password")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
     issuer = TokenIssuer(isolated_services.context)
     with isolated_services.context.database.session() as session:
         account_token, _account_record = issuer.issue_for_user(
             session,
             "self-hosted-list",
-            user_id=user.id,
+            user_id=user_id,
         )
     issuer.committed()
     workspace_token, _workspace_record = AuthService(isolated_services.context).create_token(

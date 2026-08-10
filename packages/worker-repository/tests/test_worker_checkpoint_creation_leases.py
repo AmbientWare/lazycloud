@@ -3,6 +3,7 @@ from __future__ import annotations
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from tests.real_redis import RealRedisActors
+from tests.service_fixtures import owned_workspace
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,
@@ -58,7 +59,7 @@ def test_automatic_checkpoint_creation_lease_rechecks_available_artifact_after_l
 ) -> None:
     redis = real_redis_actors.client()
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("default")
+    workspace = owned_workspace(control, "default")
     stub = control.create_stub("checkpoint-lease", workspace=workspace.id)
     CheckpointService(isolated_services.context).save_state(
         CheckpointStatePayload(

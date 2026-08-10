@@ -53,6 +53,7 @@ from shared.http.taskqueues import (
     TaskQueueStateResponse,
 )
 from starlette.routing import BaseRoute, Mount, Route
+from tests.service_fixtures import owned_workspace
 from tests.url_constants import TEST_URL
 
 BASE_URL = TEST_URL
@@ -626,7 +627,7 @@ def _deploy(
     workspace: str = "default",
     public: bool = False,
 ) -> tuple[Deployment, StubRecord]:
-    ControlPlaneService(services.context).upsert_workspace(workspace)
+    owned_workspace(ControlPlaneService(services.context), workspace)
     deployment = services.deployments.deploy(
         DeploymentSpec(
             name=name,
@@ -663,7 +664,7 @@ def _base_host(url: str) -> str:
 
 
 def _auth_headers(services: ApiServices, *, workspace: str = "default") -> dict[str, str]:
-    ControlPlaneService(services.context).upsert_workspace(workspace)
+    owned_workspace(ControlPlaneService(services.context), workspace)
     raw_token, _record = AuthService(services.context).create_token(
         f"route-test-{workspace}",
         scopes=["read", "write"],

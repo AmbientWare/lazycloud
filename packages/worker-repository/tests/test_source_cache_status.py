@@ -9,13 +9,14 @@ from control.service import ControlPlaneService
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import NotFoundError
+from tests.service_fixtures import owned_workspace
 from worker_repository.source_cache_status import SourceCacheCleanupStatusService
 
 
 def test_source_cache_cleanup_status_is_bounded_and_resolves_deleted_workspace(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("cleanup-status")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "cleanup-status")
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with isolated_services.context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)
@@ -55,7 +56,7 @@ def test_source_cache_cleanup_status_is_bounded_and_resolves_deleted_workspace(
 def test_source_cache_cleanup_status_clamps_future_clock_and_reports_missing(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("clock-status")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "clock-status")
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with isolated_services.context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)

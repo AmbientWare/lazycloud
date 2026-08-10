@@ -21,7 +21,7 @@ from shared.http.workspace_changes import (
     WorkspaceChangeType,
 )
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 
 def test_workspace_change_stream_requires_authentication(
@@ -40,8 +40,8 @@ def test_workspace_change_stream_resumes_and_isolates_workspaces(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    default = control.upsert_workspace("default")
-    tenant = control.upsert_workspace("tenant")
+    default = owned_workspace(control, "default")
+    tenant = owned_workspace(control, "tenant")
     token, _ = administrator_credential(isolated_services, "admin")
     repository = isolated_services.workspace_changes.repository
     first_default_id = repository.append(

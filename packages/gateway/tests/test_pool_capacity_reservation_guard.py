@@ -16,7 +16,6 @@ from database.repositories.compute import ComputeMachineEnrollmentRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from gateway.http import JoinAgentRequest
 from gateway.service import GatewayControlService
-from identity.users import UserService
 from scheduler.fleet import WorkerPoolStateSnapshot
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -40,7 +39,6 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord
 from shared.errors import ConflictError
-from shared.identity import WorkspaceRole
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -48,6 +46,7 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
 )
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import workspace_owner_user_id
 
 
 class _RecordingCapacityReservationGuard:
@@ -100,16 +99,9 @@ def _default_workspace_id(services: ApiServices) -> str:
         return services.context.default_workspace_id(session)
 
 
-def _own_default_workspace(services: ApiServices, *, username: str) -> str:
-    """Give the workspace the account a joined machine will belong to."""
-    users = UserService(services.context)
-    user = users.create(username=username, password="reservation-guard-owner-password")
-    users.add_member(
-        workspace_id=_default_workspace_id(services),
-        user_id=user.id,
-        role=WorkspaceRole.Owner,
-    )
-    return user.id
+def _own_default_workspace(services: ApiServices) -> str:
+    """The account a joined machine belongs to: the one that owns its workspace."""
+    return workspace_owner_user_id(services.context, _default_workspace_id(services))
 
 
 def _join_request(join_token: str) -> JoinAgentRequest:
@@ -537,7 +529,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
-    _own_default_workspace(isolated_services, username="reservation-guard-owner")
+    _own_default_workspace(isolated_services)
     unit_name = "reservation-guarded-pool"
     capacity_owner_id = "dfd9f90a-f4af-41ee-8873-991a9fa860fe"
     isolated_services.compute.create_unit(

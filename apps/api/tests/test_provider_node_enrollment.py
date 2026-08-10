@@ -32,7 +32,6 @@ from database.repositories.compute import (
     ComputeUnitRepository,
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from identity.users import UserService
 from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from scheduler.state import SchedulerWorkerRecord
@@ -65,8 +64,8 @@ from shared.http.provider_nodes import (
     ProviderNodeCapacity,
     ProviderNodeEnrollmentRequest,
 )
-from shared.identity import WorkspaceRole
 from shared.provider_config import ProviderKind
+from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 
 _ACCOUNT_ID = "123456789012"
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
@@ -227,19 +226,17 @@ class _Workers:
 
 def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
     """The account that owns the default workspace; connections hang off it."""
-    users = UserService(services.context)
-    user = users.create(username=username, password="connection-owner-password")
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
-    users.add_member(workspace_id=workspace_id, user_id=user.id, role=WorkspaceRole.Owner)
-    return user.id
+    user_id = workspace_owner_user_id(services.context, workspace_id)
+    return user_id
 
 
 def test_provider_node_enrollment_rejects_cross_workspace_connection(
     isolated_services: ApiServices,
 ) -> None:
     default_pool = _seed_connection_and_pool(isolated_services)
-    other_workspace = ControlPlaneService(isolated_services.context).upsert_workspace("other")
+    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
     cross_workspace_pool = _pool(
         workspace_id=other_workspace.id,
         pool_id=str(uuid4()),

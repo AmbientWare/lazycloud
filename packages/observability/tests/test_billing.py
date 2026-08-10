@@ -27,7 +27,6 @@ from database.repositories.observability import UsageRepository
 from fastapi.testclient import TestClient
 from gateway.http import AgentMetricSnapshot, AgentTelemetryRequest
 from identity.auth import AuthService
-from identity.users import UserService
 from observability.settings import UsagePricingSettings
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.billing import BillableMetric, BillingCoverageStatus
@@ -36,7 +35,6 @@ from shared.compute_policy import MachinePool, UnitName
 from shared.deployments import StubKind
 from shared.http.usage import UsageBillingPeriod
 from shared.http_transport import HttpChannel
-from shared.identity import WorkspaceRole
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -48,7 +46,11 @@ from shared.usage import (
 )
 from shared.usage_query import UsageQuery
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import (
+    administrator_credential,
+    owned_workspace,
+    workspace_owner_user_id,
+)
 
 cli = build_admin_cli()
 
@@ -83,7 +85,7 @@ class _TestClientHttpChannel(HttpChannel):
 def test_task_count_usage_is_owner_scoped_and_idempotent(
     isolated_services: ApiServices,
 ) -> None:
-    other_workspace = ControlPlaneService(isolated_services.context).upsert_workspace("external")
+    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "external")
     with isolated_services.context.database.session() as session:
         owner_workspace_id = isolated_services.context.default_workspace_id(session)
         other_workspace_id = other_workspace.id
@@ -716,7 +718,7 @@ def test_billing_csv_matches_authorized_report_and_preserves_all_sections(
     client_stack: ExitStack,
 ) -> None:
     now = utc_now()
-    other_workspace = ControlPlaneService(isolated_services.context).upsert_workspace("external")
+    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "external")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         other_workspace_id = other_workspace.id
@@ -830,13 +832,11 @@ def test_agent_node_usage_records_against_canonical_workspace_id(
     )
     token_hash = hash_compute_token("agent-token")
     joined_at = utc_now() - timedelta(seconds=30)
-    users = UserService(isolated_services.context)
-    owner = users.create(username="usage-node-owner", password="usage-node-owner-password")
-    users.add_member(workspace_id=workspace_id, user_id=owner.id, role=WorkspaceRole.Owner)
+    owner_user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
     with isolated_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
-                user_id=owner.id,
+                user_id=owner_user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 pool=MachinePool("usage-managed"),

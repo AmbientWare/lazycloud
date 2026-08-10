@@ -33,6 +33,7 @@ from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 from tests.fakes import FakeObjectClient
+from tests.service_fixtures import owned_workspace
 
 
 @dataclass
@@ -160,7 +161,7 @@ def test_workspace_storage_creation_validates_before_persisting(
         isolated_services.context,
         workspace_storage_client=bucket_client,
     )
-    workspace = service.upsert_workspace("broken")
+    workspace = owned_workspace(service, "broken")
 
     with pytest.raises(WorkspaceStorageError, match="unable to create workspace storage bucket"):
         service.create_workspace_storage(workspace.id)
@@ -185,7 +186,7 @@ def test_external_workspace_storage_validates_and_rejects_duplicates(
         isolated_services.context,
         workspace_storage_client_factory=client_factory,
     )
-    workspace = service.upsert_workspace("tenant")
+    workspace = owned_workspace(service, "tenant")
     storage = WorkspaceStorageConfig(
         backend="s3",
         bucket="external-bucket",
@@ -223,7 +224,7 @@ def test_workspace_storage_api_keeps_token_active_after_cache_invalidation_hook(
         request,
     )
     control = ControlPlaneService(services.context)
-    workspace = control.upsert_workspace("tenant")
+    workspace = owned_workspace(control, "tenant")
     raw_token, token_record = AuthService(services.context).create_token(
         "tenant-storage",
         kind=TokenKind.WorkspacePrimary,
@@ -269,8 +270,8 @@ def test_workspace_objects_with_same_logical_location_are_physically_isolated(
         default_bucket="physical-objects",
     )
     control = ControlPlaneService(isolated_services.context)
-    first = control.upsert_workspace("first-object-owner")
-    second = control.upsert_workspace("second-object-owner")
+    first = owned_workspace(control, "first-object-owner")
+    second = owned_workspace(control, "second-object-owner")
 
     first_record = storage.put_bytes_for_workspace(
         workspace_id=first.id,
@@ -320,8 +321,8 @@ def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixe
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "logical-object-purpose-owner"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "logical-object-purpose-owner"
     )
 
     records = tuple(
@@ -362,8 +363,8 @@ def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "immutable-object-owner"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "immutable-object-owner"
     )
     source = tmp_path / "artifact.bin"
     source.write_bytes(b"immutable payload")
@@ -421,8 +422,8 @@ def test_object_completeness_requires_exact_metadata_and_maps_store_outages(
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "object-completeness-owner"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "object-completeness-owner"
     )
     record = storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
@@ -486,8 +487,8 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
         default_bucket="physical-objects",
     )
     control = ControlPlaneService(isolated_services.context)
-    leaving = control.upsert_workspace("archive-leaving-owner")
-    staying = control.upsert_workspace("archive-staying-owner")
+    leaving = owned_workspace(control, "archive-leaving-owner")
+    staying = owned_workspace(control, "archive-staying-owner")
     image_id = "shared-image"
     archive_key = f"image-archives/{image_id}.rclip"
     client.put_bytes(archive_key, b"archive", bucket="image-archives")

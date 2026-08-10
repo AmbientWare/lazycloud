@@ -14,12 +14,13 @@ from shared.identity import TokenKind
 from shared.mounts import MountAuthMode
 from storage.service import ObjectStorage
 from tests.fakes import FakeObjectClient
+from tests.service_fixtures import owned_workspace
 
 
 def test_workspace_object_cleanup_preserves_external_bucket_data(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace("cleanup-tenant")
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "cleanup-tenant")
     object_client = FakeObjectClient()
     storage = ObjectStorage(
         isolated_services.context,
@@ -48,7 +49,7 @@ def test_secret_relationships_decode_persisted_cloud_bucket_credentials(
     request: pytest.FixtureRequest,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("relationship-tenant")
+    workspace = owned_workspace(control, "relationship-tenant")
     token = _workspace_token(isolated_services, workspace.id, "relationship-token")
     isolated_services.secrets.set("ACCESS_KEY", "access", workspace=workspace.id)
     isolated_services.secrets.set("SECRET_KEY", "secret", workspace=workspace.id)

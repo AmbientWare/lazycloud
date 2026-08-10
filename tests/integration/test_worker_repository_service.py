@@ -99,7 +99,7 @@ from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUp
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,
@@ -224,7 +224,7 @@ def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(
     redis = real_redis_actors.client()
     service = _worker_repository_service(isolated_services, redis)
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("default")
+    workspace = owned_workspace(control, "default")
     workspace_owner_user_id(isolated_services.context, workspace.id)
     stub = control.create_stub("automatic-checkpoint-lease", workspace=workspace.id)
     container_id = str(uuid4())
@@ -644,7 +644,8 @@ def test_cache_origin_broker_returns_urls_without_storage_credentials(
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context),
         "brokered-worker",
         storage=WorkspaceStorageConfig(
             backend="s3",
@@ -707,8 +708,8 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
     client_stack: ExitStack,
 ) -> None:
     redis = real_redis_actors.client()
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "origin-authorization-owner"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "origin-authorization-owner"
     )
     workspace_id = workspace.id
     victim_image_id = "image-victim"
@@ -881,7 +882,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     redis = real_redis_actors.client()
     token = _worker_token(isolated_services, "workspace-a")
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-a")
+    workspace = owned_workspace(control, "workspace-a")
     workspace_owner_user_id(isolated_services.context, workspace.id)
     isolated_services.compute.create_unit(
         UnitName("pool"),
@@ -1267,7 +1268,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
 ) -> None:
     redis = real_redis_actors.client()
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("workspace-a")
+    workspace = owned_workspace(control, "workspace-a")
     workspace_owner_user_id(isolated_services.context, workspace.id)
     stub = control.create_stub("worker", workspace=workspace.id)
     isolated_services.secrets.set("API_TOKEN", "secret-value", workspace=workspace.id)
@@ -1644,8 +1645,8 @@ def test_container_shutdown_owner_rejects_optimistic_database_terminal_state(
     redis = real_redis_actors.client()
     containers = RedisSchedulerContainerRepository(redis)
     container_id = str(uuid4())
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "shutdown-finalization"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "shutdown-finalization"
     )
     containers.set_container_state(
         SchedulerContainerState(
@@ -1808,7 +1809,7 @@ def test_worker_repository_service_persists_checkpoint_archive_and_state(
     archive = b"checkpoint-archive"
     archive_hash = hashlib.sha256(archive).hexdigest()
     control = ControlPlaneService(isolated_services.context)
-    workspace = control.upsert_workspace("default")
+    workspace = owned_workspace(control, "default")
     stub = control.create_stub("checkpoint-archive", workspace=workspace.id)
     service.save_checkpoint_state(
         SaveCheckpointStateRequest(
@@ -2459,7 +2460,7 @@ def _worker_token(
     *,
     kind: TokenKind = TokenKind.Worker,
 ) -> str:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(workspace_id)
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), workspace_id)
     workspace_owner_user_id(isolated_services.context, workspace.id)
     return AuthService(isolated_services.context).create_token(
         f"{workspace_id}-{kind.value}",

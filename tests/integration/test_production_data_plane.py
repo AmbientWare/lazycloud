@@ -24,6 +24,7 @@ from storage_client.s3 import (
     presign_endpoint_for_storage,
 )
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import owned_workspace
 
 from database import (
     DatabaseApplicationName,
@@ -51,7 +52,7 @@ def _services(root: Path) -> ApiServices:
         binary_redis_client=redis.with_key_prefix("test"),
         volume_filesystem=LocalVolumeFilesystem(root / "volumes"),
     )
-    ControlPlaneService(services.context).upsert_workspace("default")
+    owned_workspace(ControlPlaneService(services.context), "default")
     return services
 
 

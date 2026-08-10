@@ -7,6 +7,7 @@ from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from shared.errors import NotFoundError
+from tests.service_fixtures import owned_workspace
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -33,7 +34,7 @@ def test_control_workspace_reads_are_empty_or_not_found_without_creating_rows(
         with database.session() as session:
             assert WorkspaceRepository(session).list() == []
 
-        created = service.upsert_workspace("default")
+        created = owned_workspace(service, "default")
         assert service.get_workspace("default") == created
         assert service.get_workspace(created.id) == created
         assert service.list_workspaces() == [created]

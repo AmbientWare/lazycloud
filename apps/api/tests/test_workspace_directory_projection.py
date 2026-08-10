@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.workspaces import WorkspaceListResponse
 from shared.identity import WorkspaceStatus
-from tests.service_fixtures import administrator_credential
+from tests.service_fixtures import administrator_credential, owned_workspace
 
 
 def test_admin_current_workspace_honors_explicit_workspace_override(
@@ -19,7 +19,7 @@ def test_admin_current_workspace_honors_explicit_workspace_override(
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     control.get_workspace("default")
-    target = control.upsert_workspace("provider-acceptance")
+    target = owned_workspace(control, "provider-acceptance")
     admin_token, _ = administrator_credential(isolated_services, "workspace-override-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
@@ -40,9 +40,9 @@ def test_admin_can_include_deleting_workspaces_but_not_deleted_tombstones(
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     control.get_workspace("default")
-    active = control.upsert_workspace("projection-active")
-    deleting = control.upsert_workspace("projection-deleting")
-    deleted = control.upsert_workspace("projection-deleted")
+    active = owned_workspace(control, "projection-active")
+    deleting = owned_workspace(control, "projection-deleting")
+    deleted = owned_workspace(control, "projection-deleted")
     _set_lifecycle_states(
         isolated_services,
         deleting_workspace_id=deleting.id,
@@ -70,9 +70,9 @@ def test_workspace_token_cannot_expand_its_workspace_directory(
     client_stack: ExitStack,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    active = control.upsert_workspace("projection-active")
-    deleting = control.upsert_workspace("projection-deleting")
-    deleted = control.upsert_workspace("projection-deleted")
+    active = owned_workspace(control, "projection-active")
+    deleting = owned_workspace(control, "projection-deleting")
+    deleted = owned_workspace(control, "projection-deleted")
     token, _ = AuthService(isolated_services.context).create_token(
         "directory-workspace",
         workspace_id=active.id,

@@ -308,33 +308,6 @@ class ControlPlaneService:
     ) = None
     workspace_changes: WorkspaceChangePublisher | None = None
 
-    def upsert_workspace(
-        self,
-        name: str = "default",
-        *,
-        storage: WorkspaceStorageConfig | None = None,
-        signing_key_prefix: str | None = None,
-        primary_token_id: str | None = None,
-        labels: dict[str, str] | None = None,
-        metadata: Mapping[str, JsonValue] | None = None,
-    ) -> WorkspaceRecord:
-        """Write the workspace row and nothing else.
-
-        Ownership is not written here, so this is not a way to bring a workspace into
-        existence for somebody: `set_workspace` and `create_workspace` are, and they
-        name the account the workspace resolves its compute and domains through.
-        """
-        with self.context.database.session() as session:
-            return _upsert_workspace_row(
-                session,
-                name,
-                storage=storage,
-                signing_key_prefix=signing_key_prefix,
-                primary_token_id=primary_token_id,
-                labels=labels,
-                metadata=metadata,
-            )
-
     def set_workspace(
         self,
         name: str,
@@ -395,7 +368,12 @@ class ControlPlaneService:
                 kind=TokenKind.WorkspacePrimary,
                 workspace_id=workspace.id,
             )
-            workspace = self.upsert_workspace(workspace.name, primary_token_id=token_record.id)
+            with self.context.database.session() as session:
+                workspace = _upsert_workspace_row(
+                    session,
+                    workspace.name,
+                    primary_token_id=token_record.id,
+                )
         if storage is None:
             workspace = self.ensure_workspace_storage(workspace.id)
         return WorkspaceCreateResult(

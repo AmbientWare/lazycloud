@@ -32,6 +32,7 @@ from storage.volume_filesystem import (
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectInfo
+from tests.service_fixtures import owned_workspace
 
 
 def test_volume_control_isolates_same_name_by_stable_workspace_and_volume_ids(
@@ -42,7 +43,7 @@ def test_volume_control_isolates_same_name_by_stable_workspace_and_volume_ids(
     service = VolumeControlService(isolated_services, filesystem=filesystem)
     control = ControlPlaneService(isolated_services.context)
     default_workspace = control.get_workspace()
-    other_workspace = control.upsert_workspace("other")
+    other_workspace = owned_workspace(control, "other")
 
     default = service.get_or_create_volume(GetOrCreateVolumeRequest(name="data"))
     other = service.get_or_create_volume(

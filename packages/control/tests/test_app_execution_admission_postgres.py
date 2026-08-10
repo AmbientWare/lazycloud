@@ -27,6 +27,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 from storage.volume_filesystem import LocalVolumeFilesystem
 from tests.redis_fakes import FakeRedis
+from tests.service_fixtures import owned_workspace
 
 from control import apps as apps_module
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -218,7 +219,7 @@ def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
             owns_binary_redis_client=False,
             volume_filesystem=LocalVolumeFilesystem(tmp_path / "volumes"),
         )
-        ControlPlaneService(services.context).upsert_workspace("default")
+        owned_workspace(ControlPlaneService(services.context), "default")
         yield services
     finally:
         if services is not None:

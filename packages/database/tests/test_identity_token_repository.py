@@ -10,6 +10,7 @@ from database.tables.identity import TokenTable
 from shared.identity import TokenKind, TokenStatus
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
+from tests.service_fixtures import owned_workspace
 
 
 @pytest.mark.parametrize(
@@ -24,8 +25,8 @@ def test_consumed_token_requires_terminal_revocation(
     status: TokenStatus,
     revoked_at: datetime | None,
 ) -> None:
-    workspace = ControlPlaneService(isolated_services.context).upsert_workspace(
-        "consumed-token-invariant"
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "consumed-token-invariant"
     )
     consumed_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with isolated_services.context.database.session() as session:

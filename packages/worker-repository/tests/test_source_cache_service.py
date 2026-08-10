@@ -10,6 +10,7 @@ from shared.errors import ConflictError
 from shared.identity import TokenKind
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
 from shared.timestamps import utc_now
+from tests.service_fixtures import owned_workspace
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
@@ -18,8 +19,8 @@ def test_private_worker_cannot_resolve_another_workspace_cache_claim(
     isolated_services: ApiServices,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
-    owner_workspace = control.upsert_workspace("source-cache-owner")
-    other_workspace = control.upsert_workspace("source-cache-other")
+    owner_workspace = owned_workspace(control, "source-cache-owner")
+    other_workspace = owned_workspace(control, "source-cache-other")
     worker_id = "private-worker"
     owner = WorkerRepositoryPrincipal(
         workspace_id=owner_workspace.id,
