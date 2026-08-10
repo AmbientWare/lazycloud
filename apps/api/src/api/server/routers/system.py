@@ -7,10 +7,10 @@ from control.service import ControlPlaneService
 from database.records.identity import DeviceAuthorizationRecord
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse
-from identity.auth import AuthError, AuthorizationDeniedError
+from identity.auth import AuthError
 from identity.authz import AuthzRequirement, AuthzResourceKind
 from identity.device_auth import DeviceAuthorizationService
-from shared.errors import ConflictError, InvalidInputError
+from shared.errors import ConflictError
 from shared.http.device_auth import (
     DEVICE_AUTHORIZATION_VERIFICATION_PATH,
     DeviceCodeCreateRequest,
@@ -36,10 +36,7 @@ from shared.http.system import (
     WorkspaceSigningKeyResponse,
 )
 from shared.identity import (
-    USER_PRINCIPAL_TOKEN_KINDS,
     AuthTokenRecord,
-    PlatformRole,
-    TokenKind,
 )
 from shared.usage import usage_to_prometheus
 
@@ -68,31 +65,6 @@ def _public_token(record: AuthTokenRecord) -> AuthTokenResponse:
     return AuthTokenResponse.model_validate(
         record.model_dump(mode="json", exclude={"token_hash", "worker_id"})
     )
-
-
-def _authorize_token_issuance(
-    services: ApiServices,
-    issuer: AuthTokenRecord,
-    requested_kind: TokenKind,
-) -> None:
-    """This route mints workspace credentials, and only those.
-
-    A credential that names a person comes from signing in or from the offline
-    administrator bootstrap, both of which mint it against an account. Minting one
-    here would produce a token whose kind claims a person and whose row names a
-    workspace — administrator everywhere, owned by nobody, revocable with no account
-    to revoke it from. An account is made an administrator by its role instead.
-    """
-    if requested_kind in USER_PRINCIPAL_TOKEN_KINDS:
-        raise InvalidInputError(
-            f"{requested_kind.value} credentials name an account, not a workspace; "
-            f"they come from signing in or from the offline administrator bootstrap"
-        )
-    if (
-        requested_kind is not TokenKind.Workspace
-        and services.auth.platform_role(issuer) is not PlatformRole.Administrator
-    ):
-        raise AuthorizationDeniedError("admin token required to issue non-workspace tokens")
 
 
 def _reject_self_token_mutation(
