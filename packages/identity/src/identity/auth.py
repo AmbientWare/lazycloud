@@ -897,13 +897,6 @@ class AuthService:
         self._invalidate_token_caches()
         return updated
 
-    def delete_account_token(self, user_id: str, token_id: str) -> None:
-        with self.context.database.session() as session:
-            deleted = TokenRepository(session).delete_for_user(token_id, user_id=user_id)
-        if not deleted:
-            raise NotFoundError(f"account token not found: {token_id}")
-        self._invalidate_token_caches()
-
     def list_workspace_tokens(self, workspace_id_or_name: str) -> list[AuthTokenRecord]:
         workspace_id = self._workspace_id(workspace_id_or_name)
         with self.context.database.session() as session:

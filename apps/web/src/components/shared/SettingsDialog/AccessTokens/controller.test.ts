@@ -54,24 +54,16 @@ describe("access tokens controller", () => {
     expect(result.current.createMode).toBe("closed");
   });
 
-  it("applies the exact server record on revoke and drops the row on delete", async () => {
+  it("drops the row on delete and keeps the failure retryable", async () => {
     const target = token({ id: "target", name: "target" });
     const sibling = token({ id: "sibling", name: "sibling" });
-    const revoked = token({
-      id: "target",
-      name: "target",
-      status: "revoked",
-      revoked_at: "2026-07-21T12:30:00Z",
-    });
-    let deleteRequests = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const path = String(input);
-      if (path.endsWith("/revoke")) return jsonResponse(revoked);
-      if (init?.method === "DELETE") {
-        deleteRequests += 1;
-        return deleteRequests === 1
-          ? jsonResponse({ detail: "delete unavailable" }, 503)
-          : new Response(null, { status: 204 });
+    let revokeRequests = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).endsWith("/revoke")) {
+        revokeRequests += 1;
+        return revokeRequests === 1
+          ? jsonResponse({ detail: "revoke unavailable" }, 503)
+          : jsonResponse(token({ id: "target", name: "target", status: "revoked" }));
       }
       return jsonResponse({ tokens: [target, sibling] });
     });
@@ -81,21 +73,16 @@ describe("access tokens controller", () => {
     });
     await waitFor(() => expect(result.current.tokens).toHaveLength(2));
 
-    act(() => result.current.beginAction("revoke", target));
+    act(() => result.current.beginAction(target));
     expect(result.current.actionMode).toBe("confirming");
-    act(() => result.current.confirmAction());
-    await waitFor(() => expect(result.current.actionMode).toBe("idle"));
-    expect(tokenCache(queryClient)).toEqual({ tokens: [revoked, sibling] });
-
-    act(() => result.current.beginAction("delete", revoked));
     act(() => {
       result.current.confirmAction();
       result.current.confirmAction();
     });
     await waitFor(() => expect(result.current.actionMode).toBe("error"));
-    expect(deleteRequests).toBe(1);
-    expect(result.current.actionError?.message).toBe("delete unavailable");
-    expect(tokenCache(queryClient)).toEqual({ tokens: [revoked, sibling] });
+    expect(revokeRequests).toBe(1);
+    expect(result.current.actionError?.message).toBe("revoke unavailable");
+    expect(tokenCache(queryClient)).toEqual({ tokens: [target, sibling] });
 
     act(() => result.current.confirmAction());
     await waitFor(() => expect(result.current.actionMode).toBe("idle"));

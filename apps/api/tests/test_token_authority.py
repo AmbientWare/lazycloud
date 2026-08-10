@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 
-import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
@@ -90,20 +89,12 @@ def test_one_account_cannot_see_or_revoke_another_account_s_tokens(
     assert persisted.status is TokenStatus.Active
 
 
-@pytest.mark.parametrize(
-    ("method", "suffix", "detail"),
-    [
-        ("POST", "/revoke", "cannot revoke the authenticating token"),
-        ("DELETE", "", "cannot delete the authenticating token"),
-    ],
-)
-def test_token_cannot_mutate_its_own_record(
-    method: str,
-    suffix: str,
-    detail: str,
+def test_token_cannot_revoke_its_own_record(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
+    """A credential cannot end itself, so a mistake cannot lock the caller out."""
+    method, suffix, detail = "POST", "/revoke", "cannot revoke the authenticating token"
     _admin_token, admin_record = administrator_credential(isolated_services, "self-mutation")
     own_token, own_record = AuthService(isolated_services.context).create_account_token(
         admin_record.user_id,
