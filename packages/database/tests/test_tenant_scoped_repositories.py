@@ -16,6 +16,7 @@ from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import NotFoundError
 from shared.identity import TokenKind
 from shared.image_building.records import ImageRecord
+from shared.timestamps import utc_now
 
 
 def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
@@ -74,7 +75,7 @@ def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
         tokens = TokenRepository(session)
         assert tokens.get(token_id, workspace_id=intruder.id) is None
         assert tokens.list(workspace_id=intruder.id) == []
-        assert tokens.delete(token_id, workspace_id=intruder.id) is False
+        assert tokens.revoke(token_id, workspace_id=intruder.id, now=utc_now()) is None
         assert tokens.get(token_id, workspace_id=owner.id) is not None
 
         volumes = VolumeRepository(session)

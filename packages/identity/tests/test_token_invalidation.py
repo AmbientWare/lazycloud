@@ -72,13 +72,9 @@ def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServic
     after_revoke = generation()
     assert after_revoke > baseline
 
-    auth.toggle_token(record.id)
-    after_toggle = generation()
-    assert after_toggle > after_revoke
-
     auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=True)
     after_disable = generation()
-    assert after_disable > after_toggle
+    assert after_disable > after_revoke
     auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=False)
 
     owner = UserService(isolated_services.context).create(

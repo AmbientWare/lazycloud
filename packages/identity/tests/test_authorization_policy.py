@@ -20,7 +20,6 @@ from identity.authz import (
     worker_requirement,
     workspace_requirement,
 )
-from shared.errors import ConflictError
 from shared.identity import AuthScope, AuthTokenRecord, TokenKind
 from tests.service_fixtures import administrator_credential
 
@@ -62,19 +61,7 @@ def test_auth_service_records_token_kind_and_checks_scopes(
 
     with pytest.raises(AuthError, match="invalid token"):
         auth.authenticate(raw_token, scope=AuthScope.Read)
-    with pytest.raises(ConflictError, match="consumed token"):
-        auth.toggle_token(record.id)
     assert stored_token_ids == []
-
-
-def test_expired_token_cannot_be_reactivated(isolated_services: ApiServices) -> None:
-    auth = AuthService(isolated_services.context)
-    raw_token, record = auth.create_token("expired", expires_in_seconds=-1)
-
-    with pytest.raises(AuthError, match="invalid token"):
-        auth.authenticate(raw_token)
-    with pytest.raises(ConflictError, match="expired or consumed"):
-        auth.toggle_token(record.id)
 
 
 def test_bootstrap_succeeds_once_and_never_reopens(
