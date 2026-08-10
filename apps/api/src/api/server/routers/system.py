@@ -292,7 +292,7 @@ def api_v1_approve_device_code(
     No workspace is chosen here: the credential the CLI claims reaches every
     workspace the approving person belongs to, and the CLI picks its active one.
     """
-    user_id = require_user_principal(services, token)
+    user_id = require_user_principal(token)
     record = DeviceAuthorizationService(services.context).approve(user_code, user_id=user_id)
     return _device_code_response(record)
 

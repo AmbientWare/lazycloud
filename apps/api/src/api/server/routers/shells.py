@@ -375,7 +375,7 @@ def _authorize_shell_websocket(
                 stub_id=stub_id,
                 container_id=container_id,
             )
-        token = services.auth.authorize_header(
+        principal = services.auth.authorize_principal(
             websocket_authorization_header(websocket),
             AuthzRequirement(action=AuthScope.Read),
             allow_if_no_tokens=False,
@@ -385,15 +385,15 @@ def _authorize_shell_websocket(
             code=status.WS_1008_POLICY_VIOLATION,
             reason=str(exc),
         ) from exc
-    if token is None:
+    if principal is None:
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="missing authorization principal",
         )
     return ShellWebSocketAuthorization(
-        token=token,
+        token=principal.token,
         audience=ShellWebSocketAudience(
-            workspace_id=websocket_workspace(services, websocket, token, AuthScope.Read),
+            workspace_id=websocket_workspace(services, websocket, principal, AuthScope.Read),
             stub_id=stub_id,
             container_id=container_id,
         ),
