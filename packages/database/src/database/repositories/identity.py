@@ -1091,6 +1091,7 @@ class TokenRepository:
         return [auth_token_record_from_table(row) for row in self.session.scalars(statement)]
 
     def delete(self, token_id: str, *, workspace_id: str) -> bool:
+        """Drop a platform service credential so its replacement can take the name."""
         result = self.session.execute(
             delete(TokenTable).where(
                 TokenTable.id == token_id,
@@ -1186,33 +1187,6 @@ class TokenRepository:
         )
         self.session.flush()
         return isinstance(result, CursorResult) and result.rowcount == 1
-
-    def activate(
-        self,
-        token_id: str,
-        *,
-        workspace_id: str,
-        now: datetime,
-    ) -> AuthTokenRecord | None:
-        """Reactivate only a non-consumed credential that has not expired."""
-        row = self.session.scalars(
-            update(TokenTable)
-            .where(
-                TokenTable.id == token_id,
-                TokenTable.workspace_id == workspace_id,
-                TokenTable.status == TokenStatus.Revoked.value,
-                TokenTable.consumed_at.is_(None),
-                or_(TokenTable.expires_at.is_(None), TokenTable.expires_at > now),
-            )
-            .values(
-                status=TokenStatus.Active.value,
-                revoked_at=None,
-                updated_at=now,
-            )
-            .returning(TokenTable)
-        ).first()
-        self.session.flush()
-        return auth_token_record_from_table(row) if row is not None else None
 
     def revoke(
         self,

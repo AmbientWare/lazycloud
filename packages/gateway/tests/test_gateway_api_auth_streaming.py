@@ -78,7 +78,7 @@ def client_stack() -> Iterator[ExitStack]:
         yield stack
 
 
-def test_workspace_token_create_names_and_deletes(
+def test_account_token_create_names_and_revokes(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
@@ -97,8 +97,8 @@ def test_workspace_token_create_names_and_deletes(
     assert payload["token"]
 
     token_id = _required_string(record, "id")
-    deleted = client.delete(f"/api/v1/tokens/{token_id}", headers=_auth(admin_token))
-    assert deleted.status_code == 204
+    revoked = client.post(f"/api/v1/tokens/{token_id}/revoke", headers=_auth(admin_token))
+    assert revoked.status_code == 200
     token_items = _response_object_list(
         client.get("/api/v1/tokens", headers=_auth(admin_token)),
         "tokens",

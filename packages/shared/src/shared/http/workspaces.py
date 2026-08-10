@@ -81,10 +81,6 @@ class WorkspaceAuditAction(StringEnum):
     AdministratorRecovered = "administrator_recovered"
     WorkspaceRenamed = "workspace_renamed"
     WorkspaceDeleted = "workspace_deleted"
-    TokenCreated = "token_created"
-    TokenEnabled = "token_enabled"
-    TokenDisabled = "token_disabled"
-    TokenDeleted = "token_deleted"
 
 
 class WorkspaceAuditTarget(StringEnum):

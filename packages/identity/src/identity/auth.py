@@ -219,7 +219,6 @@ class TokenIssuer:
         workspace_id: str = "default",
         worker_id: str = "",
         reusable: bool = True,
-        audit_actor: AuthTokenRecord | None = None,
     ) -> tuple[str, AuthTokenRecord]:
         """Mint a credential scoped to one workspace.
 
@@ -240,7 +239,6 @@ class TokenIssuer:
             workspace_id=workspace_id,
             worker_id=worker_id,
             reusable=reusable,
-            audit_actor=audit_actor,
         )
 
     def issue_for_user(
@@ -300,7 +298,6 @@ class TokenIssuer:
         workspace_id: str = "",
         worker_id: str = "",
         reusable: bool,
-        audit_actor: AuthTokenRecord | None = None,
     ) -> tuple[str, AuthTokenRecord]:
         if bool(user_id) == bool(workspace_id):
             msg = "a token names exactly one principal: a user or a workspace"
@@ -329,16 +326,6 @@ class TokenIssuer:
             reusable=reusable,
             expires_at=expires_at,
         )
-        if audit_actor is not None and owner_workspace_id:
-            WorkspaceAuditRepository(session).append(
-                workspace_id=owner_workspace_id,
-                action=WorkspaceAuditAction.TokenCreated,
-                actor=audit_actor,
-                target_type=WorkspaceAuditTarget.Token,
-                target_id=record.id,
-                target_name=record.name,
-                summary=f"Created access token {record.name}",
-            )
         return raw_token, record
 
     def committed(self) -> None:
@@ -463,7 +450,6 @@ class AuthService:
         workspace_id: str = "default",
         worker_id: str = "",
         reusable: bool = True,
-        audit_actor: AuthTokenRecord | None = None,
     ) -> tuple[str, AuthTokenRecord]:
         issuer = TokenIssuer(self.context, self.token_cache)
         with self.context.database.session() as session:
@@ -476,7 +462,6 @@ class AuthService:
                 workspace_id=workspace_id,
                 worker_id=worker_id,
                 reusable=reusable,
-                audit_actor=audit_actor,
             )
         issuer.committed()
         return raw_token, record
@@ -812,28 +797,6 @@ class AuthService:
         self._invalidate_token_caches()
         return updated
 
-    def toggle_token(self, token_id_or_name: str) -> AuthTokenRecord:
-        record = self._find_token(token_id_or_name)
-        if record.status is TokenStatus.Active:
-            with self.context.database.session() as session:
-                updated = TokenRepository(session).revoke_across_workspaces(
-                    record.id,
-                    now=utc_now(),
-                )
-            if updated is None:
-                raise KeyError(f"token not found: {token_id_or_name}")
-        else:
-            with self.context.database.session() as session:
-                updated = TokenRepository(session).activate(
-                    record.id,
-                    workspace_id=record.workspace_id,
-                    now=utc_now(),
-                )
-            if updated is None:
-                raise ConflictError("expired or consumed token cannot be reactivated")
-        self._invalidate_token_caches()
-        return updated
-
     def create_workspace_token(
         self,
         workspace_id_or_name: str,
@@ -842,7 +805,6 @@ class AuthService:
         name: str | None = None,
         scopes: list[str] | None = None,
         reusable: bool = True,
-        audit_actor: AuthTokenRecord | None = None,
     ) -> tuple[str, AuthTokenRecord]:
         workspace_id = self._workspace_id(workspace_id_or_name)
         return self.create_token(
@@ -851,7 +813,6 @@ class AuthService:
             workspace_id=workspace_id,
             scopes=scopes,
             reusable=reusable,
-            audit_actor=audit_actor,
         )
 
     def create_account_token(
@@ -913,68 +874,12 @@ class AuthService:
         with self.context.database.session() as session:
             return TokenRepository(session).get(token_id, workspace_id=workspace_id)
 
-    def toggle_workspace_token(
-        self,
-        workspace_id_or_name: str,
-        token_id_or_name: str,
-        *,
-        audit_actor: AuthTokenRecord | None = None,
-    ) -> AuthTokenRecord:
-        record = self._find_workspace_token(workspace_id_or_name, token_id_or_name)
-        if record.status is TokenStatus.Active:
-            with self.context.database.session() as session:
-                updated = TokenRepository(session).revoke(
-                    record.id,
-                    workspace_id=record.workspace_id,
-                    now=utc_now(),
-                )
-                if updated is None:
-                    raise NotFoundError(f"workspace token not found: {token_id_or_name}")
-                if audit_actor is not None:
-                    WorkspaceAuditRepository(session).append(
-                        workspace_id=updated.workspace_id,
-                        action=WorkspaceAuditAction.TokenDisabled,
-                        actor=audit_actor,
-                        target_type=WorkspaceAuditTarget.Token,
-                        target_id=updated.id,
-                        target_name=updated.name,
-                        summary=f"Disabled access token {updated.name}",
-                        previous_value=TokenStatus.Active.value,
-                        new_value=updated.status.value,
-                    )
-        else:
-            with self.context.database.session() as session:
-                updated = TokenRepository(session).activate(
-                    record.id,
-                    workspace_id=record.workspace_id,
-                    now=utc_now(),
-                )
-                if updated is None:
-                    raise ConflictError("expired or consumed token cannot be reactivated")
-                if audit_actor is not None:
-                    WorkspaceAuditRepository(session).append(
-                        workspace_id=updated.workspace_id,
-                        action=WorkspaceAuditAction.TokenEnabled,
-                        actor=audit_actor,
-                        target_type=WorkspaceAuditTarget.Token,
-                        target_id=updated.id,
-                        target_name=updated.name,
-                        summary=f"Enabled access token {updated.name}",
-                        previous_value=TokenStatus.Revoked.value,
-                        new_value=updated.status.value,
-                    )
-        self._invalidate_token_caches()
-        return updated
-
     def revoke_workspace_token(
         self,
         workspace_id_or_name: str,
         token_id_or_name: str,
-        *,
-        audit_actor: AuthTokenRecord | None = None,
     ) -> AuthTokenRecord:
         record = self._find_workspace_token(workspace_id_or_name, token_id_or_name)
-        previous = record.status
         with self.context.database.session() as session:
             updated = TokenRepository(session).revoke(
                 record.id,
@@ -983,45 +888,8 @@ class AuthService:
             )
             if updated is None:
                 raise NotFoundError(f"workspace token not found: {token_id_or_name}")
-            if audit_actor is not None and previous is not TokenStatus.Revoked:
-                WorkspaceAuditRepository(session).append(
-                    workspace_id=updated.workspace_id,
-                    action=WorkspaceAuditAction.TokenDisabled,
-                    actor=audit_actor,
-                    target_type=WorkspaceAuditTarget.Token,
-                    target_id=updated.id,
-                    target_name=updated.name,
-                    summary=f"Disabled access token {updated.name}",
-                    previous_value=previous.value,
-                    new_value=updated.status.value,
-                )
         self._invalidate_token_caches()
         return updated
-
-    def delete_workspace_token(
-        self,
-        workspace_id_or_name: str,
-        token_id_or_name: str,
-        *,
-        audit_actor: AuthTokenRecord | None = None,
-    ) -> AuthTokenRecord:
-        record = self._find_workspace_token(workspace_id_or_name, token_id_or_name)
-        with self.context.database.session() as session:
-            if audit_actor is not None:
-                WorkspaceAuditRepository(session).append(
-                    workspace_id=record.workspace_id,
-                    action=WorkspaceAuditAction.TokenDeleted,
-                    actor=audit_actor,
-                    target_type=WorkspaceAuditTarget.Token,
-                    target_id=record.id,
-                    target_name=record.name,
-                    summary=f"Deleted access token {record.name}",
-                )
-            TokenRepository(session).delete(record.id, workspace_id=record.workspace_id)
-        record.status = TokenStatus.Revoked
-        record.revoked_at = utc_now()
-        self._invalidate_token_caches()
-        return record
 
     def set_workspace_tokens_admin_disabled(
         self,

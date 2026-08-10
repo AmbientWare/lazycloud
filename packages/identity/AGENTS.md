@@ -25,10 +25,21 @@ A token names exactly one principal, and the schema enforces it:
   `WorkspaceRestricted`, `Worker`, `WorkerPrivate`, `Machine`) reaches the single
   workspace it was minted for.
 
-Keep both. A workspace-scoped token is the only blast-radius control there is: if
-every credential were account-wide, a leaked CI token would reach production as
-readily as a scratch workspace. Interactive and CLI use takes a user credential;
-automation takes a workspace one.
+Every credential a person can create is a user principal: signing in mints a
+`Session`, and the tokens tab mints a `User`. Both reach every workspace the
+account belongs to, because a person's authority follows their membership rather
+than the workspace they happened to be looking at when they asked.
+
+Workspace principals are minted by the platform for the things it runs — a
+worker, a machine, an agent slot, a workspace's primary automation credential —
+and no route lets a person create one. That is what makes the kind meaningful: a
+credential naming a workspace is one nobody chose, so its blast radius is the one
+the platform gave it.
+
+Revocation is terminal. A revoked credential is never reactivated, and its row
+stays as the account's only record that it existed. Only the platform's own
+credentials are ever removed outright — a service credential re-minted under the
+same name replaces its predecessor, and expiry pruning clears the rest.
 
 Administrator standing has one definition, `AuthService.platform_role`. Both the
 admin token kind and an account whose role says so confer it, and every caller
@@ -44,7 +55,7 @@ compute and registered domains resolve through, so a second one would make
 
 Passwords are PBKDF2-HMAC-SHA256 with their own iteration count, separate from
 the token work factor because a password is chosen by a person and a token is
-256 bits of urandom. Authentication costs the same whether the username exists or
+256 bits of urandom. The minimum length is eight characters. Authentication costs the same whether the username exists or
 the password is wrong; telling those apart is how an attacker enumerates accounts.
 A password change revokes the sessions minted under the old one, and the caller
 publishes that revocation so no replica's cache outlives it.
