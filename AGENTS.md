@@ -84,7 +84,9 @@ you touch the surrounding lines.
 ## Public Boundaries
 
 - Resources use `/api/v1/<resource>`; `/gateway/*` is reserved for RPC-style
-  control. Bearer tokens scope workspaces; only admins may override workspace.
+  control. A bearer token names an account or one workspace; a request names the
+  workspace it acts on and is checked against membership, and only an
+  administrator reaches a workspace they do not belong to.
 - FastAPI handlers validate and authorize, call one service, and map typed
   results. JSON routes use `HttpModel` contracts, precise response models,
   stable operation IDs, `{data, next}` lists, `datetime`, and `204` for

@@ -22,11 +22,12 @@ substitutes, and gives every service an explicit owner and health check.
 - Sidecars that share another service's network namespace are destroyed when
   that service is recreated, and the stack will not say so. Treat the lifetime
   relationship as part of the change, not as something to rediscover.
-- Two agents share this host, and nothing coordinates them. Each allocates
-  container addresses inside its own control-plane scope, keyed on its own
-  machine id, so a bridge name or subnet used twice is two allocators issuing one
-  address with no lock between them. Fingerprint, state directory, pool, and
-  bridge are the four values that must differ, and none of them fails visibly
-  when it does not.
+- Two workers share this host and nothing coordinates them: the `container-worker`
+  service is the shared platform fleet, and the `agent` service runs one machine a
+  customer account joined. Each allocates container addresses inside its own
+  control-plane scope, keyed on its own machine id, so a bridge name or subnet used
+  twice is two allocators issuing one address with no lock between them. Machine
+  fingerprint, state directory, pool, and bridge are the four values that must
+  differ, and none of them fails visibly when it does not.
 - Operator documentation is part of the change: when deployment behavior
   changes, the runbook that describes it changes with it.

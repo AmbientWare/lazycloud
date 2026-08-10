@@ -14,7 +14,9 @@ lazycloud login [--endpoint <url>] [--token <token>] [--workspace <name>]
   order: `--endpoint` flag, `LAZYCLOUD_ENDPOINT` env, stored profile, then the
   packaged hosted default.
 - Without `--token`, a device-code flow prints a verification URL and code to
-  approve in the dashboard; the minted token is stored in the profile.
+  approve in the dashboard; the token it mints carries the approving account's
+  reach and is stored in the profile.
+- `--workspace` selects which of that account's workspaces the profile acts in.
 - `--activate` (default) makes the profile the active one.
 
 ## lazycloud profile
@@ -32,8 +34,11 @@ lazycloud login [--endpoint <url>] [--token <token>] [--workspace <name>]
 
 | Command | Description |
 | --- | --- |
-| `lazycloud token show [--profile <name>]` | Show the stored token. |
+| `lazycloud token show [--profile <name>]` | Whether the profile holds a token. |
 | `lazycloud token set VALUE [--profile <name>]` | Store a token in the profile. |
+
+Access tokens themselves are created and revoked in the dashboard under
+**Settings → Tokens**; these commands only manage the copy in a local profile.
 
 ## lazycloud workspace
 

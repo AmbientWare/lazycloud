@@ -16,10 +16,10 @@ The complete runnable source is the
 - Install the `lazycloud` CLI and log in to a workspace.
 - Make sure the workspace has access to one NVIDIA L4 GPU and permits at least
   4 CPU cores and 16 GiB of memory for the workload.
-- Export a workspace token when calling the HTTP service directly:
+- Export an access token when calling the HTTP service directly:
 
 ```bash
-export LAZYCLOUD_TOKEN="<workspace-token>"
+export LAZYCLOUD_TOKEN="<access-token>"
 ```
 
 Do not put the token in source control. The model is public, so this example

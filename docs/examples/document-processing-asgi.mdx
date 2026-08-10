@@ -174,7 +174,7 @@ lazycloud ls document-processing-data/results
 ## Public-demo security boundary
 
 `document-api` deliberately sets `authorized=False` so the static browser UI
-can upload and poll without receiving a LazyCloud workspace token. The private
+can upload and poll without receiving a LazyCloud access token. The private
 task queue still requires authenticated internal submission. Signed job tokens
 provide per-job access, but they are not user authentication.
 
