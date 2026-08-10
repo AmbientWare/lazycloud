@@ -77,6 +77,12 @@ from shared.http.system import (
     TokenListResponse,
 )
 from shared.http.usage import UsageRecordListResponse, UsageSummaryResponse
+from shared.http.users import (
+    SessionCreateRequest,
+    SessionResponse,
+    UserCreateRequest,
+    UserResponse,
+)
 from shared.http.workspaces import (
     WorkspaceConfigExportResponse,
     WorkspaceCreateRequest,
@@ -208,6 +214,16 @@ class AdminApiClient:
                     f"/api/v1/concurrency-limits/{url_path_segment(limit_id_or_name)}/release"
                 )
             )
+        )
+
+    def create_user(self, request: UserCreateRequest) -> UserResponse:
+        return UserResponse.model_validate(
+            self.channel.post("/api/v1/users", request.model_dump(mode="json"))
+        )
+
+    def sign_in(self, request: SessionCreateRequest) -> SessionResponse:
+        return SessionResponse.model_validate(
+            self.channel.post("/api/v1/sessions", request.model_dump(mode="json"))
         )
 
     def list_tokens(self) -> TokenListResponse:

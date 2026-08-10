@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -14,11 +15,14 @@ from lazycloud.config import (
     get_profile,
 )
 from lazycloud.json_contracts import validate_json_object
-from pydantic import JsonValue
+from pydantic import JsonValue, SecretStr
 from shared.http.system import TokenCreateRequest
+from shared.http.users import UserCreateRequest
 from shared.http_transport import HttpChannel
+from shared.identity import PlatformRole
 
 from cli.api_client import AdminApiClient, admin_api_client
+from cli.offline_auth import read_private_file
 
 
 def profile_export(
@@ -54,6 +58,35 @@ def profile_export(
         },
     }
     print_payload(ctx, payload)
+
+
+user_app = typer.Typer(help="Manage accounts.")
+
+
+def user_create(
+    ctx: typer.Context,
+    username: Annotated[str, typer.Option("--username")],
+    password_file: Annotated[
+        Path,
+        typer.Option(
+            "--password-file",
+            dir_okay=False,
+            resolve_path=True,
+            help="Private file holding the new account's password.",
+        ),
+    ],
+    administrator: Annotated[bool, typer.Option("--administrator")] = False,
+) -> None:
+    """Create an account. The password is read from a file, never from argv."""
+    password = read_private_file(password_file, description="password file")
+    response = admin_api_client().create_user(
+        UserCreateRequest(
+            username=username,
+            password=SecretStr(password),
+            role=PlatformRole.Administrator if administrator else PlatformRole.Member,
+        )
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
 
 
 def token_create(
@@ -108,3 +141,6 @@ def token_revoke(ctx: typer.Context, token_id_or_name: str) -> None:
     """End a credential the acting account holds."""
     record = admin_api_client().revoke_token(token_id_or_name)
     print_payload(ctx, record.model_dump(mode="json"))
+
+
+user_app.command("create")(user_create)

@@ -14,10 +14,13 @@ from database.context import ServiceContext
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from lazycloud.cli.components.output import print_payload
+from pydantic import SecretStr
 from shared.errors import ConflictError
+from shared.http.users import SessionCreateRequest
 from shared.identity import WorkspaceStorageConfig
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
+from cli.api_client import admin_api_client
 from database import (
     ControlPlaneRecoveryFence,
     DatabaseApplicationName,
@@ -156,6 +159,32 @@ def _provision_workspace_storage(
     return record.storage
 
 
+@auth_app.command("login")
+def auth_login(
+    ctx: typer.Context,
+    username: Annotated[str, typer.Option("--username")],
+    password_file: Annotated[
+        Path,
+        typer.Option(
+            "--password-file",
+            dir_okay=False,
+            resolve_path=True,
+            help="Private file holding that account's password.",
+        ),
+    ],
+) -> None:
+    """Sign in and print a credential for that account.
+
+    What it prints is what the account itself holds, which is the point: anything
+    minted with it belongs to them rather than to the administrator who ran this.
+    """
+    password = read_private_file(password_file, description="password file")
+    response = admin_api_client().sign_in(
+        SessionCreateRequest(username=username, password=SecretStr(password))
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
 @auth_app.command("recover")
 def recover_admin(
     ctx: typer.Context,
@@ -272,7 +301,7 @@ def _publish_admin_credential(
     return result
 
 
-def _read_private_file(path: Path, *, description: str) -> str:
+def read_private_file(path: Path, *, description: str) -> str:
     """Read a secret from a file the caller alone can read.
 
     Refuses a symlink, a non-regular file, group/world-readable modes, and anything
@@ -309,14 +338,14 @@ def _read_private_file(path: Path, *, description: str) -> str:
 
 
 def _read_password(path: Path) -> str:
-    value = _read_private_file(path, description="administrator password file")
+    value = read_private_file(path, description="administrator password file")
     if not value:
         raise CredentialFileError("administrator password file is empty")
     return value
 
 
 def _read_configured_token(path: Path) -> str | None:
-    value = _read_private_file(path, description="configured credential file")
+    value = read_private_file(path, description="configured credential file")
     if not value:
         return None
     if re.fullmatch(r"rt_[A-Za-z0-9_-]{43}", value) is None:
