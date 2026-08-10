@@ -962,10 +962,18 @@ class TokenRepository:
         is ended by signing out, and listing one beside a credential invites revoking
         the browser you are reading the list in. The offline administrator credential
         is not either, because it is minted and rotated outside the product.
+
+        A revoked credential is kept but not listed. Its row is the only record that
+        it ever existed, when it was made, and when it stopped working, so removing
+        the row would destroy the account's own history of it.
         """
         rows = self.session.scalars(
             select(TokenTable)
-            .where(TokenTable.user_id == user_id, TokenTable.kind == TokenKind.User.value)
+            .where(
+                TokenTable.user_id == user_id,
+                TokenTable.kind == TokenKind.User.value,
+                TokenTable.status == TokenStatus.Active.value,
+            )
             .order_by(TokenTable.created_at.desc(), TokenTable.id.asc())
         )
         return [auth_token_record_from_table(row) for row in rows]
@@ -993,17 +1001,6 @@ class TokenRepository:
         ).first()
         self.session.flush()
         return auth_token_record_from_table(row) if row is not None else None
-
-    def delete_for_user(self, token_id: str, *, user_id: str) -> bool:
-        result = self.session.execute(
-            delete(TokenTable).where(
-                TokenTable.id == token_id,
-                TokenTable.user_id == user_id,
-                TokenTable.kind == TokenKind.User.value,
-            )
-        )
-        self.session.flush()
-        return isinstance(result, CursorResult) and result.rowcount > 0
 
     def revoke_user_credentials(self, user_id: str, *, now: datetime) -> int:
         """End every live credential naming a person, which is what disabling means.

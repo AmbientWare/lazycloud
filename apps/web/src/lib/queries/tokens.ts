@@ -1,5 +1,4 @@
 import { queryOptions } from "@tanstack/react-query";
-import { z } from "zod";
 
 import { apiRequest } from "@/lib/api/client";
 import {
@@ -52,6 +51,3 @@ export function revokeToken(tokenId: string): Promise<AuthToken> {
   return apiRequest(`${tokenPath(tokenId)}/revoke`, authTokenSchema, { method: "POST" });
 }
 
-export function deleteToken(tokenId: string): Promise<null> {
-  return apiRequest(tokenPath(tokenId), z.null(), { method: "DELETE" });
-}

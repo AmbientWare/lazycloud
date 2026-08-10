@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Ban, Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
@@ -144,7 +144,7 @@ function TokenRow({ token, controller }: { token: AuthToken; controller: AccessT
         {confirming ? (
           <span className="flex items-center justify-end gap-1">
             <Button variant="destructive" size="sm" onClick={controller.confirmAction}>
-              {controller.actionKind === "revoke" ? "Revoke" : "Delete"}
+              Delete
             </Button>
             <Button variant="ghost" size="sm" onClick={controller.cancelAction}>
               Keep
@@ -154,25 +154,13 @@ function TokenRow({ token, controller }: { token: AuthToken; controller: AccessT
           <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Working" />
         ) : (
           <span className="flex items-center justify-end gap-1">
-            {active ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Revoke ${token.name}`}
-                title="Revoke token"
-                disabled={actionsDisabled}
-                onClick={() => controller.beginAction("revoke", token)}
-              >
-                <Ban />
-              </Button>
-            ) : null}
             <Button
               variant="ghost"
               size="icon"
               aria-label={`Delete ${token.name}`}
               title="Delete token"
               disabled={actionsDisabled}
-              onClick={() => controller.beginAction("delete", token)}
+              onClick={() => controller.beginAction(token)}
             >
               <Trash2 className="text-destructive" />
             </Button>

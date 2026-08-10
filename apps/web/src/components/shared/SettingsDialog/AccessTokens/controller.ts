@@ -4,7 +4,6 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
 import {
   createToken,
-  deleteToken,
   revokeToken,
   tokensQueryOptions,
   type CreateTokenInput,
@@ -12,7 +11,6 @@ import {
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
-export type TokenActionKind = "revoke" | "delete";
 type ActionMode = "idle" | "confirming" | "running" | "error";
 
 /** A secret and just enough of its record to name what was created. */
@@ -31,8 +29,8 @@ type CreateState =
 
 type ActionState =
   | { mode: "idle" }
-  | { mode: "confirming" | "running"; kind: TokenActionKind; tokenId: string }
-  | { mode: "error"; kind: TokenActionKind; tokenId: string; error: Error };
+  | { mode: "confirming" | "running"; tokenId: string }
+  | { mode: "error"; tokenId: string; error: Error };
 
 type ControllerState = {
   create: CreateState;
@@ -51,10 +49,9 @@ export type AccessTokensController = {
   create: (input: CreateTokenInput) => void;
   dismissIssued: () => void;
   actionMode: ActionMode;
-  actionKind: TokenActionKind | null;
   actionTokenId: string | null;
   actionError: Error | null;
-  beginAction: (kind: TokenActionKind, token: AuthToken) => void;
+  beginAction: (token: AuthToken) => void;
   cancelAction: () => void;
   confirmAction: () => void;
   isCommandPending: boolean;
@@ -118,11 +115,11 @@ export function useAccessTokensController(): AccessTokensController {
     setState(IDLE);
   };
 
-  const beginAction = (kind: TokenActionKind, token: AuthToken) => {
+  const beginAction = (token: AuthToken) => {
     if (commandRunning.current || state.create.mode !== "closed") return;
     setState({
       create: { mode: "closed" },
-      action: { mode: "confirming", kind, tokenId: token.id },
+      action: { mode: "confirming", tokenId: token.id },
     });
   };
 
@@ -135,19 +132,19 @@ export function useAccessTokensController(): AccessTokensController {
     const action = state.action;
     if (commandRunning.current) return;
     if (action.mode !== "confirming" && action.mode !== "error") return;
-    const { kind, tokenId } = action;
+    const { tokenId } = action;
     commandRunning.current = true;
-    setState({ create: { mode: "closed" }, action: { mode: "running", kind, tokenId } });
-    const request =
-      kind === "revoke"
-        ? revokeToken(tokenId).then((record) => replaceTokenRecord(queryClient, record))
-        : deleteToken(tokenId).then(() => removeTokenRecord(queryClient, tokenId));
-    void request
+    setState({ create: { mode: "closed" }, action: { mode: "running", tokenId } });
+    // Revoked rather than removed: the row is the only record the account has that
+    // the credential existed and when it stopped working. The server stops listing
+    // it, so it leaves the table either way.
+    void revokeToken(tokenId)
+      .then(() => removeTokenRecord(queryClient, tokenId))
       .then(() => setState(IDLE))
       .catch((error: unknown) => {
         setState({
           create: { mode: "closed" },
-          action: { mode: "error", kind, tokenId, error: asError(error) },
+          action: { mode: "error", tokenId, error: asError(error) },
         });
       })
       .finally(() => {
@@ -167,7 +164,6 @@ export function useAccessTokensController(): AccessTokensController {
     create: runCreate,
     dismissIssued,
     actionMode: state.action.mode,
-    actionKind: state.action.mode === "idle" ? null : state.action.kind,
     actionTokenId: state.action.mode === "idle" ? null : state.action.tokenId,
     actionError: state.action.mode === "error" ? state.action.error : null,
     beginAction,
@@ -184,14 +180,6 @@ function isDraftable(mode: CreateMode): boolean {
 function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
   queryClient.setQueryData<TokenListResponse>(accountQueryKeys.tokens(), (current) => ({
     tokens: [...(current?.tokens.filter((token) => token.id !== record.id) ?? []), record],
-  }));
-}
-
-function replaceTokenRecord(queryClient: QueryClient, record: AuthToken): void {
-  queryClient.setQueryData<TokenListResponse>(accountQueryKeys.tokens(), (current) => ({
-    tokens: current
-      ? current.tokens.map((token) => (token.id === record.id ? record : token))
-      : [record],
   }));
 }
 

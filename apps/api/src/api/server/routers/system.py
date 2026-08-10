@@ -239,22 +239,6 @@ def api_v1_revoke_account_token(
     return _public_token(services.auth.revoke_account_token(user_id, token_id))
 
 
-@router.delete(
-    "/api/v1/tokens/{token_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-    operation_id="delete_account_token",
-)
-def api_v1_delete_account_token(
-    token_id: str,
-    user_id: write_user,
-    token: write_token,
-    services: ApiServices = Depends(current_services),
-) -> None:
-    _reject_self_token_mutation(token, token_id, action="delete")
-    services.auth.delete_account_token(user_id, token_id)
-
-
 def _device_code_response(record: DeviceAuthorizationRecord) -> DeviceCodeResponse:
     return DeviceCodeResponse(
         user_code=record.user_code,

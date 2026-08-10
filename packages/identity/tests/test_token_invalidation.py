@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
@@ -89,10 +91,8 @@ def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServic
     after_account_revoke = generation()
     assert after_account_revoke > before_account_revoke
 
-    auth.delete_account_token(owner.id, account_record.id)
-    assert generation() > after_account_revoke
     with pytest.raises(NotFoundError, match="account token not found"):
-        auth.revoke_account_token(owner.id, account_record.id)
+        auth.revoke_account_token(owner.id, str(uuid4()))
 
     _raw, expired = auth.create_token(
         "expired-worker",
