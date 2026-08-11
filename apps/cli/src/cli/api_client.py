@@ -78,10 +78,10 @@ from shared.http.system import (
 )
 from shared.http.usage import UsageRecordListResponse, UsageSummaryResponse
 from shared.http.users import (
-    SessionCreateRequest,
-    SessionResponse,
     UserCreateRequest,
+    UserListResponse,
     UserResponse,
+    UserRoleRequest,
 )
 from shared.http.workspaces import (
     WorkspaceConfigExportResponse,
@@ -221,9 +221,28 @@ class AdminApiClient:
             self.channel.post("/api/v1/users", request.model_dump(mode="json"))
         )
 
-    def sign_in(self, request: SessionCreateRequest) -> SessionResponse:
-        return SessionResponse.model_validate(
-            self.channel.post("/api/v1/sessions", request.model_dump(mode="json"))
+    def set_user_role(self, user_id: str, request: UserRoleRequest) -> UserResponse:
+        return UserResponse.model_validate(
+            self.channel.request(
+                "PUT",
+                f"/api/v1/users/{user_id}/role",
+                payload=request.model_dump(mode="json"),
+            )
+        )
+
+    def list_users(self) -> UserListResponse:
+        return UserListResponse.model_validate(self.channel.get("/api/v1/users"))
+
+    def create_token_for_user(
+        self,
+        user_id: str,
+        request: TokenCreateRequest,
+    ) -> TokenCreateResponse:
+        return TokenCreateResponse.model_validate(
+            self.channel.post(
+                f"/api/v1/users/{user_id}/tokens",
+                request.model_dump(mode="json"),
+            )
         )
 
     def list_tokens(self) -> TokenListResponse:

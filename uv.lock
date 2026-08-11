@@ -28,6 +28,7 @@ members = [
     "provider-aws",
     "provider-clients",
     "provider-cloudflare",
+    "provider-github",
     "runner",
     "scheduler",
     "scheduler-app",
@@ -165,6 +166,7 @@ dependencies = [
     { name = "operations" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-github" },
     { name = "pydantic-settings" },
     { name = "scheduler" },
     { name = "storage" },
@@ -197,6 +199,7 @@ requires-dist = [
     { name = "operations", editable = "packages/operations" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-github", editable = "packages/providers/github" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage", editable = "packages/storage" },
@@ -1555,6 +1558,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "provider-github"
+version = "0.1.0"
+source = { editable = "packages/providers/github" }
+dependencies = [
+    { name = "httpx" },
+    { name = "lazycloud-shared" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3" },
+]
+
+[[package]]
 name = "psycopg"
 version = "3.3.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2357,6 +2377,7 @@ dev = [
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-github" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "runner" },
@@ -2393,6 +2414,7 @@ workspace = [
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-github" },
     { name = "runner" },
     { name = "scheduler" },
     { name = "scheduler-app" },
@@ -2435,6 +2457,7 @@ dev = [
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-github", editable = "packages/providers/github" },
     { name = "pytest", specifier = ">=8,<9" },
     { name = "ruff", specifier = ">=0.6" },
     { name = "runner", editable = "packages/runner" },
@@ -2471,6 +2494,7 @@ workspace = [
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-github", editable = "packages/providers/github" },
     { name = "runner", editable = "packages/runner" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "scheduler-app", editable = "apps/scheduler" },

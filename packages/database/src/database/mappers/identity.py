@@ -3,9 +3,11 @@ from __future__ import annotations
 from shared.identity import (
     AuthTokenRecord,
     DeviceAuthorizationStatus,
+    IdentityProvider,
     PlatformRole,
     TokenKind,
     TokenStatus,
+    UserIdentityRecord,
     UserRecord,
     UserStatus,
     WorkspaceMemberRecord,
@@ -18,6 +20,7 @@ from database.tables.identity import (
     DeviceAuthorizationTable,
     SecretTable,
     TokenTable,
+    UserIdentityTable,
     UserTable,
     WorkspaceMemberTable,
 )
@@ -72,11 +75,25 @@ def user_record_from_table(row: UserTable) -> UserRecord:
     """Map the relational user aggregate without consulting a JSON shadow."""
     return UserRecord(
         id=str(row.id),
-        username=row.username,
-        password_hash=row.password_hash,
+        display_name=row.display_name,
+        email=row.email,
+        avatar_url=row.avatar_url,
         role=PlatformRole(row.role),
         status=UserStatus(row.status),
-        password_changed_at=to_utc(row.password_changed_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+    )
+
+
+def user_identity_record_from_table(row: UserIdentityTable) -> UserIdentityRecord:
+    return UserIdentityRecord(
+        id=str(row.id),
+        user_id=str(row.user_id),
+        provider=IdentityProvider(row.provider),
+        subject=row.subject,
+        subject_login=row.subject_login,
+        provider_account_created_at=to_utc_or_none(row.provider_account_created_at),
+        last_authenticated_at=to_utc_or_none(row.last_authenticated_at),
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
     )
@@ -109,6 +126,7 @@ __all__ = [
     "auth_token_record_from_table",
     "device_authorization_record_from_table",
     "secret_storage_record_from_table",
+    "user_identity_record_from_table",
     "user_record_from_table",
     "workspace_member_record_from_table",
 ]

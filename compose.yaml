@@ -26,6 +26,14 @@ x-cloudflare-env: &cloudflare-env
   LAZYCLOUD_CLOUDFLARE_API_TOKEN: "${LAZYCLOUD_CLOUDFLARE_API_TOKEN:-}"
   LAZYCLOUD_CLOUDFLARE_ZONE_ID: "${LAZYCLOUD_CLOUDFLARE_ZONE_ID:-}"
 
+# The GitHub App people sign in through. Empty by default: the stack boots and
+# every Compose step drives the platform with LAZYCLOUD_TOKEN, so only browser
+# sign-in is unavailable, and it says which variables are missing when tried.
+x-github-env: &github-env
+  LAZYCLOUD_GITHUB_CLIENT_ID: "${LAZYCLOUD_GITHUB_CLIENT_ID:-}"
+  LAZYCLOUD_GITHUB_CLIENT_SECRET: "${LAZYCLOUD_GITHUB_CLIENT_SECRET:-}"
+  LAZYCLOUD_GITHUB_REDIRECT_URI: "${LAZYCLOUD_GITHUB_REDIRECT_URI:-}"
+
 x-api-env: &api-env
   LAZYCLOUD_TCP_INGRESS_ENABLED: "true"
   LAZYCLOUD_TCP_INGRESS_CERTIFICATE_FILE: "/var/lib/lazycloud/tcp-ingress/tls.crt"
@@ -246,17 +254,19 @@ services:
       - |
         token_path=/var/lib/lazycloud/bootstrap/administrator-token
         umask 077
+        # Empty expands to no flag at all, so an unset id leaves a token-only
+        # administrator rather than linking one nobody named.
+        github_id="${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
         lazycloud-admin --json auth bootstrap \
-          --username "$${LAZYCLOUD_ADMINISTRATOR_USERNAME:-admin}" \
-          --password-file /run/secrets/lazycloud-administrator-password \
           --token-file /run/secrets/lazycloud-administrator-token \
+          $${github_id:+--github-user-id "$$github_id"} \
           --output "$$token_path"
         if test -e "$$token_path"; then
           test "$$(stat -c '%a' "$$token_path")" = "600"
         fi
     environment:
       <<: [*database-bootstrap-env, *object-store-env]
-      LAZYCLOUD_ADMINISTRATOR_USERNAME: "${LAZYCLOUD_ADMINISTRATOR_USERNAME:-admin}"
+      LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID: "${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
     depends_on:
       database-bootstrap:
         condition: service_completed_successfully
@@ -267,9 +277,6 @@ services:
     secrets:
       - source: lazycloud-bootstrap-administrator-token
         target: lazycloud-administrator-token
-        mode: 0400
-      - source: lazycloud-bootstrap-administrator-password
-        target: lazycloud-administrator-password
         mode: 0400
 
   redis:
@@ -369,6 +376,7 @@ services:
           *redis-env,
           *gateway-env,
           *cloudflare-env,
+          *github-env,
           *api-env,
           *object-store-env,
           *image-build-env,
@@ -508,17 +516,19 @@ services:
         mkdir -p "$$state_dir"
         chmod 0700 "$$state_dir"
         export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
-        # Minted by the customer, not by the administrator running this step: the
-        # enrollment names whoever asked, and placement compares that account against
-        # the one the work belongs to. An administrator-minted token would make the
-        # machine the platform's and prove nothing about tenancy.
-        password_file=/run/secrets/lazycloud-customer-password
-        lazycloud-admin --json user create \
-          --username "${LAZYCLOUD_COMPOSE_CUSTOMER_USERNAME:-customer}" \
-          --password-file "$$password_file" --administrator >/dev/null 2>&1 || true
-        customer_token="$$(lazycloud-admin --json auth login \
-          --username "${LAZYCLOUD_COMPOSE_CUSTOMER_USERNAME:-customer}" \
-          --password-file "$$password_file" \
+        # The credential belongs to the customer even though the administrator mints
+        # it: the enrollment names whoever asked, and placement compares that account
+        # against the one the work belongs to. An administrator-owned token would make
+        # the machine the platform's and prove nothing about tenancy.
+        customer_name="${LAZYCLOUD_COMPOSE_CUSTOMER_NAME:-customer}"
+        customer_id="$$(lazycloud-admin --json user list \
+          | python -c 'import json,sys; n=sys.argv[1]; print(next((u["id"] for u in json.load(sys.stdin) if u["display_name"]==n), ""))' \
+              "$$customer_name")"
+        if [ -z "$$customer_id" ]; then
+          customer_id="$$(lazycloud-admin --json user create --name "$$customer_name" --administrator \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+        fi
+        customer_token="$$(lazycloud-admin --json token create compose-agent-join --user "$$customer_id" \
           | python -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
         export GATEWAY_TOKEN="$$customer_token"
         lazycloud-admin --json workspace show "${LAZYCLOUD_COMPOSE_CUSTOMER_WORKSPACE:-tenant-customer}" >/dev/null 2>&1 \
@@ -559,9 +569,6 @@ services:
     secrets:
       - source: lazycloud-bootstrap-administrator-token
         target: lazycloud-administrator-token
-        mode: 0400
-      - source: lazycloud-customer-password
-        target: lazycloud-customer-password
         mode: 0400
 
   agent:
@@ -947,9 +954,5 @@ volumes:
   tcp-ingress-tls:
 
 secrets:
-  lazycloud-customer-password:
-    environment: LAZYCLOUD_CUSTOMER_PASSWORD
   lazycloud-bootstrap-administrator-token:
     environment: LAZYCLOUD_TOKEN
-  lazycloud-bootstrap-administrator-password:
-    environment: LAZYCLOUD_ADMINISTRATOR_PASSWORD

@@ -4,12 +4,24 @@ import { z } from "zod";
 import { apiRequest } from "@/lib/api/client";
 import { currentSessionSchema, deviceCodeSchema, sessionSchema } from "@/lib/api/schemas";
 
-export function signInMutationOptions() {
+/**
+ * Where the browser goes to sign in.
+ *
+ * A URL rather than a request: the server sets the sign-in cookie and redirects to
+ * GitHub, so this has to be a document navigation. `returnTo` is handed to the
+ * server and kept against the state secret, never carried through GitHub.
+ */
+export function githubSignInHref(returnTo: string): string {
+  return `/auth/github/start?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+/** Trade the single-use code from the callback for the session credential. */
+export function completeSignInMutationOptions() {
   return mutationOptions({
-    mutationFn: ({ username, password }: { username: string; password: string }) =>
+    mutationFn: ({ code }: { code: string }) =>
       apiRequest("/api/v1/sessions", sessionSchema, {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ code }),
       }),
   });
 }
@@ -25,27 +37,6 @@ export function currentSessionQueryOptions() {
 /** End the session this browser holds, so signing out stops the credential working. */
 export function signOut(): Promise<null> {
   return apiRequest("/api/v1/sessions/current", z.null(), { method: "DELETE" });
-}
-
-export function changePasswordMutationOptions() {
-  return mutationOptions({
-    mutationFn: ({
-      userId,
-      currentPassword,
-      newPassword,
-    }: {
-      userId: string;
-      currentPassword: string;
-      newPassword: string;
-    }) =>
-      apiRequest(`/api/v1/users/${encodeURIComponent(userId)}/password`, z.null(), {
-        method: "POST",
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword,
-        }),
-      }),
-  });
 }
 
 export function deviceCodeQueryOptions(userCode: string) {

@@ -32,12 +32,11 @@ class DeviceCodeTokenResponse(HttpModel):
 
     ``status`` is a domain outcome, not an error envelope: pending polls
     return 200 with ``pending`` until the user approves, denies, or the code
-    expires. ``token`` and ``username`` are only set once on approval.
+    expires. ``token`` is only set once, on approval.
     """
 
     status: DeviceAuthorizationStatus
     token: str = ""
-    username: str = ""
 
 
 class DeviceCodeResponse(HttpModel):

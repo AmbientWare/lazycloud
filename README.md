@@ -72,7 +72,7 @@ lazycloud task logs <run-id>
 `LAZYCLOUD_ENDPOINT`, then the stored profile, then the packaged hosted default;
 a local stack needs the flag or the variable. Without `--token` it starts a
 device-code flow: the CLI prints a verification URL and confirmation code, you
-sign in to the web dashboard with your username and password to approve it, and
+sign in to the web dashboard with GitHub to approve it, and
 the CLI stores the token it mints in its profile. That token belongs to the
 approving account and reaches every workspace that account belongs to, so
 `--workspace` selects which one the profile acts in. Pass `--token` for

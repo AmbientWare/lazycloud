@@ -56,6 +56,33 @@ def normalize_http_origin(value: str, *, field_name: str = "HTTP origin") -> str
     return f"{scheme}://{host}{port_suffix}"
 
 
+def normalize_return_path(value: str, *, field_name: str = "return path") -> str:
+    """A same-origin path a browser may be sent back to after signing in.
+
+    Only a path, never a URL. Anything that could name a host — a scheme, a
+    protocol-relative `//host`, a backslash some browsers normalize to a slash —
+    would turn the sign-in route into an open redirect that borrows this origin's
+    credibility to land somebody on an attacker's page.
+    """
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    if len(normalized) > 512:
+        raise ValueError(f"{field_name} is too long")
+    if any(character.isspace() or ord(character) < 0x20 for character in normalized):
+        raise ValueError(f"{field_name} must not contain whitespace or control characters")
+    if "\x00" in normalized:
+        raise ValueError(f"{field_name} must not contain a null byte")
+    if not normalized.startswith("/") or normalized.startswith(("//", "/\\")):
+        raise ValueError(f"{field_name} must be a path beginning with a single '/'")
+    if "\\" in normalized:
+        raise ValueError(f"{field_name} must not contain a backslash")
+    path = urlsplit(normalized).path
+    if any(segment == ".." for segment in path.split("/")):
+        raise ValueError(f"{field_name} must not contain a '..' segment")
+    return normalized
+
+
 def build_deployment_url(
     external_url: str,
     target: StubUrlTarget,

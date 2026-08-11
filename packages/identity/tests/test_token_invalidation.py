@@ -78,8 +78,7 @@ def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServic
     auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=False)
 
     owner = UserService(isolated_services.context).create(
-        username="invalidation-owner",
-        password="invalidation-owner-password",
+        display_name="invalidation-owner",
     )
     _account_raw, account_record = auth.create_account_token(owner.id, "account-key")
     before_account_revoke = generation()

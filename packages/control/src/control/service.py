@@ -20,6 +20,7 @@ from database.repositories.common import (
 from database.repositories.identity import (
     SecretRepository,
     WorkspaceMemberRepository,
+    WorkspaceRepository,
     new_signing_key,
 )
 from database.repositories.orchestration import ContainerRepository
@@ -387,6 +388,49 @@ class ControlPlaneService:
             token=raw_token,
             workspace=workspace,
         )
+
+    def ensure_default_workspace(
+        self,
+        owner_user_id: str,
+        preferred_name: str = "",
+    ) -> WorkspaceRecord:
+        """The workspace an account gets on its first sign-in, provisioned once.
+
+        Called on every sign-in rather than only when the account is new. Workspace
+        creation reaches object storage and can fail after the account exists, and
+        making this conditional on "was just created" would leave such an account with
+        no workspace and no path to ever getting one.
+
+        The preferred name is a starting point, not a reservation. Workspace names are
+        globally unique while a provider login is renameable, so a login colliding with
+        an existing workspace must not turn somebody's sign-in into a conflict they have
+        no way to resolve. They can rename it afterwards.
+        """
+        with self.context.database.session() as session:
+            owned = WorkspaceMemberRepository(session).owned_workspace_ids(owner_user_id)
+        if owned:
+            return self.get_workspace(owned[0])
+        return self.create_workspace(
+            self._available_workspace_name(preferred_name, owner_user_id),
+            owner_user_id=owner_user_id,
+        ).workspace
+
+    def _available_workspace_name(self, preferred: str, owner_user_id: str) -> str:
+        fallback = f"workspace-{owner_user_id}"
+        candidate = _workspace_name_from(preferred)
+        if not candidate:
+            return fallback
+        with self.context.database.session() as session:
+            repository = WorkspaceRepository(session)
+            if repository.by_name(candidate) is None:
+                return candidate
+            for suffix in range(2, 10):
+                attempt = f"{candidate}-{suffix}"
+                if repository.by_name(attempt) is None:
+                    return attempt
+        # A name this contended is not worth more round trips to guess at. The account
+        # id is unique by construction, and the person can rename it.
+        return fallback
 
     def workspace_signing_key(self, workspace: str = "default") -> str:
         return self.get_workspace(workspace).signing_key
@@ -1437,6 +1481,25 @@ class ControlPlaneService:
             )
         self._publish_concurrency_change(record, WorkspaceChangeType.Updated)
         return result
+
+
+def _workspace_name_from(preferred: str) -> str:
+    """A provider login reshaped into something a workspace may be called.
+
+    Workspace names allow lowercase letters, digits, hyphens, and underscores, and
+    must start with a letter. A GitHub login satisfies none of that reliably: it can
+    carry capitals and may begin with a digit. Returns empty when nothing usable is
+    left, which the caller reads as "fall back to the account id".
+    """
+    lowered = "".join(
+        character if (character.isascii() and (character.isalnum() or character in "-_")) else "-"
+        for character in preferred.strip().lower()
+    ).strip("-")
+    if not lowered:
+        return ""
+    if not lowered[0].isalpha():
+        lowered = f"w-{lowered}"
+    return lowered[:63].rstrip("-_")
 
 
 def _workspace_by_name(records: list[WorkspaceRecord], name: str) -> WorkspaceRecord | None:

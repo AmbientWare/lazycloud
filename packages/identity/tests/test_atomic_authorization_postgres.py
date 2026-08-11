@@ -94,8 +94,6 @@ def test_postgresql_authorization_claims_are_atomic(tmp_path: Path) -> None:
             try:
                 result = AuthService(context).bootstrap_administrator(
                     request_id=f"bootstrap:concurrent-{index}",
-                    username="admin",
-                    password="bootstrap-password",
                     name=f"admin-{index}",
                 )
             except AuthError:
@@ -216,8 +214,6 @@ def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
         auth = AuthService(context)
         auth.bootstrap_administrator(
             request_id="bootstrap:postgres-recovery-owner",
-            username="admin",
-            password="bootstrap-password",
         )
         serving_fence = ControlPlaneRecoveryFence(database)
         serving_fence.start_serving()
@@ -235,14 +231,12 @@ def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
             assert acquired
             created = auth.recover_admin_token(
                 request_id="postgres-incident-001",
-                username="admin",
                 stage_token=publication.stage,
             )
             staged = publication.read_staged()
             assert staged is not None
             replay = auth.recover_admin_token(
                 request_id="postgres-incident-001",
-                username="admin",
                 staged_token=staged,
             )
             publication.publish(replace=False)

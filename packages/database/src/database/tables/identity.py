@@ -63,13 +63,20 @@ class IdentityAdminRecoveryRequestTable(TimestampMixin, DatabaseBase):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class UserTable(IdPayloadTable, DatabaseBase):
-    """A person who signs in and owns account-level resources."""
+class UserTable(IdTable, DatabaseBase):
+    """A person who owns account-level resources.
+
+    An account with no row in ``user_identities`` has no way to sign in and exists
+    to own tokens: the offline administrator and automation accounts are this.
+    """
 
     __tablename__ = "users"
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("username", name="uq_users_username"),
-        CheckConstraint("username = lower(username)", name="ck_users_username_lowercase"),
+        # Deliberately not unique. GitHub lets an address move between accounts, and
+        # a person can sign in with an address someone else once used; keying
+        # identity on email is how an attacker links themselves to another account.
+        # This index exists so an operator can find someone, nothing more.
+        Index("ix_users_email", "email"),
         CheckConstraint(
             "role IN ('administrator', 'member')",
             name="ck_users_role",
@@ -80,16 +87,48 @@ class UserTable(IdPayloadTable, DatabaseBase):
         ),
     )
 
-    # Lowercased on the way in rather than stored case-preserved behind a citext
-    # column, so PostgreSQL and the SQLite test backend answer a lookup the same way
-    # without depending on an extension.
-    username: Mapped[str] = mapped_column(String(120), nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    # Refreshed from the provider on every sign-in, so these describe the person as
+    # the provider last saw them rather than as they were when the account opened.
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    email: Mapped[str] = mapped_column(String(320), nullable=False, default="")
+    avatar_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    password_changed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+
+
+class UserIdentityTable(IdTable, DatabaseBase):
+    """The external account a person proves they control in order to sign in."""
+
+    __tablename__ = "user_identities"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("provider", "subject", name="uq_user_identities_provider_subject"),
+        # One identity per provider per account. Without it "which GitHub user is
+        # this person" has two answers and sign-in picks whichever row it read first.
+        UniqueConstraint("provider", "user_id", name="uq_user_identities_provider_user"),
+        CheckConstraint("provider IN ('github')", name="ck_user_identities_provider"),
+        CheckConstraint("subject <> ''", name="ck_user_identities_subject_present"),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # GitHub's numeric id, held as text so a provider whose subject is not a number
+    # needs no schema change. Never the login: a login is renameable and, once
+    # released, re-registrable by somebody else.
+    subject: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_login: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    # Null where the link was made with no provider to ask, which is the offline
+    # bootstrap. Whatever reads account age must not read null as new.
+    provider_account_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_authenticated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
 

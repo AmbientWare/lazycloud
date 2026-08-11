@@ -34,11 +34,17 @@ class UnauthenticatedRouteLimit:
 
 DEFAULT_UNAUTHENTICATED_LIMITS: tuple[UnauthenticatedRouteLimit, ...] = (
     UnauthenticatedRouteLimit("/gateway/provider-nodes/", 30, 600),
+    UnauthenticatedRouteLimit("/auth/github/start", 10, 200),
+    # Looser than the rest: a shared NAT can put a great many legitimate people
+    # behind one address, and every one of them lands here within a minute of
+    # each other.
+    UnauthenticatedRouteLimit("/auth/github/callback", 20, 400),
     UnauthenticatedRouteLimit("/auth/device", 10, 200),
     UnauthenticatedRouteLimit("/auth/authorize", 10, 200),
-    # Password sign-in: the one route where guessing the credential is the attack.
-    # The global budget matters as much as the per-address one, because credential
-    # stuffing spreads a list across many addresses rather than hammering one.
+    # Redeeming a sign-in code. The budget bounds abuse of the exchange rather than
+    # guessing: the code and the cookie nonce are each 256 bits of urandom, and the
+    # code is single-use. The global cap matters as much as the per-address one,
+    # because anything worth doing here is spread across many addresses.
     UnauthenticatedRouteLimit("/api/v1/sessions", 10, 200, methods=frozenset({"POST"})),
     UnauthenticatedRouteLimit("/health", 60, 600, fail_open=True),
 )

@@ -37,9 +37,14 @@ broad barrel, and delete the old re-export path.
 
 ## Data And Security
 
-- Requests are same-origin and carry the auth-store bearer token. Sign-in is a
-  username and password exchanged for a session credential; there is no
-  paste-a-token path, because two ways in means two ways to keep working.
+- Requests are same-origin and carry the auth-store bearer token. Sign-in leaves
+  for GitHub and returns to `/callback` with a single-use code the browser trades
+  for a session credential; there is no paste-a-token path and no password form,
+  because two ways in means two ways to keep working.
+- The sign-in control is a real anchor, not a scripted click: leaving for GitHub
+  is a document navigation. `/callback` sits outside the auth gate, since it runs
+  before there is a session, and it redeems its code exactly once — the code is
+  spent on first use and StrictMode mounts twice.
 - That credential names a person rather than a workspace, so a workspace-scoped
   request names its workspace in the `workspace` query parameter. Resources the
   account owns—access tokens, the connected cloud account, domains, joined

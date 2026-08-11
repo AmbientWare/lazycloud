@@ -49,10 +49,7 @@ def _services(root: Path) -> ApiServices:
         owns_binary_redis_client=True,
     )
     control = ControlPlaneService(services.context)
-    owner = UserService(services.context).create(
-        username="benchmark-owner",
-        password="benchmark-owner-password",
-    )
+    owner = UserService(services.context).create(display_name="benchmark-owner")
     control.set_workspace("default", owner_user_id=owner.id)
     return services
 

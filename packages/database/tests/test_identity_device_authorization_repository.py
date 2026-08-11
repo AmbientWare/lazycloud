@@ -62,8 +62,7 @@ def test_device_authorization_constraints_reject_invalid_state(
     consumed: bool,
 ) -> None:
     approver = UserService(isolated_services.context).create(
-        username="device-invariant-owner",
-        password="device-invariant-password",
+        display_name="device-invariant-owner",
     )
     expires_at = utc_now() + timedelta(minutes=15)
     with isolated_services.context.database.session() as session:

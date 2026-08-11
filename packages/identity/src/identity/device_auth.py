@@ -35,7 +35,6 @@ class DeviceAuthorizationStart:
 class DeviceAuthorizationClaim:
     status: DeviceAuthorizationStatus
     token: str = ""
-    username: str = ""
 
 
 def normalize_user_code(value: str) -> str:
@@ -158,7 +157,6 @@ class DeviceAuthorizationService:
         return DeviceAuthorizationClaim(
             status=DeviceAuthorizationStatus.Approved,
             token=raw_token,
-            username=user.username,
         )
 
     def prune_expired(self, *, now: datetime | None = None) -> int:

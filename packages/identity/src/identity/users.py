@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from collections.abc import Sequence
 
 from database.repositories.identity import (
     TokenRepository,
+    UserIdentityRepository,
     UserRepository,
     WorkspaceMemberRepository,
 )
-from database.types import DatabaseSession
 from shared.errors import ConflictError, NotFoundError
 from shared.identity import (
-    AuthTokenRecord,
+    IdentityProvider,
     PlatformRole,
-    TokenKind,
+    UserIdentityRecord,
     UserRecord,
     UserStatus,
     WorkspaceMemberRecord,
@@ -21,30 +20,12 @@ from shared.identity import (
     WorkspaceRole,
 )
 from shared.timestamps import utc_now
-from sqlalchemy.exc import IntegrityError
 
-from identity.auth import AuthError, IdentityContext, TokenIssuer
-from identity.passwords import (
-    ABSENT_USER_HASH,
-    hash_password,
-    validate_password,
-    validate_username,
-    verify_password,
-)
-
-SESSION_TTL_SECONDS = 12 * 60 * 60
-
-
-@dataclass(frozen=True, slots=True)
-class AuthenticatedSession:
-    token: str
-    record: AuthTokenRecord
-    user: UserRecord
-    expires_at: datetime
+from identity.auth import IdentityContext
 
 
 class UserService:
-    """Users, their credentials, and which workspaces each one reaches."""
+    """Users, the external identities that reach them, and the workspaces they join."""
 
     def __init__(self, context: IdentityContext) -> None:
         self.context = context
@@ -52,21 +33,39 @@ class UserService:
     def create(
         self,
         *,
-        username: str,
-        password: str,
+        display_name: str = "",
+        github_user_id: int | None = None,
+        github_login: str = "",
         role: PlatformRole = PlatformRole.Member,
     ) -> UserRecord:
-        normalized = validate_username(username)
-        password_hash = hash_password(validate_password(password))
+        """Create an account, linked to a GitHub identity when one is named.
+
+        Linking here is what makes an administrator-created account reachable: without
+        it that person's first sign-in finds no identity and opens a second account
+        for them instead, with none of the standing this one was given.
+        """
         with self.context.database.session() as session:
-            try:
-                return UserRepository(session).create(
-                    username=normalized,
-                    password_hash=password_hash,
-                    role=role,
+            identities = UserIdentityRepository(session)
+            subject = str(github_user_id) if github_user_id is not None else ""
+            if subject:
+                identities.lock_subject(provider=IdentityProvider.Github, subject=subject)
+                existing = identities.by_subject(
+                    provider=IdentityProvider.Github,
+                    subject=subject,
                 )
-            except IntegrityError as exc:
-                raise ConflictError(f"username is already in use: {normalized}") from exc
+                if existing is not None:
+                    raise ConflictError(
+                        f"github identity {subject} is already linked to an account"
+                    )
+            user = UserRepository(session).create(display_name=display_name, role=role)
+            if subject:
+                identities.link(
+                    user_id=user.id,
+                    provider=IdentityProvider.Github,
+                    subject=subject,
+                    subject_login=github_login,
+                )
+            return user
 
     def get(self, user_id: str) -> UserRecord:
         with self.context.database.session() as session:
@@ -75,28 +74,30 @@ class UserService:
             raise NotFoundError(f"user not found: {user_id}")
         return user
 
-    def by_username(self, username: str) -> UserRecord:
-        with self.context.database.session() as session:
-            user = UserRepository(session).by_username(username)
-        if user is None:
-            raise NotFoundError(f"user not found: {username}")
-        return user
-
     def list(self) -> list[UserRecord]:
         with self.context.database.session() as session:
             return UserRepository(session).list()
 
-    def change_password(self, user_id: str, *, password: str) -> UserRecord:
-        """Set a new password and end every session minted under the old one."""
-        password_hash = hash_password(validate_password(password))
-        now = utc_now()
+    def identity(self, user_id: str) -> UserIdentityRecord | None:
+        with self.context.database.session() as session:
+            return UserIdentityRepository(session).for_user(user_id)
+
+    def identities(self, user_ids: Sequence[str]) -> dict[str, UserIdentityRecord]:
+        with self.context.database.session() as session:
+            return UserIdentityRepository(session).for_users(user_ids)
+
+    def set_role(self, user_id: str, *, role: PlatformRole) -> UserRecord:
+        """Grant or withdraw platform administrator standing on an existing account.
+
+        Signing in creates an ordinary member, so without this the only
+        administrators are the ones named at creation and anyone who arrived
+        through sign-in is a member permanently.
+        """
         with self.context.database.session() as session:
             repository = UserRepository(session)
             if repository.get(user_id) is None:
                 raise NotFoundError(f"user not found: {user_id}")
-            updated = repository.set_password(user_id, password_hash=password_hash)
-            TokenRepository(session).revoke_user_sessions(user_id, now=now)
-        return updated
+            return repository.set_role(user_id, role=role)
 
     def set_status(self, user_id: str, *, status: UserStatus) -> UserRecord:
         now = utc_now()
@@ -182,76 +183,4 @@ class UserService:
             return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
 
 
-class SessionService:
-    """Password sign-in, and the short-lived credential it hands back."""
-
-    def __init__(
-        self,
-        context: IdentityContext,
-        *,
-        ttl_seconds: int = SESSION_TTL_SECONDS,
-    ) -> None:
-        self.context = context
-        self.ttl_seconds = ttl_seconds
-
-    def sign_in(self, *, username: str, password: str) -> AuthenticatedSession:
-        issuer = TokenIssuer(self.context)
-        with self.context.database.session() as session:
-            user = self._verified_user(session, username=username, password=password)
-            raw_token, record = issuer.issue_for_user(
-                session,
-                f"session:{user.username}",
-                kind=TokenKind.Session,
-                user_id=user.id,
-                expires_in_seconds=self.ttl_seconds,
-                reusable=True,
-            )
-        issuer.committed()
-        expires_at = record.expires_at or (utc_now() + timedelta(seconds=self.ttl_seconds))
-        return AuthenticatedSession(
-            token=raw_token,
-            record=record,
-            user=user,
-            expires_at=expires_at,
-        )
-
-    def verify_password(self, *, user_id: str, password: str) -> UserRecord:
-        """Prove the caller holds an account's current password.
-
-        Used before a self-service password change, so a borrowed session cannot be
-        turned into permanent ownership of the account.
-        """
-        with self.context.database.session() as session:
-            user = UserRepository(session).get(user_id)
-        if user is None:
-            raise AuthError("invalid username or password")
-        if not verify_password(password, user.password_hash):
-            raise AuthError("invalid username or password")
-        return user
-
-    def _verified_user(
-        self,
-        session: DatabaseSession,
-        *,
-        username: str,
-        password: str,
-    ) -> UserRecord:
-        user = UserRepository(session).by_username(username)
-        # Both branches run one verify, so a username that does not exist costs the
-        # same as one whose password is wrong.
-        if user is None:
-            verify_password(password, ABSENT_USER_HASH)
-            raise AuthError("invalid username or password")
-        if not verify_password(password, user.password_hash):
-            raise AuthError("invalid username or password")
-        if user.status is not UserStatus.Active:
-            raise AuthError("this account is disabled")
-        return user
-
-
-__all__ = [
-    "SESSION_TTL_SECONDS",
-    "AuthenticatedSession",
-    "SessionService",
-    "UserService",
-]
+__all__ = ["UserService"]

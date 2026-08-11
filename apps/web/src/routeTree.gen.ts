@@ -9,7 +9,9 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root"
+import { Route as SigninRouteImport } from "./routes/signin"
 import { Route as DashboardRouteImport } from "./routes/dashboard"
+import { Route as CallbackRouteImport } from "./routes/callback"
 import { Route as ActivateRouteImport } from "./routes/activate"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as WWorkspaceRouteRouteImport } from "./routes/w/$workspace/route"
@@ -26,9 +28,19 @@ import { Route as WWorkspaceAppsAppIdTasksTaskIdRouteImport } from "./routes/w/$
 import { Route as WWorkspaceAppsAppIdWorkloadsNameTasksTaskIdRouteImport } from "./routes/w/$workspace/apps/$appId_.workloads.$name.tasks.$taskId"
 import { Route as WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRouteImport } from "./routes/w/$workspace/apps/$appId_.workloads.$name.instances.$containerId"
 
+const SigninRoute = SigninRouteImport.update({
+  id: "/signin",
+  path: "/signin",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DashboardRoute = DashboardRouteImport.update({
   id: "/dashboard",
   path: "/dashboard",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CallbackRoute = CallbackRouteImport.update({
+  id: "/callback",
+  path: "/callback",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActivateRoute = ActivateRouteImport.update({
@@ -115,7 +127,9 @@ const WWorkspaceAppsAppIdWorkloadsNameInstancesContainerIdRoute =
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activate": typeof ActivateRoute
+  "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
+  "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace/": typeof WWorkspaceIndexRoute
@@ -133,7 +147,9 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activate": typeof ActivateRoute
+  "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
+  "/signin": typeof SigninRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace": typeof WWorkspaceIndexRoute
   "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
@@ -151,7 +167,9 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
   "/activate": typeof ActivateRoute
+  "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
+  "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace/": typeof WWorkspaceIndexRoute
@@ -171,7 +189,9 @@ export interface FileRouteTypes {
   fullPaths:
     | "/"
     | "/activate"
+    | "/callback"
     | "/dashboard"
+    | "/signin"
     | "/w/$workspace"
     | "/w/$workspace/tasks"
     | "/w/$workspace/"
@@ -189,7 +209,9 @@ export interface FileRouteTypes {
   to:
     | "/"
     | "/activate"
+    | "/callback"
     | "/dashboard"
+    | "/signin"
     | "/w/$workspace/tasks"
     | "/w/$workspace"
     | "/w/$workspace/apps/$appId"
@@ -206,7 +228,9 @@ export interface FileRouteTypes {
     | "__root__"
     | "/"
     | "/activate"
+    | "/callback"
     | "/dashboard"
+    | "/signin"
     | "/w/$workspace"
     | "/w/$workspace/tasks"
     | "/w/$workspace/"
@@ -225,17 +249,33 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivateRoute: typeof ActivateRoute
+  CallbackRoute: typeof CallbackRoute
   DashboardRoute: typeof DashboardRoute
+  SigninRoute: typeof SigninRoute
   WWorkspaceRouteRoute: typeof WWorkspaceRouteRouteWithChildren
 }
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
+    "/signin": {
+      id: "/signin"
+      path: "/signin"
+      fullPath: "/signin"
+      preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/dashboard": {
       id: "/dashboard"
       path: "/dashboard"
       fullPath: "/dashboard"
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/callback": {
+      id: "/callback"
+      path: "/callback"
+      fullPath: "/callback"
+      preLoaderRoute: typeof CallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/activate": {
@@ -417,7 +457,9 @@ const WWorkspaceRouteRouteWithChildren = WWorkspaceRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivateRoute: ActivateRoute,
+  CallbackRoute: CallbackRoute,
   DashboardRoute: DashboardRoute,
+  SigninRoute: SigninRoute,
   WWorkspaceRouteRoute: WWorkspaceRouteRouteWithChildren,
 }
 export const routeTree = rootRouteImport

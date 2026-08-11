@@ -54,8 +54,6 @@ def test_bootstrap_retry_publishes_the_exact_committed_token_once(
     )
     created = auth.bootstrap_administrator(
         request_id="bootstrap:test-publication",
-        username="admin",
-        password="bootstrap-password",
         stage_token=publication.stage,
     )
     staged = publication.read_staged()
@@ -64,8 +62,6 @@ def test_bootstrap_retry_publishes_the_exact_committed_token_once(
     assert publication.read_published() is None
     replay = auth.bootstrap_administrator(
         request_id="bootstrap:test-publication",
-        username="admin",
-        password="bootstrap-password",
         staged_token=staged,
     )
     publication.publish(replace=False)
@@ -103,14 +99,10 @@ def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
 
     created = auth.bootstrap_administrator(
         request_id="bootstrap:configured-authority",
-        username="admin",
-        password="bootstrap-password",
         configured_token=configured,
     )
     replay = auth.bootstrap_administrator(
         request_id="bootstrap:configured-authority",
-        username="admin",
-        password="bootstrap-password",
         configured_token=configured,
     )
 
@@ -132,16 +124,12 @@ def test_configured_bootstrap_token_mismatch_fails_closed(
     configured = _configured_token()
     created = auth.bootstrap_administrator(
         request_id="bootstrap:configured-mismatch",
-        username="admin",
-        password="bootstrap-password",
         configured_token=configured,
     )
 
     with pytest.raises(AuthError, match="retry with its staged output"):
         auth.bootstrap_administrator(
             request_id="bootstrap:configured-mismatch",
-            username="admin",
-            password="bootstrap-password",
             configured_token=_configured_token(),
         )
 
@@ -156,8 +144,6 @@ def test_configured_bootstrap_token_requires_canonical_token(
     with pytest.raises(AuthError, match="configured administrator credential is invalid"):
         auth.bootstrap_administrator(
             request_id="bootstrap:configured-invalid",
-            username="admin",
-            password="bootstrap-password",
             configured_token=token_urlsafe(32),
         )
 
@@ -169,16 +155,13 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
     tmp_path: Path,
 ) -> None:
     auth = AuthService(isolated_services.context)
-    auth.bootstrap_administrator(
-        request_id="bootstrap:test-recovery-owner", username="admin", password="bootstrap-password"
-    )
+    auth.bootstrap_administrator(request_id="bootstrap:test-recovery-owner")
     publication = CredentialFilePublication(
         tmp_path / "recovery-token",
         "recovery:incident-2026-07-19",
     )
     created = auth.recover_admin_token(
         request_id="incident-2026-07-19",
-        username="admin",
         stage_token=publication.stage,
     )
     staged = publication.read_staged()
@@ -186,7 +169,6 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
 
     replay = auth.recover_admin_token(
         request_id="incident-2026-07-19",
-        username="admin",
         staged_token=staged,
     )
     publication.publish(replace=False)
@@ -215,13 +197,9 @@ def test_different_bootstrap_request_cannot_replay_committed_claim(
     isolated_services: ApiServices,
 ) -> None:
     auth = AuthService(isolated_services.context)
-    auth.bootstrap_administrator(
-        request_id="bootstrap:test-first-request", username="admin", password="bootstrap-password"
-    )
+    auth.bootstrap_administrator(request_id="bootstrap:test-first-request")
 
     with pytest.raises(AuthError, match="already complete"):
         auth.bootstrap_administrator(
             request_id="bootstrap:test-other-request",
-            username="admin",
-            password="bootstrap-password",
         )

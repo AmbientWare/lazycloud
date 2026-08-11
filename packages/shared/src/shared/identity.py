@@ -216,13 +216,39 @@ class ConcurrencyLimitRecord(ContractModel):
         return self.available == 0
 
 
+class IdentityProvider(StringEnum):
+    Github = "github"
+
+
 class UserRecord(ContractModel):
+    """A person, plus the profile the provider last told us about them.
+
+    An account with no `UserIdentityRecord` cannot sign in and exists to own
+    tokens: the offline administrator and any automation account are this.
+    """
+
     id: str
-    username: str
-    password_hash: str = Field(default="", repr=False)
+    display_name: str = ""
+    email: str = ""
+    avatar_url: str = ""
     role: PlatformRole = PlatformRole.Member
     status: UserStatus = UserStatus.Active
-    password_changed_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class UserIdentityRecord(ContractModel):
+    """The external account a person proves they control in order to sign in."""
+
+    id: str
+    user_id: str
+    provider: IdentityProvider = IdentityProvider.Github
+    subject: str = ""
+    subject_login: str = ""
+    # Null means the link was made somewhere with no provider to ask — the offline
+    # bootstrap. Whatever reads this as an abuse signal must not treat that as new.
+    provider_account_created_at: datetime | None = None
+    last_authenticated_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -269,9 +295,11 @@ __all__ = [
     "AuthTokenRecord",
     "ConcurrencyLimitRecord",
     "DeviceAuthorizationStatus",
+    "IdentityProvider",
     "PlatformRole",
     "TokenKind",
     "TokenStatus",
+    "UserIdentityRecord",
     "UserRecord",
     "UserStatus",
     "WorkspaceMemberRecord",

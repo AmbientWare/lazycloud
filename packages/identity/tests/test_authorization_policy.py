@@ -20,7 +20,15 @@ from identity.authz import (
     worker_requirement,
     workspace_requirement,
 )
-from shared.identity import AuthScope, AuthTokenRecord, TokenKind
+from identity.users import UserService
+from shared.identity import (
+    AuthScope,
+    AuthTokenRecord,
+    PlatformRole,
+    TokenKind,
+    WorkspaceMemberRecord,
+    WorkspaceRole,
+)
 from tests.service_fixtures import administrator_credential, owned_workspace
 
 
@@ -76,16 +84,12 @@ def test_bootstrap_succeeds_once_and_never_reopens(
     assert auth.bootstrap_required()
     created = auth.bootstrap_administrator(
         request_id="bootstrap:test-initial",
-        username="admin",
-        password="bootstrap-password",
         name="initial-admin",
     )
     token_id = created.record.id
     with pytest.raises(AuthError, match="already complete"):
         auth.bootstrap_administrator(
             request_id="bootstrap:test-conflict",
-            username="admin",
-            password="bootstrap-password",
             name="second-admin",
         )
 
@@ -239,3 +243,94 @@ def test_disabled_tokens_are_rejected_by_policy(isolated_services: ApiServices) 
 
     assert not decision.allowed
     assert decision.reason == AuthzDecisionReason.DisabledToken
+
+
+def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
+    isolated_services: ApiServices,
+) -> None:
+    """Membership is the whole of a person's reach, and the role bounds what they may do.
+
+    This is the isolation boundary the account model rests on: one customer's
+    credential must not act in another customer's workspace, and a member must not
+    perform an action reserved for the owner.
+    """
+    control = ControlPlaneService(isolated_services.context)
+    users = UserService(isolated_services.context)
+    me = users.create(display_name="me-user")
+    them = users.create(display_name="them-user")
+    mine = control.set_workspace("mine", owner_user_id=me.id)
+    theirs = control.set_workspace("theirs", owner_user_id=them.id)
+
+    _raw, my_token = AuthService(isolated_services.context).create_account_token(me.id, "cli")
+
+    assert decide_authorization(
+        my_token,
+        workspace_requirement(
+            mine.id,
+            membership=users.membership(workspace_id=mine.id, user_id=me.id),
+        ),
+    ).allowed
+    assert not decide_authorization(
+        my_token,
+        workspace_requirement(
+            theirs.id,
+            membership=users.membership(workspace_id=theirs.id, user_id=me.id),
+        ),
+    ).allowed
+
+    # A membership row naming somebody else cannot stand in for one's own.
+    assert not decide_authorization(
+        my_token,
+        workspace_requirement(
+            theirs.id,
+            membership=WorkspaceMemberRecord(
+                id="borrowed",
+                workspace_id=theirs.id,
+                user_id=them.id,
+                role=WorkspaceRole.Owner,
+            ),
+        ),
+    ).allowed
+
+    users.add_member(workspace_id=theirs.id, user_id=me.id, role=WorkspaceRole.Member)
+    membership = users.membership(workspace_id=theirs.id, user_id=me.id)
+    assert decide_authorization(
+        my_token,
+        workspace_requirement(theirs.id, membership=membership),
+    ).allowed
+    assert not decide_authorization(
+        my_token,
+        workspace_requirement(
+            theirs.id,
+            membership=membership,
+            required_role=WorkspaceRole.Owner,
+        ),
+    ).allowed
+
+
+def test_a_workspace_credential_cannot_be_widened_by_a_membership_row(
+    isolated_services: ApiServices,
+) -> None:
+    """Automation keeps its single-workspace blast radius whatever else is presented."""
+    control = ControlPlaneService(isolated_services.context)
+    mine = owned_workspace(control, "mine")
+    theirs = owned_workspace(control, "theirs")
+    me = UserService(isolated_services.context).create(display_name="me-user")
+    _raw, workspace_token = AuthService(isolated_services.context).create_token(
+        "ci",
+        workspace_id=mine.id,
+    )
+
+    assert not decide_authorization(
+        workspace_token,
+        workspace_requirement(
+            theirs.id,
+            membership=WorkspaceMemberRecord(
+                id="unrelated",
+                workspace_id=theirs.id,
+                user_id=me.id,
+                role=WorkspaceRole.Owner,
+            ),
+        ),
+        platform_role=PlatformRole.Member,
+    ).allowed

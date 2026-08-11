@@ -8,7 +8,7 @@ from database.tables import DatabaseBase
 # This identifier must change whenever the predeployment baseline changes so an
 # older disposable database cannot be mistaken for the current schema. Alembic
 # stores it in a varchar(32), so it has to fit.
-revision = "20260808_machine_account_owner"
+revision = "20260810_github_identities"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

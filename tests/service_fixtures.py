@@ -21,7 +21,6 @@ from execution.collections.redis import (
     RedisSimpleQueueService,
 )
 from identity.auth import TokenIssuer
-from identity.passwords import hash_password
 from identity.users import UserService
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from pydantic import JsonValue
@@ -39,21 +38,10 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from tests.fakes import FakeObjectClient
 from tests.redis_fakes import FakeRedis
 
-_FIXTURE_PASSWORD = "workspace-owner-fixture-password"
-_FIXTURE_PASSWORD_HASH = hash_password(_FIXTURE_PASSWORD)
-"""Hashed once for the whole session: the work factor is a production cost, not a test one."""
 
-
-def _fixture_account(database: DatabaseClient, username: str) -> str:
+def _fixture_account(database: DatabaseClient, display_name: str) -> str:
     with database.session() as session:
-        return (
-            UserRepository(session)
-            .create(
-                username=username,
-                password_hash=_FIXTURE_PASSWORD_HASH,
-            )
-            .id
-        )
+        return UserRepository(session).create(display_name=display_name).id
 
 
 @dataclass(slots=True)
@@ -203,8 +191,7 @@ def administrator_credential(
     granting it would collide with whatever owner the test set up itself.
     """
     user = UserService(services.context).create(
-        username=f"admin-{uuid4().hex[:12]}",
-        password="administrator-fixture-password",
+        display_name=f"admin-{uuid4().hex[:12]}",
         role=PlatformRole.Administrator,
     )
     issuer = TokenIssuer(services.context)

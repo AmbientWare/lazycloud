@@ -125,7 +125,7 @@ function DeviceCodeDecision({
   if (approve.isSuccess) {
     return (
       <Outcome tone="positive" title="CLI connected">
-        The CLI is now signed in as <span className="font-medium">{user.username}</span> and reaches
+        The CLI is now signed in as <span className="font-medium">{user.display_name}</span> and reaches
         every workspace you belong to. You can return to your terminal.
       </Outcome>
     );
@@ -170,7 +170,7 @@ function DeviceCodeDecision({
       ) : null}
 
       <p className="text-sm text-muted-foreground">
-        Approving signs the CLI in as <span className="font-medium">{user.username}</span>. It will
+        Approving signs the CLI in as <span className="font-medium">{user.display_name}</span>. It will
         reach every workspace you belong to, and picks its active one itself.
       </p>
 

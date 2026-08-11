@@ -10,6 +10,7 @@ from database.mappers.identity import (
     auth_token_record_from_table,
     device_authorization_record_from_table,
     secret_storage_record_from_table,
+    user_identity_record_from_table,
     user_record_from_table,
     workspace_member_record_from_table,
 )
@@ -34,6 +35,7 @@ from database.tables.identity import (
     IdentityBootstrapClaimTable,
     SecretTable,
     TokenTable,
+    UserIdentityTable,
     UserTable,
     WorkspaceAuditEventTable,
     WorkspaceMemberTable,
@@ -57,9 +59,11 @@ from shared.identity import (
     AuthTokenRecord,
     ConcurrencyLimitRecord,
     DeviceAuthorizationStatus,
+    IdentityProvider,
     PlatformRole,
     TokenKind,
     TokenStatus,
+    UserIdentityRecord,
     UserRecord,
     UserStatus,
     WorkspaceMemberRecord,
@@ -69,7 +73,7 @@ from shared.identity import (
     WorkspaceStorageConfig,
 )
 from shared.timestamps import utc_now
-from sqlalchemy import and_, case, delete, exists, func, or_, select, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, class_mapper
@@ -267,11 +271,6 @@ class WorkspaceAuditPage:
     next: WorkspaceAuditCursor | None = None
 
 
-def normalize_username(value: str) -> str:
-    """The one spelling of a username the database stores and looks up by."""
-    return value.strip().lower()
-
-
 @dataclass(slots=True)
 class UserRepository:
     session: Session
@@ -279,25 +278,21 @@ class UserRepository:
     def create(
         self,
         *,
-        username: str,
-        password_hash: str,
+        display_name: str = "",
+        email: str = "",
+        avatar_url: str = "",
         role: PlatformRole = PlatformRole.Member,
     ) -> UserRecord:
-        now = utc_now()
         row = UserTable(
-            username=normalize_username(username),
-            password_hash=password_hash,
+            display_name=display_name,
+            email=email,
+            avatar_url=avatar_url,
             role=role.value,
             status=UserStatus.Active.value,
-            password_changed_at=now,
-            payload={},
         )
         self.session.add(row)
         self.session.flush()
-        record = user_record_from_table(row)
-        row.payload = record.model_dump(mode="json")
-        self.session.flush()
-        return record
+        return user_record_from_table(row)
 
     def get(self, user_id: str) -> UserRecord | None:
         row = self.session.get(UserTable, user_id)
@@ -323,20 +318,26 @@ class UserRepository:
             raise NotFoundError(f"user not found: {user_id}")
         return record
 
-    def by_username(self, username: str) -> UserRecord | None:
-        row = self.session.scalars(
-            select(UserTable).where(UserTable.username == normalize_username(username))
-        ).first()
-        return user_record_from_table(row) if row is not None else None
-
     def list(self) -> list[UserRecord]:
         rows = self.session.scalars(
             select(UserTable).order_by(UserTable.created_at.desc(), UserTable.id.asc())
         )
         return [user_record_from_table(row) for row in rows]
 
-    def set_password(self, user_id: str, *, password_hash: str) -> UserRecord:
-        return self._update(user_id, password_hash=password_hash, password_changed_at=utc_now())
+    def set_profile(
+        self,
+        user_id: str,
+        *,
+        display_name: str,
+        email: str,
+        avatar_url: str,
+    ) -> UserRecord:
+        return self._update(
+            user_id,
+            display_name=display_name,
+            email=email,
+            avatar_url=avatar_url,
+        )
 
     def set_status(self, user_id: str, *, status: UserStatus) -> UserRecord:
         return self._update(user_id, status=status.value)
@@ -352,10 +353,115 @@ class UserRepository:
             setattr(row, column, value)
         row.updated_at = utc_now()
         self.session.flush()
-        record = user_record_from_table(row)
-        row.payload = record.model_dump(mode="json")
+        return user_record_from_table(row)
+
+
+@dataclass(slots=True)
+class UserIdentityRepository:
+    session: Session
+
+    def lock_subject(self, *, provider: IdentityProvider, subject: str) -> None:
+        """Serialize concurrent first sign-ins for one external account.
+
+        Two browsers finishing the flow at once would both read "no account yet"
+        and both insert. The unique constraint is what guarantees only one wins;
+        this is what keeps the loser from having to unwind a user row it already
+        created. SQLite takes a single writer at a time and needs neither.
+        """
+        if self.session.bind is None or self.session.bind.dialect.name != "postgresql":
+            return
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"user-identity:{provider.value}:{subject}"},
+        )
+
+    def by_subject(
+        self,
+        *,
+        provider: IdentityProvider,
+        subject: str,
+    ) -> UserIdentityRecord | None:
+        row = self.session.scalars(
+            select(UserIdentityTable).where(
+                UserIdentityTable.provider == provider.value,
+                UserIdentityTable.subject == subject,
+            )
+        ).first()
+        return user_identity_record_from_table(row) if row is not None else None
+
+    def for_user(
+        self,
+        user_id: str,
+        *,
+        provider: IdentityProvider = IdentityProvider.Github,
+    ) -> UserIdentityRecord | None:
+        row = self.session.scalars(
+            select(UserIdentityTable).where(
+                UserIdentityTable.provider == provider.value,
+                UserIdentityTable.user_id == user_id,
+            )
+        ).first()
+        return user_identity_record_from_table(row) if row is not None else None
+
+    def for_users(
+        self,
+        user_ids: Collection[str],
+        *,
+        provider: IdentityProvider = IdentityProvider.Github,
+    ) -> dict[str, UserIdentityRecord]:
+        """Resolve many accounts' identities at once, so a listing is not N queries."""
+        if not user_ids:
+            return {}
+        rows = self.session.scalars(
+            select(UserIdentityTable).where(
+                UserIdentityTable.provider == provider.value,
+                UserIdentityTable.user_id.in_(list(user_ids)),
+            )
+        )
+        records = [user_identity_record_from_table(row) for row in rows]
+        return {record.user_id: record for record in records}
+
+    def link(
+        self,
+        *,
+        user_id: str,
+        provider: IdentityProvider,
+        subject: str,
+        subject_login: str = "",
+        provider_account_created_at: datetime | None = None,
+    ) -> UserIdentityRecord:
+        row = UserIdentityTable(
+            user_id=user_id,
+            provider=provider.value,
+            subject=subject,
+            subject_login=subject_login,
+            provider_account_created_at=provider_account_created_at,
+        )
+        try:
+            with self.session.begin_nested():
+                self.session.add(row)
+        except IntegrityError as exc:
+            raise ConflictError(
+                f"{provider.value} identity {subject} is already linked to an account"
+            ) from exc
         self.session.flush()
-        return record
+        return user_identity_record_from_table(row)
+
+    def record_authentication(
+        self,
+        identity_id: str,
+        *,
+        subject_login: str,
+        authenticated_at: datetime,
+    ) -> UserIdentityRecord:
+        row = self.session.get(UserIdentityTable, identity_id)
+        if row is None:
+            raise NotFoundError(f"user identity not found: {identity_id}")
+        row.subject_login = subject_login
+        row.last_authenticated_at = authenticated_at
+        row.updated_at = utc_now()
+        self.session.flush()
+        return user_identity_record_from_table(row)
 
 
 @dataclass(slots=True)
@@ -1053,24 +1159,6 @@ class TokenRepository:
             update(TokenTable)
             .where(
                 TokenTable.user_id == user_id,
-                TokenTable.status == TokenStatus.Active.value,
-            )
-            .values(
-                status=TokenStatus.Revoked.value,
-                revoked_at=now,
-                updated_at=now,
-            )
-        )
-        self.session.flush()
-        return int(result.rowcount) if isinstance(result, CursorResult) else 0
-
-    def revoke_user_sessions(self, user_id: str, *, now: datetime) -> int:
-        """End every live session a person holds, which is what a password change means."""
-        result = self.session.execute(
-            update(TokenTable)
-            .where(
-                TokenTable.user_id == user_id,
-                TokenTable.kind == TokenKind.Session.value,
                 TokenTable.status == TokenStatus.Active.value,
             )
             .values(

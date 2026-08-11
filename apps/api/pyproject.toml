@@ -23,6 +23,7 @@ dependencies = [
     "operations",
     "provider-clients",
     "provider-cloudflare",
+    "provider-github",
     "pydantic-settings>=2.4,<3",
     "scheduler",
     "storage",
