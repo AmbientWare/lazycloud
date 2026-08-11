@@ -24,14 +24,6 @@ def _token() -> str:
     return f"rt_{token_urlsafe(32)}"
 
 
-def _password_file(tmp_path: Path) -> Path:
-    """A mode-0600 file, because the command refuses a password on argv."""
-    path = tmp_path / "admin-password"
-    path.write_text("bootstrap-password\n", encoding="utf-8")
-    path.chmod(0o600)
-    return path
-
-
 def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_without_storage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -63,8 +55,6 @@ def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_witho
             "bootstrap",
             "--output",
             str(output),
-            "--password-file",
-            str(_password_file(tmp_path)),
         ],
     )
 
@@ -143,8 +133,6 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
             "bootstrap",
             "--token-file",
             str(token_file),
-            "--password-file",
-            str(_password_file(tmp_path)),
             "--output",
             str(output),
         ],
@@ -177,12 +165,3 @@ def test_configured_token_file_requires_private_mode(tmp_path: Path) -> None:
 
     os.chmod(path, 0o600)
     assert _read_configured_token(path) is not None
-
-
-def test_configured_token_file_requires_canonical_token(tmp_path: Path) -> None:
-    path = tmp_path / "configured-token"
-    path.write_text(f"configured_{token_urlsafe(32)}\n", encoding="utf-8")
-    os.chmod(path, 0o600)
-
-    with pytest.raises(CredentialFileError, match="valid token"):
-        _read_configured_token(path)

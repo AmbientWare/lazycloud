@@ -16,8 +16,6 @@ def test_authenticated_missing_workspace_requests_return_404_without_creating_ro
     auth = AuthService(isolated_services.context)
     bootstrap = auth.bootstrap_administrator(
         request_id="bootstrap:workspace-lookup-read-only",
-        username="admin",
-        password="bootstrap-password",
     )
     auth.mark_admin_token_published(
         request_id="bootstrap:workspace-lookup-read-only",

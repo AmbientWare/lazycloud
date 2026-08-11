@@ -10,15 +10,8 @@ from shared.custom_domains import CustomDomain
 from shared.errors import ConflictError
 
 
-def _account(services: ApiServices, username: str) -> str:
-    return (
-        UserService(services.context)
-        .create(
-            username=username,
-            password="domain-owner-password",
-        )
-        .id
-    )
+def _account(services: ApiServices, name: str) -> str:
+    return UserService(services.context).create(display_name=name).id
 
 
 def _register(services: ApiServices, *, user_id: str, hostname: str) -> None:

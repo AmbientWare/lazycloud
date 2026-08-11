@@ -2,18 +2,26 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field, SecretStr
+from pydantic import Field
 
-from shared.http.base import HttpModel, SecretRequestModel
+from shared.http.base import HttpModel
 from shared.http.workspaces import WorkspaceResponse
 from shared.identity import PlatformRole, UserStatus, WorkspaceRole
 
 
 class UserResponse(HttpModel):
-    """A person, as the API describes them. Never carries the password hash."""
+    """A person, as the API describes them.
+
+    `github_user_id` is empty for an account with no linked identity. Such an
+    account cannot sign in and exists to own tokens.
+    """
 
     id: str
-    username: str
+    display_name: str = ""
+    email: str = ""
+    avatar_url: str = ""
+    github_user_id: str = ""
+    github_login: str = ""
     role: PlatformRole = PlatformRole.Member
     status: UserStatus = UserStatus.Active
     created_at: datetime
@@ -25,26 +33,36 @@ class UserListResponse(HttpModel):
     next: str = ""
 
 
-class UserCreateRequest(SecretRequestModel):
-    username: str = Field(min_length=3, max_length=64)
-    password: SecretStr
+class UserCreateRequest(HttpModel):
+    """Create an account, optionally pre-linked to the GitHub identity that reaches it.
+
+    Without `github_user_id` the account cannot sign in. With it, that person's
+    first sign-in lands here rather than opening a second account for them.
+    """
+
+    display_name: str = Field(default="", max_length=255)
+    github_user_id: int | None = Field(default=None, gt=0)
+    github_login: str = Field(default="", max_length=120)
     role: PlatformRole = PlatformRole.Member
-
-
-class PasswordChangeRequest(SecretRequestModel):
-    current_password: SecretStr | None = None
-    """Required when changing your own password; omitted for an administrator reset."""
-
-    new_password: SecretStr
 
 
 class UserStatusRequest(HttpModel):
     status: UserStatus
 
 
-class SessionCreateRequest(SecretRequestModel):
-    username: str
-    password: SecretStr
+class UserRoleRequest(HttpModel):
+    role: PlatformRole
+
+
+class SessionCreateRequest(HttpModel):
+    """Redeem the single-use code the GitHub callback handed the browser.
+
+    The code alone is not enough: redemption also requires the sign-in cookie set
+    when the flow started, so a code read out of history or a screenshot is spent
+    rather than usable.
+    """
+
+    code: str = Field(min_length=1, max_length=128)
 
 
 class SessionResponse(HttpModel):
@@ -53,6 +71,7 @@ class SessionResponse(HttpModel):
     token: str
     expires_at: datetime
     user: UserResponse
+    return_to: str = ""
 
 
 class CurrentSessionResponse(HttpModel):
@@ -62,7 +81,8 @@ class CurrentSessionResponse(HttpModel):
 
 class WorkspaceMemberResponse(HttpModel):
     user_id: str
-    username: str
+    display_name: str = ""
+    email: str = ""
     role: WorkspaceRole = WorkspaceRole.Member
     created_at: datetime
 
@@ -73,7 +93,7 @@ class WorkspaceMemberListResponse(HttpModel):
 
 
 class WorkspaceMemberAddRequest(HttpModel):
-    username: str
+    user_id: str
     role: WorkspaceRole = WorkspaceRole.Member
 
 
@@ -83,12 +103,12 @@ class WorkspaceMemberRoleRequest(HttpModel):
 
 __all__ = [
     "CurrentSessionResponse",
-    "PasswordChangeRequest",
     "SessionCreateRequest",
     "SessionResponse",
     "UserCreateRequest",
     "UserListResponse",
     "UserResponse",
+    "UserRoleRequest",
     "UserStatusRequest",
     "WorkspaceMemberAddRequest",
     "WorkspaceMemberListResponse",

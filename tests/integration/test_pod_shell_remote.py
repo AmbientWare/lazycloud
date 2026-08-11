@@ -1102,9 +1102,7 @@ def _create_running_container(
 def _auth_headers(services: ApiServices) -> dict[str, str]:
     token = (
         AuthService(services.context)
-        .bootstrap_administrator(
-            request_id="bootstrap:pod-shell-remote", username="admin", password="bootstrap-password"
-        )
+        .bootstrap_administrator(request_id="bootstrap:pod-shell-remote")
         .token
     )
     return {"Authorization": f"Bearer {token}"}

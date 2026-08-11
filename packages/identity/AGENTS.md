@@ -1,7 +1,7 @@
 # Identity Package
 
-Users, passwords, sessions, authorization, tokens, bootstrap, and workspace
-membership.
+Users, external identities, sessions, authorization, tokens, bootstrap, and
+workspace membership.
 
 Authorization decisions stay deterministic and inspectable: the same principal
 and the same resource yield the same answer, with no ambient state quietly
@@ -53,9 +53,29 @@ unique index rather than by convention. The owner is who a workspace's connected
 compute and registered domains resolve through, so a second one would make
 "whose account backs this workspace" have two answers.
 
-Passwords are PBKDF2-HMAC-SHA256 with their own iteration count, separate from
-the token work factor because a password is chosen by a person and a token is
-256 bits of urandom. The minimum length is eight characters. Authentication costs the same whether the username exists or
-the password is wrong; telling those apart is how an attacker enumerates accounts.
-A password change revokes the sessions minted under the old one, and the caller
-publishes that revocation so no replica's cache outlives it.
+## Signing In
+
+A person signs in through an external identity provider, and `user_identities`
+records which external account reaches which of ours. The link is keyed on the
+provider's own immutable subject — GitHub's numeric user id — and never on a login
+or an email address. Both of those can be renamed, released, and re-registered by
+somebody else, so keying on either is how one person ends up signed in as another.
+Email is stored without a unique constraint for exactly that reason.
+
+An account with no identity row cannot sign in and exists to own tokens. The
+offline bootstrap administrator is one, deliberately: it is the credential that has
+to work when the identity provider is what is broken, so it must never acquire a
+dependency on one. Only an administrator can mint a credential naming another
+account, and that is the only way such an account gets its first one.
+
+Sign-in puts no credential in a URL. The provider callback mints a single-use
+exchange code, and the session is minted when that code is redeemed, so an
+abandoned tab leaves nothing live behind. Redemption also requires the cookie set
+when the flow began, which is what makes a code read out of browser history
+useless. Both the state and the exchange code are stored under a hash of
+themselves, consumed with GETDEL before anything is validated, so a malformed
+payload burns the credential rather than leaving it replayable.
+
+The provider access token is used once to read the profile and then discarded. It
+never crosses the `ExternalIdentityProvider` boundary, which is what keeps every
+caller above it from becoming somewhere it could be logged or stored.

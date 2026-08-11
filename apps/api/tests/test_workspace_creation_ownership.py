@@ -5,10 +5,10 @@ from contextlib import ExitStack
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
+from identity.auth import AuthService
 from shared.identity import PlatformRole
 
-_USERNAME = "creator"
-_PASSWORD = "creator-password"
+_DISPLAY_NAME = "creator"
 
 
 def test_workspace_created_through_the_api_is_owned_and_reached_by_its_creator(
@@ -22,18 +22,16 @@ def test_workspace_created_through_the_api_is_owned_and_reached_by_its_creator(
     both or it hands back a workspace the creator is refused from and nothing can
     resolve an account for.
     """
-    isolated_services.users.create(
-        username=_USERNAME,
-        password=_PASSWORD,
+    creator = isolated_services.users.create(
+        display_name=_DISPLAY_NAME,
         role=PlatformRole.Administrator,
     )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    session = client.post(
-        "/api/v1/sessions",
-        json={"username": _USERNAME, "password": _PASSWORD},
+    raw_token, _record = AuthService(isolated_services.context).create_account_token(
+        creator.id,
+        "creator-cli",
     )
-    assert session.status_code == 201, session.text
-    headers = {"Authorization": f"Bearer {session.json()['token']}"}
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    headers = {"Authorization": f"Bearer {raw_token}"}
 
     created = client.post(
         "/api/v1/workspaces",
@@ -54,6 +52,6 @@ def test_workspace_created_through_the_api_is_owned_and_reached_by_its_creator(
 
     members = client.get("/api/v1/workspaces/creator-workspace/members", headers=headers)
     assert members.status_code == 200, members.text
-    assert [(item["username"], item["role"]) for item in members.json()["data"]] == [
-        (_USERNAME, "owner")
+    assert [(item["user_id"], item["role"]) for item in members.json()["data"]] == [
+        (creator.id, "owner")
     ]

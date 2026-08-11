@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from shared.errors import NotFoundError
 from shared.http.users import (
-    PasswordChangeRequest,
     UserCreateRequest,
     UserListResponse,
     UserResponse,
+    UserRoleRequest,
     UserStatusRequest,
     WorkspaceMemberAddRequest,
     WorkspaceMemberListResponse,
@@ -17,6 +17,7 @@ from shared.identity import (
     AuthScope,
     AuthTokenRecord,
     PlatformRole,
+    UserIdentityRecord,
     UserRecord,
     WorkspaceMemberRecord,
     WorkspaceRole,
@@ -27,7 +28,6 @@ from api.server.auth import (
     read_principal,
     read_token,
     write_principal,
-    write_token,
 )
 from api.server.dependencies import (
     authorize_token_workspace,
@@ -39,11 +39,23 @@ from api.server.services import ApiServices
 router = APIRouter()
 
 
-def user_response(record: UserRecord) -> UserResponse:
-    """Project a user for the API, dropping the credential material it carries."""
+def user_response(
+    record: UserRecord,
+    identity: UserIdentityRecord | None = None,
+) -> UserResponse:
+    """Project a user for the API.
+
+    An account with no identity reports empty GitHub fields rather than being hidden:
+    it is a real account that owns tokens, and an operator listing accounts needs to
+    see that this one has no way to sign in.
+    """
     return UserResponse(
         id=record.id,
-        username=record.username,
+        display_name=record.display_name,
+        email=record.email,
+        avatar_url=record.avatar_url,
+        github_user_id=identity.subject if identity is not None else "",
+        github_login=identity.subject_login if identity is not None else "",
         role=record.role,
         status=record.status,
         created_at=record.created_at,
@@ -52,12 +64,13 @@ def user_response(record: UserRecord) -> UserResponse:
 
 
 def _member_response(
+    user: UserRecord,
     membership: WorkspaceMemberRecord,
-    username: str,
 ) -> WorkspaceMemberResponse:
     return WorkspaceMemberResponse(
         user_id=membership.user_id,
-        username=username,
+        display_name=user.display_name,
+        email=user.email,
         role=membership.role,
         created_at=membership.created_at,
     )
@@ -74,13 +87,19 @@ def create_user(
     _auth: admin_access,
     services: ApiServices = Depends(current_services),
 ) -> UserResponse:
-    return user_response(
-        services.users.create(
-            username=request.username,
-            password=request.password.get_secret_value(),
-            role=request.role,
-        )
+    """Create an account, optionally pre-linked to the GitHub identity that reaches it.
+
+    Without the link the account cannot sign in and exists only to own tokens. With
+    it, that person's first sign-in lands here instead of opening a second account
+    with none of the standing this one was given.
+    """
+    created = services.users.create(
+        display_name=request.display_name,
+        github_user_id=request.github_user_id,
+        github_login=request.github_login,
+        role=request.role,
     )
+    return user_response(created, services.users.identity(created.id))
 
 
 @router.get(
@@ -92,7 +111,11 @@ def list_users(
     _auth: admin_access,
     services: ApiServices = Depends(current_services),
 ) -> UserListResponse:
-    return UserListResponse(data=[user_response(record) for record in services.users.list()])
+    records = services.users.list()
+    identities = services.users.identities([record.id for record in records])
+    return UserListResponse(
+        data=[user_response(record, identities.get(record.id)) for record in records]
+    )
 
 
 @router.get(
@@ -107,41 +130,30 @@ def get_user(
 ) -> UserResponse:
     """Read one account: your own, or any account when you administer the platform."""
     _authorize_user_access(services, token, user_id)
-    return user_response(services.users.get(user_id))
+    return user_response(services.users.get(user_id), services.users.identity(user_id))
 
 
-@router.post(
-    "/api/v1/users/{user_id}/password",
-    status_code=status.HTTP_204_NO_CONTENT,
-    operation_id="change_user_password",
+@router.put(
+    "/api/v1/users/{user_id}/role",
+    response_model=UserResponse,
+    operation_id="set_user_role",
 )
-def change_user_password(
+def set_user_role(
     user_id: str,
-    request: PasswordChangeRequest,
-    token: write_token,
+    request: UserRoleRequest,
+    _auth: admin_access,
     services: ApiServices = Depends(current_services),
-) -> Response:
-    """Set a password, ending every session that was minted under the old one.
+) -> UserResponse:
+    """Grant or withdraw platform administrator standing.
 
-    Changing your own requires proving you hold the current one, so a borrowed
-    session cannot be turned into permanent ownership of the account. An
-    administrator reset does not, because that is what a reset is for.
+    Signing in makes an ordinary member, so this is what an administrator uses to
+    promote somebody who already has an account. Caches are dropped afterwards
+    because the role decides authorization and a replica holding the old answer
+    would keep applying it.
     """
-    administrator = _is_platform_administrator(services, token)
-    _authorize_user_access(services, token, user_id)
-    if not administrator:
-        if request.current_password is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "changing your own password requires the current password",
-            )
-        services.sessions.verify_password(
-            user_id=user_id,
-            password=request.current_password.get_secret_value(),
-        )
-    services.users.change_password(user_id, password=request.new_password.get_secret_value())
+    updated = services.users.set_role(user_id, role=request.role)
     services.auth.credentials_revoked()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return user_response(updated, services.users.identity(user_id))
 
 
 @router.put(
@@ -157,7 +169,7 @@ def set_user_status(
 ) -> UserResponse:
     updated = services.users.set_status(user_id, status=request.status)
     services.auth.credentials_revoked()
-    return user_response(updated)
+    return user_response(updated, services.users.identity(user_id))
 
 
 @router.get(
@@ -180,7 +192,7 @@ def list_workspace_members(
     memberships = services.users.members(workspace_id)
     return WorkspaceMemberListResponse(
         data=[
-            _member_response(membership, services.users.get(membership.user_id).username)
+            _member_response(services.users.get(membership.user_id), membership)
             for membership in memberships
         ]
     )
@@ -212,13 +224,13 @@ def add_workspace_member(
             status.HTTP_400_BAD_REQUEST,
             "a workspace has exactly one owner; transfer ownership instead of adding one",
         )
-    user = services.users.by_username(request.username)
+    user = services.users.get(request.user_id)
     membership = services.users.add_member(
         workspace_id=workspace_id,
         user_id=user.id,
         role=request.role,
     )
-    return _member_response(membership, user.username)
+    return _member_response(user, membership)
 
 
 @router.put(
@@ -251,7 +263,7 @@ def set_workspace_member_role(
         user_id=user_id,
         role=request.role,
     )
-    return _member_response(membership, services.users.get(user_id).username)
+    return _member_response(services.users.get(user_id), membership)
 
 
 @router.delete(

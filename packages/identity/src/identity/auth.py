@@ -21,6 +21,7 @@ from database.repositories.identity import (
     IdentityAdminRecoveryRequestRepository,
     IdentityBootstrapClaimRepository,
     TokenRepository,
+    UserIdentityRepository,
     UserRepository,
     WorkspaceAuditRepository,
     WorkspaceMemberRepository,
@@ -36,6 +37,7 @@ from shared.identity import (
     USER_PRINCIPAL_TOKEN_KINDS,
     AuthScope,
     AuthTokenRecord,
+    IdentityProvider,
     PlatformRole,
     TokenKind,
     TokenStatus,
@@ -53,13 +55,7 @@ from identity.authz import (
     decide_authorization,
     token_has_scope,
 )
-from identity.passwords import (
-    hash_password,
-    pbkdf2_encode,
-    pbkdf2_matches,
-    validate_password,
-    validate_username,
-)
+from identity.secret_hashing import pbkdf2_encode, pbkdf2_matches
 from identity.token_invalidation import (
     AuthTokenInvalidation,
     configured_token_invalidation,
@@ -171,7 +167,7 @@ class BootstrapAdminToken:
     record: AuthTokenRecord
     request_id: str
     replayed: bool = False
-    username: str = ""
+    user_id: str = ""
     """The administrator account the credential belongs to, empty on a replay."""
 
 
@@ -344,41 +340,72 @@ class TokenIssuer:
 def _create_bootstrap_administrator(
     session: DatabaseSession,
     *,
-    username: str,
-    password: str,
+    name: str,
+    github_user_id: int | None = None,
+    github_login: str = "",
 ) -> UserRecord:
-    normalized = validate_username(username)
-    repository = UserRepository(session)
-    if repository.by_username(normalized) is not None:
-        raise ConflictError(f"username is already in use: {normalized}")
-    return repository.create(
-        username=normalized,
-        password_hash=hash_password(validate_password(password)),
-        role=PlatformRole.Administrator,
+    """The first administrator, and optionally the identity that can sign in as them.
+
+    The credential this account carries never depends on a provider, which is the
+    point of it: it has to work when the identity provider is exactly what is broken.
+    Naming a GitHub id here is additive — it says who may also reach the account
+    through the dashboard, and takes nothing away from the token path.
+
+    An id that already reaches an account adopts that account rather than making a
+    second one. Bootstrap runs offline against the database by someone who could do
+    either; refusing here would only mean whoever signed in first can never be the
+    administrator this names.
+    """
+    users = UserRepository(session)
+    if github_user_id is None:
+        return users.create(display_name=name, role=PlatformRole.Administrator)
+
+    identities = UserIdentityRepository(session)
+    subject = str(github_user_id)
+    identities.lock_subject(provider=IdentityProvider.Github, subject=subject)
+    existing = identities.by_subject(provider=IdentityProvider.Github, subject=subject)
+    if existing is not None:
+        adopted = users.get(existing.user_id)
+        if adopted is None:
+            raise ConflictError(f"github identity {subject} names an account that is gone")
+        if adopted.status is not UserStatus.Active:
+            adopted = users.set_status(adopted.id, status=UserStatus.Active)
+        return users.set_role(adopted.id, role=PlatformRole.Administrator)
+
+    administrator = users.create(display_name=name, role=PlatformRole.Administrator)
+    identities.link(
+        user_id=administrator.id,
+        provider=IdentityProvider.Github,
+        subject=subject,
+        subject_login=github_login,
     )
+    return administrator
 
 
 def _recovered_administrator(
     session: DatabaseSession,
     *,
-    username: str,
-    password: str | None,
+    admin_token_id: str | None,
 ) -> UserRecord:
-    normalized = validate_username(username)
+    """The account the bootstrap credential was minted against.
+
+    Resolved through the claim rather than named by the operator, because an operator
+    recovering access under pressure can mistype a selector and promote the wrong
+    account, and there is no second credential left to undo it with.
+    """
+    if admin_token_id is None:
+        raise AuthError("administrator bootstrap recorded no credential to recover through")
+    token = TokenRepository(session).get_across_workspaces(admin_token_id)
+    if token is None or not token.user_id:
+        raise AuthError("the bootstrap administrator credential no longer names an account")
     repository = UserRepository(session)
-    user = repository.by_username(normalized)
+    user = repository.get(token.user_id)
     if user is None:
-        raise NotFoundError(f"user not found: {normalized}")
+        raise NotFoundError(f"user not found: {token.user_id}")
     if user.status is not UserStatus.Active:
         user = repository.set_status(user.id, status=UserStatus.Active)
     if user.role is not PlatformRole.Administrator:
         user = repository.set_role(user.id, role=PlatformRole.Administrator)
-    if password is not None:
-        user = repository.set_password(
-            user.id,
-            password_hash=hash_password(validate_password(password)),
-        )
-        TokenRepository(session).revoke_user_sessions(user.id, now=utc_now())
     return user
 
 
@@ -407,7 +434,8 @@ class _AccountTokenCursorPayload(ContractModel):
 
 
 _TOKEN_ITERATIONS = 200_000
-"""Lower than the password work factor: a token is 256 bits of urandom, not a guess."""
+"""A token is 256 bits of urandom rather than a guess, so the cost here bounds what a
+stolen table is worth, not what an online guessing attack can reach."""
 
 
 def _hash_token(token: str, salt: str | None = None) -> str:
@@ -447,8 +475,8 @@ class AuthService:
     def credentials_revoked(self) -> None:
         """Publish a committed credential revocation to every replica's token cache.
 
-        Called after the revoking transaction commits—workspace deletion, a password
-        change, a disabled account—so a cached positive cannot outlive it.
+        Called after the revoking transaction commits—workspace deletion, a disabled
+        account, administrator recovery—so a cached positive cannot outlive it.
         """
         self._invalidate_token_caches()
 
@@ -529,19 +557,18 @@ class AuthService:
         self,
         *,
         request_id: str,
-        username: str,
-        password: str,
         name: str = "first-admin",
         workspace: str = "default",
+        github_user_id: int | None = None,
+        github_login: str = "",
         staged_token: str | None = None,
         configured_token: str | None = None,
         stage_token: Callable[[str], None] | None = None,
     ) -> BootstrapAdminToken:
-        """Create the first administrator: the person, their workspace, and a credential.
+        """Create the first administrator: the account, their workspace, and a credential.
 
-        The person is what the bootstrap produces. A token alone could not be signed in
-        with, and every later credential is minted against an account, so the account
-        has to exist before anything else can own something.
+        The account is what the bootstrap produces. Every later credential is minted
+        against one, so it has to exist before anything else can own something.
         """
         _validate_offline_request_id(request_id)
         selected_token = _bootstrap_token(staged_token, configured_token)
@@ -587,8 +614,9 @@ class AuthService:
                 )
             administrator = _create_bootstrap_administrator(
                 session,
-                username=username,
-                password=password,
+                name=name,
+                github_user_id=github_user_id,
+                github_login=github_login,
             )
             workspace_record = WorkspaceRepository(session).ensure_named(workspace)
             # Bootstrapping into a workspace that already has an owner leaves that
@@ -635,27 +663,23 @@ class AuthService:
             record=record,
             request_id=request_id,
             replayed=not created,
-            username=administrator.username,
+            user_id=administrator.id,
         )
 
     def recover_admin_token(
         self,
         *,
         request_id: str,
-        username: str,
-        password: str | None = None,
         name: str = "recovery-admin",
         workspace: str = "default",
         staged_token: str | None = None,
         stage_token: Callable[[str], None] | None = None,
     ) -> BootstrapAdminToken:
-        """Re-establish administrator access offline for an existing account.
+        """Re-establish administrator access offline for the bootstrapped account.
 
         Recovery re-keys a person rather than minting a free-floating credential: the
         account is what owns the workspaces and the connected compute, so an operator
         who has lost access needs that account back, not a second identity beside it.
-        Supplying ``password`` also resets it, which is the usual case when the reason
-        for recovering is that nobody can sign in.
         """
         _validate_offline_request_id(request_id)
         issuer = TokenIssuer(self.context, self.token_cache)
@@ -686,8 +710,7 @@ class AuthService:
                 raise NotFoundError(f"workspace not found: {workspace}")
             administrator = _recovered_administrator(
                 session,
-                username=username,
-                password=password,
+                admin_token_id=claim.admin_token_id,
             )
             raw_token, record = issuer.issue_for_user(
                 session,
@@ -715,14 +738,14 @@ class AuthService:
             if stage_token is not None:
                 stage_token(raw_token)
         issuer.committed()
-        # Recovery can promote an existing account and revoke its sessions, neither of
-        # which a replica sees until its token cache is dropped.
+        # Recovery can reactivate and promote an existing account, neither of which a
+        # replica sees until its token cache is dropped.
         self._invalidate_token_caches()
         return BootstrapAdminToken(
             token=raw_token,
             record=record,
             request_id=request_id,
-            username=administrator.username,
+            user_id=administrator.id,
         )
 
     def mark_admin_token_published(self, *, request_id: str, recovery: bool) -> None:

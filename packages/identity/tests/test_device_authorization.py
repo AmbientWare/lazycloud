@@ -32,18 +32,18 @@ from tests.service_fixtures import owned_workspace
 def _signed_in_user(
     services: ApiServices,
     *,
-    username: str = "operator",
+    display_name: str = "operator",
     workspace: str = "default",
 ) -> tuple[UserRecord, dict[str, str]]:
     """A person who belongs to a workspace, and a credential that names them."""
     users = UserService(services.context)
-    user = users.create(username=username, password="device-login-password")
+    user = users.create(display_name=display_name)
     with services.context.database.session() as session:
         workspace_id = services.context.workspace(session, workspace).id
     users.add_member(workspace_id=workspace_id, user_id=user.id)
     issuer = TokenIssuer(services.context)
     with services.context.database.session() as session:
-        raw_token, _ = issuer.issue_for_user(session, username, user_id=user.id)
+        raw_token, _ = issuer.issue_for_user(session, display_name, user_id=user.id)
     issuer.committed()
     return user, {"Authorization": f"Bearer {raw_token}"}
 
@@ -53,7 +53,7 @@ def test_device_login_flow_approves_and_mints_account_token(
     client_stack: ExitStack,
 ) -> None:
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    user, headers = _signed_in_user(isolated_services)
+    _user, headers = _signed_in_user(isolated_services)
 
     started = client.post("/auth/device", json={"client_name": "cli@laptop"})
     assert started.status_code == 201
@@ -65,7 +65,7 @@ def test_device_login_flow_approves_and_mints_account_token(
 
     pending = client.post("/auth/device/token", json={"device_code": start["device_code"]})
     assert pending.status_code == 200
-    assert pending.json() == {"status": "pending", "token": "", "username": ""}
+    assert pending.json() == {"status": "pending", "token": ""}
 
     shown = client.get(f"/api/v1/device-codes/{start['user_code']}", headers=headers)
     assert shown.status_code == 200
@@ -83,7 +83,6 @@ def test_device_login_flow_approves_and_mints_account_token(
     assert claimed.status_code == 200
     claim = claimed.json()
     assert claim["status"] == "approved"
-    assert claim["username"] == user.username
     assert claim["token"]
 
     # The minted token names the approving account and reaches its workspaces.

@@ -10,7 +10,7 @@ from database.tables.base import IdPayloadTable, NamedWorkspacePayloadTable, utc
 from database.tables.identity import UserTable, WorkspaceTable
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.errors import NotFoundError
-from shared.identity import UserRecord, UserStatus, WorkspaceRecord, WorkspaceStatus
+from shared.identity import UserStatus, WorkspaceRecord, WorkspaceStatus
 from sqlalchemy import DateTime, Select, Uuid, select
 from sqlalchemy.orm import Session, class_mapper
 from sqlalchemy.orm.attributes import flag_modified
@@ -57,8 +57,7 @@ def _lock_active_user(session: Session, user_id: str) -> None:
     ).first()
     if row is None:
         raise NotFoundError(f"user not found: {user_id}")
-    user = UserRecord.model_validate(row.payload)
-    if user.status is not UserStatus.Active:
+    if UserStatus(row.status) is not UserStatus.Active:
         raise NotFoundError(f"user not found: {user_id}")
 
 

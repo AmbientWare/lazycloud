@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -15,14 +14,13 @@ from lazycloud.config import (
     get_profile,
 )
 from lazycloud.json_contracts import validate_json_object
-from pydantic import JsonValue, SecretStr
+from pydantic import JsonValue
 from shared.http.system import TokenCreateRequest
-from shared.http.users import UserCreateRequest
+from shared.http.users import UserCreateRequest, UserRoleRequest
 from shared.http_transport import HttpChannel
 from shared.identity import PlatformRole
 
 from cli.api_client import AdminApiClient, admin_api_client
-from cli.offline_auth import read_private_file
 
 
 def profile_export(
@@ -65,38 +63,89 @@ user_app = typer.Typer(help="Manage accounts.")
 
 def user_create(
     ctx: typer.Context,
-    username: Annotated[str, typer.Option("--username")],
-    password_file: Annotated[
-        Path,
+    name: Annotated[str, typer.Option("--name", help="Display name for the account.")] = "",
+    github_user_id: Annotated[
+        int | None,
         typer.Option(
-            "--password-file",
-            dir_okay=False,
-            resolve_path=True,
-            help="Private file holding the new account's password.",
+            "--github-user-id",
+            help=(
+                "Numeric GitHub user id that may sign in as this account. Resolve it with "
+                "curl -s https://api.github.com/users/<login>. Without it the account "
+                "cannot sign in and exists only to own tokens."
+            ),
         ),
-    ],
+    ] = None,
+    github_login: Annotated[str, typer.Option("--github-login")] = "",
     administrator: Annotated[bool, typer.Option("--administrator")] = False,
 ) -> None:
-    """Create an account. The password is read from a file, never from argv."""
-    password = read_private_file(password_file, description="password file")
+    """Create an account, optionally pre-linked to the GitHub identity that reaches it."""
     response = admin_api_client().create_user(
         UserCreateRequest(
-            username=username,
-            password=SecretStr(password),
+            display_name=name,
+            github_user_id=github_user_id,
+            github_login=github_login,
             role=PlatformRole.Administrator if administrator else PlatformRole.Member,
         )
     )
     print_payload(ctx, response.model_dump(mode="json"))
 
 
+def user_set_role(
+    ctx: typer.Context,
+    user_id: str,
+    administrator: Annotated[
+        bool,
+        typer.Option(
+            "--administrator/--member",
+            help="Grant or withdraw platform administrator standing.",
+        ),
+    ] = True,
+) -> None:
+    """Change an existing account's platform role.
+
+    Signing in makes an ordinary member, so this is how somebody who already has
+    an account becomes an administrator.
+    """
+    response = admin_api_client().set_user_role(
+        user_id,
+        UserRoleRequest(role=PlatformRole.Administrator if administrator else PlatformRole.Member),
+    )
+    print_payload(ctx, response.model_dump(mode="json"))
+
+
+def user_list(ctx: typer.Context) -> None:
+    users = admin_api_client().list_users().data
+    if json_output_enabled(ctx):
+        print_payload(ctx, [item.model_dump(mode="json") for item in users])
+        return
+    rows = [
+        [item.id, item.display_name, item.github_login, item.role.value, item.status.value]
+        for item in users
+    ]
+    console.print(table("Accounts", ["id", "name", "github", "role", "status"], rows))
+
+
 def token_create(
     ctx: typer.Context,
     name: str,
     expires_in: Annotated[int | None, typer.Option("--expires-in")] = None,
+    user: Annotated[
+        str | None,
+        typer.Option("--user", help="Mint for this account instead of the acting one."),
+    ] = None,
 ) -> None:
-    """Mint a credential for the acting account, reaching every workspace it holds."""
-    response = admin_api_client().create_token(
-        TokenCreateRequest(name=name, expires_in_seconds=expires_in)
+    """Mint a credential reaching every workspace its owning account holds.
+
+    With --user the credential belongs to that account rather than to the
+    administrator who ran this, so what it does stays attributable to them. It is
+    the only way an account with no GitHub identity gets a first credential.
+    """
+    request = TokenCreateRequest(name=name, expires_in_seconds=expires_in)
+    client = admin_api_client()
+    response = (
+        client.create_token_for_user(user, request)
+        if user is not None
+        else client.create_token(request)
     )
     print_payload(ctx, response.model_dump(mode="json"))
 
@@ -144,3 +193,5 @@ def token_revoke(ctx: typer.Context, token_id_or_name: str) -> None:
 
 
 user_app.command("create")(user_create)
+user_app.command("list")(user_list)
+user_app.command("set-role")(user_set_role)

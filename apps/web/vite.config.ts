@@ -176,6 +176,12 @@ export default defineConfig({
       prerender: {
         enabled: true,
         failOnError: true,
+        // The pages worth prerendering are the ones declared above. Following links
+        // out of a rendered page walks into the product routes, which are dynamic and
+        // behind auth, and then out of the SPA entirely: the sign-in control points at
+        // `/auth/github/start`, a backend route the crawler would try to fetch and
+        // fail the build on.
+        crawlLinks: false,
       },
       router: {
         quoteStyle: "double",

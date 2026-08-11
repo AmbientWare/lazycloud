@@ -164,8 +164,7 @@ def test_workspace_deleting_transition_atomically_revokes_workspace_credentials(
         workspace_id=workspace.id,
     )
     approver = UserService(isolated_services.context).create(
-        username="device-approver",
-        password="device-approver-password",
+        display_name="device-approver",
     )
     device = DeviceAuthorizationService(isolated_services.context)
     pending = device.start(client_name="cli")

@@ -17,8 +17,8 @@ def test_a_workspace_has_at_most_one_owner(isolated_services: ApiServices) -> No
     rather than to membership.
     """
     users = UserService(isolated_services.context)
-    first = users.create(username="first-owner", password="first-owner-password")
-    second = users.create(username="second-owner", password="second-owner-password")
+    first = users.create(display_name="first-owner")
+    second = users.create(display_name="second-owner")
     workspace = ControlPlaneService(isolated_services.context).set_workspace(
         "sole-owner",
         owner_user_id=first.id,

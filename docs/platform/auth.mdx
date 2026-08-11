@@ -25,16 +25,19 @@ lazycloud workspace audit          # recent audit events, --limit/--cursor
 
 ## Signing in to the dashboard
 
-The dashboard asks for a username and password and exchanges them for a session
-credential held by the browser. Accounts are created by an administrator; there
-is no self-service sign-up.
+The dashboard signs you in with GitHub. Continuing with GitHub sends you there to
+authorize, and coming back exchanges a single-use code for a session credential
+held by the browser. Signing in for the first time creates your account and a
+workspace you own.
 
-- A session lasts 12 hours. Repeated sign-in attempts are rate limited.
-- Signing out ends that session only — other browsers and CLI logins keep
-  working.
-- Change your password under **Settings → General**. A password is at least 8
-  characters. Changing your own requires the current one, and every session
-  minted under the old password stops working.
+- Your account is keyed to your GitHub account, not to your email address or
+  your login, so renaming either keeps you signed in to the same account.
+- Your name, email, and avatar come from GitHub and refresh on each sign-in.
+- A session lasts 12 hours. Signing out ends that session only — other browsers
+  and CLI logins keep working.
+- There is no password to set or change, and there is no second way in. An
+  administrator who needs access without GitHub uses the offline credential
+  described below.
 
 ## Logging in with the CLI
 
@@ -83,7 +86,7 @@ lazycloud profile delete staging
 
 Create access tokens in the dashboard under **Settings → Tokens**, with an
 optional expiry. A token is account-scoped: it reaches every workspace you
-belong to, so treat it like your password.
+belong to, so treat it like your GitHub session.
 
 ```bash
 lazycloud token show     # whether the active profile holds one

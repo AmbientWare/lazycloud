@@ -39,7 +39,7 @@ export function SettingsDialog({
         <header className="shrink-0 border-b border-border px-5 py-3.5 pr-12">
           <DialogTitle className="text-base">Settings</DialogTitle>
           <DialogDescription className="mt-0.5 text-xs">
-            Signed in as <span className="font-medium text-foreground/90">{user.username}</span>
+            Signed in as <span className="font-medium text-foreground/90">{user.display_name}</span>
           </DialogDescription>
         </header>
 

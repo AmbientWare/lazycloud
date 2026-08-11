@@ -77,7 +77,7 @@ from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 from tests.url_constants import EXAMPLE_COM_URL
 
 
-def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
+def _workspace_owner_id(services: ApiServices) -> str:
     """The account that owns the default workspace; connections hang off it."""
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
@@ -665,7 +665,7 @@ def _seed_ready_aws_connection(
         if reconnecting
         else None
     )
-    owner_id = _workspace_owner_id(isolated_services, username="compute-policy-owner")
+    owner_id = _workspace_owner_id(isolated_services)
     with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(

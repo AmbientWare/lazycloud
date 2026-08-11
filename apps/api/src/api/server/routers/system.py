@@ -203,6 +203,34 @@ def api_v1_create_account_token(
 
 
 @router.post(
+    "/api/v1/users/{user_id}/tokens",
+    response_model=TokenCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_token_for_user",
+)
+def api_v1_create_token_for_user(
+    user_id: str,
+    request: TokenCreateRequest,
+    _auth: admin_access,
+    services: ApiServices = Depends(current_services),
+) -> TokenCreateResponse:
+    """Mint a credential belonging to another account.
+
+    The token names the target account rather than the administrator who ran this,
+    so what it does is attributable to them and bounded by their memberships. This
+    is the only way an account with no external identity can be given a first
+    credential, which is what every automation account depends on.
+    """
+    services.users.get(user_id)
+    raw_token, record = services.auth.create_account_token(
+        user_id,
+        request.name,
+        expires_in_seconds=request.expires_in_seconds,
+    )
+    return TokenCreateResponse(token=raw_token, record=_public_token(record))
+
+
+@router.post(
     "/api/v1/tokens/{token_id}/revoke",
     response_model=AuthTokenResponse,
     operation_id="revoke_account_token",
@@ -261,11 +289,7 @@ def claim_device_authorization(
     services: ApiServices = Depends(current_services),
 ) -> DeviceCodeTokenResponse:
     claim = DeviceAuthorizationService(services.context).claim(request.device_code)
-    return DeviceCodeTokenResponse(
-        status=claim.status,
-        token=claim.token,
-        username=claim.username,
-    )
+    return DeviceCodeTokenResponse(status=claim.status, token=claim.token)
 
 
 @router.get(

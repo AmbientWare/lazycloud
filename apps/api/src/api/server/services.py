@@ -69,7 +69,8 @@ from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from gateway.shell_proxy import connect_shell_backend
 from identity.auth import AuthService, AuthTokenCache
-from identity.users import SessionService, UserService
+from identity.sign_in import SignInService
+from identity.users import UserService
 from images.control import ImageControlService
 from images.execution import (
     ImageBuildExecutor,
@@ -133,6 +134,7 @@ from provider_clients.settings import (
     AwsCapacitySettings,
 )
 from provider_cloudflare import CloudflareSettings
+from provider_github import GitHubAppSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
@@ -454,7 +456,7 @@ class ApiServiceCore:
     context: ServiceContext
     auth: AuthService
     users: UserService
-    sessions: SessionService
+    sign_in: SignInService
     auth_token_cache: AuthTokenCache
     tcp_ingress_settings: TcpIngressSettings
     agent_route_reconciliation_settings: AgentRouteReconciliationSettings
@@ -616,7 +618,6 @@ class ApiServices(ApiServiceCore):
         auth_token_cache = AuthTokenCache()
         auth = AuthService(context, token_cache=auth_token_cache)
         users = UserService(context)
-        sessions = SessionService(context)
         tcp_ingress_config = tcp_ingress_settings or TcpIngressSettings()
         agent_route_reconciliation_config = (
             agent_route_reconciliation_settings or AgentRouteReconciliationSettings()
@@ -733,6 +734,15 @@ class ApiServices(ApiServiceCore):
             ),
             workspace_storage_client_factory=_workspace_storage_client,
             workspace_changes=workspace_changes,
+        )
+        # The provider is built per call rather than once here, so a deployment that
+        # has not configured a GitHub App still starts and fails at the sign-in route
+        # naming what is missing, instead of refusing to serve anything at all.
+        sign_in = SignInService(
+            context=context,
+            redis=redis,
+            provider_factory=GitHubAppSettings().provider,
+            provision_default_workspace=control_plane.ensure_default_workspace,
         )
         resolved_volume_filesystem = volume_filesystem or WorkspaceVolumeFilesystem(
             resolve_store=workspace_volume_store_resolver(
@@ -977,7 +987,7 @@ class ApiServices(ApiServiceCore):
             context=context,
             auth=auth,
             users=users,
-            sessions=sessions,
+            sign_in=sign_in,
             auth_token_cache=auth_token_cache,
             tcp_ingress_settings=tcp_ingress_config,
             agent_route_reconciliation_settings=agent_route_reconciliation_config,
@@ -1296,7 +1306,7 @@ def _compose_api_services(
         context=core.context,
         auth=core.auth,
         users=core.users,
-        sessions=core.sessions,
+        sign_in=core.sign_in,
         auth_token_cache=core.auth_token_cache,
         tcp_ingress_settings=core.tcp_ingress_settings,
         agent_route_reconciliation_settings=core.agent_route_reconciliation_settings,

@@ -224,7 +224,7 @@ class _Workers:
         raise AssertionError("no worker should be disabled during enrollment")
 
 
-def _workspace_owner_id(services: ApiServices, *, username: str) -> str:
+def _workspace_owner_id(services: ApiServices) -> str:
     """The account that owns the default workspace; connections hang off it."""
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
@@ -384,7 +384,7 @@ def _seed_connection_and_pool(
     reconnecting: bool = False,
 ) -> ComputeUnitRecord:
     now = datetime.now(UTC)
-    owner_id = _workspace_owner_id(isolated_services, username="enrollment-owner")
+    owner_id = _workspace_owner_id(isolated_services)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         authorization = AwsAccountAuthorizationGeneration(

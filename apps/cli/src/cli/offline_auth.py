@@ -14,13 +14,10 @@ from database.context import ServiceContext
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from lazycloud.cli.components.output import print_payload
-from pydantic import SecretStr
 from shared.errors import ConflictError
-from shared.http.users import SessionCreateRequest
 from shared.identity import WorkspaceStorageConfig
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
-from cli.api_client import admin_api_client
 from database import (
     ControlPlaneRecoveryFence,
     DatabaseApplicationName,
@@ -34,15 +31,6 @@ auth_app = typer.Typer(help="Bootstrap or recover control-plane administrator ac
 @auth_app.command("bootstrap")
 def bootstrap_admin(
     ctx: typer.Context,
-    password_file: Annotated[
-        Path,
-        typer.Option(
-            "--password-file",
-            dir_okay=False,
-            resolve_path=True,
-            help="Private file holding the first administrator's password.",
-        ),
-    ],
     output: Annotated[
         Path | None,
         typer.Option(
@@ -54,10 +42,18 @@ def bootstrap_admin(
     ] = None,
     name: Annotated[str, typer.Option("--name")] = "first-admin",
     workspace: Annotated[str, typer.Option("--workspace")] = "default",
-    username: Annotated[
-        str,
-        typer.Option("--username", help="Username for the first administrator account."),
-    ] = "admin",
+    github_user_id: Annotated[
+        int | None,
+        typer.Option(
+            "--github-user-id",
+            help=(
+                "Numeric GitHub user id allowed to sign in as the first administrator. "
+                "Resolve it with curl -s https://api.github.com/users/<login>. Without "
+                "it the account is reachable only by its token."
+            ),
+        ),
+    ] = None,
+    github_login: Annotated[str, typer.Option("--github-login")] = "",
     token_file: Annotated[
         Path | None,
         typer.Option(
@@ -68,9 +64,13 @@ def bootstrap_admin(
         ),
     ] = None,
 ) -> None:
-    # Read from a file rather than an option value: a password on argv is visible in
-    # the process list and lands in shell history.
-    password = _read_password(password_file)
+    """Create the first administrator: the account, its workspace, and a credential.
+
+    The credential never depends on an identity provider, which is the point of it:
+    it has to work when the provider is what is broken. Naming a GitHub id is
+    additive and says who may also reach the account through the dashboard, so a
+    rebuilt stack lands its operator straight back in without a second account.
+    """
     configured_token = _read_configured_token(token_file) if token_file is not None else None
     if output is None and configured_token is None:
         raise CredentialFileError("--output is required without a configured credential file")
@@ -88,10 +88,10 @@ def bootstrap_admin(
         if configured_token is not None:
             result = service.bootstrap_administrator(
                 request_id=request_id,
-                username=username,
-                password=password,
                 name=name,
                 workspace=workspace,
+                github_user_id=github_user_id,
+                github_login=github_login,
                 configured_token=configured_token,
             )
             publication = None
@@ -107,10 +107,10 @@ def bootstrap_admin(
                 request_exists=current_request == request_id,
                 create=lambda staged, stage: service.bootstrap_administrator(
                     request_id=request_id,
-                    username=username,
-                    password=password,
                     name=name,
                     workspace=workspace,
+                    github_user_id=github_user_id,
+                    github_login=github_login,
                     staged_token=staged,
                     stage_token=stage,
                 ),
@@ -129,7 +129,7 @@ def bootstrap_admin(
             "status": "already_published" if result.replayed else "created",
             "request_id": request_id,
             "workspace": workspace,
-            "username": result.username,
+            "user_id": result.user_id,
             "token_id": result.record.id,
             "credential_source": "configured_file" if configured_token is not None else "generated",
             "output": str(publication.resolved_output) if publication is not None else None,
@@ -159,32 +159,6 @@ def _provision_workspace_storage(
     return record.storage
 
 
-@auth_app.command("login")
-def auth_login(
-    ctx: typer.Context,
-    username: Annotated[str, typer.Option("--username")],
-    password_file: Annotated[
-        Path,
-        typer.Option(
-            "--password-file",
-            dir_okay=False,
-            resolve_path=True,
-            help="Private file holding that account's password.",
-        ),
-    ],
-) -> None:
-    """Sign in and print a credential for that account.
-
-    What it prints is what the account itself holds, which is the point: anything
-    minted with it belongs to them rather than to the administrator who ran this.
-    """
-    password = read_private_file(password_file, description="password file")
-    response = admin_api_client().sign_in(
-        SessionCreateRequest(username=username, password=SecretStr(password))
-    )
-    print_payload(ctx, response.model_dump(mode="json"))
-
-
 @auth_app.command("recover")
 def recover_admin(
     ctx: typer.Context,
@@ -206,21 +180,13 @@ def recover_admin(
     ],
     name: Annotated[str, typer.Option("--name")] = "recovery-admin",
     workspace: Annotated[str, typer.Option("--workspace")] = "default",
-    username: Annotated[
-        str,
-        typer.Option("--username", help="Administrator account to restore access for."),
-    ] = "admin",
-    password_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--password-file",
-            dir_okay=False,
-            resolve_path=True,
-            help="Optional private file with a replacement password for that account.",
-        ),
-    ] = None,
 ) -> None:
-    password = _read_password(password_file) if password_file is not None else None
+    """Re-establish administrator access for the bootstrapped account.
+
+    It takes no selector for which account to restore. The account is the one the
+    bootstrap credential was minted against, so recovery cannot name the wrong one —
+    which matters when there is no second credential left to undo a mistake with.
+    """
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin)
     )
@@ -240,8 +206,6 @@ def recover_admin(
                 request_exists=service.recovery_request_exists(request_id),
                 create=lambda staged, stage: service.recover_admin_token(
                     request_id=request_id,
-                    username=username,
-                    password=password,
                     name=name,
                     workspace=workspace,
                     staged_token=staged,
@@ -257,7 +221,7 @@ def recover_admin(
             "status": "already_published" if result.replayed else "created",
             "request_id": request_id,
             "workspace": workspace,
-            "username": result.username,
+            "user_id": result.user_id,
             "token_id": result.record.id,
             "output": str(publication.resolved_output),
             "mode": "0600",
@@ -335,13 +299,6 @@ def read_private_file(path: Path, *, description: str) -> str:
         return payload.decode("utf-8").strip()
     except UnicodeDecodeError as exc:
         raise CredentialFileError(f"{description} is not UTF-8 text") from exc
-
-
-def _read_password(path: Path) -> str:
-    value = read_private_file(path, description="administrator password file")
-    if not value:
-        raise CredentialFileError("administrator password file is empty")
-    return value
 
 
 def _read_configured_token(path: Path) -> str | None:

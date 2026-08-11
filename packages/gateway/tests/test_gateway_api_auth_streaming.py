@@ -505,8 +505,6 @@ def _offline_admin_token(services: ApiServices, suffix: str) -> str:
         AuthService(services.context)
         .bootstrap_administrator(
             request_id=f"bootstrap:gateway-{suffix}",
-            username="admin",
-            password="bootstrap-password",
         )
         .token
     )

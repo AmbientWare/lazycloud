@@ -183,7 +183,11 @@ function testQueryClient() {
 function sessionUser(): CurrentSession["user"] {
   return {
     id: "user-1",
-    username: "owner",
+    display_name: "owner",
+    email: "",
+    avatar_url: "",
+    github_user_id: "",
+    github_login: "",
     role: "administrator",
     status: "active",
     created_at: "2026-07-21T10:00:00Z",
