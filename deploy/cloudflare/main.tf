@@ -7,6 +7,13 @@
 # record set. Each record this module writes is named individually, and anything
 # it does not name is invisible to it.
 
+locals {
+  # Carried explicitly so adopting these records does not erase the annotation a
+  # human left on them. A record this module owns and a record it does not look
+  # identical in the dashboard otherwise.
+  record_comment = "LazyCloud public ingress -> cloudflared tunnel"
+}
+
 resource "random_bytes" "tunnel_secret" {
   # Cloudflare requires at least 32 bytes, base64 encoded. Generated here rather
   # than by hand because the secret is an input to the tunnel, not something the
@@ -35,6 +42,7 @@ resource "cloudflare_dns_record" "apex" {
   content = "${cloudflare_zero_trust_tunnel_cloudflared.public_ingress.id}.cfargotunnel.com"
   proxied = true
   ttl     = 1 # Required to be 1 while proxied; Cloudflare owns the real value.
+  comment = local.record_comment
 
   lifecycle {
     precondition {
@@ -51,6 +59,7 @@ resource "cloudflare_dns_record" "wildcard" {
   content = "${cloudflare_zero_trust_tunnel_cloudflared.public_ingress.id}.cfargotunnel.com"
   proxied = true
   ttl     = 1
+  comment = local.record_comment
 
   lifecycle {
     precondition {
