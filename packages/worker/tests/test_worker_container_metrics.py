@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from shared.realtime.contracts import ContainerMetricsPayload
+from shared.usage import UsageBillingOwner
 from worker.container_metrics import (
     ContainerMetricsRawSample,
     WorkerContainerMetricsService,
@@ -74,14 +75,12 @@ class UsageRecorder:
         request: ContainerRequestContext,
         *,
         duration_ms: int,
-        cost_per_ms: float | None = None,
         window_start_ms: int = 0,
         window_end_ms: int | None = None,
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
     ) -> WorkerUsageEmissionResult:
-        _ = cost_per_ms
         self.durations.append(duration_ms)
         end_ms = window_start_ms + duration_ms if window_end_ms is None else window_end_ms
         self.windows.append((window_start_ms, end_ms))
@@ -272,6 +271,7 @@ def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
         worker_id="w",
         request=request,
         duration_ms=10_000,
+        billing_owner=UsageBillingOwner.PlatformFleet,
         evidence=WorkerUsageEvidence(cpu_used_core_seconds=0.1),
     )
     assert value_of(idle, WorkerUsageMetricName.Cpu) == 1.25
@@ -281,6 +281,7 @@ def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
         worker_id="w",
         request=request,
         duration_ms=10_000,
+        billing_owner=UsageBillingOwner.PlatformFleet,
         evidence=WorkerUsageEvidence(
             cpu_used_core_seconds=80.0,
             memory_rss_byte_seconds=8 * 1024**3,
@@ -303,6 +304,7 @@ def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> 
         worker_id="w",
         request=request,
         duration_ms=10_000,
+        billing_owner=UsageBillingOwner.PlatformFleet,
         evidence=WorkerUsageEvidence(disk_used_byte_seconds=5 * 1024**3),
     )
     emitted = {plan.name: plan.value for plan in plans}
@@ -310,6 +312,10 @@ def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> 
 
     # No occupancy, nothing billed: the ceiling alone is never charged.
     idle = plan_worker_usage_metrics(
-        worker_id="w", request=request, duration_ms=10_000, evidence=WorkerUsageEvidence()
+        worker_id="w",
+        request=request,
+        duration_ms=10_000,
+        billing_owner=UsageBillingOwner.PlatformFleet,
+        evidence=WorkerUsageEvidence(),
     )
     assert WorkerUsageMetricName.ContainerDisk not in {plan.name for plan in idle}

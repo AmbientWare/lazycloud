@@ -16,6 +16,7 @@ from database.repositories.compute import ComputeMachineEnrollmentRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from gateway.http import JoinAgentRequest
 from gateway.service import GatewayControlService
+from gateway.unit_state import billing_owner_for_unit
 from scheduler.fleet import WorkerPoolStateSnapshot
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -38,13 +39,14 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord
-from shared.errors import ConflictError
+from shared.errors import ConflictError, InvalidInputError
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
 )
+from shared.usage import UsageBillingOwner
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import workspace_owner_user_id
 
@@ -629,3 +631,75 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     assert gateway.compute_states.get_unit_state(workspace_id, capacity_owner_id) is None
     with pytest.raises(WorkerPoolStateNotFoundError):
         gateway.scheduler_pool_state_repository.get_state(capacity_owner_id)
+
+
+def test_join_credentials_are_refused_for_provider_provisioned_units(
+    isolated_services: ApiServices,
+) -> None:
+    """A machine can only be joined to a unit machines are brought to.
+
+    An internal unit is provisioned into a connected cloud account and its
+    machines arrive through provider enrollment. Minting a join credential
+    against one would let a machine somebody owns enroll under a provider-backed
+    capacity owner, and be accounted for as that account's capacity — which is
+    the field that decides whether a management fee applies.
+    """
+
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    joinable = isolated_services.compute.create_unit(
+        UnitName("joinable-unit"),
+        workspace=workspace_id,
+        provider="agent",
+        capacity_owner_id=str(uuid4()),
+        max_machines=1,
+    )
+    guard = _RecordingCapacityReservationGuard(open_reservations=False)
+    gateway = _gateway(isolated_services, guard, key_prefix="join")
+
+    # The unit machines are brought to mints a credential.
+    assert gateway.create_unit_join_token(
+        joinable.id, workspace_id=workspace_id, owner_token_id=""
+    ).token
+
+    internal = joinable.model_copy(update={"visibility": ComputeUnitVisibility.Internal})
+    with pytest.raises(InvalidInputError, match="cannot be joined"):
+        gateway.unit_state_coordinator.create_unit_join_token(
+            internal,
+            workspace_id=workspace_id,
+            owner_token_id="",
+        )
+
+
+def test_a_connected_cloud_unit_bills_its_machines_differently_than_a_brought_one(
+    isolated_services: ApiServices,
+) -> None:
+    """The management fee turns on one field, so that field decides alone.
+
+    A unit holding a provider connection was provisioned into a customer's own
+    cloud account; a unit without one is hardware somebody brought and carried to
+    us. `ComputeUnitRecord` refuses a connection on any unit that is not
+    internal, so the two cases below are the only two a joined machine can
+    resolve to.
+    """
+
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    brought = isolated_services.compute.create_unit(
+        UnitName("brought-unit"),
+        workspace=workspace_id,
+        provider="agent",
+        capacity_owner_id=str(uuid4()),
+        max_machines=1,
+    )
+    connected = brought.model_copy(
+        update={
+            "visibility": ComputeUnitVisibility.Internal,
+            "provider_connection_id": str(uuid4()),
+        }
+    )
+
+    assert billing_owner_for_unit(brought) is UsageBillingOwner.SelfHosted
+    assert billing_owner_for_unit(connected) is UsageBillingOwner.ConnectedCloud

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 from datetime import datetime
 from typing import TypeAlias
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field, JsonValue, SecretStr, TypeAdapter, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from shared.app_identity import METRICS_NAMESPACE, METRICS_SOURCE
 from shared.contracts import ContractModel
@@ -19,9 +18,6 @@ METERING_OBSERVATION_QUALITY_METADATA_KEY = "metering_observation_quality"
 METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY = "metering_observation_error_type"
 
 UsageRecordIdentityPart: TypeAlias = str | int
-UsageMetricHeaderValue: TypeAlias = str | SecretStr
-
-_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
 class UsageMetric(StringEnum):
@@ -31,10 +27,8 @@ class UsageMetric(StringEnum):
     MemoryGibSeconds = "memory_gib_seconds"
     GpuSeconds = "gpu_seconds"
     TaskCount = "task_count"
-    StorageBytes = "storage_bytes"
     PersistentVolumeByteSeconds = "persistent_volume_byte_seconds"
     ContainerDurationMilliseconds = "container_duration_milliseconds"
-    ContainerCostCents = "container_cost_cents"
     CpuUsedCoreSeconds = "cpu_used_core_seconds"
     MemoryRssByteSeconds = "memory_rss_byte_seconds"
     MemorySwapByteSeconds = "memory_swap_byte_seconds"
@@ -46,16 +40,6 @@ class UsageMetric(StringEnum):
     ContainerDiskByteSeconds = "container_disk_byte_seconds"
     DiskReadBytes = "disk_read_bytes"
     DiskWriteBytes = "disk_write_bytes"
-    ManagedComputeReservationSeconds = "managed_compute_reservation_seconds"
-    ManagedComputeReservationCostCents = "managed_compute_reservation_cost_cents"
-    CustomerCloudManagementSeconds = "customer_cloud_management_seconds"
-    CustomerCloudManagementCostCents = "customer_cloud_management_cost_cents"
-    CustomerCloudAllocatedCpuSeconds = "customer_cloud_allocated_cpu_seconds"
-    CustomerCloudAllocatedMemoryGibSeconds = "customer_cloud_allocated_memory_gib_seconds"
-    CustomerCloudAllocatedGpuSeconds = "customer_cloud_allocated_gpu_seconds"
-    CustomerCloudAllocatedDiskGibSeconds = "customer_cloud_allocated_disk_gib_seconds"
-    CustomerCloudNetworkIngressBytes = "customer_cloud_network_ingress_bytes"
-    CustomerCloudNetworkEgressBytes = "customer_cloud_network_egress_bytes"
     NodeUsage = "node_usage"
 
 
@@ -65,7 +49,6 @@ class UsageUnit(StringEnum):
     Bytes = "bytes"
     GibSeconds = "gib_seconds"
     Milliseconds = "milliseconds"
-    Cents = "cents"
     ByteSeconds = "byte_seconds"
 
 
@@ -79,20 +62,18 @@ class UsageGroupKey(StringEnum):
 
 
 class UsageBillingOwner(StringEnum):
-    ContainerAllocation = "container_allocation"
-    ManagedReservation = "managed_reservation"
-    CustomerCloud = "customer_cloud"
+    """Who pays for the machine a container ran on, which decides how it prices.
 
+    `PlatformFleet` is capacity we buy and resell, and bills at catalog rates.
+    `ConnectedCloud` is a customer's own cloud account we provision into: the
+    provider already bills them for the machine, so we charge a management fee on
+    what we placed rather than the compute itself. `SelfHosted` is hardware
+    somebody brought, which we neither buy nor manage and do not bill for.
+    """
 
-class UsageCollectorKind(StringEnum):
-    Disabled = "none"
-    Prometheus = "prometheus"
-    OpenMeter = "openmeter"
-
-
-class UsageMetricOperation(StringEnum):
-    IncrementCounter = "increment-counter"
-    SetGauge = "set-gauge"
+    PlatformFleet = "platform_fleet"
+    ConnectedCloud = "connected_cloud"
+    SelfHosted = "self_hosted"
 
 
 class MeteringObservationQuality(StringEnum):
@@ -158,35 +139,6 @@ class UsageAggregation(ContractModel):
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-class OpenMeterEvent(ContractModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
-    source: str = METRICS_SOURCE
-    type: str
-    subject: str
-    data: dict[str, JsonValue] = Field(default_factory=dict)
-    time: datetime
-
-
-class UsageMetricsSinkSettings(ContractModel):
-    collector: UsageCollectorKind = UsageCollectorKind.Disabled
-    source: str = METRICS_SOURCE
-    prometheus_port: int = 9090
-    openmeter_url: str | None = None
-    openmeter_api_key: SecretStr | None = None
-
-
-class UsageMetricEmissionPlan(ContractModel):
-    collector: UsageCollectorKind
-    operation: UsageMetricOperation
-    name: str
-    value: float
-    source: str
-    target: str | None = None
-    headers: dict[str, UsageMetricHeaderValue] = Field(default_factory=dict, repr=False)
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    body: dict[str, JsonValue] = Field(default_factory=dict, repr=False)
-
-
 def usage_to_prometheus(records: list[UsageRecord]) -> str:
     lines: list[str] = []
     for record in records:
@@ -205,114 +157,8 @@ def usage_to_prometheus(records: list[UsageRecord]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def usage_to_openmeter_events(
-    records: list[UsageRecord],
-    *,
-    source: str = METRICS_SOURCE,
-) -> list[OpenMeterEvent]:
-    events: list[OpenMeterEvent] = []
-    for record in records:
-        labels: dict[str, JsonValue] = {
-            str(key): str(value) for key, value in record.labels.items()
-        }
-        metadata: dict[str, JsonValue] = dict(record.metadata)
-        data: dict[str, JsonValue] = {
-            "resource_type": record.resource_type,
-            "resource_id": record.resource_id,
-            "value": record.quantity,
-            "quantity": record.quantity,
-            "unit": record.unit.value,
-            "labels": labels,
-            "metadata": metadata,
-        }
-        events.append(
-            OpenMeterEvent(
-                id=f"usage-{record.id}",
-                source=source,
-                type=f"{METRICS_SOURCE}.{record.metric.value}",
-                subject=record.workspace_id,
-                time=record.created_at,
-                data=data,
-            )
-        )
-    return events
-
-
-def plan_usage_metric_emission(
-    settings: UsageMetricsSinkSettings,
-    *,
-    name: str,
-    metadata: Mapping[str, JsonValue] | None = None,
-    value: float = 1.0,
-    operation: UsageMetricOperation = UsageMetricOperation.IncrementCounter,
-) -> UsageMetricEmissionPlan | None:
-    normalized = _normalize_metadata(metadata or {})
-    if settings.collector == UsageCollectorKind.Disabled:
-        return None
-    if settings.collector == UsageCollectorKind.Prometheus:
-        return UsageMetricEmissionPlan(
-            collector=settings.collector,
-            operation=operation,
-            name=name,
-            value=value,
-            source=settings.source,
-            target=f":{settings.prometheus_port}/metrics",
-            metadata=normalized,
-            body={
-                "metric": name,
-                "operation": operation.value,
-                "labels": normalized,
-                "value": value,
-            },
-        )
-    if settings.collector == UsageCollectorKind.OpenMeter:
-        if settings.openmeter_url is None:
-            msg = "openmeter_url is required for openmeter usage metrics"
-            raise ValueError(msg)
-        subject = str(normalized.get("workspace_id") or settings.source)
-        headers: dict[str, UsageMetricHeaderValue] = {
-            "Content-Type": "application/cloudevents+json"
-        }
-        if settings.openmeter_api_key is not None:
-            api_key = settings.openmeter_api_key.get_secret_value()
-            if api_key:
-                headers["Authorization"] = SecretStr(f"Bearer {api_key}")
-        event = OpenMeterEvent(
-            source=settings.source,
-            type=name,
-            subject=subject,
-            time=utc_now(),
-            data={**normalized, "value": value},
-        )
-        return UsageMetricEmissionPlan(
-            collector=settings.collector,
-            operation=operation,
-            name=name,
-            value=value,
-            source=settings.source,
-            target=settings.openmeter_url,
-            headers=headers,
-            metadata=normalized,
-            body=_JSON_OBJECT.validate_json(event.model_dump_json()),
-        )
-    msg = f"unsupported usage collector: {settings.collector}"
-    raise ValueError(msg)
-
-
-def _normalize_metadata(metadata: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    return {str(key): value for key, value in sorted(metadata.items())}
-
-
 def _escape_prometheus_label(value: str) -> str:
     return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
-
-
-def usage_metric_from_name(name: str) -> UsageMetric:
-    normalized = name.rsplit(".", 1)[-1].replace("-", "_")
-    for metric in UsageMetric:
-        if metric.value == normalized or name.endswith(metric.value):
-            return metric
-    return UsageMetric.TaskCount
 
 
 __all__ = [
@@ -321,22 +167,13 @@ __all__ = [
     "METERING_WINDOW_ENDED_AT_METADATA_KEY",
     "METERING_WINDOW_STARTED_AT_METADATA_KEY",
     "MeteringObservationQuality",
-    "OpenMeterEvent",
     "UsageAggregation",
     "UsageBillingOwner",
-    "UsageCollectorKind",
     "UsageGroupKey",
     "UsageMetric",
-    "UsageMetricEmissionPlan",
-    "UsageMetricHeaderValue",
-    "UsageMetricOperation",
-    "UsageMetricsSinkSettings",
     "UsageRecord",
     "UsageRecordIdentityPart",
     "UsageUnit",
-    "plan_usage_metric_emission",
-    "usage_metric_from_name",
     "usage_record_id",
-    "usage_to_openmeter_events",
     "usage_to_prometheus",
 ]

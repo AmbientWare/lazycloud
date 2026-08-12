@@ -45,8 +45,7 @@ AWS_MANAGED_POOL_TAG = "cloud-pool:managed-by"
 AWS_MANAGED_POOL_TAG_VALUE = "control-plane"
 
 type _AwsResponseValue = (
-    None
-    | bool
+    bool
     | int
     | float
     | str
@@ -54,6 +53,7 @@ type _AwsResponseValue = (
     | datetime
     | list[_AwsResponseValue]
     | dict[str, _AwsResponseValue]
+    | None
 )
 
 _AWS_RESPONSE = TypeAdapter(dict[str, _AwsResponseValue])

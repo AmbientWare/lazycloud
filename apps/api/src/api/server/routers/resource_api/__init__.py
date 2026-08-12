@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.server.routers.resource_api import (
+    billing,
     compute,
     deployments,
     observability,
@@ -12,6 +13,7 @@ from api.server.routers.resource_api import (
 )
 
 router = APIRouter()
+router.include_router(billing.router)
 router.include_router(deployments.router)
 router.include_router(tasks.router)
 router.include_router(secrets.router)

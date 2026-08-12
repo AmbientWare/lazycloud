@@ -16,6 +16,11 @@ from database.tables.base import (
     utc_now,
     uuid_type,
 )
+from database.tables.billing import BillingAccountTable
+from database.tables.billing_ledger import BillingLedgerEntryTable
+from database.tables.billing_periods import BillingPeriodTable
+from database.tables.billing_priced_days import BillingPricedDayTable
+from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.compute import (
     AwsAccountConnectionTable,
     AwsAuthorizationCleanupTombstoneTable,
@@ -89,6 +94,11 @@ __all__ = [
     "AutoscalerStateTable",
     "AwsAccountConnectionTable",
     "AwsAuthorizationCleanupTombstoneTable",
+    "BillingAccountTable",
+    "BillingLedgerEntryTable",
+    "BillingPeriodTable",
+    "BillingPricedDayTable",
+    "BillingWebhookEventTable",
     "CacheEntryTable",
     "CheckpointTable",
     "ComputeCapacityOperationTable",

@@ -16,7 +16,7 @@ CATALOG_DIGEST_ENV = "LAZYCLOUD_MANAGED_RUNTIME_CATALOG_DIGEST"
 ARTIFACT_DIGEST_ENV = "LAZYCLOUD_MANAGED_RUNTIME_DIGEST"
 CATALOG_FILE = "catalog.json"
 SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
-JsonScalar: TypeAlias = None | bool | int | float | str
+JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 

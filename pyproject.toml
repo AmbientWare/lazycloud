@@ -33,12 +33,14 @@ workspace = [
     "agent-app",
     "cache-server-app",
     "cli",
+    "billing",
     "container-worker-app",
     "scheduler-app",
     "worker-bootstrap-app",
     "provider-aws",
     "provider-cloudflare",
     "provider-github",
+    "provider-stripe",
 ]
 dev = [
     { include-group = "workspace" },
@@ -46,7 +48,7 @@ dev = [
     "boto3-stubs[autoscaling,cloudformation,ec2,s3,sts]>=1.40,<2",
     "httpx2>=2.4.0",
     "lupa>=2.8",
-    "pytest>=8,<9",
+    "pytest>=9,<10",
     "ruff>=0.6",
 ]
 
@@ -86,9 +88,11 @@ members = [
     "apps/container-worker",
     "apps/scheduler",
     "apps/worker-bootstrap",
+    "packages/billing",
     "packages/providers/aws",
     "packages/providers/cloudflare",
     "packages/providers/github",
+    "packages/providers/stripe",
 ]
 
 [tool.uv.sources]
@@ -98,6 +102,7 @@ agent-app = { workspace = true }
 cache = { workspace = true }
 cache-server-app = { workspace = true }
 cli = { workspace = true }
+billing = { workspace = true }
 coordination = { workspace = true }
 compute = { workspace = true }
 container-worker-app = { workspace = true }
@@ -115,6 +120,7 @@ operations = { workspace = true }
 provider-clients = { workspace = true }
 provider-cloudflare = { workspace = true }
 provider-github = { workspace = true }
+provider-stripe = { workspace = true }
 scheduler-app = { workspace = true }
 scheduler = { workspace = true }
 runner = { workspace = true }

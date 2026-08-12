@@ -116,8 +116,6 @@ def metrics(
     usage_records = services.usage.list()[:USAGE_METRICS_RECORD_LIMIT]
     if usage_records:
         body += usage_to_prometheus(usage_records)
-    elif services.compute.usage_exporter is not None:
-        body += services.compute.usage_exporter.prometheus_text()
     return PlainTextResponse(body)
 
 

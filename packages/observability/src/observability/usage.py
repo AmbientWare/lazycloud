@@ -14,8 +14,7 @@ from database.repositories.observability import (
     WorkerEventRepository,
 )
 from database.repositories.usage_billing import UsageBillingRepository
-from database.types import DatabaseSession
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageBillingPeriod
@@ -43,7 +42,6 @@ from observability.billing import (
     default_usage_price_catalog,
 )
 from observability.context import ObservabilityContext
-from observability.usage_exporter import UsageMetricsExporter
 from observability.workspace_changes import WorkspaceChangePublisher
 
 WORKER_EVENT_RETENTION = timedelta(days=30)
@@ -52,11 +50,8 @@ USAGE_CHANGE_BOUNDARY_METRICS = frozenset(
     {
         UsageMetric.TaskCount,
         UsageMetric.PersistentVolumeByteSeconds,
-        UsageMetric.ManagedComputeReservationCostCents,
-        UsageMetric.CustomerCloudManagementCostCents,
     }
 )
-_USAGE_METADATA_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
 class UsageRecordCursorPayload(ContractModel):
@@ -95,7 +90,6 @@ class WorkerEventService:
 @dataclass(slots=True)
 class UsageService:
     context: ObservabilityContext
-    exporter: UsageMetricsExporter | None = None
     price_catalog: UsagePriceCatalog = field(default_factory=default_usage_price_catalog)
     workspace_changes: WorkspaceChangePublisher | None = None
 
@@ -111,7 +105,6 @@ class UsageService:
         unit: UsageUnit,
         labels: dict[str, str] | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
-        export: bool = True,
     ) -> UsageRecord:
         with self.context.database.session() as session:
             record = UsageRepository(session).record(
@@ -125,16 +118,12 @@ class UsageService:
                 labels=labels,
                 metadata=dict(metadata) if metadata is not None else None,
             )
-            if export:
-                record = self._export_record(session, record)
         self._publish_change(record)
         return record
 
-    def append(self, record: UsageRecord, *, export: bool = True) -> UsageRecord:
+    def append(self, record: UsageRecord) -> UsageRecord:
         with self.context.database.session() as session:
             saved = UsageRepository(session).append(record)
-            if export:
-                saved = self._export_record(session, saved)
         self._publish_change(saved)
         return saved
 
@@ -305,46 +294,6 @@ class UsageService:
             labels=labels,
             metadata=metadata,
         )
-
-    def _export_record(self, session: DatabaseSession, record: UsageRecord) -> UsageRecord:
-        if self.exporter is None:
-            return record
-        metadata: dict[str, JsonValue] = {
-            **record.labels,
-            **_USAGE_METADATA_ADAPTER.validate_python(record.metadata),
-            "workspace_id": record.workspace_id,
-            "resource_type": record.resource_type,
-            "resource_id": record.resource_id,
-            "usage_record_id": record.id,
-        }
-        try:
-            self.exporter.emit(
-                name=record.metric.value,
-                metadata=metadata,
-                value=record.quantity,
-            )
-        except Exception as exc:
-            updated = record.model_copy(
-                update={
-                    "metadata": {
-                        **record.metadata,
-                        "usage_export_error": f"{type(exc).__name__}: {exc}",
-                    }
-                }
-            )
-            return UsageRepository(session).append(updated)
-        if "usage_export_error" not in record.metadata:
-            return record
-        updated = record.model_copy(
-            update={
-                "metadata": {
-                    key: value
-                    for key, value in record.metadata.items()
-                    if key != "usage_export_error"
-                }
-            }
-        )
-        return UsageRepository(session).append(updated)
 
     def _publish_change(self, record: UsageRecord) -> None:
         # Raw resource samples remain out of the workspace feed. These records

@@ -95,7 +95,6 @@ class WorkerPoolMode(StrEnum):
 
 class WorkerUsageMetricName(StrEnum):
     ContainerDuration = "container_duration_milliseconds"
-    ContainerCost = "container_cost_cents"
     Cpu = "cpu_seconds"
     Memory = "memory_gib_seconds"
     Gpu = "gpu_seconds"
@@ -183,7 +182,6 @@ class ContainerRequestContext(ContractModel):
     disk_limit_bytes: int = 0
     gpu: str = ""
     gpu_count: int = 0
-    cost_per_ms: float = 0.0
 
     @field_validator("cpu_millicores", "memory_mib", "disk_limit_bytes", "gpu_count")
     @classmethod
@@ -607,16 +605,10 @@ def plan_worker_usage_metrics(
     worker_id: str,
     request: ContainerRequestContext,
     duration_ms: int,
+    billing_owner: UsageBillingOwner,
     pool_mode: WorkerPoolMode = WorkerPoolMode.Public,
-    cost_per_ms: float | None = None,
     evidence: WorkerUsageEvidence | None = None,
 ) -> tuple[WorkerUsageMetricPlan, ...]:
-    effective_cost_per_ms = request.cost_per_ms if cost_per_ms is None else cost_per_ms
-    billing_owner = (
-        UsageBillingOwner.ManagedReservation
-        if pool_mode is WorkerPoolMode.Private
-        else UsageBillingOwner.ContainerAllocation
-    )
     labels: dict[str, JsonValue] = {
         "container_id": request.container_id,
         "worker_id": worker_id,
@@ -631,11 +623,6 @@ def plan_worker_usage_metrics(
         "duration_ms": duration_ms,
         "pool_mode": pool_mode.value,
         "billing_owner": billing_owner.value,
-    }
-    cost_labels: dict[str, JsonValue] = {
-        **labels,
-        "cost_per_ms": effective_cost_per_ms,
-        "cost_for_duration": effective_cost_per_ms * duration_ms,
     }
     duration_seconds = duration_ms / 1_000
     measured = evidence or WorkerUsageEvidence()
@@ -673,14 +660,6 @@ def plan_worker_usage_metrics(
             value=request.gpu_count * duration_seconds,
         ),
     ]
-    if effective_cost_per_ms > 0:
-        plans.append(
-            WorkerUsageMetricPlan(
-                name=WorkerUsageMetricName.ContainerCost,
-                labels=cost_labels,
-                value=effective_cost_per_ms * duration_ms,
-            )
-        )
     if measured.disk_used_byte_seconds > 0:
         plans.append(
             WorkerUsageMetricPlan(

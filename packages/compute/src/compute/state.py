@@ -18,6 +18,7 @@ from shared.compute_policy import MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 
 DEFAULT_COMPUTE_POOL_LOCK_TTL_SECONDS = 300
 DEFAULT_COMPUTE_POOL_LOCK_RETRIES = 100
@@ -163,6 +164,14 @@ class ComputeAgentWorkerSlotState(ContractModel):
     machine_id: str
     worker_id: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    billing_owner: UsageBillingOwner
+    """How this machine's containers price.
+
+    No default: the slot is the only carrier that reaches a worker the platform
+    did not start itself, and a slot that guessed would bill a customer's own
+    hardware as capacity we sold them.
+    """
+
     status: AgentWorkerSlotStatus = AgentWorkerSlotStatus.Active
     container_id: str = ""
     worker_token_id: str = ""

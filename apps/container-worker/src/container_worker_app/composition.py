@@ -114,8 +114,6 @@ from worker.sandbox_docker import WorkerSandboxDockerService
 from worker.source_cache_cleanup import WorkerSourceCacheIdentity
 from worker.source_code import DEFAULT_SOURCE_CACHE_ROOT, SourceCodePackageMaterializer
 from worker.supervision import (
-    HttpWorkerContainerCostResolver,
-    WorkerContainerCostResolver,
     WorkerSupervisionService,
 )
 from worker.workspace_storage import WorkerWorkspaceStorageManager
@@ -186,7 +184,6 @@ def build_worker_process_services(
         container_runtime=instance_runtime,
     )
     checkpoint_activity = CheckpointLeaseRegistry()
-    cost_resolver = _container_cost_resolver(config)
     source_materializer = SourceCodePackageMaterializer(
         cache_root=_source_cache_root(config),
         cache_max_bytes=configuration.source_cache.max_bytes,
@@ -267,8 +264,8 @@ def build_worker_process_services(
             worker_id=identity.worker_id,
             event_sink=event_sink,
             usage_recorder=usage_recorder,
-            cost_resolver=cost_resolver,
             pool_mode=execution.pool_mode,
+            billing_owner=execution.billing_owner,
         ),
         settings=ContainerRuntimeMonitorSettings(
             sample_interval_seconds=configuration.monitoring.metrics_interval_seconds
@@ -418,9 +415,9 @@ def build_worker_process_services(
         instances=instance_store,
         event_sink=event_sink,
         usage_recorder=usage_recorder,
-        cost_resolver=cost_resolver,
         event_source=repository,
         pool_mode=execution.pool_mode,
+        billing_owner=execution.billing_owner,
         registration=registration,
         readiness_validator=(
             None
@@ -468,18 +465,6 @@ def _internal_http_client(config: WorkerSettings) -> InternalHttpClient:
             ),
             policy=TailnetHostPolicy(dns_suffix=config.tailnet_dns_suffix),
         ),
-    )
-
-
-def _container_cost_resolver(
-    config: WorkerSettings,
-) -> WorkerContainerCostResolver | None:
-    if not (config.container_cost_hook_endpoint and config.container_cost_hook_token):
-        return None
-    return HttpWorkerContainerCostResolver(
-        endpoint=config.container_cost_hook_endpoint,
-        token=config.container_cost_hook_token,
-        timeout_seconds=config.container_cost_hook_timeout_seconds,
     )
 
 

@@ -59,7 +59,6 @@ class ContainerSchedulingOptions(ContractModel):
     preemptible: bool = False
     gpu_limit: int = 0
     cpu_limit_millicores: int = 0
-    cost_per_ms: float = 0.0
     mounts: list[RequestMount] | None = None
     secret_names: list[str] | None = None
     gateway_token_required: bool = False

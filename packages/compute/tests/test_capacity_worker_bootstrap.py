@@ -13,6 +13,7 @@ from compute.state import ComputeAgentWorkerSlotState
 from pydantic import ValidationError
 from shared.compute_policy import MachinePool
 from shared.scheduling import SchedulerWorkerRecord
+from shared.usage import UsageBillingOwner
 
 
 @pytest.mark.parametrize(
@@ -54,6 +55,7 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
     token_id = str(uuid4())
     raw_token = generate_compute_token()
     slot = ComputeAgentWorkerSlotState(
+        billing_owner=UsageBillingOwner.SelfHosted,
         workspace_id=str(uuid4()),
         pool=MachinePool("default"),
         machine_id=str(uuid4()),

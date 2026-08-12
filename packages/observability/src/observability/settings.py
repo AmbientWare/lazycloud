@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX, METRICS_SOURCE
-from shared.billing import UsagePriceConfig
-from shared.usage import UsageCollectorKind, UsageMetricsSinkSettings
+from shared.app_identity import ENV_PREFIX
+from shared.billing import SellPriceConfig
 
 from observability.billing import UsagePriceCatalog, configured_usage_price_catalog
 from observability.telemetry import (
@@ -49,56 +46,9 @@ class TelemetrySettings(BaseSettings):
         )
 
 
-class UsageMetricsSettings(BaseSettings):
-    collector: UsageCollectorKind = UsageCollectorKind.Disabled
-    source: str = METRICS_SOURCE
-    prometheus_port: int = Field(default=9090, ge=1, le=65535)
-    openmeter_url: str | None = None
-    openmeter_api_key: SecretStr | None = None
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_USAGE_METRICS_",
-        extra="ignore",
-    )
-
-    @field_validator("source")
-    @classmethod
-    def normalize_source(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("usage metrics source cannot be empty")
-        return normalized
-
-    @model_validator(mode="after")
-    def validate_collector(self) -> UsageMetricsSettings:
-        if self.openmeter_url is not None:
-            self.openmeter_url = self.openmeter_url.strip() or None
-        if self.collector is UsageCollectorKind.OpenMeter and self.openmeter_url is None:
-            raise ValueError("OpenMeter URL is required for the OpenMeter usage collector")
-        if self.openmeter_url is not None:
-            parsed = urlparse(self.openmeter_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise ValueError("OpenMeter URL must be an absolute HTTP(S) URL")
-        return self
-
-    def to_sink_settings(self) -> UsageMetricsSinkSettings:
-        api_key = (
-            self.openmeter_api_key.get_secret_value().strip()
-            if self.openmeter_api_key is not None
-            else ""
-        )
-        return UsageMetricsSinkSettings(
-            collector=self.collector,
-            source=self.source,
-            prometheus_port=self.prometheus_port,
-            openmeter_url=self.openmeter_url,
-            openmeter_api_key=SecretStr(api_key) if api_key else None,
-        )
-
-
 class UsagePricingSettings(BaseSettings):
     billing_currency: str = "USD"
-    price_catalog: list[UsagePriceConfig] | None = None
+    price_catalog: list[SellPriceConfig] | None = None
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_USAGE_",
@@ -145,7 +95,6 @@ class WorkspaceChangeStreamSettings(BaseSettings):
 
 __all__ = [
     "TelemetrySettings",
-    "UsageMetricsSettings",
     "UsagePricingSettings",
     "VolumeMeteringSettings",
     "WorkspaceChangeStreamSettings",

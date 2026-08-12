@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import http.client
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
-from urllib.parse import urlparse
 from uuid import uuid4
 
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import Field, JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageBillingOwner,
     UsageMetric,
     UsageRecord,
     UsageUnit,
@@ -66,75 +64,6 @@ class WorkerUsageRecorder(Protocol):
     ) -> UsageRecord: ...
 
 
-class WorkerContainerCostResolver(Protocol):
-    def cost_per_ms(self, request: ContainerRequestContext) -> float: ...
-
-
-@dataclass(slots=True)
-class HttpWorkerContainerCostResolver:
-    endpoint: str
-    token: str
-    timeout_seconds: float = 10.0
-
-    def cost_per_ms(self, request: ContainerRequestContext) -> float:
-        if not self.endpoint or not self.token:
-            return 0.0
-        payload: JsonObject = {
-            "cpu": request.cpu_millicores,
-            "memory": request.memory_mib,
-            "gpu": request.gpu,
-            "gpu_count": request.gpu_count,
-        }
-        endpoint = urlparse(self.endpoint)
-        if endpoint.scheme not in {"http", "https"} or endpoint.hostname is None:
-            raise RuntimeError("container cost hook must be an HTTP(S) URL with a hostname")
-        connection: http.client.HTTPConnection
-        if endpoint.scheme == "https":
-            connection = http.client.HTTPSConnection(
-                endpoint.hostname,
-                endpoint.port,
-                timeout=self.timeout_seconds,
-            )
-        else:
-            connection = http.client.HTTPConnection(
-                endpoint.hostname,
-                endpoint.port,
-                timeout=self.timeout_seconds,
-            )
-        request_target = endpoint.path or "/"
-        if endpoint.query:
-            request_target = f"{request_target}?{endpoint.query}"
-        try:
-            connection.request(
-                "POST",
-                request_target,
-                body=json.dumps(payload, separators=(",", ":")),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.token}",
-                },
-            )
-            response = connection.getresponse()
-            body = response.read(1 << 20)
-            if response.status < 200 or response.status >= 300:
-                detail = body.decode("utf-8", errors="replace")
-                raise RuntimeError(
-                    f"container cost hook failed with status {response.status}: {detail}"
-                )
-        except OSError as exc:
-            raise RuntimeError(f"container cost hook failed: {exc}") from exc
-        finally:
-            connection.close()
-        try:
-            decoded = _JSON_OBJECT.validate_json(body or b"{}")
-        except ValidationError as exc:
-            raise RuntimeError("container cost hook response must be an object") from exc
-        cost_per_ms = decoded.get("cost_per_ms")
-        if isinstance(cost_per_ms, bool | int | float | str):
-            return float(cost_per_ms or 0.0)
-        return 0.0
-
-
 class WorkerOomHandlingResult(ContractModel):
     container_id: str
     event: WorkerEventRecord
@@ -165,8 +94,8 @@ class WorkerSupervisionService:
     event_sink: WorkerEventSink
     usage_recorder: WorkerUsageRecorder | None = None
     container_stopper: WorkerContainerStopper | None = None
-    cost_resolver: WorkerContainerCostResolver | None = None
     pool_mode: WorkerPoolMode = WorkerPoolMode.Public
+    billing_owner: UsageBillingOwner = UsageBillingOwner.PlatformFleet
 
     def handle_oom(
         self,
@@ -206,7 +135,6 @@ class WorkerSupervisionService:
         request: ContainerRequestContext,
         *,
         duration_ms: int,
-        cost_per_ms: float | None = None,
         window_start_ms: int = 0,
         window_end_ms: int | None = None,
         metering_window_started_at: datetime,
@@ -262,13 +190,12 @@ class WorkerSupervisionService:
                 reason="workspace id is required for usage records",
             )
 
-        resolved_cost = self._cost_per_ms(request, cost_per_ms)
         plans = plan_worker_usage_metrics(
             worker_id=self.worker_id,
             request=request,
             duration_ms=duration_ms,
+            billing_owner=self.billing_owner,
             pool_mode=self.pool_mode,
-            cost_per_ms=resolved_cost,
             evidence=evidence,
         )
         if not plans:
@@ -377,23 +304,10 @@ class WorkerSupervisionService:
             },
         )
 
-    def _cost_per_ms(
-        self,
-        request: ContainerRequestContext,
-        explicit_cost_per_ms: float | None,
-    ) -> float | None:
-        if explicit_cost_per_ms is not None:
-            return explicit_cost_per_ms
-        if self.cost_resolver is None:
-            return None
-        return self.cost_resolver.cost_per_ms(request)
-
 
 def usage_record_kind(metric: WorkerUsageMetricName) -> tuple[UsageMetric, UsageUnit]:
     if metric is WorkerUsageMetricName.ContainerDuration:
         return (UsageMetric.ContainerDurationMilliseconds, UsageUnit.Milliseconds)
-    if metric is WorkerUsageMetricName.ContainerCost:
-        return (UsageMetric.ContainerCostCents, UsageUnit.Cents)
     if metric is WorkerUsageMetricName.Cpu:
         return (UsageMetric.CpuSeconds, UsageUnit.Seconds)
     if metric is WorkerUsageMetricName.Memory:

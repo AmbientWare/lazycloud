@@ -130,6 +130,7 @@ class ShellControlService:
             status=ContainerStatus.Pending,
         )
         with self.services.context.database.session() as session:
+            self.services.containers.assert_solvent(session, workspace_id=stub.workspace_id)
             ContainerRepository(session).records.upsert(
                 record,
                 key=record.id,

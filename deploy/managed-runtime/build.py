@@ -19,7 +19,7 @@ MANAGED_DISTRIBUTIONS = ("foundation", "runner", "lazycloud", "lazycloud-shared"
 SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
 SCHEMA_VERSION = 3
-JsonScalar: TypeAlias = None | bool | int | float | str
+JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 

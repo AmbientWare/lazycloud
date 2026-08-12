@@ -18,13 +18,15 @@ from shared.app_identity import ENV_PREFIX, REDIS_KEY_PREFIX
 from shared.deployment_settings import MissingDeploymentSettingError
 
 type RedisWireScalar = str | bytes | int | float | bool
+# Mapping keys are invariant, so a decoded `str`-keyed reply and the `bytes | str`
+# reply redis-py declares for a command are separate arms; neither widens the other.
 type RedisWireResponse = (
     RedisWireScalar
-    | None
     | Sequence[RedisWireResponse]
     | AbstractSet[RedisWireScalar]
     | Mapping[str, RedisWireResponse]
-    | Mapping[bytes, RedisWireResponse]
+    | Mapping[bytes | str, RedisWireResponse]
+    | None
 )
 type RedisCommandResponse = RedisWireResponse | Awaitable[RedisWireResponse]
 type RedisKeyPart = str | int
@@ -99,7 +101,7 @@ class RedisTransport(Protocol):
         name: str,
         key: str | None = None,
         value: str | None = None,
-        mapping: dict[str, str] | None = None,
+        mapping: Mapping[FieldT, EncodableT] | None = None,
     ) -> RedisCommandResponse: ...
 
     def hget(self, name: str, key: str) -> RedisCommandResponse: ...
@@ -484,12 +486,15 @@ class RedisClient:
         *,
         mapping: Mapping[str, str] | None = None,
     ) -> int:
+        encoded_mapping: dict[FieldT, EncodableT] | None = (
+            {name: item for name, item in mapping.items()} if mapping is not None else None
+        )
         return _redis_int(
             self._transport.hset(
                 key,
                 field,
                 value,
-                mapping=dict(mapping) if mapping is not None else None,
+                mapping=encoded_mapping,
             ),
             "HSET",
         )

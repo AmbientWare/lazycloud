@@ -7,6 +7,7 @@ from typing import Protocol
 from shared.scheduling import (
     SchedulerWorkerRecord,
 )
+from shared.usage import UsageBillingOwner
 from worker.adapters import (
     ContainerIpResolver,
     SchedulerContainerRoutePublisher,
@@ -76,7 +77,6 @@ from worker.scheduler_requests import (
 )
 from worker.source_code import SourceWorkspaceLifecycle
 from worker.supervision import (
-    WorkerContainerCostResolver,
     WorkerEventSink,
     WorkerSupervisionService,
     WorkerUsageRecorder,
@@ -192,9 +192,9 @@ def assemble_worker_process_services(
     event_sink: WorkerEventSink,
     usage_recorder: WorkerUsageRecorder,
     pool_mode: WorkerPoolMode,
-    registration: SchedulerWorkerRecord | None,
+    billing_owner: UsageBillingOwner,
+    registration: SchedulerWorkerRecord,
     readiness_validator: Callable[[], None] | None = None,
-    cost_resolver: WorkerContainerCostResolver | None = None,
     event_source: WorkerProcessEventSource | None = None,
     container_service_dependencies: WorkerProcessContainerServiceDependencies | None = None,
     finalization_dependencies: WorkerProcessFinalizationDependencies | None = None,
@@ -227,8 +227,8 @@ def assemble_worker_process_services(
         event_sink=event_sink,
         usage_recorder=usage_recorder,
         container_stopper=runtime_stopper,
-        cost_resolver=cost_resolver,
         pool_mode=pool_mode,
+        billing_owner=billing_owner,
     )
     finalizer = WorkerContainerFinalizationService(
         container_repository,
@@ -271,8 +271,8 @@ def assemble_worker_process_services(
             event_sink=event_sink,
             usage_recorder=usage_recorder,
             container_stopper=runtime_stopper,
-            cost_resolver=cost_resolver,
             pool_mode=pool_mode,
+            billing_owner=billing_owner,
         ),
         exit_events=WorkerContainerEventPublisher(event_sink, identity.worker_id),
         lifecycle_events=dependencies.lifecycle_events,
@@ -359,6 +359,7 @@ def assemble_worker_process_services(
             execution=execution,
             lifecycle=lifecycle,
             image_builds=image_builds,
+            worker_gpu_type=registration.gpu_type,
         ),
         retention=retention,
     )

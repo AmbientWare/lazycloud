@@ -10,7 +10,6 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
     usage_record_id,
-    usage_to_openmeter_events,
 )
 
 
@@ -35,11 +34,8 @@ def test_usage_contracts_preserve_recursive_json_metadata() -> None:
     )
 
     response = UsageRecordResponse.model_validate(record.model_dump(mode="json"))
-    event = usage_to_openmeter_events([record])[0]
 
     assert response.metadata == metadata
-    assert event.data["metadata"] == metadata
-    assert event.model_dump(mode="json")["data"]["metadata"] == metadata
 
 
 def test_usage_contracts_reject_non_json_metadata() -> None:

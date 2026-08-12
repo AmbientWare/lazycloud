@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 
 from agent.binary import AgentBinarySettings
@@ -44,14 +45,12 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
 from observability.stream_state import RedisEventStreamRepository
 from observability.usage import UsageService
-from observability.usage_exporter import UsageMetricsExporter
 from observability.workspace_changes import WorkspaceChangeRepository, WorkspaceChangeService
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import (
@@ -63,6 +62,7 @@ from provider_clients import (
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from provider_cloudflare import CloudflareSettings
+from provider_stripe import StripeSettings
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
 from scheduler.compute_hooks import SchedulerComputeHooks
@@ -82,6 +82,7 @@ from scheduler.state import (
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
+from shared.payments import PaymentProvider
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -96,6 +97,7 @@ from storage.volume_filesystem import (
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
+from billing import BillingCloseJob, BillingDailyJob, DatabaseBillingAdmission
 from database import DatabaseClient
 from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 
@@ -103,7 +105,6 @@ from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 @dataclass(frozen=True, slots=True)
 class SchedulerObservabilitySettings:
     workspace_changes: WorkspaceChangeStreamSettings
-    usage_metrics: UsageMetricsSettings
     usage_pricing: UsagePricingSettings
 
 
@@ -151,6 +152,8 @@ class SchedulerAppServices:
     usage: UsageService
     object_storage: ObjectStorage
     volume_metering: PersistentVolumeMeteringService
+    billing_daily: BillingDailyJob
+    billing_close: BillingCloseJob
     retention: SchedulerRetention | None
     redis_client: RedisClient
 
@@ -191,10 +194,8 @@ class SchedulerAppServices:
             workspace_changes=workspace_changes,
         )
         compute_policies = WorkspaceComputePolicyService(context)
-        usage_exporter = UsageMetricsExporter(observability.usage_metrics.to_sink_settings())
         usage = UsageService(
             context,
-            exporter=usage_exporter,
             price_catalog=observability.usage_pricing.to_price_catalog(),
             workspace_changes=workspace_changes,
         )
@@ -268,7 +269,6 @@ class SchedulerAppServices:
             context,
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
-            usage_exporter=usage_exporter,
             scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             reclaim=capacity.reclaim,
@@ -303,6 +303,7 @@ class SchedulerAppServices:
             events,
             tasks,
             DatabaseAppExecutionAdmission(),
+            DatabaseBillingAdmission(),
             scheduler=container_scheduler,
             scheduler_cancellation=container_scheduler,
             event_bus=RedisEventBus(redis),
@@ -372,6 +373,8 @@ class SchedulerAppServices:
             usage=usage,
             object_storage=object_storage,
             volume_metering=volume_metering,
+            billing_daily=BillingDailyJob(context, usage),
+            billing_close=BillingCloseJob(context, _payment_provider),
             retention=retention,
             redis_client=redis,
         )
@@ -400,6 +403,20 @@ class SchedulerRetention:
             active_recent_stub_keys=self.protected_checkpoint_stub_keys(now=now),
             now=now,
         )
+
+
+@cache
+def _payment_provider() -> PaymentProvider:
+    """The payment adapter, built once and reused.
+
+    Cached because the close runs every interval and each build opens a
+    connection pool. Failures are not cached, so a deployment that has no
+    credential raises here on every run, naming the variable, rather than once at
+    startup — usage that meters correctly and is never charged is not a state a
+    single line in a boot log should be the only record of.
+    """
+
+    return StripeSettings().provider()
 
 
 def scheduler_retention(

@@ -83,7 +83,6 @@ def usage_billing_overview(
         end=report.end,
         currency=report.currency,
         total_cost_nanos=report.total_cost_nanos,
-        contains_estimates=report.contains_estimates,
         summary=[UsageBillingLineResponse.model_validate(item) for item in report.summary],
         apps=[UsageBillingAppSummaryResponse.model_validate(item) for item in report.apps],
         activity=[UsageBillingBucketResponse.model_validate(item) for item in report.activity],

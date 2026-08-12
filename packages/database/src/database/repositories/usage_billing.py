@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from datetime import UTC, date, datetime, timedelta
 from typing import TypedDict
 
 from database.tables.observability import (
@@ -13,6 +12,7 @@ from database.tables.observability import (
     UsageRecordTable,
 )
 from pydantic import BaseModel, JsonValue, TypeAdapter
+from shared.gpu import normalize_gpu_type
 from shared.usage import UsageBillingOwner, UsageMetric, UsageRecord
 from sqlalchemy import (
     DateTime,
@@ -47,20 +47,20 @@ class UsageBillingContributionBase(TypedDict):
     window_start_ms: int
     window_end_ms: int
     legacy_record_id: str
+    billing_owner: str
+    gpu_type: str
 
 
 class UsageBillingAggregateResult(BaseModel):
     app_id: str
     workload_id: str
+    billing_owner: str
+    gpu_type: str
+    priced_on: date
     bucket_index: int
     cpu_seconds: float | None
     memory_gib_seconds: float | None
     gpu_seconds: float | None
-    recorded_compute_cost_nanos: int | None
-    managed_compute_seconds: float | None
-    managed_compute_cost_nanos: int | None
-    customer_cloud_management_seconds: float | None
-    customer_cloud_management_cost_nanos: int | None
     runs: int | None
     omitted_duration_records: int | None
 
@@ -68,6 +68,8 @@ class UsageBillingAggregateResult(BaseModel):
 class UsageBillingContributionTotals(BaseModel):
     contribution_count: int
     billing_at: datetime | None
+    billing_owner: str | None
+    gpu_type: str | None
     cpu_direct_records: int | None
     cpu_direct_seconds: float | None
     cpu_derived_seconds: float | None
@@ -77,11 +79,6 @@ class UsageBillingContributionTotals(BaseModel):
     gpu_direct_records: int | None
     gpu_direct_seconds: float | None
     gpu_derived_seconds: float | None
-    recorded_compute_cost_nanos: int | None
-    managed_compute_seconds: float | None
-    managed_compute_cost_nanos: int | None
-    customer_cloud_management_seconds: float | None
-    customer_cloud_management_cost_nanos: int | None
     runs: int | None
     omitted_duration_records: int | None
 
@@ -100,6 +97,13 @@ class UsageBillingEvidenceRow:
     cpu_millicores: str
     memory_mb: str
     gpu_count: str
+    gpu: str
+    """GPU model the container held, empty for CPU-only work.
+
+    Carried into billing because GPU seconds are priced per model: a T4 second and
+    an H100 second differ by more than an order of magnitude, so a rate that did
+    not name the model could only be a blend nobody could check.
+    """
     label_worker_id: str
     metadata_worker_id: str
     window_start_ms: UsageMetadataScalar
@@ -111,15 +115,20 @@ class UsageBillingEvidenceRow:
 class UsageBillingAggregateRow:
     app_id: str
     workload_id: str
+    billing_owner: str
+    gpu_type: str
+    priced_on: date
+    """The day this usage ran, which decides the rate it prices at.
+
+    Distinct from `bucket_start`, which is a property of how the report was asked
+    for: buckets begin where the requested window begins, and a single-bucket
+    report has no day in it at all.
+    """
+
     bucket_start: datetime
     cpu_seconds: float
     memory_gib_seconds: float
     gpu_seconds: float
-    recorded_compute_cost_nanos: int
-    managed_compute_seconds: float
-    managed_compute_cost_nanos: int
-    customer_cloud_management_seconds: float
-    customer_cloud_management_cost_nanos: int
     runs: int
     omitted_duration_records: int
 
@@ -135,6 +144,8 @@ class UsageBillingWindowContribution:
     window_start_ms: int
     window_end_ms: int
     legacy_record_id: str
+    billing_owner: str = ""
+    gpu_type: str = ""
     cpu_direct_records: int = 0
     cpu_direct_seconds: float = 0
     cpu_derived_seconds: float = 0
@@ -144,11 +155,6 @@ class UsageBillingWindowContribution:
     gpu_direct_records: int = 0
     gpu_direct_seconds: float = 0
     gpu_derived_seconds: float = 0
-    recorded_compute_cost_nanos: int = 0
-    managed_compute_seconds: float = 0
-    managed_compute_cost_nanos: int = 0
-    customer_cloud_management_seconds: float = 0
-    customer_cloud_management_cost_nanos: int = 0
     runs: int = 0
     omitted_duration_records: int = 0
 
@@ -179,11 +185,6 @@ class UsageBillingWindowContribution:
                 self.gpu_direct_records,
                 self.gpu_direct_seconds,
                 self.gpu_derived_seconds,
-                self.recorded_compute_cost_nanos,
-                self.managed_compute_seconds,
-                self.managed_compute_cost_nanos,
-                self.customer_cloud_management_seconds,
-                self.customer_cloud_management_cost_nanos,
                 self.runs,
                 self.omitted_duration_records,
             )
@@ -201,6 +202,8 @@ class UsageBillingWindowContribution:
             "window_start_ms": self.window_start_ms,
             "window_end_ms": self.window_end_ms,
             "legacy_record_id": self.legacy_record_id,
+            "billing_owner": self.billing_owner,
+            "gpu_type": self.gpu_type,
             "cpu_direct_records": self.cpu_direct_records,
             "cpu_direct_seconds": self.cpu_direct_seconds,
             "cpu_derived_seconds": self.cpu_derived_seconds,
@@ -210,11 +213,6 @@ class UsageBillingWindowContribution:
             "gpu_direct_records": self.gpu_direct_records,
             "gpu_direct_seconds": self.gpu_direct_seconds,
             "gpu_derived_seconds": self.gpu_derived_seconds,
-            "recorded_compute_cost_nanos": self.recorded_compute_cost_nanos,
-            "managed_compute_seconds": self.managed_compute_seconds,
-            "managed_compute_cost_nanos": self.managed_compute_cost_nanos,
-            "customer_cloud_management_seconds": self.customer_cloud_management_seconds,
-            "customer_cloud_management_cost_nanos": self.customer_cloud_management_cost_nanos,
             "runs": self.runs,
             "omitted_duration_records": self.omitted_duration_records,
         }
@@ -235,20 +233,13 @@ class UsageBillingWindowIdentity:
 _BILLING_USAGE_METRICS = (
     UsageMetric.CpuSeconds,
     UsageMetric.MemoryGibSeconds,
-    UsageMetric.ContainerDiskByteSeconds,
     UsageMetric.GpuSeconds,
     UsageMetric.TaskCount,
     UsageMetric.ContainerDurationMilliseconds,
-    UsageMetric.ContainerCostCents,
-    UsageMetric.ManagedComputeReservationSeconds,
-    UsageMetric.ManagedComputeReservationCostCents,
-    UsageMetric.CustomerCloudManagementSeconds,
-    UsageMetric.CustomerCloudManagementCostCents,
 )
 _CONTAINER_COMPUTE_METRICS = frozenset(
     {
         UsageMetric.ContainerDurationMilliseconds,
-        UsageMetric.ContainerCostCents,
         UsageMetric.CpuSeconds,
         UsageMetric.MemoryGibSeconds,
         UsageMetric.GpuSeconds,
@@ -345,6 +336,7 @@ class UsageBillingRepository:
                 cpu_millicores=record.labels.get("cpu_millicores", ""),
                 memory_mb=record.labels.get("mem_mb", ""),
                 gpu_count=record.labels.get("gpu_count", ""),
+                gpu=normalize_gpu_type(record.labels.get("gpu", "")),
                 label_worker_id=record.labels.get("worker_id", ""),
                 metadata_worker_id=_metadata_text(metadata.get("worker_id")),
                 window_start_ms=_metadata_scalar(metadata.get("window_start_ms")),
@@ -381,6 +373,25 @@ class UsageBillingRepository:
             self._recompute_window(identity)
         self.session.flush()
 
+    def workspaces_with_usage_between(self, *, start: datetime, end: datetime) -> tuple[str, ...]:
+        """Every workspace with metered compute in an interval.
+
+        The daily pricing job sweeps these rather than every workspace, so a run
+        costs one query plus one report per workspace that actually ran
+        something — not one per workspace that has ever existed.
+        """
+
+        rows = self.session.scalars(
+            select(UsageBillingWindowTable.workspace_id)
+            .where(
+                UsageBillingWindowTable.billing_at >= start,
+                UsageBillingWindowTable.billing_at < end,
+            )
+            .group_by(UsageBillingWindowTable.workspace_id)
+            .order_by(UsageBillingWindowTable.workspace_id.asc())
+        ).all()
+        return tuple(rows)
+
     def aggregates(
         self,
         *,
@@ -406,6 +417,10 @@ class UsageBillingRepository:
             else literal(0)
         )
         bucket = case((bucket < 0, 0), else_=bucket).label("bucket_index")
+        # The day the usage happened, which is not derivable from the bucket: a
+        # report's buckets start wherever its window starts, and one asking for a
+        # single bucket has no day in it at all. A rate is chosen by this.
+        priced_on = func.date(UsageBillingWindowTable.billing_at).label("priced_on")
         workload = (
             UsageBillingWindowTable.workload_id if group_by_workload else literal("")
         ).label("workload_id")
@@ -435,24 +450,12 @@ class UsageBillingRepository:
                 UsageBillingWindowTable.app_id,
                 workload,
                 bucket,
+                priced_on,
+                UsageBillingWindowTable.billing_owner,
+                UsageBillingWindowTable.gpu_type,
                 func.sum(cpu).label("cpu_seconds"),
                 func.sum(memory).label("memory_gib_seconds"),
                 func.sum(gpu).label("gpu_seconds"),
-                func.sum(UsageBillingWindowTable.recorded_compute_cost_nanos).label(
-                    "recorded_compute_cost_nanos"
-                ),
-                func.sum(UsageBillingWindowTable.managed_compute_seconds).label(
-                    "managed_compute_seconds"
-                ),
-                func.sum(UsageBillingWindowTable.managed_compute_cost_nanos).label(
-                    "managed_compute_cost_nanos"
-                ),
-                func.sum(UsageBillingWindowTable.customer_cloud_management_seconds).label(
-                    "customer_cloud_management_seconds"
-                ),
-                func.sum(UsageBillingWindowTable.customer_cloud_management_cost_nanos).label(
-                    "customer_cloud_management_cost_nanos"
-                ),
                 func.sum(UsageBillingWindowTable.runs).label("runs"),
                 func.sum(UsageBillingWindowTable.omitted_duration_records).label(
                     "omitted_duration_records"
@@ -463,8 +466,14 @@ class UsageBillingRepository:
                 UsageBillingWindowTable.billing_at >= start,
                 UsageBillingWindowTable.billing_at < end,
             )
-            .group_by(UsageBillingWindowTable.app_id, workload, bucket)
-            .order_by(UsageBillingWindowTable.app_id, workload, bucket)
+            .group_by(
+                UsageBillingWindowTable.app_id,
+                workload,
+                bucket,
+                priced_on,
+                UsageBillingWindowTable.billing_owner,
+                UsageBillingWindowTable.gpu_type,
+            )
         )
         if app_id is not None:
             statement = statement.where(UsageBillingWindowTable.app_id == app_id)
@@ -472,18 +481,14 @@ class UsageBillingRepository:
             UsageBillingAggregateRow(
                 app_id=row.app_id,
                 workload_id=row.workload_id,
+                billing_owner=row.billing_owner,
+                gpu_type=row.gpu_type,
+                priced_on=_as_date(row.priced_on),
                 bucket_start=start
                 + timedelta(seconds=int(row.bucket_index) * (bucket_seconds or 0)),
                 cpu_seconds=float(row.cpu_seconds or 0),
                 memory_gib_seconds=float(row.memory_gib_seconds or 0),
                 gpu_seconds=float(row.gpu_seconds or 0),
-                recorded_compute_cost_nanos=int(row.recorded_compute_cost_nanos or 0),
-                managed_compute_seconds=float(row.managed_compute_seconds or 0),
-                managed_compute_cost_nanos=int(row.managed_compute_cost_nanos or 0),
-                customer_cloud_management_seconds=float(row.customer_cloud_management_seconds or 0),
-                customer_cloud_management_cost_nanos=int(
-                    row.customer_cloud_management_cost_nanos or 0
-                ),
                 runs=int(row.runs or 0),
                 omitted_duration_records=int(row.omitted_duration_records or 0),
             )
@@ -521,6 +526,12 @@ class UsageBillingRepository:
                 select(
                     func.count().label("contribution_count"),
                     func.min(UsageBillingContributionTable.billing_at).label("billing_at"),
+                    # Every contribution to a window shares its GPU model and
+                    # its billing owner: one container, one worker, one unit.
+                    # `max` rather than `min` so a stated classification beats an
+                    # unstated one — the empty string sorts below every name.
+                    func.max(UsageBillingContributionTable.billing_owner).label("billing_owner"),
+                    func.max(UsageBillingContributionTable.gpu_type).label("gpu_type"),
                     func.sum(UsageBillingContributionTable.cpu_direct_records).label(
                         "cpu_direct_records"
                     ),
@@ -548,21 +559,6 @@ class UsageBillingRepository:
                     func.sum(UsageBillingContributionTable.gpu_derived_seconds).label(
                         "gpu_derived_seconds"
                     ),
-                    func.sum(UsageBillingContributionTable.recorded_compute_cost_nanos).label(
-                        "recorded_compute_cost_nanos"
-                    ),
-                    func.sum(UsageBillingContributionTable.managed_compute_seconds).label(
-                        "managed_compute_seconds"
-                    ),
-                    func.sum(UsageBillingContributionTable.managed_compute_cost_nanos).label(
-                        "managed_compute_cost_nanos"
-                    ),
-                    func.sum(UsageBillingContributionTable.customer_cloud_management_seconds).label(
-                        "customer_cloud_management_seconds"
-                    ),
-                    func.sum(
-                        UsageBillingContributionTable.customer_cloud_management_cost_nanos
-                    ).label("customer_cloud_management_cost_nanos"),
                     func.sum(UsageBillingContributionTable.runs).label("runs"),
                     func.sum(UsageBillingContributionTable.omitted_duration_records).label(
                         "omitted_duration_records"
@@ -590,6 +586,8 @@ class UsageBillingRepository:
             "window_start_ms": identity.window_start_ms,
             "window_end_ms": identity.window_end_ms,
             "legacy_record_id": identity.legacy_record_id,
+            "billing_owner": row.billing_owner or "",
+            "gpu_type": row.gpu_type or "",
             "cpu_direct_records": int(row.cpu_direct_records or 0),
             "cpu_direct_seconds": float(row.cpu_direct_seconds or 0),
             "cpu_derived_seconds": float(row.cpu_derived_seconds or 0),
@@ -599,13 +597,6 @@ class UsageBillingRepository:
             "gpu_direct_records": int(row.gpu_direct_records or 0),
             "gpu_direct_seconds": float(row.gpu_direct_seconds or 0),
             "gpu_derived_seconds": float(row.gpu_derived_seconds or 0),
-            "recorded_compute_cost_nanos": int(row.recorded_compute_cost_nanos or 0),
-            "managed_compute_seconds": float(row.managed_compute_seconds or 0),
-            "managed_compute_cost_nanos": int(row.managed_compute_cost_nanos or 0),
-            "customer_cloud_management_seconds": float(row.customer_cloud_management_seconds or 0),
-            "customer_cloud_management_cost_nanos": int(
-                row.customer_cloud_management_cost_nanos or 0
-            ),
             "runs": int(row.runs or 0),
             "omitted_duration_records": int(row.omitted_duration_records or 0),
         }
@@ -621,6 +612,8 @@ class UsageBillingRepository:
                 index_elements=list(_IDENTITY_COLUMNS),
                 set_={
                     "billing_at": excluded.billing_at,
+                    "billing_owner": excluded.billing_owner,
+                    "gpu_type": excluded.gpu_type,
                     "cpu_direct_records": excluded.cpu_direct_records,
                     "cpu_direct_seconds": excluded.cpu_direct_seconds,
                     "cpu_derived_seconds": excluded.cpu_derived_seconds,
@@ -630,15 +623,6 @@ class UsageBillingRepository:
                     "gpu_direct_records": excluded.gpu_direct_records,
                     "gpu_direct_seconds": excluded.gpu_direct_seconds,
                     "gpu_derived_seconds": excluded.gpu_derived_seconds,
-                    "recorded_compute_cost_nanos": excluded.recorded_compute_cost_nanos,
-                    "managed_compute_seconds": excluded.managed_compute_seconds,
-                    "managed_compute_cost_nanos": excluded.managed_compute_cost_nanos,
-                    "customer_cloud_management_seconds": (
-                        excluded.customer_cloud_management_seconds
-                    ),
-                    "customer_cloud_management_cost_nanos": (
-                        excluded.customer_cloud_management_cost_nanos
-                    ),
                     "runs": excluded.runs,
                     "omitted_duration_records": excluded.omitted_duration_records,
                     "updated_at": func.now(),
@@ -654,7 +638,7 @@ def usage_billing_window_contribution(
         return None
     if (
         record.resource_type == "container"
-        and record.labels.get("billing_owner") == UsageBillingOwner.ManagedReservation.value
+        and record.labels.get("billing_owner") == UsageBillingOwner.SelfHosted.value
         and record.metric in _CONTAINER_COMPUTE_METRICS
     ):
         return None
@@ -696,6 +680,8 @@ def usage_billing_window_contribution(
         "window_start_ms": contribution_window_start_ms,
         "window_end_ms": contribution_window_end_ms,
         "legacy_record_id": legacy_record_id,
+        "billing_owner": record.labels.get("billing_owner", ""),
+        "gpu_type": normalize_gpu_type(record.labels.get("gpu", "")),
     }
     if record.metric is UsageMetric.ContainerDurationMilliseconds:
         seconds = quantity / 1_000
@@ -727,29 +713,10 @@ def usage_billing_window_contribution(
             gpu_direct_records=1,
             gpu_direct_seconds=quantity,
         )
-    if record.metric is UsageMetric.ContainerCostCents:
-        return UsageBillingWindowContribution(
-            **base,
-            recorded_compute_cost_nanos=_cents_to_nanos(quantity),
-        )
-    if record.metric is UsageMetric.ManagedComputeReservationSeconds:
-        return UsageBillingWindowContribution(**base, managed_compute_seconds=quantity)
-    if record.metric is UsageMetric.ManagedComputeReservationCostCents:
-        return UsageBillingWindowContribution(
-            **base,
-            managed_compute_cost_nanos=_cents_to_nanos(quantity),
-        )
-    if record.metric is UsageMetric.CustomerCloudManagementSeconds:
-        return UsageBillingWindowContribution(
-            **base,
-            customer_cloud_management_seconds=quantity,
-        )
-    if record.metric is UsageMetric.CustomerCloudManagementCostCents:
-        return UsageBillingWindowContribution(
-            **base,
-            customer_cloud_management_cost_nanos=_cents_to_nanos(quantity),
-        )
-    return UsageBillingWindowContribution(**base, runs=round(quantity))
+    if record.metric is UsageMetric.TaskCount:
+        return UsageBillingWindowContribution(**base, runs=round(quantity))
+    # No catch-all: an unrecognised metric contributes nothing.
+    return None
 
 
 def _stored_contribution_identity(
@@ -824,19 +791,19 @@ def _metadata_text(value: JsonValue) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _as_date(value: object) -> date:
+    """Backends differ on whether `date()` returns a date or a string."""
+
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
 def _nonnegative_number(value: str) -> float:
     try:
         return max(float(value or "0"), 0)
     except ValueError:
         return 0
-
-
-def _cents_to_nanos(quantity: float) -> int:
-    return int(
-        (Decimal(str(quantity)) * Decimal(10_000_000)).quantize(
-            Decimal("1"), rounding=ROUND_HALF_UP
-        )
-    )
 
 
 def _metadata_scalar(value: JsonValue) -> UsageMetadataScalar:

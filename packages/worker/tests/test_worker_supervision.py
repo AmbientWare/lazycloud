@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageBillingOwner,
     UsageMetric,
     UsageRecord,
     UsageUnit,
@@ -194,7 +195,6 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
             memory_mib=512,
             gpu="L4",
             gpu_count=1,
-            cost_per_ms=0.02,
         )
 
         result = service.record_usage_window(
@@ -230,7 +230,6 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
         UsageMetric.CpuSeconds,
         UsageMetric.MemoryGibSeconds,
         UsageMetric.GpuSeconds,
-        UsageMetric.ContainerCostCents,
         UsageMetric.CpuUsedCoreSeconds,
         UsageMetric.MemoryRssByteSeconds,
         UsageMetric.MemorySwapByteSeconds,
@@ -246,7 +245,6 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
     assert result.records[2].quantity == 0.25
     assert result.records[3].quantity == 0.5
     assert result.records[0].quantity == 500
-    assert result.records[4].quantity == 10
     assert result.records[-4].quantity == 4
     assert result.records[-3].quantity == 2
     assert result.records[-2].quantity == 4096
@@ -255,7 +253,7 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
     assert result.records[0].labels["duration_ms"] == "500"
     assert result.records[0].labels["deployment_id"] == "deployment-1"
     assert result.records[0].labels["pool_mode"] == WorkerPoolMode.Public.value
-    assert result.records[0].labels["billing_owner"] == "container_allocation"
+    assert result.records[0].labels["billing_owner"] == "platform_fleet"
     assert result.records[0].metadata["window_start_ms"] == 0
     assert result.records[0].metadata["window_end_ms"] == 500
     expected_window_metadata = {
@@ -284,7 +282,6 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
         == expected_window_metadata
         for record in persisted_records
     )
-    assert result.records[4].metadata["worker_metric"] == "container_cost_cents"
 
 
 def test_worker_supervision_usage_windows_are_idempotent(
@@ -305,7 +302,6 @@ def test_worker_supervision_usage_windows_are_idempotent(
             app_id="app-1",
             cpu_millicores=2000,
             memory_mib=512,
-            cost_per_ms=0.02,
         )
 
         first = service.record_usage_window(
@@ -331,20 +327,26 @@ def test_worker_supervision_usage_windows_are_idempotent(
 
     assert [record.id for record in second.records] == [record.id for record in first.records]
     assert sorted(record.metric for record in records) == [
-        UsageMetric.ContainerCostCents,
         UsageMetric.ContainerDurationMilliseconds,
         UsageMetric.CpuSeconds,
         UsageMetric.MemoryGibSeconds,
     ]
     assert {record.metric: record.quantity for record in records} == {
-        UsageMetric.ContainerCostCents: 10,
         UsageMetric.ContainerDurationMilliseconds: 500,
         UsageMetric.CpuSeconds: 1,
         UsageMetric.MemoryGibSeconds: 0.25,
     }
 
 
-def test_worker_supervision_records_private_pool_usage_for_managed_billing_owner() -> None:
+def test_worker_supervision_records_the_billing_owner_it_was_configured_with() -> None:
+    """Who pays is carried to the worker, not inferred from the pool it serves.
+
+    A private pool says the capacity is reserved, not who bought it: a customer's
+    own hardware and a customer's cloud account we provision into are both
+    private, and they price differently. The two are set independently here so a
+    private worker labelled self-hosted stays self-hosted.
+    """
+
     sink = EventSink()
     recorder = MemoryUsageRecorder()
     service = WorkerSupervisionService(
@@ -352,6 +354,7 @@ def test_worker_supervision_records_private_pool_usage_for_managed_billing_owner
         event_sink=sink,
         usage_recorder=recorder,
         pool_mode=WorkerPoolMode.Private,
+        billing_owner=UsageBillingOwner.SelfHosted,
     )
     request = ContainerRequestContext(
         container_id="ctr-1",
@@ -377,7 +380,7 @@ def test_worker_supervision_records_private_pool_usage_for_managed_billing_owner
     assert all(
         record.labels["pool_mode"] == WorkerPoolMode.Private.value for record in result.records
     )
-    assert all(record.labels["billing_owner"] == "managed_reservation" for record in result.records)
+    assert all(record.labels["billing_owner"] == "self_hosted" for record in result.records)
 
 
 def test_worker_supervision_requires_ordered_timezone_aware_metering_window() -> None:

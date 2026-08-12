@@ -211,9 +211,9 @@ def test_zero_cost_record_does_not_create_empty_billing_projection(
             workspace_id=workspace_id,
             resource_type="container",
             resource_id="container-zero-cost",
-            metric=UsageMetric.ContainerCostCents,
+            metric=UsageMetric.TaskCount,
             quantity=0,
-            unit=UsageUnit.Cents,
+            unit=UsageUnit.Count,
             metadata={
                 "worker_id": "worker-zero-cost",
                 "window_start_ms": 0,

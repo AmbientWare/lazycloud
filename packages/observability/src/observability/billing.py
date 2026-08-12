@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from io import StringIO
+from typing import cast
 
 from database.records.apps import AppRecord, StubRecord
 from database.repositories.usage_billing import (
@@ -13,74 +14,86 @@ from database.repositories.usage_billing import (
     UsageBillingEvidenceRow,
     UsageMetadataScalar,
 )
-from pydantic import Field
 from shared.billing import (
-    COMPUTE_PRICE_METRICS,
+    PRICED_METRICS,
     BillableMetric,
-    BillingCostBasis,
     BillingCoverageStatus,
-    UsagePriceConfig,
+    SellPriceConfig,
 )
-from shared.contracts import ContractModel
+from shared.gpu import SUPPORTED_GPU_NAMES, GpuType
+from shared.timestamps import utc_now
 from shared.usage import (
     UsageBillingOwner,
     UsageMetric,
     UsageUnit,
 )
 
-NANOS_PER_MAJOR_CURRENCY_UNIT = 1_000_000_000
-AWS_FARGATE_PRICING_URL = (
-    "https://aws.amazon.com/about-aws/whats-new/2019/01/"
-    "aws-fargate-prices-reduced-by-up-to-50-percent/"
-)
-AWS_G4_REFERENCE_URL = (
-    "https://aws.amazon.com/blogs/machine-learning/"
-    "bert-inference-on-g4-instances-using-apache-mxnet-and-gluonnlp-"
-    "1-million-requests-for-20-cents/"
-)
-
 
 @dataclass(frozen=True, slots=True)
-class UsagePrice:
+class SellPrice:
+    """One rate LazyCloud charges, for one metric and optionally one variant.
+
+    `variant` distinguishes rates that share a metric but not a price. GPU seconds
+    are the case that forces it: a T4 second and an H100 second are both
+    `gpu_seconds` and differ by more than an order of magnitude, and a single
+    blended rate would leave a customer unable to see why their bill is what it
+    is. An empty variant means the rate covers the whole metric.
+    """
+
     metric: BillableMetric
     label: str
     unit: UsageUnit
     price_per_unit_nanos: int
     currency: str
-    provider: str
-    service: str
-    region: str
     effective_date: date
-    source_url: str
+    variant: str = ""
     note: str = ""
 
     @classmethod
-    def from_config(cls, config: UsagePriceConfig) -> UsagePrice:
+    def from_config(cls, config: SellPriceConfig) -> SellPrice:
         return cls(
             metric=config.metric,
             label=config.label,
             unit=config.unit,
             price_per_unit_nanos=config.price_per_unit_nanos,
             currency=config.currency,
-            provider=config.provider,
-            service=config.service,
-            region=config.region,
             effective_date=config.effective_date,
-            source_url=config.source_url,
+            variant=config.variant,
             note=config.note,
         )
+
+    @property
+    def key(self) -> tuple[BillableMetric, str]:
+        return (self.metric, self.variant)
 
 
 @dataclass(frozen=True, slots=True)
 class UsagePriceCatalog:
+    """The rates a workspace is billed against."""
+
     currency: str
-    prices: tuple[UsagePrice, ...]
+    prices: tuple[SellPrice, ...]
+    _by_key: Mapping[tuple[BillableMetric, str], tuple[SellPrice, ...]] = field(
+        default_factory=lambda: cast("dict[tuple[BillableMetric, str], tuple[SellPrice, ...]]", {}),
+        repr=False,
+        compare=False,
+    )
+    """Built once in `__post_init__`, newest effective date first.
+
+    A key holds a history rather than a rate, because a rate applies from its
+    effective date forward and usage keeps whatever was in force when it ran.
+    Every priced key in a report resolves through here, for the summary and again
+    for each app, workload and activity bucket.
+    """
 
     def __post_init__(self) -> None:
         currency = self.currency.strip().upper()
         if len(currency) != 3 or not currency.isalpha():
             raise ValueError("usage billing currency must be a three-letter code")
         object.__setattr__(self, "currency", currency)
+        keys: set[tuple[BillableMetric, str]] = set()
+        dated_keys: set[tuple[BillableMetric, str, date]] = set()
+        dated: set[tuple[tuple[BillableMetric, str], date]] = set()
         metrics: set[BillableMetric] = set()
         for price in self.prices:
             if price.currency != currency:
@@ -88,28 +101,122 @@ class UsagePriceCatalog:
                     f"usage price for {price.metric.value} uses {price.currency}, "
                     f"expected {currency}"
                 )
-            if price.metric in metrics:
-                raise ValueError(f"duplicate usage price for {price.metric.value}")
+            if (price.key, price.effective_date) in dated:
+                variant = f" variant {price.variant}" if price.variant else ""
+                raise ValueError(
+                    f"duplicate usage price for {price.metric.value}{variant} "
+                    f"effective {price.effective_date.isoformat()}"
+                )
+            dated.add((price.key, price.effective_date))
+            dated_keys.add((price.metric, price.variant, price.effective_date))
+            keys.add(price.key)
             metrics.add(price.metric)
-        if metrics != set(COMPUTE_PRICE_METRICS):
-            missing = ", ".join(
-                metric.value for metric in COMPUTE_PRICE_METRICS if metric not in metrics
-            )
-            unsupported = ", ".join(
-                sorted(metric.value for metric in metrics - set(COMPUTE_PRICE_METRICS))
-            )
+        required = set(PRICED_METRICS)
+        if metrics != required:
+            missing = ", ".join(metric.value for metric in PRICED_METRICS if metric not in metrics)
+            unsupported = ", ".join(sorted(metric.value for metric in metrics - required))
             details: list[str] = []
             if missing:
                 details.append(f"missing {missing}")
             if unsupported:
                 details.append(f"unsupported {unsupported}")
             raise ValueError(
-                f"usage price catalog must cover exactly the compute metrics: {'; '.join(details)}"
+                f"usage price catalog must cover exactly the priced metrics: {'; '.join(details)}"
             )
+        self._validate_gpu_variants(dated_keys, utc_now().date())
+        history: dict[tuple[BillableMetric, str], tuple[SellPrice, ...]] = {}
+        for price in self.prices:
+            history[price.key] = (*history.get(price.key, ()), price)
+        object.__setattr__(
+            self,
+            "_by_key",
+            {
+                key: tuple(sorted(rates, key=lambda rate: rate.effective_date, reverse=True))
+                for key, rates in history.items()
+            },
+        )
 
-    @property
-    def by_metric(self) -> Mapping[BillableMetric, UsagePrice]:
-        return {price.metric: price for price in self.prices}
+    @staticmethod
+    def _validate_gpu_variants(keys: set[tuple[BillableMetric, str, date]], today: date) -> None:
+        """GPU rates must name exactly the models the platform schedules, today.
+
+        Effectivity is part of it: a model whose only rate starts next month is
+        priced by a catalog that satisfies a date check and bills nothing until
+        then, which is the same silent gap an absent rate would be.
+
+        Priced and schedulable are one list, `SUPPORTED_GPU_TYPES`. Left to drift
+        they diverge in both directions and neither is visible: a model that runs
+        with no rate bills nothing, and a rate for hardware nobody can rent looks
+        like coverage that does not exist.
+
+        A variant-free GPU rate is refused for the same reason. It answers for
+        every model at once, which turns an unpriced GPU from a named gap into a
+        silent charge at some other chip's price.
+        """
+
+        for metric in (BillableMetric.GpuSeconds, BillableMetric.ManagedGpuSeconds):
+            priced = {
+                variant
+                for priced_metric, variant, effective_date in keys
+                if priced_metric is metric and effective_date <= today
+            }
+            if "" in priced:
+                raise ValueError(
+                    f"{metric.value} must be priced per model; a rate with no model "
+                    "would answer for every GPU including ones nobody priced"
+                )
+            if priced != SUPPORTED_GPU_NAMES:
+                missing = ", ".join(sorted(SUPPORTED_GPU_NAMES - priced))
+                unsupported = ", ".join(sorted(priced - SUPPORTED_GPU_NAMES))
+                details: list[str] = []
+                if missing:
+                    details.append(f"schedulable but unpriced: {missing}")
+                if unsupported:
+                    details.append(f"priced but not schedulable: {unsupported}")
+                raise ValueError(
+                    f"{metric.value} prices disagree with SUPPORTED_GPU_TYPES "
+                    f"({'; '.join(details)})"
+                )
+
+    def price_for(
+        self,
+        metric: BillableMetric,
+        variant: str = "",
+        *,
+        on: date,
+    ) -> SellPrice | None:
+        """The rate in force for one metric and variant on a given day.
+
+        `on` is the day the usage happened, not the day the report runs. A price
+        change is prospective: it moves what tomorrow costs and never what
+        yesterday did, so a month recomputed after a change still prices at the
+        rate the customer was charged under.
+
+        Usage predating every rate in the catalog resolves to `None`. Reaching
+        back for the oldest rate would stamp a line with an effective date that
+        postdates the work it priced, and an unpriced line is a gap the coverage
+        report already names.
+
+        Falls back to a metric's variant-free rate, which the constructor forbids
+        for GPU seconds—so an unpriced GPU resolves to `None` and surfaces as a
+        named gap rather than being billed at another chip's price.
+        """
+
+        found = self._effective(self._by_key.get((metric, variant)), on)
+        if found is not None:
+            return found
+        return self._effective(self._by_key.get((metric, "")), on)
+
+    @staticmethod
+    def _effective(rates: tuple[SellPrice, ...] | None, on: date) -> SellPrice | None:
+        """The newest rate that had taken effect by `on`."""
+
+        if not rates:
+            return None
+        for rate in rates:
+            if rate.effective_date <= on:
+                return rate
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +227,16 @@ class UsageBillingLine:
     unit: UsageUnit
     price_per_unit_nanos: int | None
     cost_nanos: int
-    cost_basis: BillingCostBasis
+    variant: str = ""
+    """Which rate produced this line—the GPU model, or empty where one rate covers
+    the whole metric."""
+
+    effective_date: date | None = None
+    """When the rate that priced this line took effect, or null where nothing
+    priced it.
+
+    Carried because a rate change splits a metric into two lines rather than
+    blending them, and without this the two are indistinguishable."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +271,6 @@ class UsageBillingCoverage:
     status: BillingCoverageStatus
     priced_metrics: tuple[BillableMetric, ...]
     unpriced_metrics: tuple[BillableMetric, ...]
-    recorded_cost_present: bool
     omitted_duration_records: int
     gaps: tuple[UsageBillingCoverageGap, ...]
 
@@ -167,8 +282,7 @@ class UsageBillingReport:
     end: datetime
     currency: str
     total_cost_nanos: int
-    contains_estimates: bool
-    catalog: tuple[UsagePrice, ...]
+    catalog: tuple[SellPrice, ...]
     summary: tuple[UsageBillingLine, ...]
     apps: tuple[UsageBillingAttribution, ...]
     workloads: tuple[UsageBillingAttribution, ...]
@@ -192,7 +306,6 @@ class UsageBillingOverview:
     end: datetime
     currency: str
     total_cost_nanos: int
-    contains_estimates: bool
     summary: tuple[UsageBillingLine, ...]
     apps: tuple[UsageBillingAppSummary, ...]
     activity: tuple[UsageBillingBucket, ...]
@@ -208,18 +321,52 @@ class UsageBillingWorkloads:
     data: tuple[UsageBillingAttribution, ...]
 
 
+_WindowKey = tuple[BillableMetric, str]
+"""What a window accumulates against: a metric and its variant, before any rate
+has been chosen. The rate cannot be part of it, because the window is still being
+built when quantities land in it."""
+
+_PricedKey = tuple[BillableMetric, str, date | None]
+"""What one billing line is: a metric, the variant that prices it — the GPU model,
+or empty for the rest — and the effective date of the rate that priced it.
+
+The date is part of the identity because a rate change splits a line rather than
+blending it: a month spanning one shows both rates, which is what the customer
+was actually charged."""
+
+
 @dataclass(slots=True)
 class _ComputeWindow:
-    direct_quantities: dict[BillableMetric, float] = field(default_factory=dict)
-    derived_quantities: dict[BillableMetric, float] = field(default_factory=dict)
-    recorded_container_cost_nanos: int = 0
+    priced_on: date
+    """The day this window's usage happened, which decides the rate it prices at.
+
+    Held because the report's own interval cannot answer it: a month spans rate
+    changes, and every window in it has to price at what was in force when it
+    ran rather than at what is in force when the report is built.
+    """
+
+    direct_quantities: dict[_WindowKey, float] = field(default_factory=dict)
+    derived_quantities: dict[_WindowKey, float] = field(default_factory=dict)
+    billing_owner: str = ""
+    """Who paid for the machine this window ran on.
+
+    Held per window rather than per record, and resolved the same way the rollup
+    resolves it — the greatest label wins, so a stated classification beats an
+    unstated one. A window whose records disagreed would otherwise bill its
+    derived seconds against one metric and its direct seconds against another,
+    which defeats the direct-over-derived precedence below and charges the same
+    second twice.
+    """
 
     def merge(self, other: _ComputeWindow) -> None:
-        for metric, quantity in other.direct_quantities.items():
-            self.direct_quantities[metric] = self.direct_quantities.get(metric, 0) + quantity
-        for metric, quantity in other.derived_quantities.items():
-            self.derived_quantities[metric] = self.derived_quantities.get(metric, 0) + quantity
-        self.recorded_container_cost_nanos += other.recorded_container_cost_nanos
+        for key, quantity in other.direct_quantities.items():
+            self.direct_quantities[key] = self.direct_quantities.get(key, 0) + quantity
+        for key, quantity in other.derived_quantities.items():
+            self.derived_quantities[key] = self.derived_quantities.get(key, 0) + quantity
+        self.billing_owner = max(self.billing_owner, other.billing_owner)
+        # Earliest wins: a window that merged across a boundary prices at the
+        # rate its usage started under, never at a later and possibly higher one.
+        self.priced_on = min(self.priced_on, other.priced_on)
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,81 +381,146 @@ class _MeteringWindowKey:
 @dataclass(slots=True)
 class _UsageAccumulator:
     compute_windows: dict[_MeteringWindowKey, _ComputeWindow] = field(default_factory=dict)
-    managed_cost_nanos: int = 0
-    managed_seconds: float = 0
-    customer_cloud_management_cost_nanos: int = 0
-    customer_cloud_management_seconds: float = 0
     tasks: int = 0
     omitted_duration_records: int = 0
 
     def merge(self, other: _UsageAccumulator) -> None:
         for window_key, window in other.compute_windows.items():
-            self.compute_windows.setdefault(window_key, _ComputeWindow()).merge(window)
-        self.managed_cost_nanos += other.managed_cost_nanos
-        self.managed_seconds += other.managed_seconds
-        self.customer_cloud_management_cost_nanos += other.customer_cloud_management_cost_nanos
-        self.customer_cloud_management_seconds += other.customer_cloud_management_seconds
+            self.compute_windows.setdefault(
+                window_key, _ComputeWindow(priced_on=window.priced_on)
+            ).merge(window)
         self.tasks += other.tasks
         self.omitted_duration_records += other.omitted_duration_records
 
 
-REFERENCE_PRICES: tuple[UsagePrice, ...] = (
-    UsagePrice(
+_PRICES_EFFECTIVE = date(2026, 8, 11)
+
+_GPU_SELL_PRICES: tuple[tuple[str, int], ...] = (
+    (GpuType.T4.value, 155_800),
+    (GpuType.L4.value, 249_833),
+    (GpuType.A10G.value, 333_667),
+    (GpuType.A100_40.value, 553_850),
+    (GpuType.L40S.value, 593_985),
+    (GpuType.A100_80.value, 812_674),
+    (GpuType.H100.value, 936_700),
+    (GpuType.H200.value, 1_088_399),
+)
+"""Nanodollars per GPU-second, by GPU model, ascending.
+
+Set at `max(competitor_anchor x 0.95, aws_cost x 1.5)` against AWS us-east-1
+rates observed 2026-08-11.
+
+The datacenter parts—L40S and above—are derived from spot and are therefore
+preemptible by default. On-demand they land 2.1x-3.3x above Modal and Beam,
+neither of which buys on-demand either, and pricing only the flagships off spot
+produced an inversion where an H100 second cost less than an A100-80 second. The
+G-family parts stay on-demand: spot saves little there and on-demand capacity is
+easier to hold.
+
+A GPU absent from this table is unpriced rather than billed at a neighbouring
+chip's rate.
+"""
+
+_MANAGED_GPU_FEES: tuple[tuple[str, int], ...] = (
+    (GpuType.T4.value, 7_300),
+    (GpuType.L4.value, 13_496),
+    (GpuType.A10G.value, 17_967),
+    (GpuType.L40S.value, 35_751),
+    (GpuType.A100_40.value, 70_556),
+    (GpuType.A100_80.value, 93_333),
+    (GpuType.H100.value, 234_667),
+    (GpuType.H200.value, 278_000),
+)
+"""Nanodollars per managed GPU-second, by model, ascending.
+
+Each is 8% of that model's AWS us-east-1 on-demand price per GPU-second, taken
+from the smallest instance offering it and net of the vCPU and memory that
+instance also carries, since those bill under their own managed rates. Netted
+dollars per GPU-hour: T4 0.3285 (g4dn.xlarge), L4 0.6073 (g6.xlarge), A10G
+0.8085 (g5.xlarge), L40S 1.6088 (g6e.xlarge), A100-40 3.175 (p4d.24xlarge),
+A100-80 4.200 (p4de.24xlarge), H100 10.5575 (p5.48xlarge), H200 12.50875
+(p5e.48xlarge). The vCPU and memory subtracted are the rates below.
+
+Do not derive these from `_GPU_SELL_PRICES`. That table is
+`max(competitor x 0.95, aws_cost x 1.5)` and its datacenter rows price off spot,
+so it carries neither an on-demand figure nor a consistent multiple of one.
+
+Every rate here is netted from an observed on-demand price. A model nobody can
+net that way does not belong in this table, and therefore does not belong in
+`SUPPORTED_GPU_TYPES` either — the two are one list, so a card that cannot be
+priced is a card this platform does not offer.
+"""
+
+DEFAULT_SELL_PRICES: tuple[SellPrice, ...] = (
+    SellPrice(
         metric=BillableMetric.CpuSeconds,
         label="CPU",
         unit=UsageUnit.Seconds,
-        price_per_unit_nanos=11_244,
+        price_per_unit_nanos=15_313,
         currency="USD",
-        provider="AWS",
-        service="Fargate Linux/x86",
-        region="us-east-1",
-        effective_date=date(2019, 1, 7),
-        source_url=AWS_FARGATE_PRICING_URL,
-        note=(
-            "Configured AWS reference rate from the 2019-01-07 Fargate price schedule; "
-            "free tiers and discounts are excluded."
-        ),
+        effective_date=_PRICES_EFFECTIVE,
     ),
-    UsagePrice(
+    SellPrice(
         metric=BillableMetric.MemoryGibSeconds,
         label="Memory",
         unit=UsageUnit.GibSeconds,
-        price_per_unit_nanos=1_235,
+        price_per_unit_nanos=2_100,
         currency="USD",
-        provider="AWS",
-        service="Fargate Linux/x86",
-        region="us-east-1",
-        effective_date=date(2019, 1, 7),
-        source_url=AWS_FARGATE_PRICING_URL,
-        note=(
-            "Configured AWS reference rate from the 2019-01-07 Fargate price schedule; "
-            "free tiers and discounts are excluded."
-        ),
+        effective_date=_PRICES_EFFECTIVE,
     ),
-    UsagePrice(
-        metric=BillableMetric.GpuSeconds,
-        label="GPU",
+    *(
+        SellPrice(
+            metric=BillableMetric.GpuSeconds,
+            label=f"GPU ({gpu})",
+            unit=UsageUnit.Seconds,
+            price_per_unit_nanos=nanos,
+            currency="USD",
+            effective_date=_PRICES_EFFECTIVE,
+            variant=gpu,
+        )
+        for gpu, nanos in _GPU_SELL_PRICES
+    ),
+    SellPrice(
+        metric=BillableMetric.ManagedCpuSeconds,
+        label="Managed CPU",
         unit=UsageUnit.Seconds,
-        price_per_unit_nanos=146_111,
+        # 8% of $0.0357 per vCPU-hour, solved from c5.xlarge against r5.xlarge.
+        price_per_unit_nanos=793,
         currency="USD",
-        provider="AWS",
-        service="EC2 g4dn.xlarge / NVIDIA T4",
-        region="us-east-1",
-        effective_date=date(2020, 9, 28),
-        source_url=AWS_G4_REFERENCE_URL,
-        note="Historical AWS reference instance rate converted to one GPU-second.",
+        effective_date=_PRICES_EFFECTIVE,
+    ),
+    SellPrice(
+        metric=BillableMetric.ManagedMemoryGibSeconds,
+        label="Managed memory",
+        unit=UsageUnit.GibSeconds,
+        # 8% of $0.00342 per GiB-hour, from the same pair.
+        price_per_unit_nanos=76,
+        currency="USD",
+        effective_date=_PRICES_EFFECTIVE,
+    ),
+    *(
+        SellPrice(
+            metric=BillableMetric.ManagedGpuSeconds,
+            label=f"Managed GPU ({gpu})",
+            unit=UsageUnit.Seconds,
+            price_per_unit_nanos=nanos,
+            currency="USD",
+            effective_date=_PRICES_EFFECTIVE,
+            variant=gpu,
+        )
+        for gpu, nanos in _MANAGED_GPU_FEES
     ),
 )
 
 
 def default_usage_price_catalog() -> UsagePriceCatalog:
-    return UsagePriceCatalog(currency="USD", prices=REFERENCE_PRICES)
+    return UsagePriceCatalog(currency="USD", prices=DEFAULT_SELL_PRICES)
 
 
 def configured_usage_price_catalog(
     *,
     currency: str,
-    prices: Iterable[UsagePriceConfig] | None,
+    prices: Iterable[SellPriceConfig] | None,
 ) -> UsagePriceCatalog:
     if prices is None:
         catalog = default_usage_price_catalog()
@@ -319,35 +531,19 @@ def configured_usage_price_catalog(
         return catalog
     return UsagePriceCatalog(
         currency=currency,
-        prices=tuple(UsagePrice.from_config(price) for price in prices),
+        prices=tuple(SellPrice.from_config(price) for price in prices),
     )
 
 
-_DERIVED_METRICS = COMPUTE_PRICE_METRICS
-
-
-class CustomerCloudManagementFeeRates(ContractModel):
-    """What LazyCloud charges to run a workload on the customer's own account.
-
-    The metrics these rates price — `CustomerCloudManagementSeconds` and
-    `CustomerCloudManagementCostCents` — are aggregated here but have no writer
-    anywhere in the repository. Charging for connected-cloud management is a
-    pricing decision that has not been made; the vocabulary is kept so that
-    making it is a change to one owner rather than a new subsystem.
-    """
-
-    vcpu_hourly_micros: int = Field(ge=0)
-    memory_gib_hourly_micros: int = Field(ge=0)
-
-
-_LINE_ORDER = {
-    BillableMetric.CpuSeconds: 0,
-    BillableMetric.MemoryGibSeconds: 1,
-    BillableMetric.GpuSeconds: 2,
-    BillableMetric.RecordedCompute: 3,
-    BillableMetric.ManagedCompute: 4,
-    BillableMetric.CustomerCloudManagement: 5,
+_LINE_ORDER: Mapping[BillableMetric, int] = {
+    metric: order for order, metric in enumerate(BillableMetric)
 }
+"""Where each metric sits on a bill, in declaration order.
+
+Derived rather than listed so a metric cannot be priced without being sortable:
+every lookup here is unguarded, and a metric the catalog demands but this map
+omits raises on the first line it produces.
+"""
 
 
 def build_usage_billing_report(
@@ -362,7 +558,7 @@ def build_usage_billing_report(
     price_catalog: UsagePriceCatalog | None = None,
 ) -> UsageBillingReport:
     catalog = price_catalog or default_usage_price_catalog()
-    prices = catalog.by_metric
+    prices = catalog
     app_names = {app.id: app.name for app in apps}
     stub_records = {stub.id: stub for stub in stubs}
     buckets: dict[tuple[datetime, str, str], _UsageAccumulator] = {}
@@ -457,9 +653,6 @@ def build_usage_billing_report(
         end=end,
         currency=catalog.currency,
         total_cost_nanos=_total_cost(summary),
-        contains_estimates=any(
-            line.cost_basis is not BillingCostBasis.Recorded for line in summary
-        ),
         catalog=catalog.prices,
         summary=summary,
         apps=app_rows,
@@ -480,7 +673,7 @@ def build_usage_billing_overview(
     price_catalog: UsagePriceCatalog | None = None,
 ) -> UsageBillingOverview:
     catalog = price_catalog or default_usage_price_catalog()
-    prices = catalog.by_metric
+    prices = catalog
     app_names = {app.id: app.name for app in apps}
     summary_accumulator = _UsageAccumulator()
     app_accumulators: dict[str, _UsageAccumulator] = {}
@@ -526,9 +719,6 @@ def build_usage_billing_overview(
         end=end,
         currency=catalog.currency,
         total_cost_nanos=_total_cost(summary),
-        contains_estimates=any(
-            line.cost_basis is not BillingCostBasis.Recorded for line in summary
-        ),
         summary=summary,
         apps=apps_rows,
         activity=activity,
@@ -547,7 +737,7 @@ def build_usage_billing_workloads(
     price_catalog: UsagePriceCatalog | None = None,
 ) -> UsageBillingWorkloads:
     catalog = price_catalog or default_usage_price_catalog()
-    prices = catalog.by_metric
+    prices = catalog
     app_names = {app.id: app.name for app in apps}
     stub_records = {stub.id: stub for stub in stubs}
     accumulators: dict[str, _UsageAccumulator] = {}
@@ -590,25 +780,51 @@ def build_usage_billing_workloads(
     )
 
 
+_MANAGED_METRICS: Mapping[BillableMetric, BillableMetric] = {
+    BillableMetric.CpuSeconds: BillableMetric.ManagedCpuSeconds,
+    BillableMetric.MemoryGibSeconds: BillableMetric.ManagedMemoryGibSeconds,
+    BillableMetric.GpuSeconds: BillableMetric.ManagedGpuSeconds,
+}
+
+
+def _metric_trio(billing_owner: str) -> Mapping[BillableMetric, BillableMetric]:
+    """How this window's catalog metrics translate to what it is billed under.
+
+    Capacity on a customer's own cloud account bills a management fee instead of
+    a compute rate, and the two are different metrics so one report can show both
+    when an app runs on both fleets. Anything else — the platform fleet, and rows
+    written before the classification existed — bills at catalog rates.
+    """
+
+    if billing_owner == UsageBillingOwner.ConnectedCloud.value:
+        return _MANAGED_METRICS
+    return {}
+
+
 def _aggregate_accumulator(record: UsageBillingAggregateRow) -> _UsageAccumulator:
     accumulator = _UsageAccumulator(
-        managed_cost_nanos=record.managed_compute_cost_nanos,
-        managed_seconds=record.managed_compute_seconds,
-        customer_cloud_management_cost_nanos=record.customer_cloud_management_cost_nanos,
-        customer_cloud_management_seconds=record.customer_cloud_management_seconds,
         tasks=record.runs,
         omitted_duration_records=record.omitted_duration_records,
     )
-    quantities = {
-        BillableMetric.CpuSeconds: record.cpu_seconds,
-        BillableMetric.MemoryGibSeconds: record.memory_gib_seconds,
-        BillableMetric.GpuSeconds: record.gpu_seconds,
+    quantities: dict[_WindowKey, float] = {
+        (BillableMetric.CpuSeconds, ""): record.cpu_seconds,
+        (BillableMetric.MemoryGibSeconds, ""): record.memory_gib_seconds,
+        (BillableMetric.GpuSeconds, record.gpu_type): record.gpu_seconds,
     }
-    if record.recorded_compute_cost_nanos > 0 or any(
-        quantity > 0 for quantity in quantities.values()
-    ):
+    if any(quantity > 0 for quantity in quantities.values()):
         key = _MeteringWindowKey(
-            resource_id=f"{record.app_id}:{record.workload_id}:{record.bucket_start.isoformat()}",
+            # One app, workload and bucket can return several rows differing only
+            # by GPU model, by billing owner, or by the day they ran. All three
+            # are part of this key because all three change which rate applies:
+            # rows sharing it collide and their quantities sum, which is only
+            # correct where they would price identically. The day matters even
+            # when the report asks for a single bucket — especially then, since
+            # every row in it shares one bucket start.
+            resource_id=(
+                f"{record.app_id}:{record.workload_id}:"
+                f"{record.bucket_start.isoformat()}:{record.gpu_type}:"
+                f"{record.billing_owner}:{record.priced_on.isoformat()}"
+            ),
             worker_id="",
             window_start_ms=None,
             window_end_ms=None,
@@ -616,9 +832,10 @@ def _aggregate_accumulator(record: UsageBillingAggregateRow) -> _UsageAccumulato
         )
         accumulator.compute_windows[key] = _ComputeWindow(
             direct_quantities={
-                metric: quantity for metric, quantity in quantities.items() if quantity > 0
+                key: quantity for key, quantity in quantities.items() if quantity > 0
             },
-            recorded_container_cost_nanos=record.recorded_compute_cost_nanos,
+            billing_owner=record.billing_owner,
+            priced_on=record.priced_on,
         )
     return accumulator
 
@@ -628,23 +845,26 @@ def _accumulate_record(
     record: UsageBillingEvidenceRow,
 ) -> None:
     quantity = max(record.quantity, 0)
-    if _managed_reservation_container_metric(record):
+    if _self_hosted_container_metric(record):
         return
     if record.metric is UsageMetric.ContainerDurationMilliseconds:
         compute_window = _compute_window(accumulator, record)
         seconds = quantity / 1_000
         resources = {
-            BillableMetric.CpuSeconds: seconds * _nonnegative_number(record.cpu_millicores) / 1_000,
-            BillableMetric.MemoryGibSeconds: seconds
+            _window_key(BillableMetric.CpuSeconds, record): seconds
+            * _nonnegative_number(record.cpu_millicores)
+            / 1_000,
+            _window_key(BillableMetric.MemoryGibSeconds, record): seconds
             * _nonnegative_number(record.memory_mb)
             / 1_024,
-            BillableMetric.GpuSeconds: seconds * _nonnegative_number(record.gpu_count),
+            _window_key(BillableMetric.GpuSeconds, record): seconds
+            * _nonnegative_number(record.gpu_count),
         }
         if not any(value > 0 for value in resources.values()):
             accumulator.omitted_duration_records += 1
-        for metric, derived_quantity in resources.items():
-            compute_window.derived_quantities[metric] = (
-                compute_window.derived_quantities.get(metric, 0) + derived_quantity
+        for key, derived_quantity in resources.items():
+            compute_window.derived_quantities[key] = (
+                compute_window.derived_quantities.get(key, 0) + derived_quantity
             )
         return
     direct_metric = {
@@ -654,107 +874,62 @@ def _accumulate_record(
     }.get(record.metric)
     if direct_metric is not None:
         compute_window = _compute_window(accumulator, record)
-        compute_window.direct_quantities[direct_metric] = (
-            compute_window.direct_quantities.get(direct_metric, 0) + quantity
+        key = _window_key(direct_metric, record)
+        compute_window.direct_quantities[key] = (
+            compute_window.direct_quantities.get(key, 0) + quantity
         )
         return
     if record.metric is UsageMetric.TaskCount:
         accumulator.tasks += round(quantity)
         return
-    if record.metric is UsageMetric.ContainerCostCents:
-        _compute_window(accumulator, record).recorded_container_cost_nanos += _cents_to_nanos(
-            quantity
-        )
-        return
-    if record.metric is UsageMetric.ManagedComputeReservationSeconds:
-        accumulator.managed_seconds += quantity
-        return
-    if record.metric is UsageMetric.ManagedComputeReservationCostCents:
-        accumulator.managed_cost_nanos += _cents_to_nanos(quantity)
-        return
-    if record.metric is UsageMetric.CustomerCloudManagementSeconds:
-        accumulator.customer_cloud_management_seconds += quantity
-        return
-    if record.metric is UsageMetric.CustomerCloudManagementCostCents:
-        accumulator.customer_cloud_management_cost_nanos += _cents_to_nanos(quantity)
-        return
 
 
 def _billing_lines(
     accumulator: _UsageAccumulator,
-    prices: Mapping[BillableMetric, UsagePrice],
+    prices: UsagePriceCatalog,
 ) -> tuple[UsageBillingLine, ...]:
     lines: list[UsageBillingLine] = []
-    compute_quantities = _compute_quantities(accumulator)
-    recorded_container_cost_nanos = _recorded_container_cost_nanos(accumulator)
-    estimated_compute_costs = {
-        metric: _estimated_cost_nanos(prices[metric], quantity)
-        for metric, quantity in compute_quantities.items()
-        if quantity > 0 and metric in prices
-    }
-    if recorded_container_cost_nanos > 0 and estimated_compute_costs:
-        compute_costs = _allocate_cost(
-            recorded_container_cost_nanos,
-            estimated_compute_costs,
-        )
-        compute_basis = BillingCostBasis.RecordedAllocation
-    else:
-        compute_costs = estimated_compute_costs
-        compute_basis = BillingCostBasis.CatalogEstimate
-    for metric, quantity in compute_quantities.items():
+    for key, (quantity, price) in _compute_quantities(accumulator, prices).items():
         if quantity <= 0:
             continue
-        price = prices.get(metric)
+        metric, variant, effective_date = key
         if price is None:
+            # A null price says why the cost is zero.
+            lines.append(
+                UsageBillingLine(
+                    metric=metric,
+                    variant=variant,
+                    label=_unpriced_label(key),
+                    quantity=quantity,
+                    unit=_METRIC_UNITS[metric],
+                    price_per_unit_nanos=None,
+                    cost_nanos=0,
+                    effective_date=effective_date,
+                )
+            )
             continue
         lines.append(
             UsageBillingLine(
                 metric=metric,
+                variant=variant,
                 label=price.label,
                 quantity=quantity,
                 unit=price.unit,
                 price_per_unit_nanos=price.price_per_unit_nanos,
-                cost_nanos=compute_costs.get(metric, 0),
-                cost_basis=compute_basis,
+                cost_nanos=_estimated_cost_nanos(price, quantity),
+                effective_date=effective_date,
             )
         )
-    if recorded_container_cost_nanos > 0 and not estimated_compute_costs:
-        lines.append(
-            UsageBillingLine(
-                metric=BillableMetric.RecordedCompute,
-                label="Recorded compute",
-                quantity=(recorded_container_cost_nanos * 100 / NANOS_PER_MAJOR_CURRENCY_UNIT),
-                unit=UsageUnit.Cents,
-                price_per_unit_nanos=None,
-                cost_nanos=recorded_container_cost_nanos,
-                cost_basis=BillingCostBasis.Recorded,
-            )
+    return tuple(
+        sorted(
+            lines,
+            key=lambda line: (
+                _LINE_ORDER[line.metric],
+                line.variant,
+                line.effective_date or date.min,
+            ),
         )
-    if accumulator.managed_cost_nanos > 0:
-        lines.append(
-            UsageBillingLine(
-                metric=BillableMetric.ManagedCompute,
-                label="Managed compute",
-                quantity=accumulator.managed_seconds,
-                unit=UsageUnit.Seconds,
-                price_per_unit_nanos=None,
-                cost_nanos=accumulator.managed_cost_nanos,
-                cost_basis=BillingCostBasis.Recorded,
-            )
-        )
-    if accumulator.customer_cloud_management_cost_nanos > 0:
-        lines.append(
-            UsageBillingLine(
-                metric=BillableMetric.CustomerCloudManagement,
-                label="Customer cloud management",
-                quantity=accumulator.customer_cloud_management_seconds,
-                unit=UsageUnit.Seconds,
-                price_per_unit_nanos=None,
-                cost_nanos=accumulator.customer_cloud_management_cost_nanos,
-                cost_basis=BillingCostBasis.Recorded,
-            )
-        )
-    return tuple(sorted(lines, key=lambda line: _LINE_ORDER[line.metric]))
+    )
 
 
 def _attribution(
@@ -762,7 +937,7 @@ def _attribution(
     *,
     app_id: str,
     app_name: str,
-    prices: Mapping[BillableMetric, UsagePrice],
+    prices: UsagePriceCatalog,
     workload_id: str = "",
     workload_name: str = "",
     workload_kind: str = "",
@@ -785,7 +960,7 @@ def _app_summary(
     *,
     app_id: str,
     app_name: str,
-    prices: Mapping[BillableMetric, UsagePrice],
+    prices: UsagePriceCatalog,
 ) -> UsageBillingAppSummary:
     lines = _billing_lines(accumulator, prices)
     return UsageBillingAppSummary(
@@ -799,36 +974,32 @@ def _app_summary(
 
 def _billing_coverage(
     accumulator: _UsageAccumulator,
-    prices: Mapping[BillableMetric, UsagePrice],
+    prices: UsagePriceCatalog,
 ) -> UsageBillingCoverage:
-    compute_quantities = _compute_quantities(accumulator)
-    observed = {metric for metric, quantity in compute_quantities.items() if quantity > 0}
-    if accumulator.managed_seconds > 0 or accumulator.managed_cost_nanos > 0:
-        observed.add(BillableMetric.ManagedCompute)
-    if (
-        accumulator.customer_cloud_management_seconds > 0
-        or accumulator.customer_cloud_management_cost_nanos > 0
-    ):
-        observed.add(BillableMetric.CustomerCloudManagement)
-
-    priced = {
-        metric
-        for metric in observed
-        if metric in prices
-        or (metric is BillableMetric.ManagedCompute and accumulator.managed_cost_nanos > 0)
-        or (
-            metric is BillableMetric.CustomerCloudManagement
-            and accumulator.customer_cloud_management_cost_nanos > 0
-        )
+    compute_quantities = _compute_quantities(accumulator, prices)
+    observed_keys = {key for key, (quantity, _) in compute_quantities.items() if quantity > 0}
+    unpriced_keys = {
+        key
+        for key, (quantity, price) in compute_quantities.items()
+        if quantity > 0 and price is None
     }
-    unpriced = observed - priced
+    observed = {key[0] for key in observed_keys}
+    unpriced = {key[0] for key in unpriced_keys}
+    priced = observed - unpriced
     gaps = [
         UsageBillingCoverageGap(
-            billable_metric=metric,
+            billable_metric=key[0],
             usage_metric=None,
-            reason=f"No configured price is available for {metric.value}.",
+            # Naming the variant matters: "no price for gpu_seconds" sends someone
+            # looking for a missing catalog entry that is in fact present for every
+            # GPU but the one that ran.
+            reason=(
+                f"No configured price is available for {key[0].value} ({key[1]})."
+                if key[1]
+                else f"No configured price is available for {key[0].value}."
+            ),
         )
-        for metric in sorted(unpriced, key=lambda item: _LINE_ORDER[item])
+        for key in sorted(unpriced_keys, key=lambda item: (_LINE_ORDER[item[0]], item[1]))
     ]
     if accumulator.omitted_duration_records:
         gaps.append(
@@ -841,17 +1012,10 @@ def _billing_coverage(
                 ),
             )
         )
-    recorded_cost_present = (
-        _recorded_container_cost_nanos(accumulator) > 0
-        or accumulator.managed_cost_nanos > 0
-        or accumulator.customer_cloud_management_cost_nanos > 0
-    )
-    has_billable_evidence = bool(
-        observed or recorded_cost_present or accumulator.omitted_duration_records
-    )
+    has_billable_evidence = bool(observed or accumulator.omitted_duration_records)
     if not has_billable_evidence:
         status = BillingCoverageStatus.Empty
-    elif not priced and not recorded_cost_present:
+    elif not priced:
         status = BillingCoverageStatus.Unpriced
     elif gaps:
         status = BillingCoverageStatus.Partial
@@ -861,7 +1025,6 @@ def _billing_coverage(
         status=status,
         priced_metrics=tuple(sorted(priced, key=lambda item: _LINE_ORDER[item])),
         unpriced_metrics=tuple(sorted(unpriced, key=lambda item: _LINE_ORDER[item])),
-        recorded_cost_present=recorded_cost_present,
         omitted_duration_records=accumulator.omitted_duration_records,
         gaps=tuple(gaps),
     )
@@ -873,7 +1036,6 @@ _CSV_FIELDS: tuple[str, ...] = (
     "window_start",
     "window_end",
     "currency",
-    "contains_estimates",
     "total_cost_nanos",
     "bucket_start",
     "bucket_end",
@@ -889,17 +1051,12 @@ _CSV_FIELDS: tuple[str, ...] = (
     "unit",
     "price_per_unit_nanos",
     "cost_nanos",
-    "cost_basis",
-    "provider",
-    "service",
-    "region",
+    "variant",
     "effective_date",
-    "source_url",
     "note",
     "coverage_status",
     "priced_metrics",
     "unpriced_metrics",
-    "recorded_cost_present",
     "omitted_duration_records",
     "billable_metric",
     "usage_metric",
@@ -920,11 +1077,8 @@ def usage_billing_report_csv(report: UsageBillingReport) -> str:
                 "label": price.label,
                 "unit": price.unit.value,
                 "price_per_unit_nanos": price.price_per_unit_nanos,
-                "provider": price.provider,
-                "service": price.service,
-                "region": price.region,
+                "variant": price.variant,
                 "effective_date": price.effective_date.isoformat(),
-                "source_url": price.source_url,
                 "note": price.note,
             }
         )
@@ -961,7 +1115,6 @@ def usage_billing_report_csv(report: UsageBillingReport) -> str:
             "unpriced_metrics": "|".join(
                 metric.value for metric in report.coverage.unpriced_metrics
             ),
-            "recorded_cost_present": str(report.coverage.recorded_cost_present).lower(),
             "omitted_duration_records": report.coverage.omitted_duration_records,
         }
     )
@@ -1012,7 +1165,6 @@ def _csv_base(report: UsageBillingReport, *, section: str) -> dict[str, str | in
         "window_start": report.start.isoformat(),
         "window_end": report.end.isoformat(),
         "currency": report.currency,
-        "contains_estimates": report.contains_estimates,
         "total_cost_nanos": report.total_cost_nanos,
     }
 
@@ -1026,44 +1178,35 @@ def _csv_line(
     return {
         **_csv_base(report, section=section),
         "metric": line.metric.value,
+        "variant": line.variant,
         "label": line.label,
         "quantity": line.quantity,
         "unit": line.unit.value,
         "price_per_unit_nanos": line.price_per_unit_nanos,
         "cost_nanos": line.cost_nanos,
-        "cost_basis": line.cost_basis.value,
+        "effective_date": line.effective_date.isoformat() if line.effective_date else "",
     }
 
 
-def _allocate_cost(
-    total_cost_nanos: int,
-    weights: Mapping[BillableMetric, int],
-) -> dict[BillableMetric, int]:
-    total_weight = sum(weights.values())
-    if total_weight <= 0:
-        return {}
-    allocations: dict[BillableMetric, int] = {}
-    remaining = total_cost_nanos
-    ordered = sorted(weights, key=lambda metric: _LINE_ORDER[metric])
-    for metric in ordered[:-1]:
-        allocation = total_cost_nanos * weights[metric] // total_weight
-        allocations[metric] = allocation
-        remaining -= allocation
-    allocations[ordered[-1]] = remaining
-    return allocations
+_METRIC_UNITS: Mapping[BillableMetric, UsageUnit] = {
+    BillableMetric.CpuSeconds: UsageUnit.Seconds,
+    BillableMetric.MemoryGibSeconds: UsageUnit.GibSeconds,
+    BillableMetric.GpuSeconds: UsageUnit.Seconds,
+    BillableMetric.ManagedCpuSeconds: UsageUnit.Seconds,
+    BillableMetric.ManagedMemoryGibSeconds: UsageUnit.GibSeconds,
+    BillableMetric.ManagedGpuSeconds: UsageUnit.Seconds,
+}
 
 
-def _estimated_cost_nanos(price: UsagePrice, quantity: float) -> int:
+def _unpriced_label(key: _PricedKey) -> str:
+    metric, variant, _ = key
+    base = metric.value.replace("_", " ").capitalize()
+    return f"{base} ({variant})" if variant else base
+
+
+def _estimated_cost_nanos(price: SellPrice, quantity: float) -> int:
     return int(
         (Decimal(str(quantity)) * Decimal(price.price_per_unit_nanos)).quantize(
-            Decimal("1"), rounding=ROUND_HALF_UP
-        )
-    )
-
-
-def _cents_to_nanos(quantity: float) -> int:
-    return int(
-        (Decimal(str(quantity)) * Decimal(NANOS_PER_MAJOR_CURRENCY_UNIT) / Decimal(100)).quantize(
             Decimal("1"), rounding=ROUND_HALF_UP
         )
     )
@@ -1081,7 +1224,15 @@ def _compute_window(
     record: UsageBillingEvidenceRow,
 ) -> _ComputeWindow:
     key = _metering_window_key(record)
-    return accumulator.compute_windows.setdefault(key, _ComputeWindow())
+    moment = _billing_moment(record).date()
+    window = accumulator.compute_windows.get(key)
+    if window is None:
+        window = _ComputeWindow(priced_on=moment)
+        accumulator.compute_windows[key] = window
+    else:
+        window.priced_on = min(window.priced_on, moment)
+    window.billing_owner = max(window.billing_owner, record.billing_owner)
+    return window
 
 
 def _metering_window_key(record: UsageBillingEvidenceRow) -> _MeteringWindowKey:
@@ -1139,35 +1290,62 @@ def _billing_moment(record: UsageBillingEvidenceRow) -> datetime:
     return window_started_at.astimezone(UTC)
 
 
-def _managed_reservation_container_metric(record: UsageBillingEvidenceRow) -> bool:
+def _self_hosted_container_metric(record: UsageBillingEvidenceRow) -> bool:
     return (
         record.resource_type == "container"
-        and record.billing_owner == UsageBillingOwner.ManagedReservation.value
+        and record.billing_owner == UsageBillingOwner.SelfHosted.value
     ) and record.metric in {
         UsageMetric.ContainerDurationMilliseconds,
-        UsageMetric.ContainerCostCents,
         UsageMetric.CpuSeconds,
         UsageMetric.MemoryGibSeconds,
         UsageMetric.GpuSeconds,
     }
 
 
-def _compute_quantities(accumulator: _UsageAccumulator) -> dict[BillableMetric, float]:
-    quantities = {metric: 0.0 for metric in _DERIVED_METRICS}
+def _window_key(metric: BillableMetric, record: UsageBillingEvidenceRow) -> _WindowKey:
+    """Which rate this record's contribution is billed against.
+
+    Only GPU seconds vary by model, managed or not. Everything else prices the
+    same whatever hardware produced it.
+    """
+
+    if metric in {BillableMetric.GpuSeconds, BillableMetric.ManagedGpuSeconds}:
+        return (metric, record.gpu)
+    return (metric, "")
+
+
+def _compute_quantities(
+    accumulator: _UsageAccumulator,
+    prices: UsagePriceCatalog,
+) -> dict[_PricedKey, tuple[float, SellPrice | None]]:
+    """Total each priced key, taking direct measurement over derived per window.
+
+    Windows accumulate under the catalog metrics whatever paid for them, and the
+    management fee is applied here, once, from the window's own owner. Choosing
+    the metric while records arrive would let one window hold both, and a direct
+    second under one metric can never take precedence over a derived second under
+    another — it would be added to it.
+    """
+
+    quantities: dict[_PricedKey, tuple[float, SellPrice | None]] = {}
     for window in accumulator.compute_windows.values():
-        for metric in _DERIVED_METRICS:
-            quantities[metric] += (
-                window.direct_quantities[metric]
-                if metric in window.direct_quantities
-                else window.derived_quantities.get(metric, 0)
+        metrics = _metric_trio(window.billing_owner)
+        for key in set(window.direct_quantities) | set(window.derived_quantities):
+            metric, variant = key
+            billed = metrics.get(metric, metric)
+            # Resolved per window, so usage either side of a rate change keeps
+            # its own rate and lands on its own line rather than being blended
+            # into an average nobody was ever charged.
+            rate = prices.price_for(billed, variant, on=window.priced_on)
+            priced = (billed, variant, rate.effective_date if rate is not None else None)
+            quantity = (
+                window.direct_quantities[key]
+                if key in window.direct_quantities
+                else window.derived_quantities.get(key, 0)
             )
+            running = quantities.get(priced, (0.0, None))[0]
+            quantities[priced] = (running + quantity, rate)
     return quantities
-
-
-def _recorded_container_cost_nanos(accumulator: _UsageAccumulator) -> int:
-    return sum(
-        window.recorded_container_cost_nanos for window in accumulator.compute_windows.values()
-    )
 
 
 def _bucket_start(moment: datetime, bucket_seconds: int, *, origin: datetime) -> datetime:
@@ -1191,18 +1369,11 @@ def _total_cost(lines: Iterable[UsageBillingLine]) -> int:
 
 def _has_usage(accumulator: _UsageAccumulator) -> bool:
     return bool(
-        accumulator.compute_windows
-        or accumulator.tasks
-        or accumulator.managed_cost_nanos
-        or accumulator.managed_seconds
-        or accumulator.customer_cloud_management_cost_nanos
-        or accumulator.customer_cloud_management_seconds
-        or accumulator.omitted_duration_records
+        accumulator.compute_windows or accumulator.tasks or accumulator.omitted_duration_records
     )
 
 
 __all__ = [
-    "REFERENCE_PRICES",
     "UsageBillingAppSummary",
     "UsageBillingAttribution",
     "UsageBillingBucket",
@@ -1212,7 +1383,6 @@ __all__ = [
     "UsageBillingOverview",
     "UsageBillingReport",
     "UsageBillingWorkloads",
-    "UsagePrice",
     "UsagePriceCatalog",
     "build_usage_billing_overview",
     "build_usage_billing_report",

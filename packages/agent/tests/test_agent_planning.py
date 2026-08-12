@@ -23,6 +23,7 @@ from agent.operations import (
 from shared.compute_enrollment import PreflightSeverity
 from shared.compute_policy import MachinePool
 from shared.gpu import normalize_gpu_type
+from shared.usage import UsageBillingOwner
 
 
 def test_agent_capacity_parsing_gpu_selection_and_schedulable_checks() -> None:
@@ -100,6 +101,7 @@ def test_agent_service_serializes_worker_capacity_without_credentials() -> None:
         worker_token="token-1",
         pool=MachinePool("gpu"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        billing_owner=UsageBillingOwner.SelfHosted,
         machine_id="machine-1",
         cpu_millicores=2500,
         memory_mb=4096,
@@ -128,6 +130,7 @@ def test_worker_slot_equality_and_reconciliation() -> None:
         worker_token="token-1",
         pool=MachinePool("default"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        billing_owner=UsageBillingOwner.SelfHosted,
         machine_id="machine-1",
         cpu_millicores=1000,
         memory_mb=1024,
@@ -138,6 +141,7 @@ def test_worker_slot_equality_and_reconciliation() -> None:
         worker_id="worker-2",
         pool=MachinePool("default"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        billing_owner=UsageBillingOwner.SelfHosted,
     )
 
     assert same_worker_slot(active, unchanged)

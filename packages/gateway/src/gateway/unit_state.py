@@ -24,15 +24,40 @@ from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import ComputeCredentialStatus
 from shared.compute_fleet import Machine
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import (
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
+    MachinePool,
+    UnitName,
+)
 from shared.errors import InvalidInputError, NotFoundError
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 
 from compute import projection
 from gateway.views import pool_config_from_unit, private_pool_from_compute_state
 
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
+
+
+def billing_owner_for_unit(unit: ComputeUnitRecord) -> UsageBillingOwner:
+    """How containers on this unit's machines price.
+
+    A provider connection is a customer's own cloud account, so a unit holding
+    one is capacity we provision and manage but never buy — what the management
+    fee is charged for. Everything else a machine can be brought to is hardware
+    we neither bought nor manage. `ComputeUnitRecord` makes holding a connection
+    exactly equivalent to being internal, and refuses one on any other unit.
+
+    The fleet is neither and never reaches here: its workers are started by the
+    platform rather than joined, and take the owner their own configuration
+    names.
+    """
+
+    if unit.provider_connection_id is not None:
+        return UsageBillingOwner.ConnectedCloud
+    return UsageBillingOwner.SelfHosted
 
 
 class GatewayComputeService(Protocol):
@@ -223,6 +248,16 @@ class GatewayUnitStateCoordinator:
         owner_token_id: str,
         ttl: str = "",
     ) -> JoinTokenCreationPlan:
+        if unit.visibility is ComputeUnitVisibility.Internal:
+            # An internal unit is provisioned into a connected cloud account and
+            # its machines arrive through provider enrollment. A join credential
+            # is for a machine somebody brings, so minting one here would let a
+            # machine of unknown origin enroll under a provider-backed capacity
+            # owner and be accounted for as that account's capacity.
+            raise InvalidInputError(
+                f"unit {unit.name} is provisioned by its provider and cannot be joined; "
+                "join credentials belong to units machines are brought to"
+            )
         plan = self.plan_unit_join_token(
             unit,
             workspace_id=workspace_id,

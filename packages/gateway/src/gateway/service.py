@@ -155,7 +155,6 @@ from shared.http.gateway import (
     ResolveDeploymentTargetResponse,
     SyncContainerWorkspaceBody,
     SyncContainerWorkspaceResponse,
-    TaskCostState,
 )
 from shared.http.gateway_tasks import (
     AppendTaskLogRequest,
@@ -189,8 +188,7 @@ from shared.source_cache_cleanup import (
 )
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
-from shared.usage import UsageMetric, UsageUnit, usage_record_id
-from shared.usage_query import UsageQuery
+from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record_id
 from storage.service import ObjectStorage
 from worker.container_client import models
 from worker.container_client.scheduler import SchedulerContainerClientFactory
@@ -224,7 +222,7 @@ from gateway.http import (
 from gateway.payloads import container_output, object_key, task_result_value
 from gateway.route_prewarm import RoutePrewarmService
 from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
-from gateway.unit_state import GatewayUnitStateCoordinator
+from gateway.unit_state import GatewayUnitStateCoordinator, billing_owner_for_unit
 from gateway.views import (
     agent_pool_transport,
     agent_route_view,
@@ -290,20 +288,6 @@ class CapacityReservationGuard(Protocol):
 
 class AgentCapacityInterruptionSink(Protocol):
     def preempt_agent_capacity(self, state: ComputeAgentTokenState) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class TaskCostEstimate:
-    estimated_cost_micros: int | None
-    state: TaskCostState
-    reason: str
-
-    def event_data(self) -> dict[str, JsonValue]:
-        return {
-            "estimated_cost_micros": self.estimated_cost_micros,
-            "cost_state": self.state.value,
-            "cost_reason": self.reason,
-        }
 
 
 def _deployment_kind_to_stub_kind(kind: DeploymentKind) -> StubKind:
@@ -727,7 +711,6 @@ class GatewayControlService:
         stub = stub_for_task(self.control_plane, task)
         workspace_id = stub.workspace_id if stub else ""
         app_id = stub.app_id if stub and stub.app_id else ""
-        cost = self._task_cost_estimate(task, resolved_container_id)
         data: dict[str, JsonValue] = {
             "phase": phase,
             "status": task.status.value,
@@ -738,7 +721,6 @@ class GatewayControlService:
             "stub_id": stub.id if stub else "",
             "app_id": app_id,
             "result_present": result_present,
-            **cost.event_data(),
         }
         if duration_seconds > 0:
             data["duration_seconds"] = duration_seconds
@@ -754,31 +736,6 @@ class GatewayControlService:
             workspace_id=workspace_id or None,
         )
         self.event_streams.append_event(EventRecordType.TaskUpdated, data)
-
-    def _task_cost_estimate(self, task: Task, container_id: str) -> TaskCostEstimate:
-        if not container_id:
-            return TaskCostEstimate(
-                estimated_cost_micros=None,
-                state=TaskCostState.Unavailable,
-                reason="task has no container usage records",
-            )
-        records = self.services.usage.list(
-            UsageQuery(resource_type="container", resource_id=container_id)
-        )
-        cost_cents = sum(
-            record.quantity for record in records if record.metric == UsageMetric.ContainerCostCents
-        )
-        if not any(record.metric == UsageMetric.ContainerCostCents for record in records):
-            return TaskCostEstimate(
-                estimated_cost_micros=None,
-                state=TaskCostState.Unavailable,
-                reason="container cost usage record is unavailable",
-            )
-        return TaskCostEstimate(
-            estimated_cost_micros=round(cost_cents * 10_000),
-            state=TaskCostState.Available,
-            reason="derived from container cost usage records",
-        )
 
     def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
         try:
@@ -2138,10 +2095,13 @@ class GatewayControlService:
                 response_state = self._persist_agent_state(heartbeat.state)
             else:
                 response_state = heartbeat.state or current_state
-            agent_slots = self._agent_slots_for_machine(response_state)
             bootstrap_unit = self.unit_state_coordinator.unit_by_capacity_owner(
                 response_state.capacity_owner_id,
                 workspace_id=response_state.workspace_id,
+            )
+            agent_slots = self._agent_slots_for_machine(
+                response_state,
+                billing_owner=billing_owner_for_unit(bootstrap_unit),
             )
             bootstrap_pool = self.unit_state_coordinator.private_unit_state(
                 bootstrap_unit,
@@ -2254,6 +2214,8 @@ class GatewayControlService:
     def _agent_slots_for_machine(
         self,
         agent_state: ComputeAgentTokenState,
+        *,
+        billing_owner: UsageBillingOwner,
     ) -> list[ComputeAgentWorkerSlotState]:
         slots = self.compute_states.list_agent_worker_slot_states(
             agent_state.workspace_id,
@@ -2276,6 +2238,7 @@ class GatewayControlService:
             agent_worker_record(worker),
             slots,
             token_plan,
+            billing_owner=billing_owner,
             cluster_name=self.agent_cluster_name,
             worker_image=agent_worker_image(
                 self.agent_worker_image_registry,

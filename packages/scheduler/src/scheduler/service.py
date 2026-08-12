@@ -78,6 +78,11 @@ CRON_JOB_LOCK_TTL_SECONDS = 10
 # Short enough that a scheduler dying mid-sweep does not hold expiry shut for
 # long, and long enough that one sweep finishes inside it.
 POD_EXPIRY_LOCK_TTL_SECONDS = 30
+
+# Long enough to outlive a sweep that talks to a payment provider for every
+# account, short enough that a replica dying mid-sweep does not hold the next
+# hour's run out. The work is idempotent, so an expired lease costs a repeat.
+BILLING_LOCK_TTL_SECONDS = 900
 CRON_JOB_DEPLOYMENT_KINDS = {DeploymentKind.Function, DeploymentKind.CronJob}
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
@@ -268,12 +273,29 @@ class SchedulerCapacityControls:
     capacity_interruptions: SchedulerCapacityInterruptionService | None = None
 
 
+class SchedulerBillingDailyJob(Protocol):
+    def run(self, *, now: datetime) -> bool: ...
+
+
+class SchedulerBillingCloseJob(Protocol):
+    def run(self, *, now: datetime) -> bool:
+        """Settle what is due, returning whether the work ran out.
+
+        A sweep bounded by the payment provider's latency cannot finish inside
+        one tick, so a run that stopped short says so and is resumed on the next
+        one rather than after the interval.
+        """
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
     retention: SchedulerRetentionService | None = None
     tailnet_cleanup: SchedulerTailnetCleanupService | None = None
     custom_domains: SchedulerCustomDomainService | None = None
+    billing_daily: SchedulerBillingDailyJob | None = None
+    billing_close: SchedulerBillingCloseJob | None = None
 
 
 @dataclass
@@ -289,6 +311,10 @@ class Scheduler:
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
     custom_domain_reconcile_interval_seconds: float = 60.0
     last_custom_domain_reconcile_at: datetime | None = field(default=None, init=False)
+    billing_daily_interval_seconds: float = 3600.0
+    last_billing_daily_at: datetime | None = field(default=None, init=False)
+    billing_close_interval_seconds: float = 3600.0
+    last_billing_close_at: datetime | None = field(default=None, init=False)
     token_prune_interval_seconds: float = 3600.0
     last_token_prune_at: datetime | None = field(default=None, init=False)
     retention_interval_seconds: float = 3600.0
@@ -553,7 +579,7 @@ class Scheduler:
             else []
         )
         function_retries = (
-            self.schedule_function_retries(now=now, limit=container_limit)
+            self._best_effort_schedule_function_retries(now=now, limit=container_limit)
             if include_containers
             else []
         )
@@ -580,6 +606,8 @@ class Scheduler:
             limit=container_limit,
         )
         self._best_effort_reconcile_custom_domains(now=now)
+        self._best_effort_price_billing_days(now=now)
+        self._best_effort_close_billing_periods(now=now)
         worker_pool_drains = (
             self._best_effort_drain_worker_pools(now=now, limit=container_limit)
             if include_containers
@@ -974,6 +1002,112 @@ class Scheduler:
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []
+
+    def _best_effort_schedule_function_retries(
+        self, *, now: datetime | None, limit: int
+    ) -> list[Task]:
+        """Retry due function tasks, and never let one of them end the pass.
+
+        Best effort like its neighbours, and for a reason this one makes sharper:
+        the steps after it include the billing that prices usage and collects
+        payment. A tenant whose task cannot be scheduled would otherwise stop the
+        machinery that would have made it schedulable, on every tick, forever.
+        """
+
+        try:
+            return self.schedule_function_retries(now=now, limit=limit)
+        except Exception:
+            LOGGER.exception("scheduler function retry scheduling failed")
+            return []
+
+    def _best_effort_price_billing_days(self, *, now: datetime | None) -> bool:
+        """Price the days that have finished, wherever they are not priced yet.
+
+        Hourly rather than daily: the job only ever prices finished days, so a
+        repeat is a recomputation that converges, and running often means a
+        scheduler that was down at midnight costs an hour rather than a day.
+
+        Returns whether the work is settled for now — false where a sweep
+        stopped short and the next tick should carry on rather than wait out the
+        interval.
+        """
+        billing_daily = self.maintenance.billing_daily
+        if billing_daily is None:
+            return True
+        current_time = now or utc_now()
+        if (
+            self.last_billing_daily_at is not None
+            and (current_time - self.last_billing_daily_at).total_seconds()
+            < self.billing_daily_interval_seconds
+        ):
+            return True
+        cron_job_locks = self.states.cron_job_locks
+        if cron_job_locks is None:
+            return True
+        lock_key = cron_job_locks.key("scheduler", "leases", "billing-daily")
+        token = uuid4().hex
+        if not try_acquire_token_lock(
+            cron_job_locks, lock_key, token, ttl_seconds=BILLING_LOCK_TTL_SECONDS
+        ):
+            return False
+        self.last_billing_daily_at = current_time
+        try:
+            return billing_daily.run(now=current_time)
+        except Exception:
+            LOGGER.exception("scheduler billing daily pricing failed")
+            return False
+        finally:
+            release_token_lock(cron_job_locks, lock_key, token)
+
+    def _best_effort_close_billing_periods(self, *, now: datetime | None) -> bool:
+        """Settle and invoice the month that has ended.
+
+        Held under a lock for the whole sweep, not per account: issuing an
+        invoice is several calls to the payment provider with no transaction
+        around them, and two replicas racing would both be waiting on the same
+        provider rather than sharing the work.
+
+        The lock is also what keeps the deployment responsive. A sweep runs
+        inside this tick, so the replica holding it stops dispatching for the
+        duration — and the one that did not get it carries the tick meanwhile.
+        The sweep bounds itself as well, and says when it stopped short so the
+        next tick continues rather than waiting out the interval.
+        """
+        billing_close = self.maintenance.billing_close
+        if billing_close is None:
+            return True
+        current_time = now or utc_now()
+        if (
+            self.last_billing_close_at is not None
+            and (current_time - self.last_billing_close_at).total_seconds()
+            < self.billing_close_interval_seconds
+        ):
+            return True
+        cron_job_locks = self.states.cron_job_locks
+        if cron_job_locks is None:
+            return True
+        lock_key = cron_job_locks.key("scheduler", "leases", "billing-close")
+        token = uuid4().hex
+        if not try_acquire_token_lock(
+            cron_job_locks, lock_key, token, ttl_seconds=BILLING_LOCK_TTL_SECONDS
+        ):
+            return False
+        # Stamped only once the lock is held, so a replica that lost the race
+        # retries on the next tick instead of standing down for the interval on
+        # the strength of work it never did.
+        self.last_billing_close_at = current_time
+        try:
+            exhausted = billing_close.run(now=current_time)
+            if not exhausted:
+                # More accounts are waiting. Nothing is gained by holding them
+                # for an hour, and the next tick picks up where this one stopped.
+                self.last_billing_close_at = None
+            return exhausted
+        except Exception:
+            LOGGER.exception("scheduler billing close failed")
+            return False
+        finally:
+            release_token_lock(cron_job_locks, lock_key, token)
 
     def _best_effort_reconcile_custom_domains(self, *, now: datetime | None) -> int:
         """Advance domains still waiting on the edge.

@@ -26,11 +26,11 @@ type PayloadValue = (
     | int
     | float
     | bool
-    | None
     | datetime
     | BaseModel
     | Mapping[str, PayloadValue]
     | Sequence[PayloadValue]
+    | None
 )
 
 

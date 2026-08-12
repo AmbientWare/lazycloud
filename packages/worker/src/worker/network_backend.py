@@ -175,6 +175,10 @@ class NetworkCommandRunner(Protocol):
 
 
 class NetworkIpAllocator(Protocol):
+    worker_id: str
+    """Names the veth pair a probe creates, so two workers cannot tear down
+    each other's in-flight check."""
+
     def acquire_network_lock(self) -> str: ...
 
     def release_network_lock(self, token: str) -> None: ...

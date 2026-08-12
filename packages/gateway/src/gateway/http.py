@@ -14,6 +14,7 @@ from shared.routing import (
     BackendRouteState,
     BackendRouteTransport,
 )
+from shared.usage import UsageBillingOwner
 
 
 class AuthorizeRequest(HttpModel):
@@ -167,6 +168,7 @@ class AgentWorkerSlot(HttpModel):
     worker_token: str = ""
     pool: MachinePool = MachinePool("")
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    billing_owner: UsageBillingOwner
     machine_id: str = ""
     cpu: int = 0
     memory: int = 0

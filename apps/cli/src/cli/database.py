@@ -78,7 +78,7 @@ def database_wait(
 
 def _schema_payload(
     inspection: DatabaseSchemaInspection,
-) -> dict[str, str | None | list[str]]:
+) -> dict[str, str | list[str] | None]:
     return {
         "state": inspection.state.value,
         "current_revision": inspection.current_revision,

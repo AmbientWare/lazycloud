@@ -134,12 +134,12 @@ class FakeRedis:
         name: str,
         key: str | None = None,
         value: str | None = None,
-        mapping: dict[str, str] | None = None,
+        mapping: Mapping[FieldT, EncodableT] | None = None,
     ) -> int:
         bucket = self.hashes.setdefault(name, {})
         before = len(bucket)
         if mapping is not None:
-            bucket.update(mapping)
+            bucket.update({str(field): str(item) for field, item in mapping.items()})
         elif key is not None and value is not None:
             bucket[key] = value
         else:
@@ -459,7 +459,7 @@ class _StatusReply:
     text: str
 
 
-type _CommandReply = str | int | None | _StatusReply | list[_CommandReply]
+type _CommandReply = str | int | _StatusReply | list[_CommandReply] | None
 
 
 @runtime_checkable
@@ -639,7 +639,7 @@ class _LuaScriptRun:
         if len(arguments) < 3 or len(arguments) % 2 != 1:
             raise ResponseError("wrong number of arguments for 'hset' command")
         key = arguments[0]
-        fields = dict(zip(arguments[1::2], arguments[2::2], strict=True))
+        fields: dict[FieldT, EncodableT] = dict(zip(arguments[1::2], arguments[2::2], strict=True))
         return self._redis.hset(key, mapping=fields)
 
     def _hash_delete(self, arguments: Sequence[str]) -> _CommandReply:

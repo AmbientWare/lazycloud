@@ -49,6 +49,25 @@ class UpstreamUnavailableError(DomainError):
     """A required backing service or worker is unavailable."""
 
 
+class PaymentRequiredError(DomainError):
+    """This account owes money, so the platform will not start more work.
+
+    Distinct from `PaymentDeclinedError`, which is the provider's answer about one
+    charge. This is the platform's own decision, taken before anything runs, and
+    the caller acts on it by paying rather than by retrying.
+    """
+
+
+class PaymentDeclinedError(DomainError):
+    """The payer's bank refused the charge.
+
+    Its own error because it is neither of the two things a 4xx usually means: it
+    is not a malformed request this platform could fix by sending it differently,
+    and it is not a transient fault worth retrying unchanged. It is an answer —
+    the money did not move — and the caller records it rather than reacting to it.
+    """
+
+
 __all__ = [
     "CapacityLimitReachedError",
     "ConflictError",
@@ -56,5 +75,7 @@ __all__ = [
     "ExpiredCursorError",
     "InvalidInputError",
     "NotFoundError",
+    "PaymentDeclinedError",
+    "PaymentRequiredError",
     "UpstreamUnavailableError",
 ]

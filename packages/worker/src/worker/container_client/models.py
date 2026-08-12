@@ -12,14 +12,14 @@ CONTAINER_CLIENT_MAX_MESSAGE_SIZE_BYTES = 1 << 30
 CONTAINER_CLIENT_LOG_KEEPALIVE_SECONDS = 10.0
 
 type ContainerServiceWireValue = (
-    None
-    | bool
+    bool
     | int
     | float
     | str
     | bytes
     | list[ContainerServiceWireValue]
     | dict[str, ContainerServiceWireValue]
+    | None
 )
 type ContainerServicePayload = (
     ContractModel | ContainerServiceWireValue | Mapping[str, ContainerServiceWireValue]

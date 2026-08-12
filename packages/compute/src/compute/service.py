@@ -23,7 +23,6 @@ from database.repositories.orchestration import (
 )
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid
-from observability.usage_exporter import UsageMetricsExporter
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import Field, JsonValue, TypeAdapter
 from shared.capacity import (
@@ -207,7 +206,6 @@ class ComputeService:
     provider_registry: DirectMachineProviderRegistry | None = None
     provider_resolver: ComputeProviderResolver | None = None
     pool_bootstrap_factory: ProviderUnitBootstrapFactory | None = None
-    usage_exporter: UsageMetricsExporter | None = None
     scheduler_hooks: ComputeSchedulerHooks | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
     capacity_owner_mutations: CapacityOwnerMutationLease | None = None

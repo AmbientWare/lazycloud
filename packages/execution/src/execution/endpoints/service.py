@@ -30,7 +30,13 @@ from shared.env import (
     STUB_TYPE_ENV,
     no_gateway_origin,
 )
-from shared.errors import DomainError, InvalidInputError, NotFoundError, UpstreamUnavailableError
+from shared.errors import (
+    DomainError,
+    InvalidInputError,
+    NotFoundError,
+    PaymentRequiredError,
+    UpstreamUnavailableError,
+)
 from shared.events import EventLevel
 from shared.http.endpoint_forwarding import HeaderMap, error_response
 from shared.http.endpoints import (
@@ -756,6 +762,12 @@ class EndpointControlService:
             return True
         try:
             warmup = self.start_endpoint_serve(StartEndpointServeRequest(stub_id=stub.id))
+        except PaymentRequiredError:
+            # Not converted. Every other reason capacity cannot be had is a
+            # transient shortage the caller retries into; this one is the
+            # platform declining, and telling them 503 sends them to look for an
+            # outage that is not there.
+            raise
         except DomainError as exc:
             self._emit_warmup_failure(stub, task, str(exc))
             raise EndpointDispatchUnavailable(str(exc)) from exc

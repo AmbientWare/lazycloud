@@ -5,7 +5,6 @@ export function usageBillingOverviewFixture(workspaceId: string) {
     end: "2026-07-10T12:00:00Z",
     currency: "USD",
     total_cost_nanos: 526_000_000,
-    contains_estimates: true,
     summary: billingLines(),
     apps: [
       {
@@ -62,7 +61,6 @@ export function emptyUsageBillingOverviewFixture(workspaceId: string) {
     end: "2026-07-10T00:00:00Z",
     currency: "USD",
     total_cost_nanos: 0,
-    contains_estimates: false,
     summary: [],
     apps: [],
     activity: [],
@@ -78,7 +76,6 @@ function billingLines(scale = 1) {
       "seconds",
       11_244,
       36_000_000 * scale,
-      "recorded_allocation",
     ),
     line(
       "memory_gib_seconds",
@@ -87,7 +84,6 @@ function billingLines(scale = 1) {
       "gib_seconds",
       1_235,
       4_000_000 * scale,
-      "recorded_allocation",
     ),
     line(
       "gpu_seconds",
@@ -96,7 +92,6 @@ function billingLines(scale = 1) {
       "seconds",
       146_111,
       486_000_000 * scale,
-      "recorded_allocation",
     ),
   ];
 }
@@ -108,7 +103,6 @@ function line(
   unit: string,
   pricePerUnitNanos: number,
   costNanos: number,
-  costBasis: string,
 ) {
   return {
     metric,
@@ -117,6 +111,5 @@ function line(
     unit,
     price_per_unit_nanos: pricePerUnitNanos,
     cost_nanos: Math.round(costNanos),
-    cost_basis: costBasis,
   };
 }

@@ -127,18 +127,11 @@ class UsageBillingWindowTable(TimestampMixin, DatabaseBase):
     memory_direct_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     memory_direct_gib_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     memory_derived_gib_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    billing_owner: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+    gpu_type: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     gpu_direct_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     gpu_direct_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     gpu_derived_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    recorded_compute_cost_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    managed_compute_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    managed_compute_cost_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    customer_cloud_management_seconds: Mapped[float] = mapped_column(
-        Float, default=0, nullable=False
-    )
-    customer_cloud_management_cost_nanos: Mapped[int] = mapped_column(
-        BigInteger, default=0, nullable=False
-    )
     runs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     omitted_duration_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
@@ -183,18 +176,30 @@ class UsageBillingContributionTable(TimestampMixin, DatabaseBase):
     memory_direct_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     memory_direct_gib_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     memory_derived_gib_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    billing_owner: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+    """Who paid for the machine, which decides whether and how the window prices.
+
+    An attribute for the same reason as `gpu_type`: a window is one container on
+    one worker in one unit, so every record in it answers this identically. In
+    the identity it would enforce nothing and would let one stale-labelled record
+    open a second window row for the same interval instead of correcting the
+    first.
+
+    Empty is a fourth value and not an error: a task count is not machine time
+    and carries no owner. Anything pricing from this column has to answer for
+    empty rather than assume the column holds one of the three names.
+    """
+
+    gpu_type: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    """GPU model the container held, empty for CPU-only work.
+
+    An attribute of the window rather than part of its identity: a window is one
+    container's metering interval and a container holds one GPU model for its
+    whole life, so this can never split a window in two.
+    """
     gpu_direct_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     gpu_direct_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     gpu_derived_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    recorded_compute_cost_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    managed_compute_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    managed_compute_cost_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    customer_cloud_management_seconds: Mapped[float] = mapped_column(
-        Float, default=0, nullable=False
-    )
-    customer_cloud_management_cost_nanos: Mapped[int] = mapped_column(
-        BigInteger, default=0, nullable=False
-    )
     runs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     omitted_duration_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

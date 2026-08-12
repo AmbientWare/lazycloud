@@ -1,5 +1,6 @@
 export * from "./apps";
 export * from "./aws_connections";
+export * from "./billing";
 export * from "./client_manifests";
 export * from "./compute";
 export * from "./concurrency";
