@@ -39,12 +39,20 @@ Record ids come from `GET /zones/<zone_id>/dns_records`.
 
 One thing the import cannot recover: `tunnel_secret` is an argument rather than
 something the API returns, so an imported tunnel has a secret Terraform does not
-know. The plan will show it replacing the tunnel to take ownership of that
-secret. Replacing a tunnel is the documented rotation
-(`deploy/public-ingress/README.md`) and its ordering is load-bearing — repoint
-both records before deleting the old tunnel, or the edge serves 1033. Decide
-deliberately whether to accept that replacement or to keep the hand-made tunnel
-and adopt only the records.
+know, and the first apply rotates it.
+
+Observed on the real account: the tunnel is **updated in place**, not replaced.
+Its id survives, so `deploy/public-ingress/cloudflared.yml` needs no edit and the
+DNS records do not move. What does happen is that the running connector's
+credentials stop being valid the moment the secret rotates, and the edge serves
+1033 until a new credentials file is written and `public-ingress` is recreated.
+Have the replacement credentials ready to install before applying rather than
+after; the gap is however long that takes.
+
+The records themselves adopt cleanly, with one catch worth knowing: anything set
+on them that this module does not declare — a `comment`, most likely — shows up
+in the plan as a deletion. Declare it here instead of letting an apply quietly
+strip it.
 
 ## Backend and credentials
 
@@ -55,6 +63,11 @@ credentials outside the repository.
 
 Authenticate AWS and Cloudflare with short-lived operator credentials. Do not put
 credentials in `*.tfvars`:
+
+Set `AWS_PROFILE` to a profile whose credentials can reach the state bucket
+directly. A profile that assumes a role the current identity cannot assume fails
+at `init`, before Terraform reaches Cloudflare at all, and the error names STS
+rather than the backend.
 
 ```sh
 export AWS_PROFILE=platform-operations
@@ -69,7 +82,11 @@ terraform -chdir=deploy/cloudflare init \
 ```
 
 The operator token needs Account > Cloudflare Tunnel > Edit, Zone > DNS > Edit,
-and Zone > SSL and Certificates > Edit. That is deliberately wider than
+and Zone > SSL and Certificates > Edit. Zero Trust permissions are separate from
+the general account ones and are not included by an account-wide token template —
+a token without them lists zero tunnels and returns `1001 Not authorized` on a
+tunnel that demonstrably exists, which reads like a missing resource rather than
+a missing permission. That is deliberately wider than
 `LAZYCLOUD_CLOUDFLARE_API_TOKEN`, which the control plane runs with and which
 only needs the SSL scope. They are two tokens; only the narrow one belongs in a
 deployment `.env`.
