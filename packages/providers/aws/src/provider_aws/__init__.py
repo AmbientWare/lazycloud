@@ -43,7 +43,6 @@ from .customer_actions import (
 )
 from .instance_catalog import (
     AWS_INSTANCE_CATALOG,
-    AwsGpuModel,
     AwsInstanceCatalogEntry,
     AwsInstanceCategory,
     aws_instance_catalog_entry,
@@ -147,7 +146,6 @@ __all__ = [
     "AwsExistingAccountAuthorization",
     "AwsExistingAccountAuthorizationValidation",
     "AwsExistingAccountAuthorizationValidationInput",
-    "AwsGpuModel",
     "AwsInstanceCatalogEntry",
     "AwsInstanceCategory",
     "AwsInstanceMetadataResponse",

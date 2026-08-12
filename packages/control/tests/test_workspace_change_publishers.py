@@ -153,9 +153,9 @@ def test_hot_updates_do_not_publish_workspace_change_noise(
         workspace_id=workspace.id,
         resource_type="container",
         resource_id="sampled-container",
-        metric=UsageMetric.ContainerCostCents,
+        metric=UsageMetric.DiskReadBytes,
         quantity=1,
-        unit=UsageUnit.Cents,
+        unit=UsageUnit.Bytes,
     )
     isolated_services.volume_metering.reconcile_volume(
         volume.name,

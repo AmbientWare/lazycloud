@@ -154,7 +154,6 @@ class WorkerContainerRequestPayload(ContractModel):
     disk_limit_bytes: int = DEFAULT_CONTAINER_DISK_LIMIT_BYTES
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = True
-    cost_per_ms: float = 0.0
 
     @field_validator("ports", "requested_ports", "checkpoint_exposed_ports")
     @classmethod

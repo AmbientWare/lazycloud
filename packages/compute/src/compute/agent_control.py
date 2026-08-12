@@ -35,6 +35,7 @@ from shared.routing import (
     RoutePrewarmDecision,
 )
 from shared.timestamps import to_utc, utc_now
+from shared.usage import UsageBillingOwner
 
 from compute.projection import (
     PoolConfig,
@@ -1339,6 +1340,7 @@ def plan_agent_worker_slot(
     existing_slots: list[ComputeAgentWorkerSlotState],
     token_plan: AgentWorkerTokenPlan | None,
     *,
+    billing_owner: UsageBillingOwner,
     cluster_name: str,
     worker_image: str,
 ) -> AgentWorkerSlotControlPlan:
@@ -1370,6 +1372,7 @@ def plan_agent_worker_slot(
         worker,
         token_plan.worker_token_id,
         token_plan.worker_token_hash,
+        billing_owner=billing_owner,
         cluster_name=cluster_name,
         worker_image=worker_image,
         existing=existing,
@@ -1394,6 +1397,7 @@ def agent_worker_slot_state(
     token_id: str,
     token_hash: str,
     *,
+    billing_owner: UsageBillingOwner,
     cluster_name: str,
     worker_image: str,
     existing: ComputeAgentWorkerSlotState | None = None,
@@ -1411,6 +1415,7 @@ def agent_worker_slot_state(
         gpu=worker.gpu,
         gpu_count=worker.total_gpu_count,
         gpu_assignment=",".join(agent_state.gpu_ids),
+        billing_owner=billing_owner,
         network_prefix=worker_network_prefix(cluster_name, agent_state.machine_id),
         worker_image=worker_image,
         created_at=existing.created_at if existing else utc_now(),

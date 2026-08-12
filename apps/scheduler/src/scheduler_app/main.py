@@ -15,7 +15,6 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from observability.settings import (
-    UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
@@ -212,7 +211,6 @@ def build_scheduler_runtime(
         runtime_callback_http_url=runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=WorkspaceChangeStreamSettings(),
-            usage_metrics=UsageMetricsSettings(),
             usage_pricing=UsagePricingSettings(),
         ),
         storage=SchedulerStorageSettings(

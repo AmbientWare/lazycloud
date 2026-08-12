@@ -1,3 +1,5 @@
+from typing import TypedDict
+
 import pytest
 from shared.deployment_subdomains import (
     DeploymentHostTarget,
@@ -7,7 +9,24 @@ from shared.deployment_subdomains import (
 )
 from shared.deployments import DeploymentKind
 
-_IDENTITY = {
+
+class _Identity(TypedDict):
+    """The arguments `deployment_subdomain` takes, so splatting stays checkable."""
+
+    workspace_id: str
+    app_name: str
+    name: str
+    kind: DeploymentKind
+
+
+class _IdentityDiff(TypedDict, total=False):
+    workspace_id: str
+    app_name: str
+    name: str
+    kind: DeploymentKind
+
+
+_IDENTITY: _Identity = {
     "workspace_id": "workspace-1",
     "app_name": "demo",
     "name": "service",
@@ -29,9 +48,10 @@ def test_subdomain_is_stable_for_one_resource() -> None:
     ],
 )
 def test_resources_that_differ_anywhere_get_different_subdomains(
-    difference: dict[str, object],
+    difference: _IdentityDiff,
 ) -> None:
-    assert deployment_subdomain(**_IDENTITY) != deployment_subdomain(**{**_IDENTITY, **difference})
+    other: _Identity = {**_IDENTITY, **difference}
+    assert deployment_subdomain(**_IDENTITY) != deployment_subdomain(**other)
 
 
 @pytest.mark.parametrize("version", [None, 1, 42])
@@ -52,7 +72,8 @@ def test_host_label_round_trips_to_the_resource_and_version_it_addresses(
     resource_name: str,
     version: int | None,
 ) -> None:
-    subdomain = deployment_subdomain(**{**_IDENTITY, "name": resource_name})
+    named: _Identity = {**_IDENTITY, "name": resource_name}
+    subdomain = deployment_subdomain(**named)
     label = deployment_host_label(subdomain, version=version)
 
     assert len(label) <= 63

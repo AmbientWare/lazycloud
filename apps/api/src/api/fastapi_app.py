@@ -42,6 +42,8 @@ from shared.errors import (
     DomainError,
     InvalidInputError,
     NotFoundError,
+    PaymentDeclinedError,
+    PaymentRequiredError,
     UpstreamUnavailableError,
 )
 from shared.events import Event, EventLevel
@@ -75,6 +77,8 @@ _DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     ConflictError: status.HTTP_409_CONFLICT,
     InvalidInputError: status.HTTP_400_BAD_REQUEST,
     UpstreamUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    PaymentDeclinedError: status.HTTP_402_PAYMENT_REQUIRED,
+    PaymentRequiredError: status.HTTP_402_PAYMENT_REQUIRED,
 }
 
 

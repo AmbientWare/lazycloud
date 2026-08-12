@@ -9,10 +9,13 @@ dependencies = [
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",
     "pyyaml>=6,<7",
-    "rich>=13,<14",
+    "rich>=15,<16",
     "typer>=0.26.7",
     "typing-extensions>=4.12,<5",
-    "websockets>=15,<16",
+    # Floor held below 17 on purpose: this package supports Python 3.10 and
+    # websockets 17 does not. A dependency that cannot install on a Python the
+    # package claims to support is a broken install, not a version to chase.
+    "websockets>=15,<18",
 ]
 
 [project.scripts]

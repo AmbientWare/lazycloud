@@ -18,10 +18,6 @@ function formatCount(quantity: number): string {
   return Intl.NumberFormat().format(Math.round(quantity));
 }
 
-function formatCents(quantity: number): string {
-  return `$${(quantity / 100).toFixed(2)}`;
-}
-
 function formatSeconds(quantity: number): string {
   return formatDuration(quantity * 1_000);
 }
@@ -48,23 +44,11 @@ const KNOWN_METRICS: Record<string, Omit<MetricDisplay, "internal"> & { internal
   cpu_seconds: { label: "CPU time", format: formatSeconds, order: 2 },
   memory_gib_seconds: { label: "Memory", format: formatGibSeconds, order: 3 },
   task_count: { label: "Tasks", format: formatCount, order: 4 },
-  container_cost_cents: { label: "Compute cost", format: formatCents, order: 5 },
-  managed_compute_reservation_seconds: {
-    label: "Reserved compute",
-    format: formatSeconds,
-    order: 6,
-  },
-  managed_compute_reservation_cost_cents: {
-    label: "Reserved compute cost",
-    format: formatCents,
-    order: 7,
-  },
-  customer_cloud_management_seconds: {
-    label: "Customer cloud management",
-    format: formatSeconds,
-    order: 8,
-  },
-  storage_bytes: { label: "Storage", format: formatBytes, order: 9 },
+  // The management fee on a customer's own cloud: the same three dimensions,
+  // charged for running the fleet rather than for the compute itself.
+  managed_gpu_seconds: { label: "Managed GPU time", format: formatSeconds, order: 5 },
+  managed_cpu_seconds: { label: "Managed CPU time", format: formatSeconds, order: 6 },
+  managed_memory_gib_seconds: { label: "Managed memory", format: formatGibSeconds, order: 7 },
   // Scheduler/operator counters: never rendered on customer pages.
   container_requested_count: {
     label: "Containers requested",
@@ -79,55 +63,12 @@ const KNOWN_METRICS: Record<string, Omit<MetricDisplay, "internal"> & { internal
     internal: true,
   },
   node_usage: { label: "Node usage", format: formatCount, order: 102, internal: true },
-  customer_cloud_management_cost_cents: {
-    label: "Customer cloud management cost",
-    format: formatCents,
-    order: 103,
-    internal: true,
-  },
-  customer_cloud_allocated_cpu_seconds: {
-    label: "Customer cloud CPU allocation",
-    format: formatSeconds,
-    order: 104,
-    internal: true,
-  },
-  customer_cloud_allocated_memory_gib_seconds: {
-    label: "Customer cloud memory allocation",
-    format: formatGibSeconds,
-    order: 105,
-    internal: true,
-  },
-  customer_cloud_allocated_gpu_seconds: {
-    label: "Customer cloud GPU allocation",
-    format: formatSeconds,
-    order: 106,
-    internal: true,
-  },
-  customer_cloud_allocated_disk_gib_seconds: {
-    label: "Customer cloud disk allocation",
-    format: formatGibSeconds,
-    order: 107,
-    internal: true,
-  },
-  customer_cloud_network_ingress_bytes: {
-    label: "Customer cloud network ingress",
-    format: formatBytes,
-    order: 108,
-    internal: true,
-  },
-  customer_cloud_network_egress_bytes: {
-    label: "Customer cloud network egress",
-    format: formatBytes,
-    order: 109,
-    internal: true,
-  },
 };
 
 const UNIT_FORMATTERS: Record<string, (quantity: number) => string> = {
   milliseconds: formatDuration,
   seconds: formatSeconds,
   count: formatCount,
-  cents: formatCents,
   bytes: formatBytes,
   gib_seconds: formatGibSeconds,
 };

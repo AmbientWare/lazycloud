@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 from shared.app_identity import ENV_PREFIX, NAME, WORKER_CHECKPOINT_ROOT
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport
+from shared.usage import UsageBillingOwner
 
 from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
 from worker.events import WorkerPoolMode
@@ -59,6 +60,14 @@ class WorkerExecutionConfiguration(ContractModel):
     runtimes: list[OciRuntimeName] = Field(default_factory=lambda: [OciRuntimeName.Runsc])
     capacity: WorkerCapacityConfiguration = Field(default_factory=WorkerCapacityConfiguration)
     pool_mode: WorkerPoolMode = WorkerPoolMode.Public
+    billing_owner: UsageBillingOwner = UsageBillingOwner.PlatformFleet
+    """Who pays for this machine, and so how its containers price.
+
+    Defaults to the fleet because a worker the platform starts directly is
+    running on capacity the platform bought. Every other origin arrives through
+    an agent worker slot, which states its own classification and overrides this.
+    """
+
     requires_pool_selector: bool = False
     preemptible: bool = False
     persistent: bool = False

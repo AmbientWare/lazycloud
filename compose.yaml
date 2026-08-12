@@ -26,6 +26,13 @@ x-cloudflare-env: &cloudflare-env
   LAZYCLOUD_CLOUDFLARE_API_TOKEN: "${LAZYCLOUD_CLOUDFLARE_API_TOKEN:-}"
   LAZYCLOUD_CLOUDFLARE_ZONE_ID: "${LAZYCLOUD_CLOUDFLARE_ZONE_ID:-}"
 
+# The payment provider money is collected through. Empty by default: usage is
+# still metered and priced, and only the step that issues an invoice is absent,
+# which the scheduler says once at startup rather than failing to boot.
+x-stripe-env: &stripe-env
+  LAZYCLOUD_STRIPE_API_KEY: "${LAZYCLOUD_STRIPE_API_KEY:-}"
+  LAZYCLOUD_STRIPE_WEBHOOK_SECRET: "${LAZYCLOUD_STRIPE_WEBHOOK_SECRET:-}"
+
 # The GitHub App people sign in through. Empty by default: the stack boots and
 # every Compose step drives the platform with LAZYCLOUD_TOKEN, so only browser
 # sign-in is unavailable, and it says which variables are missing when tried.
@@ -91,9 +98,6 @@ x-tailnet-env: &tailnet-env
   LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG: "${LAZYCLOUD_TAILNET_CONTROL_PLANE_TAG:-tag:lazycloud-control-plane}"
   LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS: "${LAZYCLOUD_TAILNET_AUTH_KEY_TTL_SECONDS:-300}"
   LAZYCLOUD_TAILNET_CONTROL_URL: "${LAZYCLOUD_TAILNET_CONTROL_URL:-}"
-
-x-usage-credentials: &usage-credentials
-  LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY: "${LAZYCLOUD_USAGE_METRICS_OPENMETER_API_KEY:-}"
 
 x-platform-aws-credentials: &platform-aws-credentials
   AWS_REGION: "${AWS_REGION:-us-east-1}"
@@ -376,6 +380,7 @@ services:
           *redis-env,
           *gateway-env,
           *cloudflare-env,
+          *stripe-env,
           *github-env,
           *api-env,
           *object-store-env,
@@ -383,7 +388,6 @@ services:
           *release-env,
           *agent-binary-env,
           *aws-compute-env,
-          *usage-credentials,
           *tailnet-env,
           *platform-aws-credentials,
           *tailnet-control-credentials,
@@ -466,7 +470,6 @@ services:
           *object-store-env,
           *image-build-env,
           *agent-binary-env,
-          *usage-credentials,
           *tailnet-env,
           *tailnet-control-credentials,
           *backend-route-credentials,
@@ -672,11 +675,11 @@ services:
           *redis-env,
           *gateway-env,
           *cloudflare-env,
+          *stripe-env,
           *object-store-env,
           *release-env,
           *agent-binary-env,
           *aws-compute-env,
-          *usage-credentials,
           *scheduler-env,
           *tailnet-env,
           *platform-aws-credentials,
@@ -920,6 +923,7 @@ configs:
             gpu_type: ""
             gpu_count: 0
           pool_mode: public
+          billing_owner: platform_fleet
           requires_pool_selector: false
           preemptible: false
           persistent: true

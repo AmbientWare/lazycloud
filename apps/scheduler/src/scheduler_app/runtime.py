@@ -40,6 +40,8 @@ from scheduler.preemption import (
 from scheduler.service import (
     MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS,
     Scheduler,
+    SchedulerBillingCloseJob,
+    SchedulerBillingDailyJob,
     SchedulerCapacityControls,
     SchedulerMaintenanceControls,
     SchedulerRetentionService,
@@ -126,6 +128,8 @@ class SchedulerRuntime:
                 retention=app_services.retention,
                 tailnet_cleanup=app_services.tailnet_cleanup,
                 custom_domains=app_services.custom_domains,
+                billing_daily=app_services.billing_daily,
+                billing_close=app_services.billing_close,
                 interval_seconds=interval_seconds,
                 managed_compute_reconcile_interval_seconds=(
                     managed_compute_reconcile_interval_seconds
@@ -160,6 +164,8 @@ class SchedulerRuntime:
         retention: SchedulerRetentionService | None,
         tailnet_cleanup: SchedulerTailnetCleanupService,
         custom_domains: CustomDomainService,
+        billing_daily: SchedulerBillingDailyJob,
+        billing_close: SchedulerBillingCloseJob,
         interval_seconds: float = 1.0,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
@@ -281,6 +287,8 @@ class SchedulerRuntime:
                 retention=retention,
                 tailnet_cleanup=tailnet_cleanup,
                 custom_domains=custom_domains,
+                billing_daily=billing_daily,
+                billing_close=billing_close,
             ),
             retention_interval_seconds=retention_settings.interval_seconds,
             retention_retry_initial_seconds=(retention_settings.retry_initial_seconds),

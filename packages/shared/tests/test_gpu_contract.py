@@ -1,4 +1,4 @@
-from shared.gpu import normalize_gpu_type
+from shared.gpu import SUPPORTED_GPU_TYPES, normalize_gpu_type
 
 
 def test_gpu_normalization_preserves_no_gpu_any_and_overlapping_aliases() -> None:
@@ -16,3 +16,16 @@ def test_gpu_normalization_preserves_no_gpu_any_and_overlapping_aliases() -> Non
 
 def test_gpu_normalization_keeps_unknown_provider_hardware_as_reported() -> None:
     assert normalize_gpu_type("Future Accelerator X") == "Future Accelerator X"
+
+
+def test_every_supported_model_is_already_its_own_normalized_form() -> None:
+    """A supported name has to survive the normalisation a worker's report goes through.
+
+    The scheduler matches a request against what the worker on the machine says it
+    has, normalised on the way. A supported name that normalises to something else
+    is hardware that provisions and then never receives work — and, since GPU
+    seconds are priced per model, bills under a name no rate answers to.
+    """
+
+    for gpu in SUPPORTED_GPU_TYPES:
+        assert normalize_gpu_type(gpu.value) == gpu.value

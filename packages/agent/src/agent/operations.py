@@ -47,6 +47,7 @@ from shared.tailscale_install import (
     TAILSCALE_INSTALL_VERSION,
 )
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 from worker.configuration import (
     DEFAULT_WORKER_CONFIG_PATH,
     WORKER_CONFIG_PATH_ENV,
@@ -1084,6 +1085,7 @@ class AgentWorkerSlot(ContractModel):
     worker_token: str = ""
     pool: MachinePool = MachinePool("default")
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    billing_owner: UsageBillingOwner
     machine_id: str = ""
     cpu_millicores: int = 0
     memory_mb: int = 0
@@ -1467,6 +1469,7 @@ def build_agent_worker_config(
                 gpu_count=slot.gpu_count,
             ),
             pool_mode=WorkerPoolMode.Private,
+            billing_owner=slot.billing_owner,
             requires_pool_selector=True,
             persistent=True,
             agent_worker=True,
@@ -1618,6 +1621,10 @@ def same_worker_slot(a: AgentWorkerSlot | None, b: AgentWorkerSlot | None) -> bo
         "gpu_assignment",
         "network_prefix",
         "worker_image",
+        # A reclassified unit has to restart the worker: the label is stamped on
+        # every usage record the running worker emits, and one left running under
+        # its old classification keeps billing the wrong way until it exits.
+        "billing_owner",
     ]
     return all(getattr(a, field_name) == getattr(b, field_name) for field_name in comparable)
 

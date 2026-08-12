@@ -24,6 +24,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRepository,
 )
 from database.repositories.observability import UsageRepository
+from database.repositories.usage_billing import UsageBillingRepository
 from fastapi.testclient import TestClient
 from gateway.http import AgentMetricSnapshot, AgentTelemetryRequest
 from identity.auth import AuthService
@@ -33,6 +34,7 @@ from shared.billing import BillableMetric, BillingCoverageStatus
 from shared.compute_enrollment import MachineReadinessPhase
 from shared.compute_policy import MachinePool, UnitName
 from shared.deployments import StubKind
+from shared.gpu import SUPPORTED_GPU_TYPES
 from shared.http.usage import UsageBillingPeriod
 from shared.http_transport import HttpChannel
 from shared.timestamps import utc_now
@@ -179,106 +181,6 @@ def test_usage_record_api_pages_more_than_one_thousand_records(
     assert len(record_ids) == 1005
 
 
-def test_billing_report_uses_recorded_compute_cost_without_double_counting(
-    isolated_services: ApiServices,
-) -> None:
-    now = utc_now()
-    app_id = str(uuid4())
-    stub_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-        AppRepository(session).upsert(
-            AppRecord(id=app_id, workspace_id=workspace_id, name="trainer")
-        )
-        StubRepository(session).upsert(
-            StubRecord(
-                id=stub_id,
-                workspace_id=workspace_id,
-                app_id=app_id,
-                name="embed",
-                kind=StubKind.Function,
-            )
-        )
-
-    labels = {
-        "app_id": app_id,
-        "stub_id": stub_id,
-        "deployment_id": "deployment-v1",
-        "cpu_millicores": "1000",
-        "mem_mb": "2048",
-        "gpu": "T4",
-        "gpu_count": "1",
-    }
-    isolated_services.usage.record(
-        workspace_id=workspace_id,
-        resource_type="container",
-        resource_id="container-1",
-        metric=UsageMetric.ContainerDurationMilliseconds,
-        quantity=3_600_000,
-        unit=UsageUnit.Milliseconds,
-        labels=labels,
-    )
-    isolated_services.usage.record(
-        workspace_id=workspace_id,
-        resource_type="container",
-        resource_id="container-1",
-        metric=UsageMetric.ContainerCostCents,
-        quantity=52.6,
-        unit=UsageUnit.Cents,
-        labels=labels,
-    )
-    for deployment_id in ("deployment-v1", "deployment-v2"):
-        isolated_services.usage.record_task_count(
-            workspace_id=workspace_id,
-            resource_type="function",
-            resource_id=stub_id,
-            task_id=str(uuid4()),
-            kind="function",
-            app_id=app_id,
-            deployment_id=deployment_id,
-        )
-    isolated_services.usage.append(
-        UsageRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type="function",
-            resource_id=stub_id,
-            metric=UsageMetric.TaskCount,
-            quantity=100,
-            unit=UsageUnit.Count,
-            labels={"app_id": app_id, "stub_id": stub_id},
-            created_at=now + timedelta(hours=1),
-        ),
-        export=False,
-    )
-
-    report = isolated_services.usage.billing_report(
-        workspace_id=workspace_id,
-        start=now - timedelta(hours=1),
-        end=now + timedelta(hours=1),
-        bucket_seconds=3600,
-    )
-
-    lines = {line.metric.value: line for line in report.summary}
-    compute_lines = [
-        lines[metric] for metric in ("cpu_seconds", "memory_gib_seconds", "gpu_seconds")
-    ]
-    assert lines["cpu_seconds"].quantity == 3600
-    assert lines["memory_gib_seconds"].quantity == 7200
-    assert lines["gpu_seconds"].quantity == 3600
-    assert {line.cost_basis.value for line in compute_lines} == {"recorded_allocation"}
-    assert sum(line.cost_nanos for line in compute_lines) == 526_000_000
-    assert "task_count" not in lines
-    assert report.total_cost_nanos == 526_000_000
-    assert len(report.workloads) == 1
-    assert report.workloads[0].workload_name == "embed"
-    assert report.workloads[0].tasks == 2
-    assert report.coverage.status is BillingCoverageStatus.Complete
-    assert report.coverage.recorded_cost_present is True
-    assert report.coverage.unpriced_metrics == ()
-    assert report.coverage.gaps == ()
-
-
 def test_billing_prefers_direct_compute_only_within_the_same_metering_window(
     isolated_services: ApiServices,
 ) -> None:
@@ -345,7 +247,7 @@ def test_billing_prefers_direct_compute_only_within_the_same_metering_window(
         ),
     )
     for record in records:
-        isolated_services.usage.append(record, export=False)
+        isolated_services.usage.append(record)
 
     report = isolated_services.usage.billing_report(
         workspace_id=workspace_id,
@@ -365,6 +267,224 @@ def test_billing_prefers_direct_compute_only_within_the_same_metering_window(
     assert lines[BillableMetric.MemoryGibSeconds].quantity == 6
     assert overview.summary == report.summary
     assert overview.activity == report.activity
+
+
+def test_gpu_is_priced_per_model_and_the_rollup_agrees_with_the_report(
+    isolated_services: ApiServices,
+) -> None:
+    """Each GPU model bills at its own rate, and both billing paths agree.
+
+    The report reads raw usage; the overview reads rolled-up windows. They are
+    separate queries over separate tables, so a model carried by one and not the
+    other is two different bills for one month.
+    """
+
+    report_start = utc_now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    def gpu_record(container: str, gpu: str, milliseconds: int) -> UsageRecord:
+        return UsageRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            resource_type="container",
+            resource_id=container,
+            metric=UsageMetric.ContainerDurationMilliseconds,
+            quantity=milliseconds,
+            unit=UsageUnit.Milliseconds,
+            labels={
+                "cpu_millicores": "1000",
+                "mem_mb": "1024",
+                "gpu": gpu,
+                "gpu_count": "1",
+                "worker_id": f"worker-{gpu.lower()}",
+            },
+            created_at=report_start + timedelta(minutes=10),
+        )
+
+    for record in (
+        gpu_record("container-h100", "H100", 10_000),
+        gpu_record("container-t4", "T4", 10_000),
+    ):
+        isolated_services.usage.append(record)
+
+    report_end = report_start + timedelta(hours=2)
+    report = isolated_services.usage.billing_report(
+        workspace_id=workspace_id, start=report_start, end=report_end, bucket_seconds=3600
+    )
+    overview = isolated_services.usage.billing_overview(
+        workspace_id=workspace_id, start=report_start, end=report_end, bucket_seconds=3600
+    )
+
+    gpu_lines = {
+        line.variant: line for line in report.summary if line.metric is BillableMetric.GpuSeconds
+    }
+
+    assert set(gpu_lines) == {"H100", "T4"}
+    # Ten seconds on each chip, charged at each chip's own rate.
+    assert gpu_lines["H100"].quantity == 10
+    assert gpu_lines["T4"].quantity == 10
+    for line in gpu_lines.values():
+        assert line.price_per_unit_nanos is not None
+        assert line.cost_nanos == line.quantity * line.price_per_unit_nanos
+    assert gpu_lines["H100"].cost_nanos > gpu_lines["T4"].cost_nanos
+    assert overview.summary == report.summary
+
+
+def test_a_gpu_with_no_rate_still_reports_its_seconds(
+    isolated_services: ApiServices,
+) -> None:
+    """Usage nobody priced appears on the bill at zero, never as nothing.
+
+    Dropping the key would drop the quantity with it, billing nothing for compute
+    that plainly ran and leaving no line to say so.
+    """
+
+    report_start = utc_now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    isolated_services.usage.record(
+        workspace_id=workspace_id,
+        resource_type="container",
+        resource_id="container-unpriced-gpu",
+        metric=UsageMetric.ContainerDurationMilliseconds,
+        quantity=10_000,
+        unit=UsageUnit.Milliseconds,
+        # V100 is a real GpuType the sell-price catalog does not carry.
+        labels={"cpu_millicores": "0", "mem_mb": "0", "gpu": "V100", "gpu_count": "1"},
+    )
+
+    report = isolated_services.usage.billing_report(
+        workspace_id=workspace_id,
+        start=report_start,
+        end=report_start + timedelta(hours=2),
+        bucket_seconds=3600,
+    )
+
+    gpu_lines = [line for line in report.summary if line.metric is BillableMetric.GpuSeconds]
+
+    assert len(gpu_lines) == 1
+    assert gpu_lines[0].variant == "V100"
+    assert gpu_lines[0].quantity == 10
+    assert gpu_lines[0].price_per_unit_nanos is None
+    assert gpu_lines[0].cost_nanos == 0
+    # GPU is the only metric with usage here and it has no rate, so the whole
+    # period is unpriced rather than partly priced.
+    assert report.coverage.status is BillingCoverageStatus.Unpriced
+    assert any("V100" in gap.reason for gap in report.coverage.gaps)
+
+
+def test_a_label_disagreement_inside_one_window_cannot_double_bill(
+    isolated_services: ApiServices,
+) -> None:
+    """Both billing paths agree even when records in one window disagree on GPU.
+
+    The rollup keys a window by GPU model; the report does not. A window whose
+    duration record names a model while its CPU record does not therefore splits
+    into two rollup rows — and direct-beats-derived is applied per row, so the
+    measured CPU seconds and the reserved CPU seconds are both counted.
+    """
+
+    report_start = utc_now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    window: dict[str, JsonValue] = {
+        "worker_id": "worker-split",
+        "window_start_ms": 0,
+        "window_end_ms": 10_000,
+        METERING_WINDOW_STARTED_AT_METADATA_KEY: report_start.isoformat(),
+        METERING_WINDOW_ENDED_AT_METADATA_KEY: (report_start + timedelta(seconds=10)).isoformat(),
+    }
+    common = {"cpu_millicores": "1000", "mem_mb": "1024", "worker_id": "worker-split"}
+    isolated_services.usage.append(
+        UsageRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            resource_type="container",
+            resource_id="container-split",
+            metric=UsageMetric.ContainerDurationMilliseconds,
+            quantity=10_000,
+            unit=UsageUnit.Milliseconds,
+            labels={**common, "gpu": "H100", "gpu_count": "1"},
+            metadata=window,
+            created_at=report_start + timedelta(minutes=5),
+        )
+    )
+    isolated_services.usage.append(
+        UsageRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            resource_type="container",
+            resource_id="container-split",
+            metric=UsageMetric.CpuSeconds,
+            quantity=10,
+            unit=UsageUnit.Seconds,
+            labels={**common, "gpu_count": "0"},
+            metadata=window,
+            created_at=report_start + timedelta(minutes=5),
+        )
+    )
+
+    report_end = report_start + timedelta(hours=2)
+    report = isolated_services.usage.billing_report(
+        workspace_id=workspace_id,
+        start=report_start,
+        end=report_end,
+        bucket_seconds=3600,
+    )
+    overview = isolated_services.usage.billing_overview(
+        workspace_id=workspace_id,
+        start=report_start,
+        end=report_end,
+        bucket_seconds=3600,
+    )
+
+    assert overview.summary == report.summary
+
+
+def test_container_disk_occupancy_is_not_counted_as_task_runs(
+    isolated_services: ApiServices,
+) -> None:
+    """A metered quantity with no billing branch contributes nothing.
+
+    Disk byte-seconds reaching a task counter put ten figures into a workspace's
+    task total, and `runs` is a 32-bit column.
+    """
+
+    report_start = utc_now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    labels = {"cpu_millicores": "1000", "mem_mb": "1024", "gpu_count": "0"}
+    isolated_services.usage.record(
+        workspace_id=workspace_id,
+        resource_type="container",
+        resource_id="container-disk",
+        metric=UsageMetric.ContainerDurationMilliseconds,
+        quantity=1_000,
+        unit=UsageUnit.Milliseconds,
+        labels=labels,
+    )
+    isolated_services.usage.record(
+        workspace_id=workspace_id,
+        resource_type="container",
+        resource_id="container-disk",
+        metric=UsageMetric.ContainerDiskByteSeconds,
+        quantity=1024**3 * 30,
+        unit=UsageUnit.ByteSeconds,
+        labels=labels,
+    )
+
+    overview = isolated_services.usage.billing_overview(
+        workspace_id=workspace_id,
+        start=report_start,
+        end=report_start + timedelta(hours=2),
+        bucket_seconds=3600,
+    )
+
+    assert sum(app.tasks for app in overview.apps) == 0
 
 
 def test_billing_activity_uses_authoritative_metering_window_start(
@@ -393,7 +513,6 @@ def test_billing_activity_uses_authoritative_metering_window_start(
             },
             created_at=report_start + timedelta(hours=1, minutes=5),
         ),
-        export=False,
     )
 
     report = isolated_services.usage.billing_report(
@@ -407,14 +526,23 @@ def test_billing_activity_uses_authoritative_metering_window_start(
     assert report.activity[1].lines == ()
 
 
-def test_managed_reservation_container_evidence_is_not_projected_twice(
+def test_self_hosted_container_evidence_prices_at_nothing(
     isolated_services: ApiServices,
 ) -> None:
+    """Hardware somebody brought is evidence of compute we never sold.
+
+    It is retained because the dashboard shows what ran, and priced at nothing
+    because we neither bought the machine nor manage it. A connected cloud
+    account looks identical here and must not be dropped with it: that is
+    capacity we provision, and its rows are what the management fee is computed
+    from.
+    """
+
     now = utc_now()
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     container_labels = {
-        "billing_owner": UsageBillingOwner.ManagedReservation.value,
+        "billing_owner": UsageBillingOwner.SelfHosted.value,
         "cpu_millicores": "1000",
         "mem_mb": "1024",
         "gpu_count": "0",
@@ -450,41 +578,9 @@ def test_managed_reservation_container_evidence_is_not_projected_twice(
             metadata=window,
             created_at=now,
         ),
-        UsageRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type="container",
-            resource_id="container-managed",
-            metric=UsageMetric.ContainerCostCents,
-            quantity=50,
-            unit=UsageUnit.Cents,
-            labels=container_labels,
-            metadata=window,
-            created_at=now,
-        ),
-        UsageRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type="managed_reservation",
-            resource_id="reservation-managed",
-            metric=UsageMetric.ManagedComputeReservationSeconds,
-            quantity=60,
-            unit=UsageUnit.Seconds,
-            created_at=now,
-        ),
-        UsageRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type="managed_reservation",
-            resource_id="reservation-managed",
-            metric=UsageMetric.ManagedComputeReservationCostCents,
-            quantity=12.5,
-            unit=UsageUnit.Cents,
-            created_at=now,
-        ),
     )
     for record in records:
-        isolated_services.usage.append(record, export=False)
+        isolated_services.usage.append(record)
 
     report = isolated_services.usage.billing_report(
         workspace_id=workspace_id,
@@ -500,12 +596,101 @@ def test_managed_reservation_container_evidence_is_not_projected_twice(
         bucket_seconds=3600,
     )
 
+    # Retained as evidence of what ran, priced at nothing on both paths rather
+    # than twice on one.
     assert len(retained) == len(records)
-    assert [(line.metric, line.quantity) for line in report.summary] == [
-        (BillableMetric.ManagedCompute, 60)
-    ]
-    assert report.total_cost_nanos == 125_000_000
-    assert report.coverage.recorded_cost_present is True
+    assert report.summary == ()
+    assert report.total_cost_nanos == 0
+    assert overview.summary == report.summary
+    assert overview.total_cost_nanos == report.total_cost_nanos
+
+
+def test_connected_cloud_container_evidence_survives_to_be_priced(
+    isolated_services: ApiServices,
+) -> None:
+    """A customer's own cloud account is capacity we manage, so it still bills.
+
+    Both classifications reach the report as private capacity, and one drop site
+    covering both would silently waive every management fee on the connected
+    accounts the fee exists for.
+    """
+
+    now = utc_now()
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    container_labels = {
+        "billing_owner": UsageBillingOwner.ConnectedCloud.value,
+        "cpu_millicores": "1000",
+        "mem_mb": "1024",
+        "gpu_count": "0",
+        "worker_id": "worker-connected",
+    }
+    window: dict[str, JsonValue] = {
+        "worker_id": "worker-connected",
+        "window_start_ms": 0,
+        "window_end_ms": 1000,
+    }
+    # Two metrics in one window, as a worker actually emits them: the second
+    # recomputes the window through the upsert's conflict branch rather than
+    # inserting a second row.
+    for metric, quantity, unit in (
+        (UsageMetric.ContainerDurationMilliseconds, 1_000, UsageUnit.Milliseconds),
+        (UsageMetric.CpuSeconds, 1, UsageUnit.Seconds),
+    ):
+        isolated_services.usage.append(
+            UsageRecord(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                resource_type="container",
+                resource_id="container-connected",
+                metric=metric,
+                quantity=quantity,
+                unit=unit,
+                labels=container_labels,
+                metadata=window,
+                created_at=now,
+            )
+        )
+
+    report = isolated_services.usage.billing_report(
+        workspace_id=workspace_id,
+        start=now - timedelta(hours=1),
+        end=now + timedelta(hours=1),
+        bucket_seconds=3600,
+    )
+    overview = isolated_services.usage.billing_overview(
+        workspace_id=workspace_id,
+        start=now - timedelta(hours=1),
+        end=now + timedelta(hours=1),
+        bucket_seconds=3600,
+    )
+
+    with isolated_services.context.database.session() as session:
+        rollup = UsageBillingRepository(session).aggregates(
+            workspace_id=workspace_id,
+            start=now - timedelta(hours=1),
+            end=now + timedelta(hours=1),
+            bucket_seconds=3600,
+            group_by_workload=False,
+        )
+
+    # Both paths, because they drop independently: the overview reads the
+    # rollup, and that is the one an invoice is computed from.
+    assert report.summary != ()
+    assert overview.summary != ()
+    # The classification reaches the rollup, which is where the fee will read it
+    # from. A column that stayed empty would price every managed account at zero
+    # without failing anything.
+    assert [row.billing_owner for row in rollup] == [UsageBillingOwner.ConnectedCloud.value]
+    # A management fee, not a compute charge: the same seconds on the platform
+    # fleet would price at the catalog CPU and memory rates, which are more than
+    # an order of magnitude above these.
+    assert {line.metric for line in report.summary} == {
+        BillableMetric.ManagedCpuSeconds,
+        BillableMetric.ManagedMemoryGibSeconds,
+    }
+    # The two paths compute the fee independently — one from evidence rows, one
+    # from the rollup — and only agree if they resolve the owner the same way.
     assert overview.summary == report.summary
     assert overview.total_cost_nanos == report.total_cost_nanos
 
@@ -552,7 +737,6 @@ def test_billing_api_returns_compact_overview_and_lazy_workload_detail(
         "end",
         "currency",
         "total_cost_nanos",
-        "contains_estimates",
         "summary",
         "apps",
         "activity",
@@ -679,11 +863,7 @@ def test_usage_price_catalog_is_validated_from_deployment_environment(
     price_base: dict[str, JsonValue] = {
         "price_per_unit_nanos": 25000,
         "currency": "EUR",
-        "provider": "Example Cloud",
-        "service": "Serverless compute",
-        "region": "eu-central-1",
         "effective_date": "2025-01-01",
-        "source_url": "https://pricing.example.test/compute",
     }
     prices: list[dict[str, JsonValue]] = [
         {**price_base, "metric": "cpu_seconds", "label": "CPU", "unit": "seconds"},
@@ -693,7 +873,35 @@ def test_usage_price_catalog_is_validated_from_deployment_environment(
             "label": "Memory",
             "unit": "gib_seconds",
         },
-        {**price_base, "metric": "gpu_seconds", "label": "GPU", "unit": "seconds"},
+        # Derived from the same list the catalog validates against: a fixture
+        # that hand-listed models would drift from it exactly as two catalogs do.
+        *(
+            {
+                **price_base,
+                "metric": "gpu_seconds",
+                "label": f"GPU ({gpu.value})",
+                "unit": "seconds",
+                "variant": gpu.value,
+            }
+            for gpu in SUPPORTED_GPU_TYPES
+        ),
+        {**price_base, "metric": "managed_cpu_seconds", "label": "Managed CPU", "unit": "seconds"},
+        {
+            **price_base,
+            "metric": "managed_memory_gib_seconds",
+            "label": "Managed memory",
+            "unit": "gib_seconds",
+        },
+        *(
+            {
+                **price_base,
+                "metric": "managed_gpu_seconds",
+                "label": f"Managed GPU ({gpu.value})",
+                "unit": "seconds",
+                "variant": gpu.value,
+            }
+            for gpu in SUPPORTED_GPU_TYPES
+        ),
     ]
     monkeypatch.setenv("LAZYCLOUD_USAGE_BILLING_CURRENCY", "eur")
     monkeypatch.setenv("LAZYCLOUD_USAGE_PRICE_CATALOG", json.dumps(prices))
@@ -702,14 +910,19 @@ def test_usage_price_catalog_is_validated_from_deployment_environment(
 
     assert configured.billing_currency == "EUR"
     assert configured.price_catalog is not None
-    assert configured.price_catalog[0].provider == "Example Cloud"
+    assert (
+        configured.to_price_catalog().price_for(
+            BillableMetric.GpuSeconds, "H100", on=utc_now().date()
+        )
+        is not None
+    )
 
     monkeypatch.setenv("LAZYCLOUD_USAGE_PRICE_CATALOG", json.dumps([prices[0], *prices]))
     with pytest.raises(ValidationError, match="duplicate usage price for cpu_seconds"):
         UsagePricingSettings()
 
     monkeypatch.setenv("LAZYCLOUD_USAGE_PRICE_CATALOG", json.dumps(prices[:1]))
-    with pytest.raises(ValidationError, match="must cover exactly the compute metrics"):
+    with pytest.raises(ValidationError, match="must cover exactly the priced metrics"):
         UsagePricingSettings()
 
 
@@ -771,7 +984,16 @@ def test_billing_csv_matches_authorized_report_and_preserves_all_sections(
     catalog_row = next(
         row for row in rows if row["section"] == "catalog" and row["metric"] == "cpu_seconds"
     )
-    assert catalog_row["source_url"].startswith("https://aws.amazon.com/")
+    # The catalog section carries the rate charged, not a citation of anyone
+    # else's published price—a sell price has no source to point at.
+    assert int(catalog_row["price_per_unit_nanos"]) > 0
+    assert catalog_row["effective_date"]
+    gpu_rows = {
+        row["variant"]
+        for row in rows
+        if row["section"] == "catalog" and row["metric"] == "gpu_seconds"
+    }
+    assert {"T4", "H100"} <= gpu_rows
     assert (
         next(row for row in rows if row["section"] == "coverage")["coverage_status"] == "complete"
     )
@@ -799,7 +1021,6 @@ def test_billing_window_normalizes_to_utc_and_is_end_exclusive(
                 unit=UsageUnit.Count,
                 created_at=created_at,
             ),
-            export=False,
         )
 
     mountain = timezone(timedelta(hours=-6))

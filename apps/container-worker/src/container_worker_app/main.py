@@ -70,9 +70,6 @@ class ContainerWorkerArguments(argparse.Namespace):
     keepalive_interval_seconds: float = DEFAULT_WORKER_KEEPALIVE_INTERVAL_SECONDS
     heartbeat_file: Path = heartbeat_path(CONTAINER_WORKER_PROCESS_NAME)
     worker_spindown_seconds: float | None = None
-    container_cost_hook_endpoint: str | None = None
-    container_cost_hook_token: str | None = None
-    container_cost_hook_timeout_seconds: float | None = None
     gpu_devices: str | None = None
     nvidia_cdi_enabled: bool | None = None
     once: bool = False
@@ -608,18 +605,6 @@ def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
         worker_spindown_seconds=_override(
             args.worker_spindown_seconds,
             loaded.worker_spindown_seconds,
-        ),
-        container_cost_hook_endpoint=_override(
-            args.container_cost_hook_endpoint,
-            loaded.container_cost_hook_endpoint,
-        ),
-        container_cost_hook_token=_override(
-            args.container_cost_hook_token,
-            loaded.container_cost_hook_token,
-        ),
-        container_cost_hook_timeout_seconds=_override(
-            args.container_cost_hook_timeout_seconds,
-            loaded.container_cost_hook_timeout_seconds,
         ),
         gpu_devices=_override(args.gpu_devices, loaded.gpu_devices),
         nvidia_cdi_enabled=_override(args.nvidia_cdi_enabled, loaded.nvidia_cdi_enabled),

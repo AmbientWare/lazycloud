@@ -29,6 +29,7 @@ from images.scheduling import (
     IMAGE_BUILD_REQUEST_KIND,
     plan_image_build_container_request,
 )
+from shared.errors import DomainError
 from shared.image_building.records import BuildStatus
 from shared.scheduling import SchedulerContainerSubmitResult, SchedulerWorkerRequest
 from worker.repository_payloads import ImageBuildPrivateInputs, ImageBuildRegistryAuth
@@ -45,6 +46,17 @@ from worker_repository.image_build_credentials import (
 
 class ImageBuildContainerRequestScheduler(Protocol):
     def submit(self, request: SchedulerWorkerRequest) -> SchedulerContainerSubmitResult: ...
+
+
+class ImageBuildSolvency(Protocol):
+    """Whether this workspace's account may start a build.
+
+    A build is compute the platform pays for like any other, and it reaches the
+    worker without ever creating a container record — so the gate every other
+    workload passes through is one it would otherwise walk around.
+    """
+
+    def assert_solvent(self, *, workspace_id: str) -> None: ...
 
 
 class ImageBuildContainerExecutorFactory(Protocol):
@@ -73,6 +85,9 @@ class SchedulerImageBuildExecutor:
     address_poll_interval_seconds: float = DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_SECONDS
     sleep: ImageBuildSleep = time.sleep
     credential_cache: ImageBuildCredentialStore | None = None
+    solvency: ImageBuildSolvency | None = None
+    """Absent only where nothing composes one. A deployment that bills has it, and
+    a build then costs the account nothing it has not agreed to pay for."""
 
     def execute(self, request: ImageBuildExecutionRequest) -> ImageBuildExecutionResult:
         events = [
@@ -130,6 +145,13 @@ class SchedulerImageBuildExecutor:
                     f"image build credential staging failed ({type(exc).__name__})",
                 )
 
+        if self.solvency is not None:
+            try:
+                self.solvency.assert_solvent(workspace_id=workspace_id)
+            except DomainError as exc:
+                # Before the container request, so a refused build reserves no
+                # worker and leaves no pending state behind it.
+                return self._failure_before_connection(request, events, str(exc))
         try:
             try:
                 scheduled = self.scheduler.submit(plan.scheduler_request)

@@ -12,6 +12,7 @@ from compute.state import (
 from coordination.redis_client import RedisClient
 from shared.compute_policy import MachinePool, UnitName
 from shared.routing import AgentBackendRoute
+from shared.usage import UsageBillingOwner
 from tests.redis_fakes import FakeRedis
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -68,6 +69,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
     assert repo.get_agent_machine_state_for_workspace("ws-1", "machine-1") == agent
 
     slot = ComputeAgentWorkerSlotState(
+        billing_owner=UsageBillingOwner.SelfHosted,
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         workspace_id="ws-1",
         pool=MachinePool("default"),
@@ -134,6 +136,7 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls() -> None:
         created_at=now,
     )
     cleanup_slot = ComputeAgentWorkerSlotState(
+        billing_owner=UsageBillingOwner.SelfHosted,
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         workspace_id="ws-1",
         pool=MachinePool("cleanup"),

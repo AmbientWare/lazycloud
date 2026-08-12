@@ -1783,6 +1783,7 @@ def _agent_slot_from_gateway(slot: http.AgentWorkerSlot) -> AgentWorkerSlot:
         worker_token=slot.worker_token,
         pool=slot.pool,
         capacity_owner_id=slot.capacity_owner_id,
+        billing_owner=slot.billing_owner,
         machine_id=slot.machine_id,
         cpu_millicores=slot.cpu,
         memory_mb=slot.memory,

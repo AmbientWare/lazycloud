@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -21,7 +22,13 @@ from shared.container_requests import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.env import GATEWAY_HTTP_URL_ENV, no_gateway_origin
-from shared.errors import ConflictError, DomainError, InvalidInputError, NotFoundError
+from shared.errors import (
+    ConflictError,
+    DomainError,
+    InvalidInputError,
+    NotFoundError,
+    PaymentRequiredError,
+)
 from shared.events import EventLevel
 from shared.function_payloads import (
     FunctionDependencyBinding,
@@ -68,6 +75,8 @@ from execution.mounts import (
 )
 from execution.services import ExecutionServices, SchedulerSubmissionResult
 
+LOGGER = logging.getLogger(__name__)
+
 FUNCTION_LIKE_STUB_KINDS = {StubKind.Function, StubKind.CronJob}
 
 
@@ -90,6 +99,11 @@ class FunctionControlService:
                     done=True,
                     exit_code=1,
                 )
+            # Before the task row, because everything after this commits: a
+            # refusal taken later leaves a task queued forever for an account
+            # nothing will schedule.
+            with self.services.context.database.session() as session:
+                self.services.containers.assert_solvent(session, workspace_id=stub.workspace_id)
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
             retry_policy = config.effective_retry_policy
             invoke_plan = plan_function_invoke(
@@ -158,6 +172,12 @@ class FunctionControlService:
                 workspace_id=stub.workspace_id,
             )
             return FunctionInvokeResponse.from_result(task_id=task.id)
+        except PaymentRequiredError:
+            # Told to the caller as a refusal rather than folded into a result.
+            # Everything else here is something that went wrong while running
+            # their code, which a failed task describes; this is the platform
+            # declining to run it at all, and there is no task to describe it.
+            raise
         except Exception as exc:
             return FunctionInvokeResponse.from_result(
                 task_id="",
@@ -539,7 +559,16 @@ class FunctionControlService:
                 stub = self.control_plane.get_stub(task.stub_id)
                 if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
                     continue
-            result = self._schedule_function_task(task, eligible_at=current)
+            try:
+                result = self._schedule_function_task(task, eligible_at=current)
+            except DomainError:
+                # One task's refusal is its own. This sweep runs inside the
+                # scheduler's pass, so an account that cannot be scheduled would
+                # otherwise stop every later step of it — including the billing
+                # that is the only thing able to make that account schedulable
+                # again.
+                LOGGER.exception("scheduling retry for task %s failed", task.id)
+                continue
             if result is not None:
                 scheduled.append(self.services.tasks.get(task.id))
         return scheduled
@@ -626,7 +655,17 @@ class FunctionControlService:
         with self.services.context.database.session() as session:
             dependencies = TaskDependencyRepository(session).list_for_upstream(task.id)
         for dependency in dependencies:
-            self._try_schedule_waiting_task(dependency.task_id, seen=visited)
+            try:
+                self._try_schedule_waiting_task(dependency.task_id, seen=visited)
+            except DomainError:
+                # Releasing what waited on this task is downstream of finishing
+                # it, and the work that finished is already recorded. A refusal
+                # here must not travel back up and fail the call that reported a
+                # success — a runner would exit non-zero for a function that ran
+                # perfectly well.
+                LOGGER.exception(
+                    "releasing dependent task %s of %s failed", dependency.task_id, task.id
+                )
 
     def function_call_graph(
         self,

@@ -31,6 +31,7 @@ from worker.scheduler_requests import (
     WorkerSchedulerRequestProcessor,
     WorkerSchedulerRequestResult,
     WorkerSchedulerRequestStatus,
+    container_execution_context_from_scheduler_request,
 )
 from worker.worker_lifecycle import WorkerLifecycleOrchestrator
 
@@ -54,6 +55,7 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
         workers=workers,
         containers=containers,
         execution=execution,
+        worker_gpu_type="",
     )
 
     started = processor.run_once()
@@ -94,6 +96,7 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
         workers=workers,
         containers=containers,
         execution=execution,
+        worker_gpu_type="",
         image_builds=image_builds,
     )
 
@@ -137,6 +140,7 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
         workers=workers,
         containers=containers,
         execution=execution,
+        worker_gpu_type="",
         lifecycle=lifecycle,
     )
     started = processor.run_once()
@@ -183,6 +187,7 @@ def test_worker_scheduler_request_processor_backgrounds_long_lived_container() -
         workers=workers,
         containers=containers,
         execution=execution,
+        worker_gpu_type="",
         lifecycle=lifecycle,
     )
 
@@ -222,6 +227,7 @@ def test_worker_scheduler_request_processor_drops_missing_state_and_releases_cap
         workers=workers,
         containers=_ContainerRepository(),
         execution=_ExecutionService(),
+        worker_gpu_type="",
     )
 
     result = processor.run_once()
@@ -242,6 +248,7 @@ def test_worker_scheduler_request_processor_drops_stopping_state_and_deletes_sta
         workers=_WorkerRepository(requests=[request]),
         containers=containers,
         execution=_ExecutionService(),
+        worker_gpu_type="",
     )
 
     result = processor.run_once()
@@ -271,6 +278,7 @@ def test_worker_scheduler_request_processor_reports_execution_failure() -> None:
             states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
         ),
         execution=_ExecutionService(result=execution_result),
+        worker_gpu_type="",
     )
 
     started = processor.run_once()
@@ -461,3 +469,55 @@ class _ShutdownStopper:
         del reason
         self.stopped.append((container_id, force))
         self.stop_requested.set()
+
+
+def test_a_container_is_billed_for_the_card_it_ran_on() -> None:
+    """The usage label names the machine's GPU, not the one the request asked for.
+
+    A request may say `any`, or name a model as a list, and the scheduler resolves
+    it against real capacity. `any` is not a rate anything can price, so a
+    container billed under it produces an unpriced line for compute that plainly
+    ran on a real card.
+    """
+
+    context = container_execution_context_from_scheduler_request(
+        _request(gpu_type="any", gpu_count=1, payload={"image_id": "img-1"}),
+        worker_gpu_type="H100",
+    )
+
+    assert context.request.gpu == "H100"
+    assert context.request.gpu_count == 1
+
+
+def test_a_cpu_only_container_on_a_gpu_host_is_billed_for_no_card() -> None:
+    """No GPU allocated means no GPU stamped, whatever the host happens to hold.
+
+    GPU seconds are priced per model, so stamping the host's card on a container
+    that was never given one invents a charge out of the machine it landed on.
+    """
+
+    context = container_execution_context_from_scheduler_request(
+        _request(gpu_type="", gpu_count=0, payload={"image_id": "img-1"}),
+        worker_gpu_type="H100",
+    )
+
+    assert context.request.gpu == ""
+    assert context.request.gpu_count == 0
+
+
+def test_a_worker_that_names_no_particular_card_bills_for_none() -> None:
+    """`any` reaches worker configuration verbatim and must not be billed as a model.
+
+    A pool joined with `gpu=["any"]` puts that word ahead of the machine's own
+    detected cards, so every worker in it registers `any` as its model. Passing it
+    through would price the container at an unknown model on a machine whose real
+    card we never confirmed; an empty model is a visible unpriced gap instead.
+    """
+
+    context = container_execution_context_from_scheduler_request(
+        _request(gpu_type="H100", gpu_count=1, payload={"image_id": "img-1"}),
+        worker_gpu_type="any",
+    )
+
+    assert context.request.gpu == ""
+    assert context.request.gpu_count == 1

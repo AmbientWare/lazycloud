@@ -32,7 +32,6 @@ from networking.tailnet import TailnetRuntime
 from networking.tailnet_control import TailscaleTailnetControl
 from observability.settings import (
     TelemetrySettings,
-    UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
@@ -232,7 +231,6 @@ def _production_api_services() -> ApiServices:
     image_build_container_settings = ImageBuildContainerSettings()
     container_service_settings = ContainerServiceSettings()
     retention_settings = RetentionSettings()
-    usage_metrics_settings = UsageMetricsSettings()
     usage_pricing_settings = UsagePricingSettings()
     volume_metering_settings = VolumeMeteringSettings()
     tailnet_runtime_settings = TailnetRuntimeSettings()
@@ -295,7 +293,6 @@ def _production_api_services() -> ApiServices:
             image_build_container_settings=image_build_container_settings,
             container_service_settings=container_service_settings,
             retention_settings=retention_settings,
-            usage_metrics_settings=usage_metrics_settings,
             usage_pricing_settings=usage_pricing_settings,
             volume_metering_settings=volume_metering_settings,
             redis_client=redis_client,

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from datetime import date
-from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
@@ -11,25 +10,43 @@ from shared.usage import UsageUnit
 
 
 class BillableMetric(StringEnum):
+    """What a billing line charges for.
+
+    Declaration order is load-bearing: report line ordering derives from it, so a
+    member inserted in the middle reorders every invoice.
+
+    The `Managed*` members are the same compute measured on a customer's own
+    cloud account. They are separate metrics rather than a flag on the originals
+    because they answer a different question — not what the compute is worth, but
+    what managing it is worth — and a report shows both at once when one app runs
+    on both fleets.
+    """
+
     CpuSeconds = "cpu_seconds"
     MemoryGibSeconds = "memory_gib_seconds"
     GpuSeconds = "gpu_seconds"
-    RecordedCompute = "recorded_compute"
-    ManagedCompute = "managed_compute_reservation_seconds"
-    CustomerCloudManagement = "customer_cloud_management_seconds"
+    ManagedCpuSeconds = "managed_cpu_seconds"
+    ManagedMemoryGibSeconds = "managed_memory_gib_seconds"
+    ManagedGpuSeconds = "managed_gpu_seconds"
 
 
-COMPUTE_PRICE_METRICS: tuple[BillableMetric, ...] = (
+PRICED_METRICS: tuple[BillableMetric, ...] = (
     BillableMetric.CpuSeconds,
     BillableMetric.MemoryGibSeconds,
     BillableMetric.GpuSeconds,
+    BillableMetric.ManagedCpuSeconds,
+    BillableMetric.ManagedMemoryGibSeconds,
+    BillableMetric.ManagedGpuSeconds,
 )
+"""Every metric a price catalog must cover, and every one a report can charge.
 
-
-class BillingCostBasis(StringEnum):
-    CatalogEstimate = "catalog_estimate"
-    RecordedAllocation = "recorded_allocation"
-    Recorded = "recorded"
+All of these come from a container's allocation over a metering window, which is
+why they accumulate per window rather than summing outright: one window can emit
+both a duration record and directly recorded seconds covering the same interval,
+and the directly recorded figure takes precedence so those seconds are charged
+once. Neither figure is pure measurement — a container that bursts past its
+request is billed the burst, and one that idles under it is billed the request.
+"""
 
 
 class BillingCoverageStatus(StringEnum):
@@ -39,25 +56,34 @@ class BillingCoverageStatus(StringEnum):
     Unpriced = "unpriced"
 
 
-class UsagePriceConfig(ContractModel):
+class SellPriceConfig(ContractModel):
+    """What LazyCloud charges for one metric.
+
+    `price_per_unit_nanos` admits zero. A metered dimension we have chosen not to
+    charge for is a real state—it keeps the meter, the ledger entry and the
+    invoice line, and only the rate is zero—and it is not expressible if the
+    contract demands a positive price.
+    """
+
     metric: BillableMetric
     label: str
     unit: UsageUnit
-    price_per_unit_nanos: int
+    price_per_unit_nanos: int = Field(ge=0)
     currency: str
-    provider: str
-    service: str
-    region: str
     effective_date: date
-    source_url: str
+    variant: str = Field(default="", max_length=64)
+    """Distinguishes rates sharing a metric—the GPU model, for `gpu_seconds`.
+
+    Empty means the rate covers the whole metric.
+    """
     note: str = ""
 
-    @field_validator("label", "provider", "service", "region")
+    @field_validator("label")
     @classmethod
-    def _non_empty_text(cls, value: str) -> str:
+    def _non_empty_label(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            raise ValueError("usage price catalog text fields cannot be empty")
+            raise ValueError("sell price label cannot be empty")
         return normalized
 
     @field_validator("currency")
@@ -65,30 +91,13 @@ class UsagePriceConfig(ContractModel):
     def _currency_code(cls, value: str) -> str:
         normalized = value.strip().upper()
         if len(normalized) != 3 or not normalized.isalpha():
-            raise ValueError("usage price currency must be a three-letter code")
-        return normalized
-
-    @field_validator("price_per_unit_nanos")
-    @classmethod
-    def _positive_price(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("usage price must be positive")
-        return value
-
-    @field_validator("source_url")
-    @classmethod
-    def _absolute_source_url(cls, value: str) -> str:
-        normalized = value.strip()
-        parsed = urlparse(normalized)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("usage price source URL must be absolute HTTP(S)")
+            raise ValueError("sell price currency must be a three-letter code")
         return normalized
 
 
 __all__ = [
-    "COMPUTE_PRICE_METRICS",
+    "PRICED_METRICS",
     "BillableMetric",
-    "BillingCostBasis",
     "BillingCoverageStatus",
-    "UsagePriceConfig",
+    "SellPriceConfig",
 ]

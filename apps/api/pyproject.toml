@@ -5,6 +5,7 @@ description = "FastAPI control-plane server for LazyCloud."
 requires-python = ">=3.12"
 dependencies = [
     "agent",
+    "billing",
     "cache",
     "cloudpickle>=3,<4",
     "compute",
@@ -24,6 +25,7 @@ dependencies = [
     "provider-clients",
     "provider-cloudflare",
     "provider-github",
+    "provider-stripe",
     "pydantic-settings>=2.4,<3",
     "scheduler",
     "storage",
@@ -31,8 +33,8 @@ dependencies = [
     "worker",
     "worker-repository",
     "uvicorn>=0.30,<1",
-    "websockets>=15,<16",
-    "cryptography>=49,<50",
+    "websockets>=17,<18",
+    "cryptography>=50,<51",
 ]
 
 [project.scripts]

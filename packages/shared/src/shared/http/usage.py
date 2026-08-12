@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import Field, JsonValue
 
-from shared.billing import BillableMetric, BillingCostBasis
+from shared.billing import BillableMetric
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.usage import UsageMetric, UsageUnit
@@ -51,7 +51,18 @@ class UsageBillingLineResponse(HttpModel):
     unit: UsageUnit
     price_per_unit_nanos: int | None = None
     cost_nanos: int
-    cost_basis: BillingCostBasis
+    effective_date: date | None = None
+    """When the rate that priced this line took effect, null where nothing priced
+    it. A rate change splits a metric into two lines rather than blending them, and
+    this is what tells them apart."""
+
+    variant: str = ""
+    """Which rate produced this line—the GPU model, or empty where one rate covers
+    the whole metric.
+
+    A summary can hold several lines sharing a metric, so `metric` alone does not
+    identify one; readers key on the pair.
+    """
 
 
 class UsageBillingAttributionResponse(HttpModel):
@@ -86,7 +97,6 @@ class UsageBillingOverviewResponse(HttpModel):
     end: datetime
     currency: str
     total_cost_nanos: int = 0
-    contains_estimates: bool = True
     summary: list[UsageBillingLineResponse] = Field(default_factory=list)
     apps: list[UsageBillingAppSummaryResponse] = Field(default_factory=list)
     activity: list[UsageBillingBucketResponse] = Field(default_factory=list)

@@ -220,6 +220,7 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
         worker_token=str(worker_token) if worker_token is not None else "",
         pool=slot.pool,
         capacity_owner_id=slot.capacity_owner_id,
+        billing_owner=slot.billing_owner,
         machine_id=slot.machine_id,
         cpu=slot.cpu,
         memory=slot.memory,

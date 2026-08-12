@@ -80,6 +80,18 @@ class ContainerEventBus(Protocol):
     def send(self, event: EventBusEvent) -> EventBusSendResult: ...
 
 
+class PaymentAdmission(Protocol):
+    """Whether this workspace's account may start more work.
+
+    Beside `AppExecutionAdmission` and asked in the same breath, because the two
+    are the same kind of question: a reason unrelated to capacity why this
+    container must not come into existence. Both are answered inside the
+    transaction that would create it, so a refusal leaves nothing to undo.
+    """
+
+    def assert_solvent(self, session: DatabaseSession, *, workspace_id: str) -> None: ...
+
+
 class AppExecutionAdmission(Protocol):
     def assert_active(
         self,
@@ -126,17 +138,33 @@ class ContainerService:
     events: EventService
     tasks: TaskService
     app_admission: AppExecutionAdmission
+    payment_admission: PaymentAdmission
     scheduler: ContainerScheduler
     scheduler_cancellation: SchedulerContainerCancellation
     event_bus: ContainerEventBus
     workspace_changes: WorkspaceChangePublisher
     runtime_state: ContainerRuntimeStateRepository | None = None
 
+    def assert_solvent(self, session: DatabaseSession, *, workspace_id: str) -> None:
+        """Refuse a workspace whose account owes money, before anything exists.
+
+        Exposed here rather than left to callers to find, because the two that
+        build their own container record instead of reserving one still have to
+        ask — and asking through the service that owns containers keeps the one
+        answer in one place.
+        """
+
+        self.payment_admission.assert_solvent(session, workspace_id=workspace_id)
+
     def reserve_pending(
         self,
         session: DatabaseSession,
         reservation: PendingContainerReservation,
     ) -> ContainerRecord:
+        # Before the row. Asked ahead of the app check because it is the broader
+        # refusal — owing money stops work whether or not an app owns it, and a
+        # reservation without an app id skips the check below entirely.
+        self.payment_admission.assert_solvent(session, workspace_id=reservation.workspace_id)
         app_id = optional_uuid(reservation.app_id, field="app_id")
         if app_id is not None:
             self.app_admission.assert_active(
@@ -350,7 +378,6 @@ class ContainerService:
             docker_enabled=options.docker_enabled,
             block_network=options.block_network,
             allow_list=[str(item) for item in options.allow_list or []],
-            cost_per_ms=options.cost_per_ms,
             mounts=list(options.mounts or []),
             secret_names=[str(name) for name in options.secret_names or []],
             gateway_token_required=options.gateway_token_required,

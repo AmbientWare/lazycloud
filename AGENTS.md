@@ -23,9 +23,16 @@ gets its `CLAUDE.md` symlink in the same change.
 - Protect secrets and user work. Never expose secrets in output, URLs, logs,
   tests, comments, docs, or durable records. Inspect the dirty tree, preserve
   unrelated changes, and stage only intentional files.
-- All implementation here is original. Match the capability, security,
-  durability, operability, cost, performance, and public contracts production
-  requires—never another codebase's internals or names.
+- Read other codebases freely and learn from them—how a problem was solved, what
+  a design costs, what it missed. What ships here is written from that
+  understanding, not transcribed: no copying code, structure, or names verbatim
+  or near-verbatim, and no result that is another project's work wearing renamed
+  variables. Match the capability, security, durability, operability, cost,
+  performance, and public contracts production requires rather than another
+  project's internals. Under a copyleft licence (AGPL, GPL) this is a legal line
+  and not only an authorship one, and derivative-work scope there reaches further
+  than verbatim copying—so name the source and its licence when a reading
+  informs a design.
 
 ## Reporting and Responding to the User
 

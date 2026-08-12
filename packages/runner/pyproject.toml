@@ -9,7 +9,10 @@ dependencies = [
     "foundation",
     "pydantic>=2.8,<3",
     "uvicorn>=0.30,<1",
-    "websockets>=15,<16",
+    # Floor held below 17 on purpose: this package supports Python 3.10 and
+    # websockets 17 does not. A dependency that cannot install on a Python the
+    # package claims to support is a broken install, not a version to chase.
+    "websockets>=15,<18",
     "packaging>=24,<27",
 ]
 

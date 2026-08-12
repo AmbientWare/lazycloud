@@ -50,10 +50,17 @@ def function_invoke(
 def function_invoke_stream(
     request: FunctionInvokeBody,
     workspace_id: write_workspace,
+    services: ApiServices = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
+    # Asked here rather than left to the service, because a streaming response
+    # sends its status before the generator runs: a refusal raised inside it
+    # cannot be a 402 and reaches the caller as a stream that simply ends,
+    # which reads as the platform losing the request rather than declining it.
+    with services.context.database.session() as session:
+        services.containers.assert_solvent(session, workspace_id=workspace_id)
     return StreamingResponse(
         _function_ndjson(service.function_invoke_stream(request)),
         media_type="application/x-ndjson",

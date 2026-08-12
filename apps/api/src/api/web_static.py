@@ -12,7 +12,14 @@ from starlette.types import Scope
 WEB_STATIC_DIR_ENV = "LAZYCLOUD_WEB_STATIC_DIR"
 
 _DEFAULT_STATIC_DIR = Path(__file__).parent / "web_static"
-_BACKEND_PATH_NAMESPACES = frozenset({"api", "auth", "gateway"})
+_BACKEND_PATH_NAMESPACES = frozenset({"api", "auth", "gateway", "webhooks"})
+"""Namespaces the SPA never answers for.
+
+A path outside these falls through to `index.html` with a 200, which is right for
+a client-side route and wrong for anything a machine calls: a payment provider
+posting to a mistyped webhook path would read the dashboard's HTML as a
+successful delivery and stop retrying.
+"""
 _BUILD_ASSET_NAMESPACE = "assets"
 
 

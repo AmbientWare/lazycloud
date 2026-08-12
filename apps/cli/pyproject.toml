@@ -12,7 +12,7 @@ dependencies = [
     "lazycloud-shared==0.1.0",
     "lazycloud==0.1.0",
     "pydantic>=2.8,<3",
-    "rich>=13,<14",
+    "rich>=15,<16",
     "storage-client",
     "typer>=0.26.7",
 ]

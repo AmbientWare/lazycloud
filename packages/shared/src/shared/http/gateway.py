@@ -27,11 +27,6 @@ class StringList(HttpModel):
     values: list[str] = Field(default_factory=list)
 
 
-class TaskCostState(StringEnum):
-    Available = "available"
-    Unavailable = "unavailable"
-
-
 class AgentCapacityInterruptionRequest(HttpModel):
     agent_token: str = Field(min_length=1, repr=False)
     machine_id: str = Field(min_length=1)
@@ -313,5 +308,4 @@ __all__ = [
     "StubVolume",
     "SyncContainerWorkspaceBody",
     "SyncContainerWorkspaceResponse",
-    "TaskCostState",
 ]

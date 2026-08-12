@@ -1761,20 +1761,6 @@ class RedisSchedulerContainerRepository:
             self.release_concurrency_reservation(release_workspace_id, container_id)
         return state
 
-    def update_assigned_gpu(self, container_id: str, gpu_type: str) -> SchedulerContainerState:
-        def write() -> SchedulerContainerState:
-            state = self.get_container_state(container_id)
-            if state is None:
-                raise ContainerStateNotFoundError(container_id)
-            updated = state.model_copy(update={"gpu_type": gpu_type})
-            self.redis.hash_set(
-                self.keys.container_state(container_id),
-                mapping=redis_serialization.dump_model_hash(updated),
-            )
-            return updated
-
-        return self._with_container_lock(container_id, write)
-
     def delete_container_state(self, container_id: str) -> bool:
         def write() -> tuple[bool, str | None]:
             self._fence_container_request(container_id)

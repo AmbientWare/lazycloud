@@ -12,10 +12,9 @@ export const usageMetrics = [
   "memory_gib_seconds",
   "gpu_seconds",
   "task_count",
-  "storage_bytes",
   "persistent_volume_byte_seconds",
   "container_duration_milliseconds",
-  "container_cost_cents",
+  "container_disk_byte_seconds",
   "cpu_used_core_seconds",
   "memory_rss_byte_seconds",
   "memory_swap_byte_seconds",
@@ -26,16 +25,6 @@ export const usageMetrics = [
   "network_egress_packets",
   "disk_read_bytes",
   "disk_write_bytes",
-  "managed_compute_reservation_seconds",
-  "managed_compute_reservation_cost_cents",
-  "customer_cloud_management_seconds",
-  "customer_cloud_management_cost_cents",
-  "customer_cloud_allocated_cpu_seconds",
-  "customer_cloud_allocated_memory_gib_seconds",
-  "customer_cloud_allocated_gpu_seconds",
-  "customer_cloud_allocated_disk_gib_seconds",
-  "customer_cloud_network_ingress_bytes",
-  "customer_cloud_network_egress_bytes",
   "node_usage",
 ] as const;
 
@@ -45,7 +34,6 @@ export const usageUnits = [
   "bytes",
   "gib_seconds",
   "milliseconds",
-  "cents",
   "byte_seconds",
 ] as const;
 
@@ -53,12 +41,10 @@ export const billableMetrics = [
   "cpu_seconds",
   "memory_gib_seconds",
   "gpu_seconds",
-  "recorded_compute",
-  "managed_compute_reservation_seconds",
-  "customer_cloud_management_seconds",
+  "managed_cpu_seconds",
+  "managed_memory_gib_seconds",
+  "managed_gpu_seconds",
 ] as const;
-
-export const billingCostBases = ["catalog_estimate", "recorded_allocation", "recorded"] as const;
 
 const currencySchema = z.string().regex(/^[A-Z]{3}$/);
 
@@ -89,7 +75,13 @@ const usageBillingLineSchema = z.object({
   unit: z.enum(usageUnits),
   price_per_unit_nanos: z.number().int().nonnegative().nullish(),
   cost_nanos: z.number().int().nonnegative(),
-  cost_basis: z.enum(billingCostBases),
+  // A summary can carry several lines sharing a metric — one per GPU model — so
+  // metric alone does not identify a line, and neither does metric and variant:
+  // a rate change splits one metric into two lines. Readers key on all three.
+  variant: z.string().default(""),
+  // A rate change splits a metric into two lines rather than blending them; this
+  // is what distinguishes them. Null where nothing priced the line.
+  effective_date: z.string().nullable().default(null),
 });
 export type UsageBillingLine = z.infer<typeof usageBillingLineSchema>;
 
@@ -127,7 +119,6 @@ export const usageBillingOverviewSchema = z.object({
   end: z.string(),
   currency: currencySchema,
   total_cost_nanos: z.number().int().nonnegative().default(0),
-  contains_estimates: z.boolean().default(true),
   summary: z.array(usageBillingLineSchema).default([]),
   apps: z.array(usageBillingAppSummarySchema).default([]),
   activity: z.array(usageBillingBucketSchema).default([]),

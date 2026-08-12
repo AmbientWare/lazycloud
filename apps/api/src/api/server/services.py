@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -107,14 +107,12 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    UsageMetricsSettings,
     UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
 from observability.stream_state import RedisEventStreamRepository
 from observability.usage import UsageService, WorkerEventService
-from observability.usage_exporter import UsageMetricsExporter
 from observability.workspace_changes import WorkspaceChangeRepository, WorkspaceChangeService
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import (
@@ -135,6 +133,7 @@ from provider_clients.settings import (
 )
 from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
+from provider_stripe import StripeSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
@@ -201,6 +200,7 @@ from shared.http.taskqueues import (
     TaskQueueStateResponse,
 )
 from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
+from shared.payments import PaymentProvider
 from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.image_archive import (
     IMAGE_ARCHIVE_EXTENSION,
@@ -253,6 +253,7 @@ from api.settings import (
     PublicIngressSettings,
     TcpIngressSettings,
 )
+from billing import DatabaseBillingAdmission, ImageBuildBillingAdmission
 from database import DatabaseClient
 
 
@@ -461,6 +462,8 @@ class ApiServiceCore:
     tcp_ingress_settings: TcpIngressSettings
     agent_route_reconciliation_settings: AgentRouteReconciliationSettings
     gateway_settings: GatewaySettings
+    stripe_settings: StripeSettings
+    payment_provider: Callable[[], PaymentProvider]
     workspace_change_stream_settings: WorkspaceChangeStreamSettings
     agent_binary_settings: AgentBinarySettings
     aws_account_connection_settings: AwsAccountConnectionSettings
@@ -563,6 +566,7 @@ class ApiServices(ApiServiceCore):
         tcp_ingress_settings: TcpIngressSettings | None = None,
         agent_route_reconciliation_settings: AgentRouteReconciliationSettings | None = None,
         gateway_settings: GatewaySettings | None = None,
+        stripe_settings: StripeSettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
@@ -583,7 +587,6 @@ class ApiServices(ApiServiceCore):
         image_build_container_settings: ImageBuildContainerSettings | None = None,
         container_service_settings: ContainerServiceSettings | None = None,
         retention_settings: RetentionSettings | None = None,
-        usage_metrics_settings: UsageMetricsSettings | None = None,
         usage_pricing_settings: UsagePricingSettings | None = None,
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
@@ -623,6 +626,7 @@ class ApiServices(ApiServiceCore):
             agent_route_reconciliation_settings or AgentRouteReconciliationSettings()
         )
         gateway_config = gateway_settings or GatewaySettings()
+        stripe_config = stripe_settings or StripeSettings()
         workspace_change_stream_config = (
             workspace_change_stream_settings or WorkspaceChangeStreamSettings()
         )
@@ -650,7 +654,6 @@ class ApiServices(ApiServiceCore):
         )
         container_service_config = container_service_settings or ContainerServiceSettings()
         retention_config = retention_settings or RetentionSettings()
-        usage_metrics_config = usage_metrics_settings or UsageMetricsSettings()
         usage_pricing_config = usage_pricing_settings or UsagePricingSettings()
         volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
         redis = redis_client
@@ -767,10 +770,8 @@ class ApiServices(ApiServiceCore):
                 tailnet_peer_resolver=tailnet_peer_resolver,
             )
         )
-        usage_exporter = UsageMetricsExporter(usage_metrics_config.to_sink_settings())
         usage = UsageService(
             context,
-            exporter=usage_exporter,
             price_catalog=usage_pricing_config.to_price_catalog(),
             workspace_changes=workspace_changes,
         )
@@ -828,7 +829,6 @@ class ApiServices(ApiServiceCore):
             context,
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap,
-            usage_exporter=usage_exporter,
             scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             capacity_owner_mutations=capacity_reservation_repository,
@@ -881,6 +881,7 @@ class ApiServices(ApiServiceCore):
             events,
             tasks,
             DatabaseAppExecutionAdmission(),
+            DatabaseBillingAdmission(),
             scheduler=container_scheduler,
             scheduler_cancellation=container_scheduler,
             event_bus=RedisEventBus(redis),
@@ -927,6 +928,7 @@ class ApiServices(ApiServiceCore):
             container_repository=container_repository,
             redis_client=redis,
             image_build_container_transport_factory=container_transport_factory,
+            database=database,
         )
         resolved_image_archive_store = image_archive_store
         if resolved_image_archive_store is None and isinstance(
@@ -992,6 +994,8 @@ class ApiServices(ApiServiceCore):
             tcp_ingress_settings=tcp_ingress_config,
             agent_route_reconciliation_settings=agent_route_reconciliation_config,
             gateway_settings=gateway_config,
+            stripe_settings=stripe_config,
+            payment_provider=_payment_provider_factory(stripe_config),
             workspace_change_stream_settings=workspace_change_stream_config,
             agent_binary_settings=agent_artifact_config,
             aws_account_connection_settings=aws_account_connection_config,
@@ -1311,6 +1315,8 @@ def _compose_api_services(
         tcp_ingress_settings=core.tcp_ingress_settings,
         agent_route_reconciliation_settings=core.agent_route_reconciliation_settings,
         gateway_settings=core.gateway_settings,
+        stripe_settings=core.stripe_settings,
+        payment_provider=core.payment_provider,
         workspace_change_stream_settings=core.workspace_change_stream_settings,
         agent_binary_settings=core.agent_binary_settings,
         aws_account_connection_settings=core.aws_account_connection_settings,
@@ -1537,6 +1543,29 @@ def _worker_repository_service(
     )
 
 
+def _payment_provider_factory(settings: StripeSettings) -> Callable[[], PaymentProvider]:
+    """A provider built at most once, from the settings this app composed.
+
+    Composition owns which credential the process uses, so this closes over the
+    settings object rather than reading the environment a second time — two
+    sources for one credential is two things to keep in step, and the endpoint
+    already reads its signing secret from the composed one.
+
+    Built lazily and not cached on failure: a deployment missing the credential
+    raises on each attempt, naming the variable, rather than once at startup
+    where the only evidence is a line in a boot log.
+    """
+
+    built: list[PaymentProvider] = []
+
+    def provider() -> PaymentProvider:
+        if not built:
+            built.append(settings.provider())
+        return built[0]
+
+    return provider
+
+
 def _workspace_storage_client(storage: WorkspaceStorageConfig) -> S3ObjectStoreClient:
     return S3ObjectStoreClient.from_settings(
         S3ObjectStoreSettings(
@@ -1623,6 +1652,7 @@ def _image_build_executor(
     container_repository: RedisSchedulerContainerRepository,
     redis_client: RedisClient,
     image_build_container_transport_factory: ContainerServiceTransportFactory | None,
+    database: DatabaseClient,
 ) -> ImageBuildExecutor:
     if execution_settings.executor is not ImageBuildExecutorKind.BuildContainer:
         return execution_settings.create_executor()
@@ -1647,4 +1677,5 @@ def _image_build_executor(
         address_wait_timeout_seconds=container_settings.address_wait_timeout_seconds,
         address_poll_interval_seconds=container_settings.address_poll_interval_seconds,
         credential_cache=RedisImageBuildCredentialCache(redis_client),
+        solvency=ImageBuildBillingAdmission(database),
     )

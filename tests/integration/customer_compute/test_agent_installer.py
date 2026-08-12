@@ -32,6 +32,7 @@ from shared.app_identity import AGENT_NAME
 from shared.compute_policy import MachinePool
 from shared.http.errors import ErrorResponse, HttpApiError
 from shared.tailscale_install import TAILSCALE_AMD64_SHA256, TAILSCALE_INSTALL_VERSION
+from shared.usage import UsageBillingOwner
 from tests.url_constants import EXAMPLE_URL
 from worker.source_cache_cleanup import (
     WorkerSourceCacheDestructionReceipt,
@@ -643,6 +644,7 @@ def test_status_validates_state_and_never_outputs_agent_token(
         AgentWorkerSlot(
             worker_id="worker-one",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            billing_owner=UsageBillingOwner.SelfHosted,
         )
     ]
     (tmp_path / "active-worker-slots.json").write_text(

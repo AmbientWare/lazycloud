@@ -11,7 +11,11 @@ import { LinearSelect, LinearSelectItem } from "@/components/shared/LinearSelect
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ConcurrencyLimitList, UsageBillingOverview } from "@/lib/api/schemas";
+import type {
+  ConcurrencyLimitList,
+  UsageBillingLine,
+  UsageBillingOverview,
+} from "@/lib/api/schemas";
 import { concurrencyLimitsQueryOptions } from "@/lib/queries/concurrency";
 import {
   downloadUsageBillingCsv,
@@ -22,8 +26,9 @@ import {
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 import { CostActivityChart } from "./-components/CostActivityChart";
+import { PaymentMethodPanel } from "./-components/PaymentMethodPanel";
 import { UsageByAppList } from "./-components/UsageByAppList";
-import { billingLabel, formatCostNanos, formatUsageQuantity } from "./-components/usage-report";
+import { formatCostNanos, formatUsageQuantity } from "./-components/usage-report";
 
 const usageRanges = ["current", "24h", "7d", "30d"] as const;
 type UsageRange = (typeof usageRanges)[number];
@@ -155,6 +160,14 @@ function UsagePageContent({
             </PanelErrorBoundary>
           </Panel>
 
+          <Panel
+            title="Payment method"
+            description="How this account is charged"
+            className="lg:col-span-12"
+          >
+            <PaymentMethodPanel />
+          </Panel>
+
           <Panel title="Apps" className="min-h-[22rem] lg:col-span-12 lg:min-h-0">
             <UsageByAppList
               apps={billing.data.apps}
@@ -201,7 +214,30 @@ function SpendSummary({
   concurrency: ConcurrencyLimitList | undefined;
   concurrencyError: boolean;
 }) {
-  const lines = new Map(report.summary.map((line) => [line.metric, line]));
+  // GPU seconds arrive as one line per model, so keying on metric alone would
+  // keep whichever sorted last and report a fraction of the time actually used.
+  // The readout is a per-metric total, so total them. Managed compute folds into
+  // the dimension it measures: it is the same second of CPU, memory or GPU, only
+  // charged as a fee, and a workspace running entirely on its own cloud would
+  // otherwise read zero across every resource while showing a cost.
+  const readoutDimension: Record<string, string> = {
+    cpu_seconds: "cpu_seconds",
+    managed_cpu_seconds: "cpu_seconds",
+    memory_gib_seconds: "memory_gib_seconds",
+    managed_memory_gib_seconds: "memory_gib_seconds",
+    gpu_seconds: "gpu_seconds",
+    managed_gpu_seconds: "gpu_seconds",
+  };
+  const totals = new Map<string, { line: UsageBillingLine; quantity: number }>();
+  for (const line of report.summary) {
+    const dimension = readoutDimension[line.metric];
+    if (dimension === undefined) continue;
+    const seen = totals.get(dimension);
+    totals.set(dimension, {
+      line,
+      quantity: (seen?.quantity ?? 0) + line.quantity,
+    });
+  }
   const capacity = useMemo(() => {
     const limits = concurrency?.limits ?? [];
     return {
@@ -217,7 +253,7 @@ function SpendSummary({
     <div className="flex h-full min-h-0 flex-col px-4 py-3">
       <div className="border-b border-border/70 pb-3">
         <div className="min-w-0">
-          <div className="micro-label mb-1">{billingLabel(report)}</div>
+          <div className="micro-label mb-1">{"Total cost"}</div>
           <div className="readout text-2xl">
             {formatCostNanos(report.total_cost_nanos, false, report.currency)}
           </div>
@@ -225,12 +261,16 @@ function SpendSummary({
       </div>
       <div className="grid grid-cols-2 gap-x-5 gap-y-3 py-3">
         {resourceReadouts.map((metric) => {
-          const line = lines.get(metric);
+          const total = totals.get(metric);
           return (
             <UsageReadout
               key={metric}
               label={readoutLabel(metric)}
-              value={line ? formatUsageQuantity(line) : "0"}
+              value={
+                total
+                  ? formatUsageQuantity({ ...total.line, quantity: total.quantity })
+                  : "0"
+              }
             />
           );
         })}

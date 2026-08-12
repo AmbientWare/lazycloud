@@ -10,25 +10,43 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
+import { billableMetrics } from "@/lib/api/schemas/usage";
 import type { UsageBillingOverview } from "@/lib/api/schemas";
 import { formatCostNanos } from "./usage-report";
 
+// Every billable metric belongs to exactly one band. A metric missing here is
+// dropped from the chart while the headline total still counts it, so the bars
+// quietly stop adding up to the number above them.
 const chartSeries = [
-  { metric: "cpu_seconds", label: "CPU", color: "var(--chart-1)" },
-  { metric: "memory_gib_seconds", label: "Memory", color: "var(--chart-2)" },
-  { metric: "gpu_seconds", label: "GPU", color: "var(--chart-3)" },
-  { metric: "recorded_compute", label: "Recorded compute", color: "var(--chart-5)" },
+  { metric: "cpu_seconds", label: "CPU", color: "var(--chart-1)", covers: ["cpu_seconds"] },
   {
-    metric: "managed_compute_reservation_seconds",
-    label: "Managed compute",
-    color: "var(--chart-5)",
+    metric: "memory_gib_seconds",
+    label: "Memory",
+    color: "var(--chart-2)",
+    covers: ["memory_gib_seconds"],
   },
+  { metric: "gpu_seconds", label: "GPU", color: "var(--chart-3)", covers: ["gpu_seconds"] },
   {
-    metric: "customer_cloud_management_seconds",
-    label: "Customer cloud management",
+    // One band for the fee rather than three: it is charged for managing a
+    // fleet, not for the CPU, memory and GPU it is measured from, and the
+    // report lines below still break it out by dimension.
+    metric: "managed",
+    label: "Managed",
     color: "var(--chart-4)",
+    covers: ["managed_cpu_seconds", "managed_memory_gib_seconds", "managed_gpu_seconds"],
   },
 ] as const;
+
+// Makes the comment above enforceable rather than aspirational: a billable
+// metric no band covers fails the build here instead of vanishing from the bars.
+type CoveredMetric = (typeof chartSeries)[number]["covers"][number];
+type UncoveredMetric = Exclude<(typeof billableMetrics)[number], CoveredMetric>;
+const _everyBillableMetricHasABand: UncoveredMetric extends never ? true : never = true;
+void _everyBillableMetricHasABand;
+
+const seriesByMetric = new Map<string, string>(
+  chartSeries.flatMap((series) => series.covers.map((metric) => [metric, series.metric])),
+);
 
 const config = Object.fromEntries(
   chartSeries.map((series) => [series.metric, { label: series.label, color: series.color }]),
@@ -36,7 +54,7 @@ const config = Object.fromEntries(
 
 export function CostActivityChart({ report }: { report: UsageBillingOverview }) {
   const { data, visibleSeries } = useMemo(() => {
-    const totals = new Map(chartSeries.map((series) => [series.metric, 0]));
+    const totals = new Map<string, number>(chartSeries.map((series) => [series.metric, 0]));
     const rows = report.activity.map((bucket) => {
       const row: Record<string, number | string> = {
         label: format(
@@ -46,8 +64,10 @@ export function CostActivityChart({ report }: { report: UsageBillingOverview }) 
       };
       for (const series of chartSeries) row[series.metric] = 0;
       for (const line of bucket.lines) {
-        row[line.metric] = Number(row[line.metric]) + line.cost_nanos;
-        totals.set(line.metric, (totals.get(line.metric) ?? 0) + line.cost_nanos);
+        const seriesMetric = seriesByMetric.get(line.metric);
+        if (seriesMetric === undefined) continue;
+        row[seriesMetric] = Number(row[seriesMetric]) + line.cost_nanos;
+        totals.set(seriesMetric, (totals.get(seriesMetric) ?? 0) + line.cost_nanos);
       }
       return row;
     });

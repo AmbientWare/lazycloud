@@ -47,6 +47,11 @@ DEFAULT_UNAUTHENTICATED_LIMITS: tuple[UnauthenticatedRouteLimit, ...] = (
     # because anything worth doing here is spread across many addresses.
     UnauthenticatedRouteLimit("/api/v1/sessions", 10, 200, methods=frozenset({"POST"})),
     UnauthenticatedRouteLimit("/health", 60, 600, fail_open=True),
+    # Payment outcomes. Generous per address because they all arrive from the
+    # provider's own small set of egress addresses, and a busy close can deliver
+    # a burst; bounded because this is a public POST that does an HMAC and a
+    # database write before it can tell a real delivery from noise.
+    UnauthenticatedRouteLimit("/webhooks/", 120, 2_000, methods=frozenset({"POST"})),
 )
 
 _WINDOW_SECONDS = 60

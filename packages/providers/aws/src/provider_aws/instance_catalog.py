@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.compute_policy import UnitName
+from shared.gpu import SUPPORTED_GPU_TYPES, GpuType
 
 
 class AwsInstanceCatalogModel(BaseModel):
@@ -18,31 +19,12 @@ class AwsInstanceCategory(StrEnum):
     NvidiaGpu = "nvidia_gpu"
 
 
-class AwsGpuModel(StrEnum):
-    """Cards EC2 rents, named as `shared.gpu.GpuType` names them.
-
-    The two vocabularies must agree: a workload asks in `GpuType` terms and the
-    scheduler compares the answer against what a worker reports, so a name that
-    differs here is a type nobody can ever be scheduled onto.
-    """
-
-    T4 = "T4"
-    A10G = "A10G"
-    L4 = "L4"
-    L40S = "L40S"
-    A100_40 = "A100-40"
-    A100_80 = "A100-80"
-    H100 = "H100"
-    H200 = "H200"
-    B200 = "B200"
-
-
 class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
     instance_type: str
     kind: AwsInstanceCategory
     cpu_millicores: int = Field(gt=0)
     memory_mb: int = Field(gt=0)
-    gpu: AwsGpuModel | None = None
+    gpu: GpuType | None = None
     gpu_count: int = Field(default=0, ge=0)
     local_nvme: bool = True
 
@@ -52,6 +34,12 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
             raise ValueError("CPU instances cannot declare GPU capacity")
         if self.kind is AwsInstanceCategory.NvidiaGpu and (self.gpu is None or self.gpu_count < 1):
             raise ValueError("NVIDIA GPU instances must declare GPU capacity")
+        if self.gpu is not None and self.gpu not in SUPPORTED_GPU_TYPES:
+            # Schedulable and priced are one list. A model offered here but absent
+            # from SUPPORTED_GPU_TYPES would run and then bill nothing.
+            raise ValueError(
+                f"{self.instance_type} offers {self.gpu.value}, which the platform does not support"
+            )
         return self
 
 
@@ -85,7 +73,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -93,7 +81,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -101,7 +89,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -109,7 +97,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -117,7 +105,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -125,7 +113,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -133,7 +121,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
-        gpu=AwsGpuModel.T4,
+        gpu=GpuType.T4,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -141,7 +129,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -149,7 +137,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -157,7 +145,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -165,7 +153,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -173,7 +161,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -181,7 +169,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -189,7 +177,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -197,7 +185,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=768 * 1024,
-        gpu=AwsGpuModel.A10G,
+        gpu=GpuType.A10G,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -205,7 +193,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -213,7 +201,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -221,7 +209,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -229,7 +217,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -237,7 +225,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -245,7 +233,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -253,7 +241,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -261,7 +249,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=768 * 1024,
-        gpu=AwsGpuModel.L4,
+        gpu=GpuType.L4,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -269,7 +257,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=32 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -277,7 +265,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=64 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -285,7 +273,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=128 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -293,7 +281,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=256 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -301,7 +289,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=512 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -309,7 +297,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=384 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -317,7 +305,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=768 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=4,
     ),
     AwsInstanceCatalogEntry(
@@ -325,7 +313,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=1536 * 1024,
-        gpu=AwsGpuModel.L40S,
+        gpu=GpuType.L40S,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -333,7 +321,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=1152 * 1024,
-        gpu=AwsGpuModel.A100_40,
+        gpu=GpuType.A100_40,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -341,7 +329,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=1152 * 1024,
-        gpu=AwsGpuModel.A100_80,
+        gpu=GpuType.A100_80,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -349,7 +337,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=256 * 1024,
-        gpu=AwsGpuModel.H100,
+        gpu=GpuType.H100,
         gpu_count=1,
     ),
     AwsInstanceCatalogEntry(
@@ -357,7 +345,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=2048 * 1024,
-        gpu=AwsGpuModel.H100,
+        gpu=GpuType.H100,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -365,7 +353,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=2048 * 1024,
-        gpu=AwsGpuModel.H200,
+        gpu=GpuType.H200,
         gpu_count=8,
     ),
     AwsInstanceCatalogEntry(
@@ -373,15 +361,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=2048 * 1024,
-        gpu=AwsGpuModel.H200,
-        gpu_count=8,
-    ),
-    AwsInstanceCatalogEntry(
-        instance_type="p6-b200.48xlarge",
-        kind=AwsInstanceCategory.NvidiaGpu,
-        cpu_millicores=192_000,
-        memory_mb=2048 * 1024,
-        gpu=AwsGpuModel.B200,
+        gpu=GpuType.H200,
         gpu_count=8,
     ),
 )

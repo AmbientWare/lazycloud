@@ -270,18 +270,6 @@ class WorkerSettings(BaseSettings):
         default="ms3",
         validation_alias="WORKER_WORKSPACE_STORAGE_MOUNTPOINT_BINARY",
     )
-    container_cost_hook_endpoint: str = Field(
-        default="",
-        validation_alias="WORKER_CONTAINER_COST_HOOK_ENDPOINT",
-    )
-    container_cost_hook_token: str = Field(
-        default="",
-        validation_alias="WORKER_CONTAINER_COST_HOOK_TOKEN",
-    )
-    container_cost_hook_timeout_seconds: float = Field(
-        default=10.0,
-        validation_alias="WORKER_CONTAINER_COST_HOOK_TIMEOUT_SECONDS",
-    )
     gpu_devices: str = Field(
         default="",
         validation_alias=AliasChoices("WORKER_GPU_DEVICES", "NVIDIA_VISIBLE_DEVICES"),

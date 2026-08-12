@@ -40,7 +40,6 @@ class WorkerUsageWindowRecorder(Protocol):
         request: ContainerRequestContext,
         *,
         duration_ms: int,
-        cost_per_ms: float | None = None,
         window_start_ms: int = 0,
         window_end_ms: int | None = None,
         metering_window_started_at: datetime,

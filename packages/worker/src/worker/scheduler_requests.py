@@ -12,6 +12,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.contracts import ContractModel
+from shared.gpu import concrete_gpu_type
 from shared.image_building.authoring import LinuxArchitecture
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
@@ -123,6 +124,13 @@ class WorkerSchedulerRequestProcessor:
     workers: WorkerSchedulerRequestWorkerRepository
     containers: WorkerSchedulerRequestContainerRepository
     execution: WorkerSchedulerRequestExecutionService
+    worker_gpu_type: str
+    """The GPU model this worker's machine declares it holds, empty on a CPU host.
+
+    No default: it is what every container this worker runs is billed for, and a
+    machine that silently reports the wrong card bills the wrong rate.
+    """
+
     lifecycle: WorkerSchedulerRequestLifecycle | None = None
     image_builds: WorkerSchedulerRequestImageBuildExecutor | None = None
     _background: dict[str, _BackgroundExecution] = field(default_factory=dict, init=False)
@@ -152,7 +160,9 @@ class WorkerSchedulerRequestProcessor:
             return self._release_capacity(request, self._execute_image_build_request(request))
 
         try:
-            context = container_execution_context_from_scheduler_request(request)
+            context = container_execution_context_from_scheduler_request(
+                request, worker_gpu_type=self.worker_gpu_type
+            )
             if runs_in_background(context.startup_kind):
                 return self._start_background(request, context)
             execution = self._execute_container(context)
@@ -400,13 +410,41 @@ class WorkerSchedulerRequestProcessor:
         return result.model_copy(update={"capacity_released": True})
 
 
+def _billable_gpu(*, gpu_count: int, worker_gpu_type: str) -> str:
+    """Which GPU model this container is charged for.
+
+    Empty whenever no GPU was allocated — a CPU-only container on a GPU host must
+    not be stamped with that host's card. Where one was allocated only the
+    machine's own model counts: the request carries what the user asked for, and
+    charging that would bill a card nothing on the machine confirmed. A worker
+    that cannot name its card therefore bills as an unpriced gap rather than a
+    guess.
+    """
+
+    if gpu_count <= 0:
+        return ""
+    return concrete_gpu_type(worker_gpu_type)
+
+
 def container_execution_context_from_scheduler_request(
     request: SchedulerWorkerRequest,
+    *,
+    worker_gpu_type: str,
 ) -> ContainerExecutionContext:
+    """Build the execution context for one scheduled container.
+
+    `worker_gpu_type` is what this worker's machine declares it holds, and is what
+    the container is billed for. The request carries whatever the user asked for,
+    which may be `any` or a list, and neither of those is a rate anything can
+    price.
+    """
     payload = WorkerContainerRequestPayload.model_validate(request.payload)
     memory_limit_bytes = payload.memory_limit_bytes
     if memory_limit_bytes is None and request.memory_mib > 0:
         memory_limit_bytes = request.memory_mib * MIB
+    # One allocation count, so the model and the count it is charged by can never
+    # disagree about whether this container held a GPU at all.
+    gpu_count = gpu_count_for_capacity(request.gpu_type, request.gpu_request, request.gpu_count)
     return ContainerExecutionContext(
         request=ContainerRequestContext(
             container_id=request.container_id,
@@ -428,13 +466,8 @@ def container_execution_context_from_scheduler_request(
             cpu_millicores=request.cpu_millicores,
             memory_mib=request.memory_mib,
             disk_limit_bytes=payload.disk_limit_bytes or 0,
-            gpu=request.gpu_type,
-            gpu_count=gpu_count_for_capacity(
-                request.gpu_type,
-                request.gpu_request,
-                request.gpu_count,
-            ),
-            cost_per_ms=payload.cost_per_ms,
+            gpu=_billable_gpu(gpu_count=gpu_count, worker_gpu_type=worker_gpu_type),
+            gpu_count=gpu_count,
         ),
         architecture=LinuxArchitecture(request.architecture),
         startup_kind=payload.startup_kind,

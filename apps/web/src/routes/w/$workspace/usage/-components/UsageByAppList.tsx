@@ -215,8 +215,9 @@ function WorkloadUsageRow({
       <div className="order-3 col-span-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground md:order-none md:col-span-1">
         {contributors.length ? (
           contributors.map((line) => (
-            <span key={line.metric} className="whitespace-nowrap">
-              {metricDisplay(line.metric, line.unit).label}{" "}
+            <span key={`${line.metric}:${line.variant}:${line.effective_date ?? ""}`} className="whitespace-nowrap">
+              {metricDisplay(line.metric, line.unit).label}
+              {line.variant ? ` (${line.variant})` : ""}{" "}
               <span className="mono">{formatCostNanos(line.cost_nanos, false, currency)}</span>
             </span>
           ))
