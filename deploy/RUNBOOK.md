@@ -225,10 +225,13 @@ connectivity fault.
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
-| Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Mint a new client owning both the agent and control-plane tags in the Tailscale admin console, update `.env`, recreate `control-plane` |
+| Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Terraform owns this client (`deploy/tailnet/main.tf`). Change its tag list and apply; the replacement re-exports both outputs. Minting one in the admin console instead creates a client Terraform does not know about, and the next apply fights it. |
 | Admin scrape token | `.env` | Reissue through the CLI; `/metrics` is admin-gated and must stay so |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
-| Cloudflare API token | `.env`, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read |
+| Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
+| Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
+| Stripe webhook signing secret | `.env`, `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` | Returned only when the endpoint is created. Replace the endpoint through `deploy/stripe`, take the new output, recreate `control-plane` and `scheduler`. |
+| Stripe API key | `.env`, `LAZYCLOUD_STRIPE_API_KEY` | Roll the restricted key in the Stripe dashboard, update `.env`, recreate `control-plane` and `scheduler`. |
 
 Legacy credentials from the superseded architecture live outside the repo at
 `~/.lazycloud-legacy-secrets/secrets-backup/`. They are **not** rotated. Anything
