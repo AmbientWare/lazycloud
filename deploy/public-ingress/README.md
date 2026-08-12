@@ -74,8 +74,13 @@ that the customer did anything wrong.
 ## Minting a tunnel
 
 Requires a Cloudflare API token with Account → Cloudflare Tunnel → Edit, Zone →
-DNS → Edit, and Zone → Zone → Read. Set `CLOUDFLARE_API_TOKEN` in the
-deployment `.env`.
+DNS → Edit, and Zone → Zone → Read. Export it as `CLOUDFLARE_API_TOKEN` in the
+operator's shell. It is not a deployment value: nothing in the stack reads it and
+it does not belong in `.env`.
+
+`deploy/cloudflare` now declares the tunnel and both records, and is the
+preferred path. The manual steps below remain the reference for what that module
+produces, and for operating a deployment that predates it.
 
 1. `POST /accounts/{account}/cfd_tunnel` with a fresh base64 32-byte
    `tunnel_secret` and `config_src: local`.
