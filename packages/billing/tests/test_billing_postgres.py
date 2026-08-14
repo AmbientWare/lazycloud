@@ -1,28 +1,38 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from threading import Event as ThreadEvent
 from time import sleep
 from uuid import uuid4
 
 import pytest
+from billing.reconciliation import RECONCILIATION_DIVERGENCE_ACTION
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_outbox import BillingMeterOutboxRepository
-from database.repositories.identity import UserRepository, WorkspaceRepository
+from database.repositories.identity import (
+    UserRepository,
+    WorkspaceMemberRepository,
+    WorkspaceRepository,
+)
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
+from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS
+from shared.errors import ConflictError
+from shared.events import Event, EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderInvoice,
     ProviderSubscription,
 )
 from shared.timestamps import utc_now
@@ -31,7 +41,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
-from billing import BillingAccountService
+from billing import (
+    BillingAccountService,
+    BillingPlanChangeService,
+    BillingReconciliationService,
+)
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 # Every one of these invariants is enforced by PostgreSQL and by nothing in
@@ -135,6 +149,173 @@ class _RegistrationCountingProvider:
 
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("registering must not read invoices")
+
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        raise AssertionError("registering must not list invoices")
+
+
+@dataclass(frozen=True, slots=True)
+class _RefusingEventSink:
+    """Nothing here abandons an intent, so nothing here records one."""
+
+    def emit(
+        self,
+        action: str,
+        *,
+        resource_type: str,
+        resource_id: str,
+        message: str,
+        level: EventLevel = EventLevel.Info,
+        data: dict[str, JsonValue] | None = None,
+        workspace_id: str | None = None,
+    ) -> Event:
+        raise AssertionError(f"an upgrade that was refused must not record {action}")
+
+
+@dataclass(slots=True)
+class _RecordingEventSink:
+    """Keeps what a pass reported, since the divergence is the whole report."""
+
+    actions: list[str] = field(default_factory=list)
+
+    def emit(
+        self,
+        action: str,
+        *,
+        resource_type: str,
+        resource_id: str,
+        message: str,
+        level: EventLevel = EventLevel.Info,
+        data: dict[str, JsonValue] | None = None,
+        workspace_id: str | None = None,
+    ) -> Event:
+        del resource_type, message, data, workspace_id
+        self.actions.append(action)
+        return Event(
+            id=str(uuid4()),
+            action=action,
+            level=level,
+            resource_type="billing_account",
+            resource_id=resource_id,
+            message="",
+        )
+
+
+@dataclass(slots=True)
+class _UpgradeCountingProvider:
+    """A provider that holds the plan swap open until the test lets it finish.
+
+    The swap is where a second subscribe would arrive: the request commits its
+    intent and then sits in the provider call for as long as the proration takes
+    to collect, which is the whole window the second one has to be refused in.
+    """
+
+    swap_entered: ThreadEvent = field(default_factory=ThreadEvent)
+    swap_release: ThreadEvent = field(default_factory=ThreadEvent)
+    plan_swaps: list[str] = field(default_factory=list)
+    grants: list[int] = field(default_factory=list)
+    expired_grants: list[str] = field(default_factory=list)
+    subscription_reads: int = 0
+    plan: BillingPlanId = BillingPlanId.Free
+    """What the provider currently holds, which a settle and a reconciliation
+    both read and neither is told."""
+
+    def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
+        del email, workspace_id
+        return PaymentCustomer(provider_customer_id=f"cus_{account_id}")
+
+    def card_setup_session(
+        self, *, provider_customer_id: str, currency: str, success_url: str, cancel_url: str
+    ) -> HostedPaymentSession:
+        raise AssertionError("upgrading must not open a card page")
+
+    def customer_portal_session(
+        self, *, provider_customer_id: str, return_url: str
+    ) -> HostedPaymentSession:
+        raise AssertionError("upgrading must not open a portal page")
+
+    def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
+        raise AssertionError("upgrading must not read payment methods")
+
+    def set_default_payment_method(
+        self, *, provider_customer_id: str, provider_payment_method_id: str
+    ) -> None:
+        raise AssertionError("upgrading must not set a default card")
+
+    def record_meter_event(
+        self,
+        *,
+        event_name: str,
+        provider_customer_id: str,
+        value_nanos: int,
+        occurred_at: datetime,
+        identifier: str,
+        pricing_version: str,
+    ) -> None:
+        raise AssertionError("upgrading must not meter usage")
+
+    def create_subscription(
+        self, *, provider_customer_id: str, plan: BillingPlanId
+    ) -> ProviderSubscription:
+        del provider_customer_id
+        self.plan = plan
+        return _subscription(plan)
+
+    def set_subscription_plan(
+        self, *, provider_subscription_id: str, plan: BillingPlanId
+    ) -> ProviderSubscription:
+        del provider_subscription_id
+        self.plan_swaps.append(plan.value)
+        self.swap_entered.set()
+        self.swap_release.wait(timeout=10)
+        self.plan = plan
+        return _subscription(plan)
+
+    def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
+        del provider_subscription_id
+        self.subscription_reads += 1
+        return _subscription(self.plan)
+
+    def create_credit_grant(
+        self,
+        *,
+        account_id: str,
+        provider_customer_id: str,
+        amount_nanos: int,
+        period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
+    ) -> ProviderCreditGrant:
+        del account_id, provider_customer_id, previous_period_ended_at
+        self.grants.append(amount_nanos)
+        return ProviderCreditGrant(
+            provider_credit_grant_id=f"credgr_{len(self.grants)}",
+            amount_nanos=amount_nanos,
+            expires_at=period_ended_at,
+        )
+
+    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
+        self.expired_grants.append(provider_credit_grant_id)
+
+    def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
+        raise AssertionError("no invoice here has a period that has closed")
+
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        del provider_customer_id, since, limit
+        return ()
+
+
+def _subscription(plan: BillingPlanId) -> ProviderSubscription:
+    return ProviderSubscription(
+        provider_subscription_id="sub_upgrade",
+        status="active",
+        current_period_started_at=CYCLE_STARTED_AT,
+        current_period_ended_at=CYCLE_ENDED_AT,
+        plan=plan,
+    )
 
 
 @contextmanager
@@ -330,6 +511,84 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
     assert stored.provider_customer_id == first.provider_customer_id
     assert stored.provider_subscription_id == first.provider_subscription_id
     assert stored.plan is BillingPlanId.Free
+
+
+def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
+    """One button, two clicks, one proration.
+
+    The intent is committed before the provider is called, so no transaction
+    spans that call and nothing serializes two subscribes on the account row.
+    What refuses the second is the partial unique index on an open intent, in
+    PostgreSQL and nowhere in Python. Without it both callers reach
+    `set_subscription_plan`, and the provider raises and collects a proration
+    for each.
+    """
+
+    with _postgres_database() as database:
+        with database.session() as session:
+            user_id = UserRepository(session).create(display_name="upgrade-race").id
+            workspace_id = WorkspaceRepository(session).create(name=f"upgrade-{uuid4()}").id
+            WorkspaceMemberRepository(session).ensure_owner(
+                workspace_id=workspace_id, user_id=user_id
+            )
+        provider = _UpgradeCountingProvider()
+        with database.session() as session:
+            BillingAccountService(session).billing_account_for(
+                provider, user_id=user_id, workspace_id=workspace_id
+            )
+        service = BillingPlanChangeService(
+            database=database,
+            payments=lambda: provider,
+            events=_RefusingEventSink(),
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            first = executor.submit(service.subscribe, user_id=user_id)
+            # The first caller has committed its intent and is inside the
+            # provider call. Held here rather than raced, because what the index
+            # has to refuse is a second subscribe arriving while the first one's
+            # money is still moving.
+            assert provider.swap_entered.wait(timeout=10), (
+                "the first upgrade never reached the provider"
+            )
+            with pytest.raises(ConflictError):
+                service.subscribe(user_id=user_id)
+            provider.swap_release.set()
+            upgraded = first.result(timeout=10)
+
+        with database.session() as session:
+            stored = BillingAccountRepository(session).get_by_user(user_id)
+        # The winning settle used the subscription the swap answered with, and
+        # the loser never reached one.
+        reads_the_upgrade_cost = provider.subscription_reads
+
+        # Both sweeps then read this same database, because SQLite answers
+        # queries PostgreSQL refuses — a keyset cursor standing for "before every
+        # id" is a string there and an unparseable UUID here — and a sweep that
+        # raises on every pass is money nobody is watching.
+        settled = BillingPlanChangeService(
+            database=database,
+            payments=lambda: provider,
+            events=_RefusingEventSink(),
+        ).settle_open()
+        provider.plan = BillingPlanId.Free
+        reconciler_events = _RecordingEventSink()
+        reconciled = BillingReconciliationService(
+            database=database,
+            payments=lambda: provider,
+            events=reconciler_events,
+        ).reconcile()
+
+    assert provider.plan_swaps == [BillingPlanId.Team.value]
+    assert upgraded.plan is BillingPlanId.Team
+    assert stored is not None
+    assert stored.plan is BillingPlanId.Team
+    assert reads_the_upgrade_cost == 0
+    # Nothing is left open: the intent this upgrade recorded reached a terminal
+    # status, and the one the loser was refused was never written.
+    assert (settled.applied_count, settled.open_count) == (0, 0)
+    assert (reconciled.accounts_checked, reconciled.divergent_count) == (1, 1)
+    assert reconciler_events.actions == [RECONCILIATION_DIVERGENCE_ACTION]
 
 
 def test_postgresql_one_meter_event_is_claimed_and_settled_by_one_drainer() -> None:

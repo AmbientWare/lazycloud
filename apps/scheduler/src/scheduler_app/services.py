@@ -94,7 +94,12 @@ from storage.volume_filesystem import (
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
-from billing import BillingMeterOutboxService, DatabaseBillingAdmission
+from billing import (
+    BillingMeterOutboxService,
+    BillingPlanChangeService,
+    BillingReconciliationService,
+    DatabaseBillingAdmission,
+)
 from database import DatabaseClient
 from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 
@@ -149,6 +154,8 @@ class SchedulerAppServices:
     object_storage: ObjectStorage
     volume_metering: PersistentVolumeMeteringService
     meter_outbox: BillingMeterOutboxService
+    plan_changes: BillingPlanChangeService
+    billing_reconciliation: BillingReconciliationService
     retention: SchedulerRetention | None
     redis_client: RedisClient
 
@@ -205,7 +212,10 @@ class SchedulerAppServices:
             interval_seconds=storage.volume_metering.interval_seconds,
         )
         object_storage = ObjectStorage.from_settings(context, storage.object_store)
-        meter_outbox = _meter_outbox(context, events, StripeSettings())
+        stripe_settings = StripeSettings()
+        meter_outbox = _meter_outbox(context, events, stripe_settings)
+        plan_changes = _plan_changes(context, events, stripe_settings)
+        billing_reconciliation = _billing_reconciliation(context, events, stripe_settings)
         retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
@@ -369,6 +379,8 @@ class SchedulerAppServices:
             object_storage=object_storage,
             volume_metering=volume_metering,
             meter_outbox=meter_outbox,
+            plan_changes=plan_changes,
+            billing_reconciliation=billing_reconciliation,
             retention=retention,
             redis_client=redis,
         )
@@ -396,6 +408,44 @@ def _meter_outbox(
     """
 
     return BillingMeterOutboxService(
+        database=context.database,
+        payments=settings.provider_factory(),
+        events=events,
+    )
+
+
+def _plan_changes(
+    context: ServiceContext,
+    events: EventService,
+    settings: StripeSettings,
+) -> BillingPlanChangeService:
+    """The sweep that finishes plan changes whose outcome nobody recorded.
+
+    Composed unconditionally for the same reason the outbox is, and the cost of
+    dropping it is larger: an intent with no outcome is a customer who may
+    already have paid for a plan this platform is not billing them on.
+    """
+
+    return BillingPlanChangeService(
+        database=context.database,
+        payments=settings.provider_factory(),
+        events=events,
+    )
+
+
+def _billing_reconciliation(
+    context: ServiceContext,
+    events: EventService,
+    settings: StripeSettings,
+) -> BillingReconciliationService:
+    """The pass that reports where the provider and this platform disagree.
+
+    Composed unconditionally, again for the reason the outbox is: the whole
+    point of this pass is that somebody is watching, and a deployment that
+    silently had no watcher would be the failure it exists to catch.
+    """
+
+    return BillingReconciliationService(
         database=context.database,
         payments=settings.provider_factory(),
         events=events,

@@ -71,11 +71,11 @@ class BillingLedgerSegmentTable(TimestampMixin, DatabaseBase):
     is never updated or deleted, so a rate published later can never reprice
     usage a customer has already been shown.
 
-    `quantity` in `quantity_unit` is the whole of what was charged for, and
-    `component` says which resource it counts. There is no second denormalized
-    breakdown beside it: one number in one place cannot disagree with itself, and
-    a copy allocated from milliseconds could not express a burst above the
-    reservation at all.
+    `quantity` is the whole of what was charged for, and `component` says which
+    resource it counts and therefore which unit it is in. There is no second
+    denormalized breakdown beside it: one number in one place cannot disagree
+    with itself, and a copy allocated from milliseconds could not express a burst
+    above the reservation at all.
     """
 
     __tablename__ = "billing_ledger_segments"
@@ -179,7 +179,6 @@ class BillingLedgerSegmentTable(TimestampMixin, DatabaseBase):
     duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     quantity: Mapped[Decimal] = mapped_column(Numeric(38, 9), nullable=False)
-    quantity_unit: Mapped[str] = mapped_column(String(24), nullable=False)
 
     pricing_version: Mapped[str] = mapped_column(String(64), nullable=False)
     rate_nanos_per_unit: Mapped[Decimal] = mapped_column(Numeric(30, 12), nullable=False)

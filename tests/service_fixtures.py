@@ -185,6 +185,21 @@ def _existing_owner(control: ControlPlaneService, name: str) -> str | None:
     return owner.user_id if owner is not None else None
 
 
+def unbilled_account(context: ServiceContext) -> tuple[str, str]:
+    """A workspace and its owner, with nothing billing has ever written.
+
+    The opposite of what `_fixture_account` leaves, and the state the billing
+    tests need: what provisioning does on first reaching an account cannot be
+    observed against one a fixture has already stood a row up for.
+    """
+
+    with context.database.session() as session:
+        user_id = UserRepository(session).create(display_name="unprovisioned").id
+        workspace_id = WorkspaceRepository(session).create(name=f"unbilled-{uuid4()}").id
+        WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace_id, user_id=user_id)
+    return user_id, workspace_id
+
+
 def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
     """The account that owns a workspace, created on first ask.
 

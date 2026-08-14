@@ -59,6 +59,10 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
             sqlite_where=text("status = 'sending'"),
         ),
         Index("ix_billing_meter_outbox_settled", "status", "updated_at"),
+        # What the reconciler reads: one customer's window, to subtract what has
+        # not reached the provider yet from the ledger it compares an invoice
+        # against.
+        Index("ix_billing_meter_outbox_customer_window", "provider_customer_id", "occurred_at"),
     )
 
     id: Mapped[str] = mapped_column(

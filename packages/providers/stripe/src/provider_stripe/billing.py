@@ -14,6 +14,7 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderInvoice,
     ProviderSubscription,
 )
 from shared.timestamps import utc_now
@@ -186,6 +187,17 @@ class _InvoiceLine(StripeObject):
 class _InvoiceLines(StripeObject):
     data: list[_InvoiceLine] = Field(default_factory=list)
     has_more: bool = False
+
+
+class _Invoice(StripeObject):
+    id: str
+    status: str = ""
+    period_start: int
+    period_end: int
+
+
+class _InvoiceList(StripeObject):
+    data: list[_Invoice] = Field(default_factory=list)
 
 
 class _Meter(StripeObject):
@@ -588,6 +600,42 @@ class StripeBilling:
             if not page.has_more or not page.data:
                 return totals
             starting_after = page.data[-1].id
+
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        """This customer's bills raised since an instant, newest first.
+
+        One page and no paging loop: the caller reconciles the most recent
+        closed period, and a customer with more than `limit` invoices inside the
+        window has a cycle far shorter than any this platform sells.
+
+        An invoice carrying no status is skipped rather than guessed at —
+        nothing here can say whether it counts as billed — which keeps the
+        vocabulary Stripe owns from having to be complete on this side.
+        """
+
+        listed = read(
+            _InvoiceList,
+            self.client,
+            "GET",
+            "/invoices",
+            params=[
+                ("customer", provider_customer_id),
+                ("created[gte]", _epoch(since, "since")),
+                ("limit", str(limit)),
+            ],
+        )
+        return [
+            ProviderInvoice(
+                provider_invoice_id=invoice.id,
+                status=invoice.status,
+                period_started_at=datetime.fromtimestamp(invoice.period_start, tz=UTC),
+                period_ended_at=datetime.fromtimestamp(invoice.period_end, tz=UTC),
+            )
+            for invoice in listed.data
+            if invoice.status
+        ]
 
     def _live_subscription(self, provider_customer_id: str) -> _Subscription | None:
         """The subscription this customer is already on, if any.

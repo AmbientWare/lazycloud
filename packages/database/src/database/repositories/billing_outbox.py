@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from shared.timestamps import to_utc
-from sqlalchemy import CursorResult, delete, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.orm import Session
 
 _ERROR_LIMIT = 512
@@ -30,6 +31,19 @@ class ClaimedMeterEvent:
     pricing_version: str
     occurred_at: datetime
     attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class UndeliveredMeterTotals:
+    """One meter's value that has not reached the provider, by whether it can.
+
+    Nanodollars, as the rows themselves count: `waiting_nanos` is queued or in
+    flight and will be offered again, `abandoned_nanos` has been given up on and
+    will not.
+    """
+
+    waiting_nanos: int = 0
+    abandoned_nanos: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +182,68 @@ class BillingMeterOutboxRepository:
         self.session.flush()
         return _rowcount(result)
 
+    def abandoned_total(self) -> tuple[int, int]:
+        """How many charges have been given up on, and what they metered.
+
+        The value is what the usage was priced at rather than what it would have
+        been billed: an account spends its allowance before it is charged for
+        anything, so part of any total here would have reached an invoice at
+        zero.
+
+        A standing figure rather than a delta, because a row is abandoned once
+        and pruning never removes one: the count only falls when somebody has
+        answered for the money and deleted the evidence. Served by
+        `ix_billing_meter_outbox_settled`.
+        """
+
+        row = self.session.execute(
+            select(
+                func.count(BillingMeterOutboxTable.id),
+                func.coalesce(func.sum(BillingMeterOutboxTable.value_nanos), 0),
+            ).where(BillingMeterOutboxTable.status == "abandoned")
+        ).one()
+        return int(row[0]), int(row[1])
+
+    def undelivered_totals(
+        self, *, provider_customer_id: str, started_at: datetime, ended_at: datetime
+    ) -> Mapping[str, UndeliveredMeterTotals]:
+        """What this customer's window never reached the provider with, per meter.
+
+        Split by whether it still can. Both have to be subtracted before an
+        invoice is compared against the ledger — neither is on the bill — but
+        they are different facts: one is a delivery that has not happened yet
+        and the other is one that never will, and collapsing them would let a
+        charge nobody will ever make read as an account in perfect agreement.
+        """
+
+        found = self.session.execute(
+            select(
+                BillingMeterOutboxTable.meter_event_name,
+                BillingMeterOutboxTable.status,
+                func.coalesce(func.sum(BillingMeterOutboxTable.value_nanos), 0),
+            )
+            .where(
+                BillingMeterOutboxTable.provider_customer_id == provider_customer_id,
+                BillingMeterOutboxTable.occurred_at >= started_at,
+                BillingMeterOutboxTable.occurred_at < ended_at,
+                BillingMeterOutboxTable.status != "sent",
+            )
+            .group_by(
+                BillingMeterOutboxTable.meter_event_name,
+                BillingMeterOutboxTable.status,
+            )
+        ).all()
+        totals: dict[str, UndeliveredMeterTotals] = {}
+        for meter_event_name, status, value_nanos in found:
+            held = totals.get(str(meter_event_name), UndeliveredMeterTotals())
+            nanos = int(value_nanos)
+            totals[str(meter_event_name)] = (
+                replace(held, abandoned_nanos=held.abandoned_nanos + nanos)
+                if status == "abandoned"
+                else replace(held, waiting_nanos=held.waiting_nanos + nanos)
+            )
+        return totals
+
     def prune(self, *, sent_before: datetime, limit: int) -> int:
         """Delete settled rows in a bounded batch.
 
@@ -230,4 +306,4 @@ def _rowcount(result: object) -> int:
     return int(result.rowcount) if isinstance(result, CursorResult) else 0
 
 
-__all__ = ["BillingMeterOutboxRepository", "ClaimedMeterEvent"]
+__all__ = ["BillingMeterOutboxRepository", "ClaimedMeterEvent", "UndeliveredMeterTotals"]

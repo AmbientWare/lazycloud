@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -15,6 +15,7 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderInvoice,
     ProviderSubscription,
 )
 from shared.timestamps import to_utc, utc_now
@@ -104,6 +105,11 @@ class _Provider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("draining the outbox must not read invoices")
 
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        raise AssertionError("draining the outbox must not list invoices")
+
 
 def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
     isolated_services: ApiServices,
@@ -131,14 +137,22 @@ def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
     )
 
     provider = _Provider()
-    result = BillingMeterOutboxService(
+    service = BillingMeterOutboxService(
         database=isolated_services.context.database,
         payments=lambda: provider,
         events=isolated_services.events,
-    ).drain(now=now)
+    )
+    result = service.drain(now=now)
+    backlog = service.abandoned_backlog()
 
     assert provider.accepted == [ACCEPTED]
     assert (result.sent_count, result.retried_count, result.abandoned_count) == (1, 1, 1)
+    # The standing backlog, which is what an operator watches: the deltas above
+    # are gone after this tick and the row is never pruned, so a charge given up
+    # on is only ever visible as this figure. Asked of the outbox rather than
+    # returned by the sweep, because the provider is what makes a sweep fail and
+    # a figure that went quiet then would go quiet exactly when it is needed.
+    assert (backlog.count, backlog.value_nanos) == (1, 1_500)
 
     rows = _rows(isolated_services)
     assert rows[ACCEPTED].status == "sent"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -116,6 +116,29 @@ class ProviderCreditGrant(ContractModel):
     A grant that outlives its period would fund the next one, so what the
     provider recorded is the only version of this worth storing.
     """
+
+
+class ProviderInvoice(ContractModel):
+    """One bill the provider raised, and the window it covers.
+
+    The period is what a local figure is compared over, so it comes from the
+    invoice rather than from a cycle computed here: an invoice covers what the
+    provider says it covers, and a window derived from anything else would
+    compare two different stretches of time and call the difference a
+    disagreement.
+    """
+
+    provider_invoice_id: str = Field(min_length=1, max_length=255)
+    status: str = Field(min_length=1, max_length=64)
+    """The provider's own word for where the invoice stands.
+
+    Carried through rather than mapped, for the reason a subscription's is: the
+    provider owns this vocabulary and adds to it, and the domain owns the set it
+    acts on.
+    """
+
+    period_started_at: datetime
+    period_ended_at: datetime
 
 
 class HostedPaymentSession(ContractModel):
@@ -332,6 +355,20 @@ class PaymentProvider(Protocol):
         """
         ...
 
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        """The customer's recent bills, newest the caller can find among them.
+
+        What the guard above needs to be usable without an invoice identifier
+        arriving from somewhere: nothing here stores one, because an invoice is
+        the provider's record and keeping a copy of their list is a second
+        ledger to hold in step. Bounded by a window and a count, since a
+        reconciliation pass reads this per account and an unbounded list would
+        be a walk over a customer's whole history every time.
+        """
+        ...
+
 
 __all__ = [
     "BILLING_CURRENCY",
@@ -341,5 +378,6 @@ __all__ = [
     "PaymentEvent",
     "PaymentProvider",
     "ProviderCreditGrant",
+    "ProviderInvoice",
     "ProviderSubscription",
 ]

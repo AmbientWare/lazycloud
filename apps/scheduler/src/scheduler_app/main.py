@@ -69,7 +69,17 @@ class SchedulerProcessResult:
     meter_events_sent_count: int = 0
     meter_events_retried_count: int = 0
     meter_events_abandoned_count: int = 0
+    meter_events_abandoned_outstanding_count: int = 0
+    meter_events_abandoned_outstanding_nanos: int = 0
     meter_events_pruned: int = 0
+    plan_changes_applied_count: int = 0
+    plan_changes_not_applied_count: int = 0
+    plan_changes_retried_count: int = 0
+    plan_changes_abandoned_count: int = 0
+    plan_changes_open_count: int = 0
+    billing_reconcile_checked_count: int = 0
+    billing_reconcile_divergent_count: int = 0
+    billing_reconcile_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
     tailnet_cleanup_processed_count: int = 0
@@ -99,7 +109,21 @@ class SchedulerProcessResult:
             "meter_events_sent_count": self.meter_events_sent_count,
             "meter_events_retried_count": self.meter_events_retried_count,
             "meter_events_abandoned_count": self.meter_events_abandoned_count,
+            "meter_events_abandoned_outstanding_count": (
+                self.meter_events_abandoned_outstanding_count
+            ),
+            "meter_events_abandoned_outstanding_nanos": (
+                self.meter_events_abandoned_outstanding_nanos
+            ),
             "meter_events_pruned": self.meter_events_pruned,
+            "plan_changes_applied_count": self.plan_changes_applied_count,
+            "plan_changes_not_applied_count": self.plan_changes_not_applied_count,
+            "plan_changes_retried_count": self.plan_changes_retried_count,
+            "plan_changes_abandoned_count": self.plan_changes_abandoned_count,
+            "plan_changes_open_count": self.plan_changes_open_count,
+            "billing_reconcile_checked_count": self.billing_reconcile_checked_count,
+            "billing_reconcile_divergent_count": self.billing_reconcile_divergent_count,
+            "billing_reconcile_failure_count": self.billing_reconcile_failure_count,
             "objects_removed": self.objects_removed,
             "retention_failure_count": self.retention_failure_count,
             "tailnet_cleanup_processed_count": self.tailnet_cleanup_processed_count,
@@ -189,7 +213,21 @@ def run_scheduler(
                 meter_events_sent_count=result.meter_events_sent_count,
                 meter_events_retried_count=result.meter_events_retried_count,
                 meter_events_abandoned_count=result.meter_events_abandoned_count,
+                meter_events_abandoned_outstanding_count=(
+                    result.meter_events_abandoned_outstanding_count
+                ),
+                meter_events_abandoned_outstanding_nanos=(
+                    result.meter_events_abandoned_outstanding_nanos
+                ),
                 meter_events_pruned=result.meter_events_pruned,
+                plan_changes_applied_count=result.plan_changes_applied_count,
+                plan_changes_not_applied_count=result.plan_changes_not_applied_count,
+                plan_changes_retried_count=result.plan_changes_retried_count,
+                plan_changes_abandoned_count=result.plan_changes_abandoned_count,
+                plan_changes_open_count=result.plan_changes_open_count,
+                billing_reconcile_checked_count=result.billing_reconcile_checked_count,
+                billing_reconcile_divergent_count=result.billing_reconcile_divergent_count,
+                billing_reconcile_failure_count=result.billing_reconcile_failure_count,
                 objects_removed=result.objects_removed,
                 retention_failure_count=result.retention_failure_count,
                 tailnet_cleanup_processed_count=result.tailnet_cleanup_processed_count,

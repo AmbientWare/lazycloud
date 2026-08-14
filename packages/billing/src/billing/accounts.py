@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.identity import UserRepository
+from database.repositories.identity import UserRepository, WorkspaceMemberRepository
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
 from shared.errors import NotFoundError, UpstreamUnavailableError
@@ -79,62 +79,6 @@ class BillingAccountService:
             accounts.lock_for_registration(user_id),
             user_id=user_id,
             workspace_id=workspace_id,
-        )
-
-    def subscribe(
-        self, payments: PaymentProvider, *, user_id: str, workspace_id: str
-    ) -> BillingAccount:
-        """Move this account onto the Team plan.
-
-        A price swapped on the subscription it already holds, not a second
-        subscription: the identifier, the billing anniversary and the three
-        metered items survive, so the usage already recorded this cycle stays
-        where it is and is billed on the invoice it belongs to.
-
-        The open period is re-termed in place rather than replaced, keeping what
-        has been spent against it, and the grant that funded the smaller
-        allowance is expired so that one grant covers the cycle. A customer
-        neither loses the allowance they already had nor holds both.
-
-        An upgrade landing in the seam between a cycle ending and its invoice
-        finalizing is a different act, and `carry_plan_into_cycle` is what tells
-        them apart: the cycle the provider answers with is a new one, so the
-        outgoing grant is left to fund the invoice it was bought for rather than
-        voided out from under it.
-
-        The provider raises and charges the prorated difference immediately and
-        refuses if it cannot be taken, so an account never comes back from here
-        holding the larger plan on a payment that did not go through.
-        """
-
-        accounts = BillingAccountRepository(self.session)
-        account = self._provision(
-            payments,
-            accounts.lock_for_registration(user_id),
-            user_id=user_id,
-            workspace_id=workspace_id,
-        )
-        if account.plan is BillingPlanId.Team:
-            return account
-        subscription = payments.set_subscription_plan(
-            provider_subscription_id=account.provider_subscription_id,
-            plan=BillingPlanId.Team,
-        )
-        return accounts.upsert(
-            user_id=user_id,
-            status=account.status,
-            provider_customer_id=account.provider_customer_id,
-            provider_subscription_id=subscription.provider_subscription_id,
-            provider_credit_grant_id=carry_plan_into_cycle(
-                self.session,
-                payments,
-                account_id=user_id,
-                provider_customer_id=account.provider_customer_id,
-                provider_credit_grant_id=account.provider_credit_grant_id,
-                subscription=subscription,
-                plan=BillingPlanId.Team,
-            ),
-            plan=BillingPlanId.Team,
         )
 
     def _provision(
@@ -221,4 +165,17 @@ def _provisioned(account: BillingAccount) -> bool:
     return bool(account.provider_customer_id and account.provider_subscription_id and account.plan)
 
 
-__all__ = ["BillingAccountService"]
+def owned_workspace_id(session: Session, user_id: str) -> str:
+    """A workspace to stamp on the provider's record of this customer.
+
+    Traceability only — the account is the person, not the workspace — but a
+    payment arriving out of band is far easier to place with one attached.
+    """
+
+    owned = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+    if not owned:
+        raise NotFoundError(f"no workspace to bill for user: {user_id}")
+    return owned[0]
+
+
+__all__ = ["BillingAccountService", "owned_workspace_id"]

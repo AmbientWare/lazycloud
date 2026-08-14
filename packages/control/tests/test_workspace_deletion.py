@@ -436,7 +436,6 @@ def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
                 segment_ended_at=now + timedelta(minutes=1),
                 duration_ms=60_000,
                 quantity=Decimal("60"),
-                quantity_unit="second",
                 pricing_version="test-pricing",
                 rate_nanos_per_unit=Decimal("1000"),
                 quote_effective_at=now,

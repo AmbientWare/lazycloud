@@ -17,9 +17,12 @@ A PostgreSQL extension the schema needs is declared with the metadata, in
 it—the baseline, and a test that calls `create_all`—and an extension named in
 only one of them is a schema that cannot be created by the other.
 
-A ledger segment states one component's quantity in one unit, and whether that
-quantity is capacity held or capacity measured. There is no second breakdown
-beside it, in a column or in a response field: a resource total is that
+A ledger segment states one component's quantity, and whether that quantity is
+capacity held or capacity measured. The component is what decides which unit the
+quantity counts, so the unit is not a column: stored beside the quantity it is a
+second statement of something the component already fixes, and two statements of
+one fact are two things that can disagree. There is no second breakdown beside
+it either, in a column or in a response field: a resource total is that
 component's rows summed, and a copy of the same figure anywhere else is a second
 sum that can disagree with the money it sits next to. It is also why a rate row
 publishes a figure per resource-second rather than one blended figure per
