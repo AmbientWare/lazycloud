@@ -176,9 +176,9 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
                 id=standing.plan,
                 allowance=(
                     BillingAllowanceResponse(
-                        period_started_at=allowance.period.started_at,
-                        period_ended_at=allowance.period.ended_at,
-                        allowance_nanos=allowance.period.allowance_nanos,
+                        period_started_at=allowance.started_at,
+                        period_ended_at=allowance.ended_at,
+                        allowance_nanos=allowance.allowance_nanos,
                         spent_nanos=allowance.spent_nanos,
                         remaining_nanos=allowance.remaining_nanos,
                     )

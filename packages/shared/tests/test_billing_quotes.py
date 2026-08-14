@@ -12,7 +12,6 @@ from shared.billing_quotes import (
     MeteredSpan,
     PricedSpan,
     Quote,
-    QuotedUnit,
     UnpricedReason,
     UnpricedSpan,
     price_span,
@@ -25,7 +24,6 @@ _END = _START + timedelta(seconds=30, microseconds=750)
 def _quote(*, effective_at: datetime, valid_until: datetime | None, rate: str) -> Quote:
     return Quote(
         component=LedgerComponent.Cpu,
-        unit=QuotedUnit.CoreSeconds,
         rate_nanos_per_unit=Decimal(rate),
         pricing_version=f"v-{rate}",
         effective_at=effective_at,

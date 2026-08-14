@@ -82,6 +82,11 @@ if _PLAN_LINES_BY_PLAN.keys() != set(BillingPlanId):
     )
 
 
+_PLANS_BY_PRICE_LOOKUP_KEY: Mapping[str, BillingPlanId] = {
+    line.price_lookup_key: line.plan for line in PLAN_LINES
+}
+
+
 def plan_line(plan: BillingPlanId) -> PlanLine:
     """The product and price one plan is sold through.
 
@@ -91,6 +96,14 @@ def plan_line(plan: BillingPlanId) -> PlanLine:
     """
 
     return _PLAN_LINES_BY_PLAN[plan]
+
+
+def plan_for_price_lookup_key(lookup_key: str) -> BillingPlanId | None:
+    """The way back from `plan_line`, kept beside it so the correspondence
+    between a plan and the price it is sold through is stated once. `None` for a
+    price this catalog did not publish."""
+
+    return _PLANS_BY_PRICE_LOOKUP_KEY.get(lookup_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,6 +498,7 @@ __all__ = [
     "StripeCatalog",
     "UsageLine",
     "cents",
+    "plan_for_price_lookup_key",
     "plan_line",
     "subscription_price_lookup_keys",
 ]

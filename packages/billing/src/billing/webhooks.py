@@ -47,8 +47,8 @@ UNPAID_SUBSCRIPTION_STATUSES = frozenset({"past_due", "unpaid", "incomplete"})
 """Provider words for a subscription whose payment did not go through.
 
 Standing this platform refuses new work on, and nothing more: retrying the card
-is the provider's, and an opinion here about when to try again is the collection
-engine the rewrite deleted.
+is the provider's, and an opinion here about when to try again would be a second
+collection engine beside theirs.
 """
 
 ENDED_SUBSCRIPTION_STATUSES = frozenset({"canceled", "incomplete_expired"})

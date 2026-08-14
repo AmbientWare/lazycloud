@@ -62,11 +62,11 @@ def usage_costs(
             cursor=cursor,
         )
     return UsageCostListResponse(
-        workspace_id=page.workspace_id,
-        start=page.start,
-        end=page.end,
+        workspace_id=workspace_id,
+        start=start,
+        end=end,
         currency=BILLING_CURRENCY,
-        group_by=page.group_by,
+        group_by=group_by,
         cost_nanos=page.cost_nanos,
         data=[
             UsageCostRowResponse(

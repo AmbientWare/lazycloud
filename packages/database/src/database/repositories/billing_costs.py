@@ -55,9 +55,12 @@ class LedgerComponentTotal:
 
     dimension: BilledDimension
     component: LedgerComponent
-    unit: QuotedUnit
     quantity: Decimal
     cost_nanos: int
+
+    @property
+    def unit(self) -> QuotedUnit:
+        return COMPONENT_UNITS[self.component]
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,7 +255,6 @@ class BillingLedgerCostRepository:
                 LedgerComponentTotal(
                     dimension=BilledDimension(dimension),
                     component=LedgerComponent(component),
-                    unit=COMPONENT_UNITS[LedgerComponent(component)],
                     quantity=Decimal(quantity),
                     cost_nanos=int(cost_nanos),
                 )
@@ -350,9 +352,9 @@ def _cost_row(
     components: tuple[LedgerComponentTotal, ...],
     names: _ResolvedNames,
 ) -> LedgerCostRow:
-    identifiers = dict(zip(("app_id", "workload_id", "task_id"), key, strict=False))
-    app_id = identifiers.get("app_id", "")
-    workload_id = identifiers.get("workload_id", "")
+    # The key carries the ids above its level and stops there, so a shallower
+    # grouping leaves the levels below it empty rather than absent.
+    app_id, workload_id, task_id = (*key, "", "")[:3]
     workload_name, workload_kind = names.workloads.get(workload_id, ("", ""))
     return LedgerCostRow(
         app_id=app_id,
@@ -360,7 +362,7 @@ def _cost_row(
         workload_id=workload_id,
         workload_name=workload_name,
         workload_kind=workload_kind,
-        task_id=identifiers.get("task_id", ""),
+        task_id=task_id,
         cost_nanos=cost_nanos,
         components=components,
     )

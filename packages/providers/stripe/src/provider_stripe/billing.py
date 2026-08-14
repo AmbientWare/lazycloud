@@ -21,8 +21,8 @@ from shared.timestamps import utc_now
 from provider_stripe.api import FormFields, StripeObject, read, send
 from provider_stripe.catalog import (
     NANOS_PER_CENT,
-    PLAN_LINES,
     cents,
+    plan_for_price_lookup_key,
     plan_line,
     subscription_price_lookup_keys,
 )
@@ -112,14 +112,26 @@ class _PaymentMethod(StripeObject):
     customer: str | None = None
 
 
-class _ItemPrice(StripeObject):
+class _Recurring(StripeObject):
+    meter: str | None = None
+
+
+class _Price(StripeObject):
+    """The parts of a price this package reads, wherever one is carried.
+
+    One shape for all three places Stripe returns a price — a subscription item,
+    a listing, an invoice line — because each carries the same object and naming
+    it three times is three descriptions of one thing to keep in step.
+    """
+
     id: str
     lookup_key: str | None = None
+    recurring: _Recurring | None = None
 
 
 class _SubscriptionItem(StripeObject):
     id: str
-    price: _ItemPrice
+    price: _Price
     current_period_start: int
     current_period_end: int
 
@@ -136,11 +148,6 @@ class _Subscription(StripeObject):
 
 class _SubscriptionList(StripeObject):
     data: list[_Subscription] = Field(default_factory=list)
-
-
-class _Price(StripeObject):
-    id: str
-    lookup_key: str | None = None
 
 
 class _PriceList(StripeObject):
@@ -162,17 +169,8 @@ class _CreditGrant(StripeObject):
     voided_at: int | None = None
 
 
-class _Recurring(StripeObject):
-    meter: str | None = None
-
-
-class _LinePrice(StripeObject):
-    id: str
-    recurring: _Recurring | None = None
-
-
 class _PriceDetails(StripeObject):
-    price: _LinePrice
+    price: _Price
 
 
 class _LinePricing(StripeObject):
@@ -208,12 +206,10 @@ class StripeBilling:
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         """Register a payer, for as long as Stripe remembers the key, only once.
 
-        Keyed on the account, so a retry after an answer this platform never
-        received is answered with the customer the first attempt created instead
-        of a second one holding half the same person's invoices. Stripe keeps a
-        key for 24 hours, which is why the identifier is stored in the request
-        that registered it rather than reconciled by a later sweep: past that
-        window a retry registers again and there is nothing to recognise it by.
+        Stripe keeps an idempotency key for 24 hours, which is why the identifier
+        is stored in the request that registered it rather than reconciled by a
+        later sweep: past that window a retry registers again and there is
+        nothing to recognise it by.
         """
 
         data = [
@@ -303,14 +299,9 @@ class StripeBilling:
     ) -> None:
         """Report one priced window of usage against a customer's meter.
 
-        `identifier` is the usage record's own id, so a resend of an event the
-        provider already accepted is discarded by them rather than counted twice
-        — the reason at-least-once delivery is the right guarantee here and not a
-        compromise. That protection lasts `METER_EVENT_DEDUPLICATION_HOURS`.
-
-        `value_nanos` is the ledger segment's cost verbatim. Nothing is rederived
-        on the way out, so an invoice and the ledger behind it compare as exact
-        integers with no second rounding step to argue about.
+        The deduplication the protocol relies on lasts
+        `METER_EVENT_DEDUPLICATION_HOURS` here, which is the ceiling every retry
+        schedule that sends these has to fit under.
 
         Which refusals are permanent is decided here rather than by the caller,
         because the limits behind them are Stripe's. Only two are: a payload this
@@ -368,18 +359,9 @@ class StripeBilling:
         catalog fail at the subscribe rather than as a subscription missing a line
         nobody notices until the invoice.
 
-        Idempotent by reading first: a customer Stripe already holds a live
-        subscription for is answered with it, whatever plan it carries, so a
-        create whose answer this platform never received converges instead of
-        making a second. A second one would carry the same metered prices, and a
-        customer's usage counted onto two invoices is a charge nobody can
-        explain.
-
-        Read rather than keyed, because an idempotency key is remembered for a
-        day and the row it protects outlives that — and a customer whose
-        subscription has since been cancelled has to be given a new one rather
-        than a replay of the one that ended. The caller records the plan the
-        answer carries rather than the one it asked for.
+        The convergence the protocol asks for is a read of the customer's live
+        subscriptions rather than an idempotency key, which Stripe remembers for
+        only a day where the account it protects lasts.
         """
 
         live = self._live_subscription(provider_customer_id)
@@ -410,15 +392,9 @@ class StripeBilling:
     ) -> ProviderSubscription:
         """Move an existing subscription onto another plan's price.
 
-        The licensed item's price is swapped in place, by item id, so the
-        subscription's identifier, its cycle and its three metered items all
-        survive — the usage already recorded against those meters stays where it
-        is and the customer's billing anniversary does not move.
-
-        Read first and returned unchanged where the item already carries the
-        target price. That is what makes the call idempotent, and it is what a
-        caller whose transaction died between changing the plan and recording it
-        converges on rather than charging a second proration.
+        The swap is by item id, and whether it is needed at all is read off that
+        item's price lookup key — which is what makes a retry after a transaction
+        that died converge rather than charge a second proration.
 
         Prorated and invoiced immediately, refusing rather than leaving an
         unpaid balance behind: a customer who cannot pay for the plan they asked
@@ -454,13 +430,6 @@ class StripeBilling:
         )
 
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
-        """What the provider says the subscription is now.
-
-        Read back rather than taken from the delivery that named it: deliveries
-        are retried for days and arrive out of order, so one describing a period
-        that has since rolled would move an allowance backwards.
-        """
-
         return _subscription(
             read(_Subscription, self.client, "GET", f"/subscriptions/{provider_subscription_id}")
         )
@@ -476,8 +445,8 @@ class StripeBilling:
     ) -> ProviderCreditGrant:
         """Give a customer the usage their plan includes.
 
-        Scoped to metered prices, so the allowance is spent against usage lines
-        before anything is charged.
+        Scoped to metered prices, which is how "spent against usage before
+        anything is charged" is stated to Stripe.
 
         The caller states the period it is buying and this adapter turns that
         into the window Stripe will actually apply the grant in, which is the
@@ -565,15 +534,7 @@ class StripeBilling:
         )
 
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
-        """What the provider billed as usage, by meter event name.
-
-        The only guard that what this platform sent is what it was charged for.
-        Both sides are integer nanodollars, so the comparison is exact and a
-        difference is a fact rather than a rounding argument.
-
-        Lines with no meter behind them — the flat plan price — are not usage and
-        are left out.
-        """
+        """Paged, because an invoice's lines are a list Stripe truncates."""
 
         totals: dict[str, int] = {}
         event_names: dict[str, str] = {}
@@ -658,15 +619,10 @@ def _subscription(payload: _Subscription) -> ProviderSubscription:
         current_period_ended_at=datetime.fromtimestamp(
             max(item.current_period_end for item in items), tz=UTC
         ),
-        plan=_PLANS_BY_PRICE_LOOKUP_KEY.get(licensed.price.lookup_key or "")
+        plan=plan_for_price_lookup_key(licensed.price.lookup_key or "")
         if licensed is not None
         else None,
     )
-
-
-_PLANS_BY_PRICE_LOOKUP_KEY: Mapping[str, BillingPlanId] = {
-    line.price_lookup_key: line.plan for line in PLAN_LINES
-}
 
 
 def _plan_item(payload: _Subscription) -> _SubscriptionItem | None:
@@ -679,7 +635,7 @@ def _plan_item(payload: _Subscription) -> _SubscriptionItem | None:
     """
 
     for item in payload.items.data:
-        if (item.price.lookup_key or "") in _PLANS_BY_PRICE_LOOKUP_KEY:
+        if plan_for_price_lookup_key(item.price.lookup_key or "") is not None:
             return item
     return None
 

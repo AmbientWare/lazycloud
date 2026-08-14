@@ -100,7 +100,7 @@ COMPONENT_UNITS: Mapping[LedgerComponent, QuotedUnit] = {
     LedgerComponent.VolumeStorage: QuotedUnit.ByteSeconds,
 }
 
-COMPONENT_DIMENSIONS: Mapping[LedgerComponent, BilledDimension] = {
+_COMPONENT_DIMENSIONS: Mapping[LedgerComponent, BilledDimension] = {
     LedgerComponent.ContainerTime: BilledDimension.ComputeRuntime,
     LedgerComponent.Cpu: BilledDimension.ComputeRuntime,
     LedgerComponent.Memory: BilledDimension.ComputeRuntime,
@@ -126,7 +126,7 @@ class BilledUsage:
 
     @property
     def dimension(self) -> BilledDimension:
-        return COMPONENT_DIMENSIONS[self.components[0]]
+        return _COMPONENT_DIMENSIONS[self.components[0]]
 
 
 BILLED_METRICS: Mapping[UsageMetric, BilledUsage] = {
@@ -173,7 +173,7 @@ other.
 # One record owes the provider one meter event, which needs one dimension, so a
 # metric may not spread its components across two.
 if any(
-    {COMPONENT_DIMENSIONS[component] for component in billed.components} != {billed.dimension}
+    {_COMPONENT_DIMENSIONS[component] for component in billed.components} != {billed.dimension}
     for billed in BILLED_METRICS.values()
 ):
     raise RuntimeError("every component one metric produces must belong to one billed dimension")
@@ -284,7 +284,6 @@ class Quote:
     """
 
     component: LedgerComponent
-    unit: QuotedUnit
     rate_nanos_per_unit: Decimal
     pricing_version: str
     effective_at: datetime
@@ -300,8 +299,11 @@ class Quote:
             raise ValueError("a rate cannot be negative")
 
     @property
-    def dimension(self) -> BilledDimension:
-        return COMPONENT_DIMENSIONS[self.component]
+    def unit(self) -> QuotedUnit:
+        """What the rate is per. The component decides it, so no caller can state
+        a unit the quantity beside it is not counted in."""
+
+        return COMPONENT_UNITS[self.component]
 
     def covers(self, at: datetime) -> bool:
         return self.effective_at <= at and (self.valid_until is None or at < self.valid_until)
@@ -309,75 +311,6 @@ class Quote:
     def cost_nanos(self, quantity: Decimal) -> int:
         product = self.rate_nanos_per_unit * quantity
         return int(product.quantize(_WHOLE_NANO, rounding=ROUND_HALF_EVEN))
-
-
-@dataclass(frozen=True, slots=True)
-class ComputeRate:
-    """One shape class's published rates over one interval, per whole unit-second.
-
-    One rate per resource rather than one blended figure per millisecond, so what
-    a charge multiplies is the quantity that was recorded — a core-second held or
-    a core-second burnt — rather than a coefficient only a placement-time table
-    can reproduce. Re-pricing a window is then re-running this over the stored
-    quantities, which is what makes reconciliation a comparison.
-    """
-
-    billing_owner: UsageBillingOwner
-    gpu_type: str
-    pricing_version: str
-    effective_at: datetime
-    valid_until: datetime | None
-    nanos_per_container_second: Decimal
-    nanos_per_cpu_core_second: Decimal
-    nanos_per_memory_gib_second: Decimal
-    nanos_per_gpu_card_second: Decimal
-
-    def quote(self, component: LedgerComponent) -> Quote:
-        if component is LedgerComponent.ContainerTime:
-            rate = self.nanos_per_container_second
-        elif component is LedgerComponent.Cpu:
-            rate = self.nanos_per_cpu_core_second
-        elif component is LedgerComponent.Memory:
-            rate = self.nanos_per_memory_gib_second
-        elif component is LedgerComponent.Gpu:
-            rate = self.nanos_per_gpu_card_second
-        else:
-            raise ValueError(f"{component} is not a shape-rated component")
-        return Quote(
-            component=component,
-            unit=COMPONENT_UNITS[component],
-            rate_nanos_per_unit=rate,
-            pricing_version=self.pricing_version,
-            effective_at=self.effective_at,
-            valid_until=self.valid_until,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class PlatformRate:
-    """Rates that belong to the platform rather than to a container's shape."""
-
-    pricing_version: str
-    effective_at: datetime
-    valid_until: datetime | None
-    nanos_per_egress_byte: Decimal
-    nanos_per_volume_byte_second: Decimal
-
-    def quote(self, component: LedgerComponent) -> Quote:
-        if component is LedgerComponent.Egress:
-            rate = self.nanos_per_egress_byte
-        elif component is LedgerComponent.VolumeStorage:
-            rate = self.nanos_per_volume_byte_second
-        else:
-            raise ValueError(f"{component} is not a platform-rated component")
-        return Quote(
-            component=component,
-            unit=COMPONENT_UNITS[component],
-            rate_nanos_per_unit=rate,
-            pricing_version=self.pricing_version,
-            effective_at=self.effective_at,
-            valid_until=self.valid_until,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,7 +339,7 @@ class MeteredSpan:
 
     @property
     def dimension(self) -> BilledDimension:
-        return COMPONENT_DIMENSIONS[self.component]
+        return _COMPONENT_DIMENSIONS[self.component]
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,17 +471,14 @@ def _quote_at(quotes: Sequence[Quote], at: datetime) -> Quote | None:
 
 __all__ = [
     "BILLED_METRICS",
-    "COMPONENT_DIMENSIONS",
     "COMPONENT_UNITS",
     "NANOS_PER_USD",
     "BilledDimension",
     "BilledUsage",
-    "ComputeRate",
     "ContainerShape",
     "LedgerBasis",
     "LedgerComponent",
     "MeteredSpan",
-    "PlatformRate",
     "PricedSegment",
     "PricedSpan",
     "Quote",

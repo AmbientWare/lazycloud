@@ -283,9 +283,9 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
             user_id=user_id, at=CYCLE_STARTED_AT
         )
         assert free is not None
-        assert free.period.started_at == CYCLE_STARTED_AT
-        assert free.period.ended_at == CYCLE_ENDED_AT
-        assert free.period.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
+        assert free.started_at == CYCLE_STARTED_AT
+        assert free.ended_at == CYCLE_ENDED_AT
+        assert free.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
         # Spent while the account was free, and it has to survive the upgrade:
         # the usage is on the same invoice the prorated plan fee lands on.
         BillingAllowanceRepository(session).increment(
@@ -309,9 +309,9 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     assert account.plan is BillingPlanId.Team
     assert account.provider_subscription_id == upgraded.provider_subscription_id == "sub_1"
     assert allowance is not None
-    assert allowance.period.started_at == CYCLE_STARTED_AT
-    assert allowance.period.ended_at == CYCLE_ENDED_AT
-    assert allowance.period.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
+    assert allowance.started_at == CYCLE_STARTED_AT
+    assert allowance.ended_at == CYCLE_ENDED_AT
+    assert allowance.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
     assert allowance.spent_nanos == 2_000_000_000
     assert provider.subscriptions == [BillingPlanId.Free]
     assert provider.plan_changes == [BillingPlanId.Team]
@@ -383,10 +383,10 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     # The closed period keeps the free terms it was granted and spent against,
     # and the new one opens on Team's.
     assert closing is not None
-    assert closing.period.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
+    assert closing.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
     assert opened is not None
-    assert opened.period.started_at == CYCLE_ENDED_AT
-    assert opened.period.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
+    assert opened.started_at == CYCLE_ENDED_AT
+    assert opened.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
 
 
 def test_an_account_with_no_subscription_cannot_start_work(
