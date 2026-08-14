@@ -148,12 +148,100 @@ class SchedulerMeterEventBatch(Protocol):
     def abandoned_count(self) -> int: ...
 
 
+class SchedulerAbandonedMeterEvents(Protocol):
+    @property
+    def count(self) -> int: ...
+
+    @property
+    def value_nanos(self) -> int: ...
+
+
 class SchedulerMeterOutboxService(Protocol):
     """The sweep that hands the provider what the pricer already owed it."""
 
     def drain(self, *, now: datetime | None = None) -> SchedulerMeterEventBatch: ...
 
+    def abandoned_backlog(self) -> SchedulerAbandonedMeterEvents: ...
+
     def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
+
+
+class SchedulerPlanChangeBatch(Protocol):
+    @property
+    def applied_count(self) -> int: ...
+
+    @property
+    def not_applied_count(self) -> int: ...
+
+    @property
+    def retried_count(self) -> int: ...
+
+    @property
+    def abandoned_count(self) -> int: ...
+
+    @property
+    def open_count(self) -> int: ...
+
+
+class SchedulerPlanChangeService(Protocol):
+    """The sweep that finishes plan changes whose outcome nobody recorded."""
+
+    def settle_open(self, *, now: datetime | None = None) -> SchedulerPlanChangeBatch: ...
+
+
+class SchedulerBillingReconciliationBatch(Protocol):
+    @property
+    def accounts_checked(self) -> int: ...
+
+    @property
+    def divergent_count(self) -> int: ...
+
+    @property
+    def unreachable_count(self) -> int: ...
+
+
+class SchedulerBillingReconciliationService(Protocol):
+    """The pass that reports where the provider and this platform disagree."""
+
+    def reconcile(self, *, now: datetime | None = None) -> SchedulerBillingReconciliationBatch: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _MeterEventSweep:
+    """What one tick of the outbox did, and what it left behind.
+
+    The first three are the tick's own work and the last two are the standing
+    backlog, which is read whether or not the sending worked: a provider outage
+    is exactly when charges are given up on, and a gauge that went quiet for the
+    duration of one would report nothing during the failure it exists for.
+    """
+
+    sent_count: int = 0
+    retried_count: int = 0
+    abandoned_count: int = 0
+    abandoned_outstanding_count: int = 0
+    abandoned_outstanding_nanos: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _NoPlanChanges:
+    applied_count: int = 0
+    not_applied_count: int = 0
+    retried_count: int = 0
+    abandoned_count: int = 0
+    open_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _NoBillingReconciliation:
+    accounts_checked: int = 0
+    divergent_count: int = 0
+    unreachable_count: int = 0
+
+
+_NO_METER_EVENT_SWEEP = _MeterEventSweep()
+_NO_PLAN_CHANGES = _NoPlanChanges()
+_NO_BILLING_RECONCILIATION = _NoBillingReconciliation()
 
 
 class SchedulerRetentionBatch(Protocol):
@@ -291,6 +379,8 @@ class SchedulerCapacityControls:
 class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
     meter_outbox: SchedulerMeterOutboxService | None = None
+    plan_changes: SchedulerPlanChangeService | None = None
+    billing_reconciliation: SchedulerBillingReconciliationService | None = None
     retention: SchedulerRetentionService | None = None
     tailnet_cleanup: SchedulerTailnetCleanupService | None = None
     custom_domains: SchedulerCustomDomainService | None = None
@@ -326,6 +416,16 @@ class Scheduler:
     sending loop should spend a query on every tick."""
 
     last_meter_event_prune_at: datetime | None = field(default=None, init=False)
+    last_reported_abandoned_meter_events: int | None = field(default=None, init=False)
+    """The outstanding abandoned figure the last line reported.
+
+    The drain's own counts are a delta and say nothing on an idle tick, but the
+    backlog they leave behind is a standing total that has to stay visible. This
+    is what keeps a 1 Hz loop from printing the same number every second while
+    still printing it whenever it moves."""
+
+    billing_reconcile_interval_seconds: float = 3600.0
+    last_billing_reconcile_at: datetime | None = field(default=None, init=False)
     worker_pool_drain_event_signatures: dict[str, tuple[str, ...]] = field(
         default_factory=dict,
         init=False,
@@ -557,11 +657,9 @@ class Scheduler:
             now=now,
             limit=container_limit,
         )
-        (
-            meter_events_sent_count,
-            meter_events_retried_count,
-            meter_events_abandoned_count,
-        ) = self._drain_meter_events(now=now)
+        meter_events = self._drain_meter_events(now=now)
+        plan_changes = self._settle_plan_changes(now=now)
+        billing_reconciliation = self._best_effort_reconcile_billing(now=now)
         meter_events_pruned = self._best_effort_prune_meter_events(now=now)
         expired_pods = self._best_effort_expire_pods(now=now) if include_containers else []
         worker_cleanups = self._best_effort_cleanup_workers(now=now) if include_containers else []
@@ -650,10 +748,20 @@ class Scheduler:
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
             volume_metering_failure_count=volume_metering_failure_count,
-            meter_events_sent_count=meter_events_sent_count,
-            meter_events_retried_count=meter_events_retried_count,
-            meter_events_abandoned_count=meter_events_abandoned_count,
+            meter_events_sent_count=meter_events.sent_count,
+            meter_events_retried_count=meter_events.retried_count,
+            meter_events_abandoned_count=meter_events.abandoned_count,
+            meter_events_abandoned_outstanding_count=meter_events.abandoned_outstanding_count,
+            meter_events_abandoned_outstanding_nanos=meter_events.abandoned_outstanding_nanos,
             meter_events_pruned=meter_events_pruned,
+            plan_changes_applied_count=plan_changes.applied_count,
+            plan_changes_not_applied_count=plan_changes.not_applied_count,
+            plan_changes_retried_count=plan_changes.retried_count,
+            plan_changes_abandoned_count=plan_changes.abandoned_count,
+            plan_changes_open_count=plan_changes.open_count,
+            billing_reconcile_checked_count=billing_reconciliation.accounts_checked,
+            billing_reconcile_divergent_count=billing_reconciliation.divergent_count,
+            billing_reconcile_failure_count=billing_reconciliation.unreachable_count,
             objects_removed=objects_removed,
             retention_failure_count=retention_failure_count,
         )
@@ -681,33 +789,136 @@ class Scheduler:
             return 0, 1
         return result.metered_count, result.failure_count
 
-    def _drain_meter_events(self, *, now: datetime | None) -> tuple[int, int, int]:
+    def _drain_meter_events(self, *, now: datetime | None) -> _MeterEventSweep:
         """Hand the payment provider the events the pricer already queued.
 
         The sweep settles each row on its own, so a provider outage — or a
         credential this process cannot read — shows up here as a rising retry
         count against a queryable backlog and a line every tick, never as a lost
         charge and never as silence.
+
+        The backlog of charges given up on is read beside the deltas and read
+        even when the sending failed, because a drain that cannot reach the
+        provider is when that figure matters most. It is also the one figure
+        that survives the tick that produced it: a row is abandoned once, is
+        never pruned, and stands there as metered usage nobody was billed for
+        until an operator has answered for it.
         """
 
         meter_outbox = self.maintenance.meter_outbox
         if meter_outbox is None:
-            return 0, 0, 0
+            return _NO_METER_EVENT_SWEEP
         try:
-            result = meter_outbox.drain(now=now)
+            drained: SchedulerMeterEventBatch = meter_outbox.drain(now=now)
         except Exception:
             LOGGER.exception("scheduler meter event delivery failed")
-            return 0, 0, 0
-        counts = (result.sent_count, result.retried_count, result.abandoned_count)
-        if any(counts):
-            # Only when a tick did something. The loop runs about once a second
-            # and an idle outbox is the ordinary case, so a line per tick would
-            # bury the one that says a charge was refused.
-            LOGGER.info(
-                "scheduler: meter events sent=%d retried=%d abandoned=%d",
-                *counts,
+            drained = _NO_METER_EVENT_SWEEP
+        backlog = self._abandoned_meter_events(meter_outbox)
+        if backlog is None:
+            # Said once, by the exception that could not read it. A summary line
+            # here would put a figure of zero beside the failure to read one.
+            return _MeterEventSweep(
+                sent_count=drained.sent_count,
+                retried_count=drained.retried_count,
+                abandoned_count=drained.abandoned_count,
             )
-        return counts
+        outstanding_count, outstanding_nanos = backlog
+        moved = (drained.sent_count, drained.retried_count, drained.abandoned_count)
+        if any(moved) or outstanding_count != self.last_reported_abandoned_meter_events:
+            # Only when a tick did something, or when the standing backlog is not
+            # the number last reported. The loop runs about once a second and an
+            # idle outbox is the ordinary case, so a line per tick would bury the
+            # one that says a charge was refused.
+            LOGGER.log(
+                logging.WARNING if outstanding_count else logging.INFO,
+                "scheduler: meter events sent=%d retried=%d abandoned=%d; "
+                "%d rows metering %d nanodollars never reached the provider",
+                *moved,
+                outstanding_count,
+                outstanding_nanos,
+            )
+            self.last_reported_abandoned_meter_events = outstanding_count
+        return _MeterEventSweep(
+            sent_count=drained.sent_count,
+            retried_count=drained.retried_count,
+            abandoned_count=drained.abandoned_count,
+            abandoned_outstanding_count=outstanding_count,
+            abandoned_outstanding_nanos=outstanding_nanos,
+        )
+
+    def _abandoned_meter_events(
+        self, meter_outbox: SchedulerMeterOutboxService
+    ) -> tuple[int, int] | None:
+        """How many charges stand given up on and what they metered, or nothing."""
+
+        try:
+            backlog = meter_outbox.abandoned_backlog()
+        except Exception:
+            LOGGER.exception("scheduler abandoned meter event backlog could not be read")
+            # Forgotten rather than carried, so the next reading is reported
+            # whatever it says instead of being compared against a number this
+            # tick never had and passed over as unchanged.
+            self.last_reported_abandoned_meter_events = None
+            return None
+        return backlog.count, backlog.value_nanos
+
+    def _settle_plan_changes(self, *, now: datetime | None) -> SchedulerPlanChangeBatch:
+        """Finish the plan changes whose outcome nobody recorded.
+
+        Every tick, because an intent with no outcome is a customer who may have
+        been charged for a plan this platform is not billing them on, and the
+        window it stays open in is the window admission judges them on the wrong
+        allowance.
+        """
+
+        plan_changes = self.maintenance.plan_changes
+        if plan_changes is None:
+            return _NO_PLAN_CHANGES
+        try:
+            result = plan_changes.settle_open(now=now)
+        except Exception:
+            LOGGER.exception("scheduler plan change settlement failed")
+            return _NO_PLAN_CHANGES
+        if result.applied_count or result.abandoned_count or result.open_count:
+            LOGGER.info(
+                "scheduler: plan changes applied=%d not_applied=%d retried=%d abandoned=%d open=%d",
+                result.applied_count,
+                result.not_applied_count,
+                result.retried_count,
+                result.abandoned_count,
+                result.open_count,
+            )
+        return result
+
+    def _best_effort_reconcile_billing(
+        self, *, now: datetime | None = None
+    ) -> SchedulerBillingReconciliationBatch:
+        """Compare the provider's record against this platform's, on an interval.
+
+        Hourly rather than per tick: it reads the provider once or twice per
+        account, and what it looks for — a delivery that never arrived, a plan
+        changed in the provider's dashboard — is not something a second makes a
+        difference to.
+        """
+
+        reconciliation = self.maintenance.billing_reconciliation
+        if reconciliation is None:
+            return _NO_BILLING_RECONCILIATION
+        current = now or utc_now()
+        if (
+            self.last_billing_reconcile_at is not None
+            and (current - self.last_billing_reconcile_at).total_seconds()
+            < self.billing_reconcile_interval_seconds
+        ):
+            return _NO_BILLING_RECONCILIATION
+        try:
+            result = reconciliation.reconcile(now=current)
+        except Exception:
+            LOGGER.exception("scheduler billing reconciliation failed")
+            self.last_billing_reconcile_at = current
+            return _NO_BILLING_RECONCILIATION
+        self.last_billing_reconcile_at = current
+        return result
 
     def _best_effort_prune_meter_events(self, *, now: datetime | None = None) -> int:
         meter_outbox = self.maintenance.meter_outbox
@@ -1348,7 +1559,17 @@ class SchedulerRunResult(ContractModel):
     meter_events_sent_count: int = 0
     meter_events_retried_count: int = 0
     meter_events_abandoned_count: int = 0
+    meter_events_abandoned_outstanding_count: int = 0
+    meter_events_abandoned_outstanding_nanos: int = 0
     meter_events_pruned: int = 0
+    plan_changes_applied_count: int = 0
+    plan_changes_not_applied_count: int = 0
+    plan_changes_retried_count: int = 0
+    plan_changes_abandoned_count: int = 0
+    plan_changes_open_count: int = 0
+    billing_reconcile_checked_count: int = 0
+    billing_reconcile_divergent_count: int = 0
+    billing_reconcile_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
 

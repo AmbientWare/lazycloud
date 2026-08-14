@@ -81,7 +81,6 @@ def usage_costs(
                     UsageCostComponentResponse(
                         dimension=total.dimension,
                         component=total.component,
-                        unit=total.unit,
                         quantity=float(total.quantity),
                         cost_nanos=total.cost_nanos,
                     )

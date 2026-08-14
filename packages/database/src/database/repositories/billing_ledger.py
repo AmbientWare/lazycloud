@@ -510,7 +510,6 @@ def _segment_values(
         "segment_ended_at": segment.ended_at,
         "duration_ms": segment.duration_ms,
         "quantity": segment.quantity,
-        "quantity_unit": segment.quote.unit.value,
         "pricing_version": segment.quote.pricing_version,
         "rate_nanos_per_unit": segment.quote.rate_nanos_per_unit,
         "quote_effective_at": segment.quote.effective_at,

@@ -68,15 +68,6 @@ class LedgerBasis(StringEnum):
     Measured = "measured"
 
 
-class QuotedUnit(StringEnum):
-    ContainerSeconds = "container_seconds"
-    CoreSeconds = "core_seconds"
-    GibSeconds = "gib_seconds"
-    CardSeconds = "card_seconds"
-    Bytes = "bytes"
-    ByteSeconds = "byte_seconds"
-
-
 class UnpricedReason(StringEnum):
     """Why a metered span produced no money.
 
@@ -90,15 +81,6 @@ class UnpricedReason(StringEnum):
     NoMeteringWindow = "no_metering_window"
     NoAccountOwner = "no_account_owner"
 
-
-COMPONENT_UNITS: Mapping[LedgerComponent, QuotedUnit] = {
-    LedgerComponent.ContainerTime: QuotedUnit.ContainerSeconds,
-    LedgerComponent.Cpu: QuotedUnit.CoreSeconds,
-    LedgerComponent.Memory: QuotedUnit.GibSeconds,
-    LedgerComponent.Gpu: QuotedUnit.CardSeconds,
-    LedgerComponent.Egress: QuotedUnit.Bytes,
-    LedgerComponent.VolumeStorage: QuotedUnit.ByteSeconds,
-}
 
 _COMPONENT_DIMENSIONS: Mapping[LedgerComponent, BilledDimension] = {
     LedgerComponent.ContainerTime: BilledDimension.ComputeRuntime,
@@ -298,13 +280,6 @@ class Quote:
         if self.rate_nanos_per_unit < 0:
             raise ValueError("a rate cannot be negative")
 
-    @property
-    def unit(self) -> QuotedUnit:
-        """What the rate is per. The component decides it, so no caller can state
-        a unit the quantity beside it is not counted in."""
-
-        return COMPONENT_UNITS[self.component]
-
     def covers(self, at: datetime) -> bool:
         return self.effective_at <= at and (self.valid_until is None or at < self.valid_until)
 
@@ -471,7 +446,6 @@ def _quote_at(quotes: Sequence[Quote], at: datetime) -> Quote | None:
 
 __all__ = [
     "BILLED_METRICS",
-    "COMPONENT_UNITS",
     "NANOS_PER_USD",
     "BilledDimension",
     "BilledUsage",
@@ -482,7 +456,6 @@ __all__ = [
     "PricedSegment",
     "PricedSpan",
     "Quote",
-    "QuotedUnit",
     "SpanPricing",
     "UnpricedReason",
     "UnpricedSpan",

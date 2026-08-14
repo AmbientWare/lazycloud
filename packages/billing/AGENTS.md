@@ -41,6 +41,71 @@ admission decision, and the sweep.
   swapped in place, so the subscription id, the billing anniversary and the three
   metered items survive and the usage already recorded this cycle is billed where
   it belongs.
+- A plan change is recorded before it is attempted and settled after. The
+  provider raises and collects the proration inside the call that swaps the
+  price, and it cannot join a transaction here, so everything between that
+  charge and the account row naming the new plan is a window where a customer
+  has paid for terms this platform is not giving them — judged by admission on
+  the allowance they left, and offered the button again. The intent row is what
+  makes that window recoverable: it is committed first, the provider is called,
+  and the outcome is written against the claim the intent was taken under.
+- Asking the provider settles it, and the answer is definitive rather than
+  likely. The swap is sent refusing to complete without payment, so the
+  subscription carries the new plan's price only if the money was taken: "the
+  item is on Team" and "the proration was collected" are one fact, readable in
+  one request, with no invoice search and no timing window. That is what lets a
+  sweep decide an intent nobody recorded an outcome for — the provider holds the
+  plan, so the cycle and the row are given the terms that were paid for; it does
+  not, so nothing happened and nothing is written.
+- The plan is not the whole of the answer, because a subscription that has ended
+  keeps the items it ended holding. A change is written back only onto the
+  subscription it was made on and only while the provider still calls that
+  subscription live; anything else is kept as evidence and reported, never
+  written. The row and the plan together are what admission reads, so a settler
+  that took the plan alone would put a live-looking subscription back on an
+  account whose subscription is gone, buy the allowance that plan includes
+  against a cycle nothing will invoice, and admit every container that follows —
+  which is the state ending a subscription clears the row to prevent, recreated
+  by the sweep that exists to protect the money.
+- A refusal is not an answer. `error_if_incomplete` can fail after the invoice
+  was raised, and a read taken behind a call that timed out cannot tell a
+  provider that never moved from one still moving — so the request settles the
+  change only where the provider already holds the plan, and paces everything
+  else for the sweep. Closing the intent on that early read is the one outcome
+  nothing recovers from: a swap that lands afterwards is a charge with no record
+  that anybody meant it. A customer whose card was refused waits a schedule for
+  their button rather than forever, which is the price of not guessing.
+- At most one plan change is open per account, enforced by a partial unique
+  index rather than by a lock. No transaction spans the provider call, so
+  nothing serializes two simultaneous subscribes on the account row, and two of
+  those are two prorations charged for one upgrade. The second caller is refused
+  with a conflict, which is a button that says so rather than a bill that does
+  not.
+- A plan change corrects and reconciliation only reports, and the difference is
+  the intent. The plan-change sweep is finishing a transaction this platform
+  started and wrote down, so it knows what was meant and may complete it.
+  Reconciliation observes objects nothing here recorded an intent about: a
+  difference there may be a delivery that never arrived or a change somebody
+  made in the provider's own dashboard, and making the two agree would be a
+  money write on a guess. It writes to no billing table on any branch, and says
+  what disagrees instead — plan, standing, cycle, and the last closed invoice's
+  metered totals against the ledger less whatever the outbox has not delivered.
+  One durable event per account per divergence, re-emitted only when what it
+  disagrees about changes, because an hourly pass that reported every account
+  every time would bury the report it exists to make.
+- The invoice it compares is the newest finalized one covering a period there is
+  usage in. A plan change is prorated onto an invoice raised there and then,
+  which carries no metered line and covers no span; taken as the newest closed
+  period it would compare an empty window against an empty invoice, agree, and
+  leave the account with no usage reconciliation from its upgrade onwards — the
+  event whose lost delivery this pass exists to catch.
+- Usage the outbox gave up on is subtracted like a backlog and reported unlike
+  one. Both are money that did not reach the invoice, so both come off the
+  ledger before the arithmetic, or every account holding either reads as a
+  disagreement about a figure that is not in dispute. But a backlog is delivered
+  eventually and this is a charge nobody will make until somebody makes it, so
+  it is a divergence of its own rather than a silence: the ledger-against-invoice
+  comparison is the only place it is attributable to the account that lost it.
 - What happens to the grant an account holds is decided from what writing the
   period did to it, never from which caller is asking. Re-terming the cycle in
   progress is a plan change, and its outgoing grant is expired before the
@@ -120,6 +185,16 @@ admission decision, and the sweep.
   dimension and value, and the row is kept as the evidence of money that never
   left. Nothing here restates a provider's limits as a number of its own to keep
   in step.
+- The abandoned backlog is a counted figure and not only an event. A row is
+  abandoned once, is never pruned, and its delta is gone after the tick that
+  produced it, so the standing count and what those rows metered are asked of
+  the outbox — a number an operator watches, which only falls when somebody has
+  answered for the money and removed the evidence. Asked rather than returned by
+  the drain, because the provider is what makes a drain fail and a figure
+  carried out of one would read zero for the length of the outage that grows it.
+  It is what the usage was priced at rather than what it would have been billed:
+  an account spends its allowance before it is charged for anything, so part of
+  any total there would have reached an invoice at zero.
 - A retryable failure is not an event. It is written to the row it belongs to and
   counted into the sweep's result, so a provider outage leaves a queryable
   backlog and a visible failure count instead of one durable event per row per

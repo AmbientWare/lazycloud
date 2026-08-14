@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -17,6 +17,7 @@ from shared.payments import (
     PaymentCustomer,
     PaymentEvent,
     ProviderCreditGrant,
+    ProviderInvoice,
     ProviderSubscription,
 )
 from tests.service_fixtures import workspace_owner_user_id
@@ -120,6 +121,11 @@ class _Provider:
 
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("applying a card delivery must not read invoices")
+
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        raise AssertionError("applying a delivery must not list invoices")
 
 
 def test_a_saved_card_becomes_the_one_charges_are_taken_from(

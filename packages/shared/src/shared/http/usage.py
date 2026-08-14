@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import Field, JsonValue
 
-from shared.billing_quotes import BilledDimension, LedgerComponent, QuotedUnit
+from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.usage import UsageMetric, UsageUnit
@@ -54,20 +54,20 @@ class UsageCostGroupKey(StringEnum):
 
 
 class UsageCostComponentResponse(HttpModel):
-    """One resource's share of a row, in the unit its rate is published per.
+    """One resource's share of a row, and the invoice line it rolls up into.
 
     Present for every component the row produced usage in, including the ones
     priced at zero — an egress line reading $0.00 is how a customer sees that
     their traffic is measured and free rather than unmeasured.
 
-    `dimension` names the invoice line the component rolls up into, so a
-    breakdown and a bill can be read against each other without the browser
+    `component` says which resource `quantity` counts and therefore which unit
+    it is in. `dimension` names the invoice line that component rolls up into,
+    so a breakdown and a bill can be read against each other without the browser
     holding its own map of which resource is billed under what.
     """
 
     dimension: BilledDimension
     component: LedgerComponent
-    unit: QuotedUnit
     quantity: float
     cost_nanos: int = Field(ge=0)
 

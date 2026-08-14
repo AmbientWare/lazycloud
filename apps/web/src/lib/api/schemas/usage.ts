@@ -59,15 +59,6 @@ export const ledgerComponents = [
 ] as const;
 export type LedgerComponent = (typeof ledgerComponents)[number];
 
-export const quotedUnits = [
-  "container_seconds",
-  "core_seconds",
-  "gib_seconds",
-  "card_seconds",
-  "bytes",
-  "byte_seconds",
-] as const;
-
 export const usageCostGroupKeys = ["app", "workload", "task"] as const;
 export type UsageCostGroupKey = (typeof usageCostGroupKeys)[number];
 
@@ -81,7 +72,6 @@ export type UsageCostGroupKey = (typeof usageCostGroupKeys)[number];
 export const usageCostComponentSchema = z.object({
   dimension: z.enum(billedDimensions),
   component: z.enum(ledgerComponents),
-  unit: z.enum(quotedUnits),
   quantity: z.number(),
   cost_nanos: z.number().int().nonnegative(),
 });

@@ -3,9 +3,8 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from billing.costs import BillingStanding, BillingStandingService
-from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import APIRouter, Depends, status
-from shared.errors import InvalidInputError, NotFoundError
+from shared.errors import InvalidInputError
 from shared.http.billing import (
     BillingAllowanceResponse,
     BillingHostedSessionRequest,
@@ -15,12 +14,11 @@ from shared.http.billing import (
 )
 from shared.payments import BILLING_CURRENCY
 from shared.timestamps import utc_now
-from sqlalchemy.orm import Session
 
 from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
 from api.server.services import ApiServices
-from billing import BillingAccountService
+from billing import BillingAccountService, BillingPlanChangeService, owned_workspace_id
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 
@@ -73,18 +71,18 @@ def subscribe_billing_plan(
     may spend and until when, and the subscription's own identifiers are the
     provider's business — publishing them here would put a second name for the
     same relationship on the wire.
+
+    `409` where a change for this account is already being settled: the provider
+    charges the proration inside the call, so letting a second one through would
+    be a customer charged twice for one upgrade.
     """
 
-    provider = services.payment_provider()
+    BillingPlanChangeService(
+        database=services.context.database,
+        payments=services.payment_provider,
+        events=services.events,
+    ).subscribe(user_id=user_id)
     with services.context.database.session() as session:
-        BillingAccountService(session).subscribe(
-            provider,
-            user_id=user_id,
-            workspace_id=_workspace_of(session, user_id),
-        )
-        # Committed before the standing is read, so what comes back is what the
-        # next request will read rather than what this transaction can still lose.
-        session.commit()
         return _summary(BillingStandingService(session).standing(user_id=user_id, at=utc_now()))
 
 
@@ -123,7 +121,7 @@ def start_billing_card_setup(
         account = BillingAccountService(session).billing_account_for(
             provider,
             user_id=user_id,
-            workspace_id=_workspace_of(session, user_id),
+            workspace_id=owned_workspace_id(session, user_id),
         )
         session.commit()
     session_url = provider.card_setup_session(
@@ -214,16 +212,3 @@ def _own_url(services: ApiServices, candidate: str) -> str:
     if parsed.scheme != expected.scheme or parsed.netloc != expected.netloc:
         raise InvalidInputError("a billing return address must be on this platform")
     return candidate
-
-
-def _workspace_of(session: Session, user_id: str) -> str:
-    """A workspace to stamp on the provider's record of this customer.
-
-    Traceability only — the account is the person, not the workspace — but a
-    payment arriving out of band is far easier to place with one attached.
-    """
-
-    owned = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
-    if not owned:
-        raise NotFoundError(f"no workspace to bill for user: {user_id}")
-    return owned[0]

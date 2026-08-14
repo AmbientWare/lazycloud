@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
@@ -11,9 +10,7 @@ from control.service import ControlPlaneService
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.identity import (
-    UserRepository,
     WorkspaceMemberRepository,
-    WorkspaceRepository,
 )
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
@@ -24,11 +21,12 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderInvoice,
     ProviderSubscription,
 )
-from tests.service_fixtures import owned_workspace, workspace_owner_user_id
+from tests.service_fixtures import owned_workspace, unbilled_account, workspace_owner_user_id
 
-from billing import BillingAccountService, DatabaseBillingAdmission
+from billing import BillingAccountService, BillingPlanChangeService, DatabaseBillingAdmission
 
 CYCLE_STARTED_AT = datetime(2026, 8, 13, 9, 30, tzinfo=UTC)
 CYCLE_ENDED_AT = datetime(2026, 9, 13, 9, 30, tzinfo=UTC)
@@ -161,22 +159,18 @@ class _Provider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("subscribing must not read invoices")
 
+    def invoices_for(
+        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+    ) -> Sequence[ProviderInvoice]:
+        raise AssertionError("subscribing must not list invoices")
 
-def _account_that_has_never_been_billed(services: ApiServices) -> tuple[str, str]:
-    """A workspace and the owner of it, with nothing billing has ever written.
 
-    Built here rather than through the shared workspace fixture, which leaves an
-    account provisioned because that is what signing in leaves. What provisioning
-    does on first reaching an account is exactly the subject of the tests below,
-    so they need one that has not.
-    """
-
-    with services.context.database.session() as session:
-        user_id = UserRepository(session).create(display_name="unprovisioned").id
-        workspace_id = WorkspaceRepository(session).create(name=f"unbilled-{uuid4()}").id
-        WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace_id, user_id=user_id)
-        session.commit()
-    return user_id, workspace_id
+def _plan_changes(services: ApiServices, provider: _Provider) -> BillingPlanChangeService:
+    return BillingPlanChangeService(
+        database=services.context.database,
+        payments=lambda: provider,
+        events=services.events,
+    )
 
 
 def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
@@ -238,7 +232,7 @@ def test_provisioning_an_account_twice_leaves_one_customer_and_one_subscription(
     """
 
     provider = _Provider()
-    user_id, workspace_id = _account_that_has_never_been_billed(isolated_services)
+    user_id, workspace_id = unbilled_account(isolated_services.context)
 
     with isolated_services.context.database.session() as session:
         first = BillingAccountService(session).billing_account_for(
@@ -278,7 +272,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     """
 
     provider = _Provider()
-    user_id, workspace_id = _account_that_has_never_been_billed(isolated_services)
+    user_id, workspace_id = unbilled_account(isolated_services.context)
 
     with isolated_services.context.database.session() as session:
         BillingAccountService(session).billing_account_for(
@@ -301,11 +295,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
-        upgraded = BillingAccountService(session).subscribe(
-            provider, user_id=user_id, workspace_id=workspace_id
-        )
-        session.commit()
+    upgraded = _plan_changes(isolated_services, provider).subscribe(user_id=user_id)
 
     with isolated_services.context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
@@ -331,11 +321,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     # paid for would include nothing until three days after they bought it.
     assert provider.grant_predecessors == [None, None]
 
-    with isolated_services.context.database.session() as session:
-        again = BillingAccountService(session).subscribe(
-            provider, user_id=user_id, workspace_id=workspace_id
-        )
-        session.commit()
+    again = _plan_changes(isolated_services, provider).subscribe(user_id=user_id)
 
     assert again.provider_subscription_id == "sub_1"
     assert provider.subscriptions == [BillingPlanId.Free]
@@ -362,7 +348,7 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     """
 
     provider = _Provider()
-    user_id, workspace_id = _account_that_has_never_been_billed(isolated_services)
+    user_id, workspace_id = unbilled_account(isolated_services.context)
 
     with isolated_services.context.database.session() as session:
         BillingAccountService(session).billing_account_for(
@@ -373,11 +359,7 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     provider.cycle_started_at = CYCLE_ENDED_AT
     provider.cycle_ended_at = CYCLE_ENDED_AT + (CYCLE_ENDED_AT - CYCLE_STARTED_AT)
 
-    with isolated_services.context.database.session() as session:
-        BillingAccountService(session).subscribe(
-            provider, user_id=user_id, workspace_id=workspace_id
-        )
-        session.commit()
+    _plan_changes(isolated_services, provider).subscribe(user_id=user_id)
 
     with isolated_services.context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
@@ -421,7 +403,7 @@ def test_an_account_with_no_subscription_cannot_start_work(
     should reach. The refusal is what makes that a fact rather than a hope.
     """
 
-    user_id, workspace_id = _account_that_has_never_been_billed(isolated_services)
+    user_id, workspace_id = unbilled_account(isolated_services.context)
     admission = DatabaseBillingAdmission()
 
     with (

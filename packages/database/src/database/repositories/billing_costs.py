@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 from database.tables.apps import AppTable, StubTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
-from shared.billing_quotes import COMPONENT_UNITS, BilledDimension, LedgerComponent, QuotedUnit
+from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
 from sqlalchemy import ColumnElement, and_, func, or_, select
@@ -58,10 +58,6 @@ class LedgerComponentTotal:
     quantity: Decimal
     cost_nanos: int
 
-    @property
-    def unit(self) -> QuotedUnit:
-        return COMPONENT_UNITS[self.component]
-
 
 @dataclass(frozen=True, slots=True)
 class LedgerCostRow:
@@ -90,7 +86,12 @@ class LedgerCostPage:
 
 @dataclass(frozen=True, slots=True)
 class BillingLedgerCostRepository:
-    """What a workspace's frozen costs add up to, read back for the dashboard.
+    """What frozen costs add up to, for the dashboard and for reconciliation.
+
+    Two questions, one owner: what a workspace spent, broken down the way a
+    customer reads it, and what a payer spent over a window, keyed the way an
+    invoice is. They are the same rows summed on different columns, and summing
+    them anywhere else would be a second answer to what something cost.
 
     Reads `billing_ledger_segments` and nothing else. The ledger is append-only
     and already carries the attribution, the component and the quantity each
@@ -130,6 +131,35 @@ class BillingLedgerCostRepository:
             )
         ).one()
         return int(total)
+
+    def account_dimension_totals(
+        self, *, user_id: str, start: datetime, end: datetime
+    ) -> Mapping[BilledDimension, int]:
+        """What one payer's usage cost over a window, per invoice line.
+
+        Keyed by dimension because that is what the provider meters and invoices
+        — the components a dimension breaks into are this platform's own
+        granularity and have no counterpart on a bill. Placed by
+        `segment_started_at`, the same instant the allowance counter uses and the
+        one `(owner_user_id, segment_started_at)` indexes; a meter event is
+        stamped at its span's start instead, and the two differ only for a span
+        split across a published rate change, which is the boundary a comparison
+        over this may disagree at.
+        """
+
+        found = self.session.execute(
+            select(
+                BillingLedgerSegmentTable.dimension,
+                func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0),
+            )
+            .where(
+                BillingLedgerSegmentTable.owner_user_id == user_id,
+                BillingLedgerSegmentTable.segment_started_at >= start,
+                BillingLedgerSegmentTable.segment_started_at < end,
+            )
+            .group_by(BillingLedgerSegmentTable.dimension)
+        ).all()
+        return {BilledDimension(row[0]): int(row[1]) for row in found}
 
     def page(
         self,

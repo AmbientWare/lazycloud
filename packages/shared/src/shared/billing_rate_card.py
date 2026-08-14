@@ -120,11 +120,24 @@ class PublishedGpuRate:
     connected_cloud_nanos_per_card_hour: int
 
     def nanos_per_card_hour(self, billing_owner: UsageBillingOwner) -> int:
+        """What one card of this model costs an hour on that kind of capacity.
+
+        Every kind is answered explicitly and an unhandled one raises. A card
+        given away by falling off the end of this would be a GPU rented for
+        nothing, discovered by the invoice it never reached rather than by the
+        capacity kind nobody priced.
+        """
+
         if billing_owner is UsageBillingOwner.PlatformFleet:
             return self.platform_fleet_nanos_per_card_hour
         if billing_owner is UsageBillingOwner.ConnectedCloud:
             return self.connected_cloud_nanos_per_card_hour
-        return 0
+        if billing_owner is UsageBillingOwner.SelfHosted:
+            # Hardware somebody brought, which this platform neither buys nor
+            # manages: free by a published zero, the same way the shape rates
+            # beside it are, rather than by a rate that is absent.
+            return 0
+        raise ValueError(f"no published GPU rate for capacity owned by {billing_owner}")
 
 
 @dataclass(frozen=True, slots=True)

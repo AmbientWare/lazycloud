@@ -107,6 +107,33 @@ class BillingAccountRepository:
         row = self.session.scalars(statement).first()
         return _account(row) if row is not None else None
 
+    def page_subscribed(
+        self, *, after_user_id: str | None, limit: int
+    ) -> tuple[BillingAccount, ...]:
+        """The accounts naming a subscription, walked by payer in one order.
+
+        A keyset walk rather than an offset: the caller is a periodic pass that
+        covers every account across several runs, and an offset would skip or
+        repeat rows as accounts are added underneath it. `user_id` order is
+        arbitrary and total, which is all a walk needs.
+
+        `None` starts the walk, and it is an absent predicate rather than a
+        sentinel value: the column is a native UUID, so any string standing for
+        "before every id" is one the database refuses to parse.
+        """
+
+        if limit <= 0:
+            return ()
+        statement = select(BillingAccountTable).where(
+            BillingAccountTable.provider_subscription_id != ""
+        )
+        if after_user_id is not None:
+            statement = statement.where(BillingAccountTable.user_id > after_user_id)
+        rows = self.session.scalars(
+            statement.order_by(BillingAccountTable.user_id).limit(limit)
+        ).all()
+        return tuple(_account(row) for row in rows)
+
     def upsert(
         self,
         *,

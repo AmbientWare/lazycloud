@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import logging
-import random
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum, auto
 from functools import partial
-from typing import Protocol
 from uuid import uuid4
 
 from database.client import DatabaseClient
 from database.repositories.billing_outbox import BillingMeterOutboxRepository, ClaimedMeterEvent
-from pydantic import JsonValue
 from shared.billing_quotes import BilledDimension
 from shared.errors import InvalidInputError
-from shared.events import Event, EventLevel
+from shared.events import EventLevel
 from shared.payments import METER_EVENT_NAMES, PaymentProvider
 from shared.timestamps import to_utc, utc_now
+
+from billing.sweeps import BillingEventSink, next_attempt_at
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,37 +40,37 @@ SENT_RETENTION = timedelta(days=7)
 
 _RETRY_BASE = timedelta(seconds=5)
 _RETRY_CAP = timedelta(seconds=900)
-_RETRY_JITTER = 0.2
-_MAX_BACKOFF_DOUBLINGS = 16
 
 _DIMENSIONS_BY_METER_EVENT: Mapping[str, BilledDimension] = {
     name: dimension for dimension, name in METER_EVENT_NAMES.items()
 }
 
 
-class BillingEventSink(Protocol):
-    """Where this package records what an operator has to answer for."""
-
-    def emit(
-        self,
-        action: str,
-        *,
-        resource_type: str,
-        resource_id: str,
-        message: str,
-        level: EventLevel = EventLevel.Info,
-        data: dict[str, JsonValue] | None = None,
-        workspace_id: str | None = None,
-    ) -> Event: ...
-
-
 @dataclass(frozen=True, slots=True)
 class MeterEventDrainResult:
-    """What one sweep did, in the terms the loop that called it reports."""
+    """What one sweep did. Every figure is this sweep's own work."""
 
     sent_count: int = 0
     retried_count: int = 0
     abandoned_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AbandonedMeterEvents:
+    """The standing backlog of charges given up on, and what they metered.
+
+    Read on its own rather than returned by the drain, because the drain is the
+    one thing that fails when the provider is unreachable and this is the figure
+    that matters most while it is. A gauge that read zero for the duration of an
+    outage would say "nothing was lost" during the outage that loses it.
+
+    `value_nanos` is what the abandoned usage was priced at, not what a customer
+    would have been billed: most of it is spent against an allowance the plan
+    already includes, so the invoice it never reached would have charged less.
+    """
+
+    count: int = 0
+    value_nanos: int = 0
 
 
 class _Verdict(Enum):
@@ -142,6 +141,20 @@ class BillingMeterOutboxService:
             if len(claimed) < self.batch_limit:
                 break
         return result
+
+    def abandoned_backlog(self) -> AbandonedMeterEvents:
+        """Every charge given up on, whatever sweep gave up on it.
+
+        A standing figure and not a delta: a row is abandoned once, the count of
+        that tick is gone with the tick, and pruning never removes one — so this
+        is the only place the usage that never reached the provider stays
+        visible. Asked after a drain, so what that drain gave up on is already
+        inside it, and asked whether or not the drain worked.
+        """
+
+        with self.database.session() as session:
+            count, value_nanos = BillingMeterOutboxRepository(session).abandoned_total()
+        return AbandonedMeterEvents(count=count, value_nanos=value_nanos)
 
     def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int:
         """Delete acknowledged rows past their retention, in one bounded batch.
@@ -246,7 +259,12 @@ class BillingMeterOutboxService:
                             event_id=event.id,
                             claim_token=claim_token,
                             now=now,
-                            next_attempt_at=_next_attempt_at(now, event.attempts),
+                            next_attempt_at=next_attempt_at(
+                                now,
+                                event.attempts,
+                                base=_RETRY_BASE,
+                                cap=_RETRY_CAP,
+                            ),
                             error=outcome.error,
                         )
                     )
@@ -301,25 +319,13 @@ class BillingMeterOutboxService:
             )
 
 
-def _next_attempt_at(now: datetime, attempts: int) -> datetime:
-    """When a refused row is offered again.
-
-    Exponential and capped so a provider outage is not hammered, jittered so a
-    batch refused together does not come back together.
-    """
-
-    doublings = min(max(attempts - 1, 0), _MAX_BACKOFF_DOUBLINGS)
-    delay = min(_RETRY_CAP, _RETRY_BASE * 2**doublings)
-    return now + delay * (1 + random.uniform(-_RETRY_JITTER, _RETRY_JITTER))
-
-
 __all__ = [
     "CLAIM_TTL",
     "MAX_ATTEMPTS",
     "METER_EVENT_ABANDONED_ACTION",
     "METER_EVENT_RESOURCE_TYPE",
     "SENT_RETENTION",
-    "BillingEventSink",
+    "AbandonedMeterEvents",
     "BillingMeterOutboxService",
     "MeterEventDrainResult",
 ]
