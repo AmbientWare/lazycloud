@@ -314,8 +314,8 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
     assert account.plan is BillingPlanId.Team
     assert account.provider_credit_grant_id == "credgr_team"
     assert allowance is not None
-    assert allowance.period.started_at == CYCLE_STARTED_AT
-    assert allowance.period.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
+    assert allowance.started_at == CYCLE_STARTED_AT
+    assert allowance.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
 
 
 def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(

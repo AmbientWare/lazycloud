@@ -8,14 +8,7 @@ from uuid import uuid4
 
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
-from shared.billing_quotes import (
-    BilledDimension,
-    ComputeRate,
-    ContainerShape,
-    LedgerComponent,
-    PlatformRate,
-    Quote,
-)
+from shared.billing_quotes import BilledDimension, ContainerShape, LedgerComponent, Quote
 from shared.errors import ConflictError, InvalidInputError
 from shared.timestamps import to_utc, to_utc_or_none
 from shared.usage import UsageBillingOwner
@@ -62,9 +55,7 @@ class ComputeRateRepository:
             )
             .order_by(ComputeRateTable.effective_at)
         ).all()
-        return tuple(
-            _compute_rate(row).quote(component) for row in rows for component in components
-        )
+        return tuple(_compute_quote(row, component) for row in rows for component in components)
 
     def publish(
         self,
@@ -154,7 +145,7 @@ class PlatformRateRepository:
             )
             .order_by(PlatformRateTable.effective_at)
         ).all()
-        return tuple(_platform_rate(row).quote(component) for row in rows)
+        return tuple(_platform_quote(row, component) for row in rows)
 
     def publish(
         self,
@@ -210,27 +201,39 @@ class PlatformRateRepository:
         _flush(self.session, f"platform rates at {effective_at}")
 
 
-def _compute_rate(row: ComputeRateTable) -> ComputeRate:
-    return ComputeRate(
-        billing_owner=UsageBillingOwner(row.billing_owner),
-        gpu_type=row.gpu_type,
+def _compute_quote(row: ComputeRateTable, component: LedgerComponent) -> Quote:
+    if component is LedgerComponent.ContainerTime:
+        rate = row.nanos_per_container_second
+    elif component is LedgerComponent.Cpu:
+        rate = row.nanos_per_cpu_core_second
+    elif component is LedgerComponent.Memory:
+        rate = row.nanos_per_memory_gib_second
+    elif component is LedgerComponent.Gpu:
+        rate = row.nanos_per_gpu_card_second
+    else:
+        raise ValueError(f"{component} is not a shape-rated component")
+    return Quote(
+        component=component,
+        rate_nanos_per_unit=rate,
         pricing_version=row.pricing_version,
         effective_at=to_utc(row.effective_at),
         valid_until=to_utc_or_none(row.valid_until),
-        nanos_per_container_second=row.nanos_per_container_second,
-        nanos_per_cpu_core_second=row.nanos_per_cpu_core_second,
-        nanos_per_memory_gib_second=row.nanos_per_memory_gib_second,
-        nanos_per_gpu_card_second=row.nanos_per_gpu_card_second,
     )
 
 
-def _platform_rate(row: PlatformRateTable) -> PlatformRate:
-    return PlatformRate(
+def _platform_quote(row: PlatformRateTable, component: LedgerComponent) -> Quote:
+    if component is LedgerComponent.Egress:
+        rate = row.nanos_per_egress_byte
+    elif component is LedgerComponent.VolumeStorage:
+        rate = row.nanos_per_volume_byte_second
+    else:
+        raise ValueError(f"{component} is not a platform-rated component")
+    return Quote(
+        component=component,
+        rate_nanos_per_unit=rate,
         pricing_version=row.pricing_version,
         effective_at=to_utc(row.effective_at),
         valid_until=to_utc_or_none(row.valid_until),
-        nanos_per_egress_byte=row.nanos_per_egress_byte,
-        nanos_per_volume_byte_second=row.nanos_per_volume_byte_second,
     )
 
 

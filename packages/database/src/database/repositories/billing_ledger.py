@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
+from database.tables.base import DatabaseBase
 from database.tables.billing import BillingAccountTable
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
@@ -44,13 +45,28 @@ from shared.usage import (
     UsageRecord,
 )
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import Insert as SqliteInsert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 _CONTAINER_SUBJECT = "container"
 
 type SegmentValue = str | int | float | Decimal | datetime | None
+
+
+def _insert(session: Session, table: type[DatabaseBase]) -> PostgresInsert | SqliteInsert:
+    """An insert statement that can be told to ignore a conflict.
+
+    Only the dialect's own constructor carries `on_conflict_do_nothing`, and
+    every write below relies on it: a placement is decided once, a segment is
+    frozen once, and a record owes the provider one meter event.
+    """
+
+    if session.get_bind().dialect.name == "postgresql":
+        return postgresql_insert(table)
+    return sqlite_insert(table)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,18 +90,12 @@ class ContainerBillingShapeRepository:
             "memory_mib": shape.memory_mib,
             "gpu_count": shape.gpu_count,
         }
-        dialect = self.session.get_bind().dialect.name
-        statement = (
-            postgresql_insert(ContainerBillingShapeTable)
-            if dialect == "postgresql"
-            else sqlite_insert(ContainerBillingShapeTable)
-        )
         # A placement is decided once. A retried assignment restates the same
         # shape, and accepting a differing one would reprice a live container.
         self.session.execute(
-            statement.values(**values).on_conflict_do_nothing(
-                index_elements=[ContainerBillingShapeTable.container_id]
-            )
+            _insert(self.session, ContainerBillingShapeTable)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[ContainerBillingShapeTable.container_id])
         )
         self.session.flush()
 
@@ -309,12 +319,9 @@ class BillingLedgerRepository:
         return whole
 
     def _shape(self, record: UsageRecord) -> ContainerShape | None:
-        if record.resource_type != _CONTAINER_SUBJECT:
+        if record.resource_type != _CONTAINER_SUBJECT or not _is_uuid(record.resource_id):
             return None
-        container_id = _uuid_text(record.resource_id)
-        if container_id is None:
-            return None
-        return ContainerBillingShapeRepository(self.session).shape_for(container_id)
+        return ContainerBillingShapeRepository(self.session).shape_for(record.resource_id)
 
     def _frozen_cost_nanos(self, usage_record_id: str) -> int:
         total = self.session.scalar(
@@ -343,14 +350,9 @@ class BillingLedgerRepository:
             for span, pricing in priced
             for segment in pricing.segments
         ]
-        dialect = self.session.get_bind().dialect.name
-        statement = (
-            postgresql_insert(BillingLedgerSegmentTable)
-            if dialect == "postgresql"
-            else sqlite_insert(BillingLedgerSegmentTable)
-        )
         inserted = self.session.execute(
-            statement.values(rows)
+            _insert(self.session, BillingLedgerSegmentTable)
+            .values(rows)
             .on_conflict_do_nothing(
                 index_elements=[
                     BillingLedgerSegmentTable.usage_record_id,
@@ -417,14 +419,9 @@ class BillingLedgerRepository:
         if not provider_customer_id:
             return
         now = utc_now()
-        dialect = self.session.get_bind().dialect.name
-        statement = (
-            postgresql_insert(BillingMeterOutboxTable)
-            if dialect == "postgresql"
-            else sqlite_insert(BillingMeterOutboxTable)
-        )
         self.session.execute(
-            statement.values(
+            _insert(self.session, BillingMeterOutboxTable)
+            .values(
                 id=str(uuid4()),
                 workspace_id=record.workspace_id,
                 identifier=record.id,
@@ -439,7 +436,8 @@ class BillingLedgerRepository:
                 status="pending",
                 attempts=0,
                 next_attempt_at=now,
-            ).on_conflict_do_nothing(index_elements=[BillingMeterOutboxTable.identifier])
+            )
+            .on_conflict_do_nothing(index_elements=[BillingMeterOutboxTable.identifier])
         )
         self.session.flush()
 
@@ -551,12 +549,18 @@ def _text(value: JsonValue) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _uuid_text(value: str) -> str | None:
+def _is_uuid(value: str) -> bool:
+    """Whether a subject id can address the shape table's key at all.
+
+    A resource id is free text on a usage record, and looking one up that is not
+    a UUID is the query the column type refuses rather than a miss.
+    """
+
     try:
         UUID(value)
     except ValueError:
-        return None
-    return value
+        return False
+    return True
 
 
 __all__ = [

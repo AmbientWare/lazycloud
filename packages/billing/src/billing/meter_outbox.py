@@ -72,7 +72,6 @@ class MeterEventDrainResult:
     sent_count: int = 0
     retried_count: int = 0
     abandoned_count: int = 0
-    reclaimed_count: int = 0
 
 
 class _Verdict(Enum):
@@ -121,7 +120,8 @@ class BillingMeterOutboxService:
         """
 
         moment = to_utc(now or utc_now())
-        result = MeterEventDrainResult(reclaimed_count=self._reclaim(moment))
+        self._reclaim(moment)
+        result = MeterEventDrainResult()
         payments = self.payments()
         for _ in range(self.max_batches):
             claim_token = str(uuid4())
@@ -157,9 +157,9 @@ class BillingMeterOutboxService:
                 limit=limit,
             )
 
-    def _reclaim(self, now: datetime) -> int:
+    def _reclaim(self, now: datetime) -> None:
         with self.database.session() as session:
-            return BillingMeterOutboxRepository(session).reclaim(
+            BillingMeterOutboxRepository(session).reclaim(
                 now=now,
                 claimed_before=now - CLAIM_TTL,
             )
@@ -266,7 +266,6 @@ class BillingMeterOutboxService:
             sent_count=totals.sent_count + sent,
             retried_count=totals.retried_count + retried,
             abandoned_count=totals.abandoned_count + len(abandoned),
-            reclaimed_count=totals.reclaimed_count,
         )
 
     def _record_abandonment(self, outcome: _Outcome) -> None:

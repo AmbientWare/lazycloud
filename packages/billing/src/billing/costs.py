@@ -51,10 +51,12 @@ class BillingStanding:
 
 @dataclass(frozen=True, slots=True)
 class UsageCostPage:
-    workspace_id: str
-    start: datetime
-    end: datetime
-    group_by: UsageCostGroupKey
+    """One page of rows, and what the whole window they came from cost.
+
+    `cost_nanos` totals the window rather than the page, so the figure a customer
+    reads as their bill never depends on how far they scrolled.
+    """
+
     cost_nanos: int
     rows: tuple[LedgerCostRow, ...]
     next: str
@@ -139,10 +141,6 @@ class UsageCostService:
             cursor=_decode_cursor(cursor),
         )
         return UsageCostPage(
-            workspace_id=workspace_id,
-            start=start,
-            end=end,
-            group_by=group_by,
             cost_nanos=repository.window_cost_nanos(
                 workspace_id=workspace_id,
                 start=start,

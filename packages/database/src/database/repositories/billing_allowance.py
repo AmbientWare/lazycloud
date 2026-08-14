@@ -30,8 +30,8 @@ class SubscriptionPeriodOutcome(StringEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class AllowancePeriod:
-    """One stretch of time, and the terms that hold over it.
+class SpentAllowancePeriod:
+    """One stretch of time, the terms that hold over it, and what they have cost.
 
     Half-open `[started_at, ended_at)`, so consecutive periods meet without
     sharing an instant and a cost belongs to exactly one of them.
@@ -40,13 +40,6 @@ class AllowancePeriod:
     started_at: datetime
     ended_at: datetime
     allowance_nanos: int
-
-
-@dataclass(frozen=True, slots=True)
-class SpentAllowancePeriod:
-    """One period's terms beside what has been spent against them."""
-
-    period: AllowancePeriod
     spent_nanos: int
 
     @property
@@ -57,7 +50,7 @@ class SpentAllowancePeriod:
         how far past the line an account is has to survive the read.
         """
 
-        return self.period.allowance_nanos - self.spent_nanos
+        return self.allowance_nanos - self.spent_nanos
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,11 +206,9 @@ class BillingAllowanceRepository:
             return None
         period_started_at, period_ended_at, allowance_nanos, spent_nanos = row
         return SpentAllowancePeriod(
-            period=AllowancePeriod(
-                started_at=to_utc(period_started_at),
-                ended_at=to_utc(period_ended_at),
-                allowance_nanos=allowance_nanos,
-            ),
+            started_at=to_utc(period_started_at),
+            ended_at=to_utc(period_ended_at),
+            allowance_nanos=allowance_nanos,
             spent_nanos=spent_nanos,
         )
 
@@ -250,7 +241,6 @@ def _covering(user_id: str, at: datetime):
 
 
 __all__ = [
-    "AllowancePeriod",
     "BillingAllowanceRepository",
     "SpentAllowancePeriod",
     "SubscriptionPeriodOutcome",
