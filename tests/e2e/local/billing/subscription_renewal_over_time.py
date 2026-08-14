@@ -15,8 +15,7 @@ meter event timestamped more than five minutes after the clock, and this
 platform stamps usage with the real time it happened. So the clock is created a
 month in the past, the subscription is bought there, and the clock is then
 advanced back up to real time before any usage is metered — after which the
-period boundary is a little under half an hour away in real time rather than a
-month.
+period boundary is under an hour away in real time rather than a month.
 
 Two steps cross that boundary rather than one, and the split is the point.
 Stripe raises the renewal invoice as the period ends and finalizes it about an
@@ -32,12 +31,13 @@ when the customer is created and never afterwards, so the run creates that
 customer itself — with the same email and the same `workspace_id` metadata
 `StripeBilling.create_customer` writes — and records it through the repository
 production records it through. The platform's own card route then adopts it,
-which is what `payment_customer_for` does with an account that already names a
-customer, and everything after that is production's path: its subscribe route,
-its pricer, its outbox, its webhook handler.
+which is what `billing_account_for` does with an account that already names a
+customer, and everything after that is production's path: the free subscription
+that route provisions, its subscribe route, its pricer, its outbox, its webhook
+handler.
 
 ```sh
-uv run --env-file .env python -m tests.e2e.local.billing.subscription_renewal_over_time \
+uv run python -m tests.e2e.local.billing.subscription_renewal_over_time \
   --live --confirm-account acct_...
 ```
 
@@ -64,14 +64,14 @@ import httpx
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.identity import UserRepository
 from database.tables.billing_allowance import BillingAllowancePeriodTable
-from database.tables.billing_webhook_events import BillingWebhookEventTable
+from foundation.environment_file import load_environment_file
 from lazycloud.abstractions.function import Function
 from lazycloud.config import reset_settings_cache
 from lazycloud.control import control_workspace_scope
 from provider_stripe import CREDIT_GRANT_SETTLEMENT_GRACE
 from provider_stripe.api import StripeObject, read
-from pydantic import Field
 from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.http.billing import BillingSummaryResponse
 from shared.timestamps import to_utc, utc_now
@@ -81,17 +81,29 @@ from tests.e2e.local.billing.cleanup import RunResources, run_cleanup
 from tests.e2e.local.billing.gate import (
     CARD_SESSION_ROUTE,
     SUBSCRIBE_ROUTE,
-    TEST_PAYMENT_METHOD,
     BillingGate,
     RunAccount,
+    attach_default_card,
+    billing_account,
     billing_gate,
     create_run_account,
+    plan_allowance,
 )
 from tests.e2e.local.billing.ledger import (
     COMPUTE_METER,
+    Event,
+    EventList,
+    Grant,
+    Invoice,
     RunLedger,
+    claims,
+    credits_applied,
+    customer_grants,
+    customer_invoices,
     drain_metered_usage,
+    invoice,
     ledger_cost_nanos,
+    moment,
     outstanding,
     preview_invoice,
     read_run_ledger,
@@ -102,14 +114,25 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 CLIENT_TIMEOUT_SECONDS = 1_800.0
 TASK_TIMEOUT_SECONDS = 900
 
-FIRST_CYCLE_MINUTES = 25
+FIRST_CYCLE_MINUTES = 45
 """How far into real time the first period's end is placed.
 
-The subscription is bought a month behind, so its cycle ends this long from now.
-Everything the first cycle has to contain happens inside it — a seven-minute
-container, the sweep that queues its meter events, and Stripe's own aggregation
-— and everything the second cycle has to contain waits for it. Longer is a run
-that idles; shorter is a container still running when its period closes.
+The subscription is bought a month behind, so its cycle ends this long after the
+clock is created. Everything the first cycle has to contain happens inside it:
+the image builds, a seven-minute container, the sweep that queues its meter
+events, and Stripe's own aggregation. The builds are in that list because
+admission refuses an account holding no subscription, so the account has to be
+provisioned — which opens the cycle — before anything can be deployed at all.
+Longer is a run that idles; shorter is a container still running when its period
+closes.
+"""
+
+FIRST_CYCLE_MARGIN_SECONDS = 900.0
+"""Real time the first cycle must still have left once the workloads are built.
+
+Enough for the container and the drain behind it. Checked once, immediately after
+the builds, because that is where a slow one shows up — and refusing there costs
+nothing, where discovering it at the boundary wastes the whole run.
 """
 
 BOUNDARY_TOLERANCE_SECONDS = 600.0
@@ -175,187 +198,6 @@ class _Customer(StripeObject):
     id: str = ""
 
 
-class _PaymentMethod(StripeObject):
-    id: str = ""
-
-
-class _Recurring(StripeObject):
-    meter: str | None = None
-
-
-class _LinePrice(StripeObject):
-    id: str = ""
-    lookup_key: str | None = None
-    recurring: _Recurring | None = None
-
-
-class _PriceDetails(StripeObject):
-    price: _LinePrice = Field(default_factory=_LinePrice)
-
-
-class _LinePricing(StripeObject):
-    price_details: _PriceDetails = Field(default_factory=_PriceDetails)
-
-
-class _InvoiceLine(StripeObject):
-    id: str = ""
-    amount: int = 0
-    quantity_decimal: str | None = None
-    pricing: _LinePricing | None = None
-
-    @property
-    def price_name(self) -> str:
-        if self.pricing is None:
-            return ""
-        price = self.pricing.price_details.price
-        return price.lookup_key or price.id
-
-
-class _InvoiceLines(StripeObject):
-    data: list[_InvoiceLine] = Field(default_factory=list)
-
-
-class _StatusTransitions(StripeObject):
-    finalized_at: int | None = None
-    paid_at: int | None = None
-
-
-class _PretaxCredit(StripeObject):
-    amount: int = 0
-    type: str = ""
-
-
-class _Invoice(StripeObject):
-    id: str = ""
-    status: str = ""
-    billing_reason: str = ""
-    period_start: int = 0
-    period_end: int = 0
-    subtotal: int = 0
-    total: int = 0
-    amount_due: int = 0
-    amount_paid: int = 0
-    attempt_count: int = 0
-    next_payment_attempt: int | None = None
-    status_transitions: _StatusTransitions = Field(default_factory=_StatusTransitions)
-    total_pretax_credit_amounts: list[_PretaxCredit] = Field(default_factory=list)
-    lines: _InvoiceLines = Field(default_factory=_InvoiceLines)
-
-    @property
-    def credit_applied(self) -> int:
-        return sum(entry.amount for entry in self.total_pretax_credit_amounts)
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "status": self.status,
-            "billing_reason": self.billing_reason,
-            "period_start": _moment(self.period_start),
-            "period_end": _moment(self.period_end),
-            "subtotal_cents": self.subtotal,
-            "credit_applied_cents": self.credit_applied,
-            "total_cents": self.total,
-            "amount_due_cents": self.amount_due,
-            "amount_paid_cents": self.amount_paid,
-            "charge_attempts": self.attempt_count,
-            "next_payment_attempt": _moment(self.next_payment_attempt or 0),
-            "finalized_at": _moment(self.status_transitions.finalized_at or 0),
-            "paid_at": _moment(self.status_transitions.paid_at or 0),
-            "lines": {
-                line.price_name: {
-                    "quantity": line.quantity_decimal,
-                    "amount_cents": line.amount,
-                }
-                for line in self.lines.data
-            },
-        }
-
-    def metered_nanos(self, price_lookup_key: str) -> int:
-        for line in self.lines.data:
-            if line.price_name != price_lookup_key or line.quantity_decimal is None:
-                continue
-            return int(line.quantity_decimal)
-        raise RuntimeError(f"invoice {self.id} carries no {price_lookup_key} line")
-
-
-class _InvoiceList(StripeObject):
-    data: list[_Invoice] = Field(default_factory=list)
-
-
-class _Grant(StripeObject):
-    id: str = ""
-    expires_at: int | None = None
-    voided_at: int | None = None
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "expires_at": _moment(self.expires_at or 0),
-            "voided_at": _moment(self.voided_at or 0),
-        }
-
-
-class _GrantList(StripeObject):
-    data: list[_Grant] = Field(default_factory=list)
-
-
-class _Monetary(StripeObject):
-    value: int = 0
-
-
-class _TransactionAmount(StripeObject):
-    monetary: _Monetary | None = None
-
-
-class _CreditsApplied(StripeObject):
-    invoice: str = ""
-
-
-class _Debit(StripeObject):
-    type: str = ""
-    amount: _TransactionAmount = Field(default_factory=_TransactionAmount)
-    credits_applied: _CreditsApplied | None = None
-
-
-class _CreditTransaction(StripeObject):
-    id: str = ""
-    type: str = ""
-    credit_grant: str = ""
-    debit: _Debit | None = None
-
-    def applied_to(self, invoice_id: str) -> int:
-        if self.debit is None or self.debit.credits_applied is None:
-            return 0
-        if self.debit.credits_applied.invoice != invoice_id:
-            return 0
-        return self.debit.amount.monetary.value if self.debit.amount.monetary else 0
-
-
-class _CreditTransactionList(StripeObject):
-    data: list[_CreditTransaction] = Field(default_factory=list)
-
-
-class _EventObject(StripeObject):
-    id: str = ""
-    customer: str | None = None
-
-
-class _EventData(StripeObject):
-    object: _EventObject = Field(default_factory=_EventObject)
-
-
-class _Event(StripeObject):
-    id: str = ""
-    type: str = ""
-    created: int = 0
-    pending_webhooks: int = 0
-    data: _EventData = Field(default_factory=_EventData)
-
-
-class _EventList(StripeObject):
-    data: list[_Event] = Field(default_factory=list)
-
-
 @dataclass(frozen=True, slots=True)
 class _Cycle:
     """One billing period, as the provider reports it."""
@@ -394,6 +236,7 @@ class _Run:
 
     account: RunAccount
     clock_id: str = ""
+    boundary_aimed_at: datetime | None = None
     provider_customer_id: str = ""
     provider_subscription_id: str = ""
     first_grant_id: str = ""
@@ -429,6 +272,9 @@ class _Run:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # This process is the entrypoint that owns itself, which is where a
+    # developer `.env` is applied; nothing already exported is overridden.
+    load_environment_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--confirm-account", default="")
@@ -446,8 +292,8 @@ def _scenario(gate: BillingGate) -> int:
     primary: BaseException | None = None
     try:
         create_run_account(gate, run.account)
-        first, second = _deploy_the_workloads(gate, run)
         evidence["registered_on_a_test_clock"] = _register_on_a_test_clock(gate, run)
+        first, second = _deploy_the_workloads(gate, run)
         evidence["subscription"] = _subscribe(gate, run)
         evidence["first_cycle_usage"] = _first_cycle_usage(gate, run, first)
         evidence["renewal_raised_and_allowance_rolled"] = _cross_the_boundary(gate, run)
@@ -475,11 +321,15 @@ def _scenario(gate: BillingGate) -> int:
 def _deploy_the_workloads(
     gate: BillingGate, run: _Run
 ) -> tuple[Function[..., dict[str, float]], Function[..., dict[str, float]]]:
-    """Build both Functions before any clock exists.
+    """Build both Functions, as early as an account is allowed to build anything.
 
     Deployment builds an image, which is the slowest thing this run does and the
-    one thing that has nothing to do with billing. Doing it first keeps it out of
-    the first period, whose length is what everything after has to fit inside.
+    one thing that has nothing to do with billing — so it wants to be first. It
+    cannot be: admission refuses an account holding no subscription, and the
+    account only holds one once the card route has provisioned it, which is what
+    opens the cycle everything after this has to fit inside. So the builds are
+    inside the first period by necessity, and what is left of that period is
+    checked here rather than discovered at the boundary.
 
     Imported here rather than at module scope so each app's unique name is minted
     once per process.
@@ -498,6 +348,26 @@ def _deploy_the_workloads(
     with control_workspace_scope(run.account.workspace_name):
         billable_container.deploy(workspace=run.account.workspace_name, source_root=SOURCE_ROOT)
         metered_container.deploy(workspace=run.account.workspace_name, source_root=SOURCE_ROOT)
+    aimed_at = _require_boundary(run)
+    left = (aimed_at - utc_now()).total_seconds()
+    print(
+        json.dumps(
+            {
+                "at": utc_now().isoformat(timespec="seconds"),
+                "built": "both workloads",
+                "boundary_aimed_at": aimed_at.isoformat(),
+                "seconds_of_the_first_cycle_left": round(left),
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    if left < FIRST_CYCLE_MARGIN_SECONDS:
+        raise RuntimeError(
+            f"the builds left {left:.0f}s of the first cycle, under the "
+            f"{FIRST_CYCLE_MARGIN_SECONDS:.0f}s its container and drain need; raise "
+            "FIRST_CYCLE_MINUTES for this host"
+        )
     return billable_container, metered_container
 
 
@@ -508,16 +378,20 @@ def _register_on_a_test_clock(gate: BillingGate, run: _Run) -> dict[str, Any]:
     itself: Stripe binds a clock at creation and never afterwards, so a customer
     the platform registered could never have a month pass. It is created with
     exactly what `StripeBilling.create_customer` sends — the account's email and
-    its workspace in metadata — plus the clock, and recorded through the
-    repository the card route writes.
+    its workspace in metadata — and recorded through the repository the card
+    route writes, naming nothing else: an account that holds a customer and no
+    subscription is a registration that got half way, which is the state the card
+    route exists to finish.
 
-    The card route is then called anyway, and that is the point of calling it:
-    `payment_customer_for` returns a customer an account already names rather
-    than registering a second, so a hosted session for this customer is the
-    platform adopting it.
+    The card route is then called, and that is the point of calling it:
+    `billing_account_for` adopts a customer an account already names rather than
+    registering a second, and provisions the rest around it — the free
+    subscription and the grant that funds it, on a customer whose clock this run
+    controls.
     """
 
     boundary = utc_now() + timedelta(minutes=FIRST_CYCLE_MINUTES)
+    run.boundary_aimed_at = boundary
     frozen = _a_month_before(boundary)
     clock = read(
         _Clock,
@@ -551,41 +425,41 @@ def _register_on_a_test_clock(gate: BillingGate, run: _Run) -> dict[str, Any]:
             user_id=run.account.user_id,
             status=BillingAccountStatus.Active,
             provider_customer_id=customer.id,
+            provider_subscription_id="",
+            provider_credit_grant_id="",
+            plan=None,
         )
         session.commit()
 
-    channel = run.account.channel(gate)
-    channel.post(CARD_SESSION_ROUTE, {"return_url": gate.public_url, "cancel_url": gate.public_url})
-    with gate.database.session() as session:
-        adopted = BillingAccountRepository(session).get_by_user(run.account.user_id)
+    run.account.channel(gate).post(
+        CARD_SESSION_ROUTE,
+        {"return_url": gate.public_url, "cancel_url": gate.public_url},
+    )
+    adopted = billing_account(gate, run.account)
     if adopted is None or adopted.provider_customer_id != customer.id:
         raise RuntimeError(
             "the card route did not adopt the run's customer; the account names "
             f"{adopted.provider_customer_id if adopted else 'nothing'}"
         )
-    method = read(
-        _PaymentMethod,
-        gate.client,
-        "POST",
-        f"/payment_methods/{TEST_PAYMENT_METHOD}/attach",
-        data=[("customer", customer.id)],
-    )
-    gate.provider.set_default_payment_method(
-        provider_customer_id=customer.id,
-        provider_payment_method_id=method.id,
-    )
+    if not adopted.provider_subscription_id or adopted.plan is not BillingPlanId.Free:
+        raise RuntimeError(
+            "the card route did not provision the run's account onto the free plan; it holds "
+            f"subscription {adopted.provider_subscription_id or 'nothing'} on plan {adopted.plan}"
+        )
+    card = attach_default_card(gate, customer.id)
     return {
         "test_clock": clock.id,
         "frozen_at": frozen.isoformat(),
         "customer": customer.id,
         "adopted_by_the_card_route": True,
-        "card": method.id,
+        "provisioned_plan": adopted.plan.value,
+        "card": card,
         "boundary_aimed_at": boundary.isoformat(),
     }
 
 
 def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
-    """Buy the plan through the platform's own route, a month behind.
+    """Move up a plan through the platform's own route, a month behind.
 
     The cycle Stripe opens is read back and checked against where this run aimed
     the boundary before anything else is done, because every later step is timed
@@ -595,14 +469,13 @@ def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
 
     channel = run.account.channel(gate)
     summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
-    if not summary.subscribed:
-        raise RuntimeError("the subscription route answered that the account is not subscribed")
-    with gate.database.session() as session:
-        account = BillingAccountRepository(session).get_by_user(run.account.user_id)
-    if account is None or not account.provider_subscription_id:
-        raise RuntimeError("subscribing wrote no provider_subscription_id to the account row")
-    if not account.provider_credit_grant_id:
-        raise RuntimeError("subscribing wrote no provider_credit_grant_id to the account row")
+    if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
+        raise RuntimeError(
+            f"the subscription route answered with plan {summary.plan.id if summary.plan else None}"
+        )
+    account = billing_account(gate, run.account)
+    if account is None or not account.provider_credit_grant_id:
+        raise RuntimeError("subscribing left the account row without the grant it bought")
     run.provider_subscription_id = account.provider_subscription_id
     run.first_grant_id = account.provider_credit_grant_id
 
@@ -614,26 +487,25 @@ def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
         ended_at=subscription.current_period_ended_at,
     )
     run.first_cycle = cycle
-    drift = abs((cycle.ended_at - utc_now()).total_seconds() - FIRST_CYCLE_MINUTES * 60)
+    aimed_at = _require_boundary(run)
+    drift = abs((cycle.ended_at - aimed_at).total_seconds())
     if drift > BOUNDARY_TOLERANCE_SECONDS:
         raise RuntimeError(
-            f"the first cycle ends {cycle.ended_at.isoformat()}, {drift:.0f}s from where this run "
-            "aimed it; a calendar month from the frozen instant is not where it was computed"
+            f"the first cycle ends {cycle.ended_at.isoformat()}, {drift:.0f}s from the "
+            f"{aimed_at.isoformat()} this run aimed at; a calendar month from the frozen instant "
+            "is not where it was computed"
         )
     period = _allowance_period_covering(gate, run, cycle)
-    if period is None or not period.covers(cycle):
-        raise RuntimeError(
-            f"subscribing opened no allowance period over {cycle.payload()}; it holds "
-            f"{period.payload() if period else 'nothing'}"
-        )
-    grant = read(_Grant, gate.client, "GET", f"/billing/credit_grants/{run.first_grant_id}")
+    if period is None:
+        raise RuntimeError(f"subscribing opened no allowance period over {cycle.payload()}")
+    grant = read(Grant, gate.client, "GET", f"/billing/credit_grants/{run.first_grant_id}")
     return {
         "status": subscription.status,
         "cycle_1": cycle.payload(),
         "seconds_until_the_boundary": round((cycle.ended_at - utc_now()).total_seconds()),
         "allowance_period": period.payload(),
         "credit_grant": grant.payload(),
-        "allowance_nanos": summary.allowance.allowance_nanos,
+        "allowance_nanos": plan_allowance(summary).allowance_nanos,
     }
 
 
@@ -726,12 +598,11 @@ def _cross_the_boundary(gate: BillingGate, run: _Run) -> dict[str, Any]:
             started_at=subscription.current_period_started_at,
             ended_at=subscription.current_period_ended_at,
         )
-        invoices = _customer_invoices(gate, run)
+        invoices = customer_invoices(gate, run.provider_customer_id)
         renewal = _renewal_invoice(invoices, first)
         deliveries = _deliveries(gate, run)
         periods = _allowance_periods(gate, run)
-        with gate.database.session() as session:
-            account = BillingAccountRepository(session).get_by_user(run.account.user_id)
+        account = billing_account(gate, run.account)
         grant_now = account.provider_credit_grant_id if account is not None else ""
         rolled = current.started_at > first.started_at
         opened = next((period for period in periods if period.covers(current)), None)
@@ -741,13 +612,15 @@ def _cross_the_boundary(gate: BillingGate, run: _Run) -> dict[str, Any]:
             "cycle_1": first.payload(),
             "subscription_period_now": current.payload(),
             "subscription_status": subscription.status,
-            "invoices": [invoice.summary() for invoice in invoices],
+            "invoices": [entry.summary() for entry in invoices],
             "renewal_invoice": renewal.id if renewal is not None else "",
             "deliveries": deliveries,
             "allowance_periods": [period.payload() for period in periods],
             "credit_grant_on_the_account_row": grant_now,
             "credit_grant_when_subscribed": run.first_grant_id,
-            "grants_at_the_provider": [grant.payload() for grant in _grants(gate, run)],
+            "grants_at_the_provider": [
+                grant.payload() for grant in customer_grants(gate, run.provider_customer_id)
+            ],
         }
         print(json.dumps(cycle_report, sort_keys=True), flush=True)
         if (
@@ -798,21 +671,23 @@ def _settle_the_renewal(gate: BillingGate, run: _Run) -> dict[str, Any]:
     )
     deadline = time.monotonic() + RENEWAL_DEADLINE_SECONDS
     while True:
-        invoice = _invoice(gate, run.renewal_invoice_id)
-        credits = _credits_applied(gate, run, invoice.id)
+        renewal = invoice(gate, run.renewal_invoice_id)
+        applied = credits_applied(
+            gate, provider_customer_id=run.provider_customer_id, invoice_id=renewal.id
+        )
         deliveries = _deliveries(gate, run)
         cycle_report: dict[str, Any] = {
             "at": utc_now().isoformat(timespec="seconds"),
-            "renewal_invoice": invoice.summary(),
-            "credit_transactions_against_it": credits,
+            "renewal_invoice": renewal.summary(),
+            "credit_transactions_against_it": applied,
             "deliveries": deliveries,
         }
         print(json.dumps(cycle_report, sort_keys=True), flush=True)
-        if invoice.status in SETTLED_INVOICE_STATUSES:
-            return _renewal_evidence(run, invoice, credits, deliveries)
+        if renewal.status in SETTLED_INVOICE_STATUSES:
+            return _renewal_evidence(run, renewal, applied, deliveries)
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"the renewal invoice was still {invoice.status} after "
+                f"the renewal invoice was still {renewal.status} after "
                 f"{RENEWAL_DEADLINE_SECONDS:.0f}s; last cycle: "
                 f"{json.dumps(cycle_report, sort_keys=True)}"
             )
@@ -821,84 +696,112 @@ def _settle_the_renewal(gate: BillingGate, run: _Run) -> dict[str, Any]:
 
 def _renewal_evidence(
     run: _Run,
-    invoice: _Invoice,
-    credits: list[dict[str, Any]],
+    renewal: Invoice,
+    applied: list[dict[str, Any]],
     deliveries: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """What the settled renewal says, checked against the ledger behind it."""
 
-    if invoice.status != "paid":
-        raise RuntimeError(f"the renewal invoice settled as {invoice.status}, not paid")
-    if invoice.status_transitions.finalized_at is None:
-        raise RuntimeError(f"invoice {invoice.id} reads paid without ever being finalized")
-    if invoice.billing_reason != RENEWAL_BILLING_REASON:
+    if renewal.status != "paid":
+        raise RuntimeError(f"the renewal invoice settled as {renewal.status}, not paid")
+    if renewal.status_transitions.finalized_at is None:
+        raise RuntimeError(f"invoice {renewal.id} reads paid without ever being finalized")
+    if renewal.billing_reason != RENEWAL_BILLING_REASON:
         raise RuntimeError(
-            f"the invoice at the boundary reads {invoice.billing_reason}, not "
+            f"the invoice at the boundary reads {renewal.billing_reason}, not "
             f"{RENEWAL_BILLING_REASON}; this was not a renewal"
         )
-    billed = invoice.metered_nanos(COMPUTE_PRICE_LOOKUP_KEY)
+    billed = renewal.metered_nanos(COMPUTE_PRICE_LOOKUP_KEY)
     if billed != run.first_cycle_nanos:
         raise RuntimeError(
             f"the renewal bills {billed} nanodollars of compute and the ledger holds "
             f"{run.first_cycle_nanos} for the first cycle's usage records"
         )
     return {
-        "invoice": invoice.summary(),
+        "invoice": renewal.summary(),
         "meter": COMPUTE_METER,
         "stripe_metered_nanos": billed,
         "ledger_cost_nanos": run.first_cycle_nanos,
         "equal": True,
-        "credit_transactions_against_it": credits,
+        "credit_transactions_against_it": applied,
         "deliveries": deliveries,
     }
 
 
 def _grant_at_the_boundary(gate: BillingGate, run: _Run) -> dict[str, Any]:
-    """Which cycle's allowance paid the first cycle's invoice.
+    """Prove the settlement grace put the right cycle's allowance on the invoice.
 
-    Stated rather than asserted, because it is a question about Stripe's own
-    ordering rather than about anything this platform controls. The invoice for
-    a cycle is raised as that cycle ends and finalized about an hour later, and
-    credit is applied at finalization — so a grant expiring on the boundary is
-    already gone when the invoice it funds asks for it, and the next cycle's
-    grant pays the last cycle's arrears. `CREDIT_GRANT_SETTLEMENT_GRACE` is what
-    keeps the right grant alive that long, and the credit transaction below is
-    the only place that can be seen.
+    Credit is applied when an invoice is finalized rather than when it is raised,
+    and the invoice for a cycle finalizes about an hour after that cycle ended. A
+    grant that expired on the boundary would already be gone when the invoice it
+    funds asks for it, and the next cycle's would pay the last cycle's arrears —
+    a customer's new month silently funding their old one.
+
+    `CREDIT_GRANT_SETTLEMENT_GRACE` moves both ends of every grant later by the
+    same amount, which is what makes the expiring grant outlive its own invoice
+    and the incoming one not yet reachable by it. Both halves are checked here,
+    against the credit ledger that says which grant actually paid.
     """
 
-    invoice = _invoice(gate, run.renewal_invoice_id)
-    credits = _credits_applied(gate, run, invoice.id)
-    first = read(_Grant, gate.client, "GET", f"/billing/credit_grants/{run.first_grant_id}")
-    second = read(_Grant, gate.client, "GET", f"/billing/credit_grants/{run.second_grant_id}")
-    spent_from = {entry["credit_grant"] for entry in credits if entry["amount_cents"]}
+    renewal = invoice(gate, run.renewal_invoice_id)
+    applied = credits_applied(
+        gate, provider_customer_id=run.provider_customer_id, invoice_id=renewal.id
+    )
+    first = read(Grant, gate.client, "GET", f"/billing/credit_grants/{run.first_grant_id}")
+    second = read(Grant, gate.client, "GET", f"/billing/credit_grants/{run.second_grant_id}")
     first_cycle = _require_cycle(run.first_cycle, "first")
     second_cycle = _require_cycle(run.second_cycle, "second")
+
+    _require_grace(first, first_cycle, which="the expiring")
+    _require_grace(second, second_cycle, which="the incoming")
+    finalized_at = renewal.status_transitions.finalized_at
+    if finalized_at is None or first.expires_at is None or finalized_at >= first.expires_at:
+        raise RuntimeError(
+            f"the renewal finalized at {moment(finalized_at)} and cycle 1's allowance expired at "
+            f"{moment(first.expires_at)}; the grant did not outlive the invoice it funds"
+        )
+    spent_from = {entry["credit_grant"] for entry in applied if entry["amount_cents"]}
+    if run.second_grant_id in spent_from:
+        raise RuntimeError(
+            f"the renewal for cycle 1 was paid from cycle 2's allowance {run.second_grant_id}; "
+            "the incoming grant was spendable before the outgoing invoice finalized"
+        )
     return {
         "expiring_grant": first.payload(),
-        "expiring_grant_outlives_cycle_1_by_the_settlement_grace": (
-            first.expires_at is not None
-            and first.expires_at
-            == int((first_cycle.ended_at + CREDIT_GRANT_SETTLEMENT_GRACE).timestamp())
-        ),
-        "expiring_grant_still_live_when_the_invoice_finalized": (
-            first.expires_at is not None
-            and invoice.status_transitions.finalized_at is not None
-            and invoice.status_transitions.finalized_at < first.expires_at
-        ),
         "new_grant": second.payload(),
-        "new_grant_covers_cycle_2_plus_the_settlement_grace": (
-            second.expires_at is not None
-            and second.expires_at
-            == int((second_cycle.ended_at + CREDIT_GRANT_SETTLEMENT_GRACE).timestamp())
-        ),
-        "renewal_subtotal_cents": invoice.subtotal,
-        "renewal_credit_applied_cents": invoice.credit_applied,
-        "renewal_amount_due_cents": invoice.amount_due,
-        "renewal_amount_paid_cents": invoice.amount_paid,
-        "credit_transactions_against_the_renewal": credits,
+        "settlement_grace_seconds": int(CREDIT_GRANT_SETTLEMENT_GRACE.total_seconds()),
+        "renewal_finalized_at": moment(finalized_at),
+        "renewal_subtotal_cents": renewal.subtotal,
+        "renewal_credit_applied_cents": renewal.credit_applied,
+        "renewal_amount_due_cents": renewal.amount_due,
+        "renewal_amount_paid_cents": renewal.amount_paid,
+        "credit_transactions_against_the_renewal": applied,
         "expiring_grant_paid_for_it": run.first_grant_id in spent_from,
-        "new_grant_paid_for_it": run.second_grant_id in spent_from,
+        "new_grant_paid_for_it": False,
     }
+
+
+def _require_grace(grant: Grant, cycle: _Cycle, *, which: str) -> None:
+    """Both ends of one grant, against the cycle it was bought for.
+
+    The expiry is exact arithmetic on the cycle. The start is the later of the
+    shifted cycle start and the instant the grant was bought, so only the shifted
+    start is checkable — and only where it is still ahead, which is every grant
+    bought for a cycle that has not yet begun.
+    """
+
+    expected_expiry = int((cycle.ended_at + CREDIT_GRANT_SETTLEMENT_GRACE).timestamp())
+    if grant.expires_at != expected_expiry:
+        raise RuntimeError(
+            f"{which} allowance expires {moment(grant.expires_at)}, not {moment(expected_expiry)}, "
+            "which is its cycle's end plus the settlement grace"
+        )
+    shifted_start = int((cycle.started_at + CREDIT_GRANT_SETTLEMENT_GRACE).timestamp())
+    if grant.effective_at is None or grant.effective_at > shifted_start:
+        raise RuntimeError(
+            f"{which} allowance becomes spendable {moment(grant.effective_at)}, later than "
+            f"{moment(shifted_start)}, which is its cycle's start plus the settlement grace"
+        )
 
 
 def _second_cycle_usage(
@@ -979,8 +882,8 @@ def _drain_the_new_period(gate: BillingGate, run: _Run) -> dict[str, Any]:
             segment_cost_nanos=whole.segment_cost_nanos,
             outbox=fresh,
         )
-        invoice = preview_invoice(gate, run.provider_subscription_id)
-        totals = gate.provider.invoice_metered_totals(provider_invoice_id=invoice.id)
+        draft = preview_invoice(gate, run.provider_subscription_id)
+        totals = gate.provider.invoice_metered_totals(provider_invoice_id=draft.id)
         owed = ledger_cost_nanos(gate, since, COMPUTE_METER)
         counted = totals.get(COMPUTE_METER, 0)
         cycle_report: dict[str, Any] = {
@@ -989,7 +892,7 @@ def _drain_the_new_period(gate: BillingGate, run: _Run) -> dict[str, Any]:
             "ledger_cost_nanos_for_those_records": owed,
             "stripe_metered_totals_on_the_new_period": dict(totals),
             "first_cycle_ledger_cost_nanos": run.first_cycle_nanos,
-            "draft_invoice": invoice.id,
+            "draft_invoice": draft.id,
         }
         signature = (fresh, tuple(sorted(totals.items())), owed)
         still = still + 1 if signature == previous else 0
@@ -1009,7 +912,7 @@ def _drain_the_new_period(gate: BillingGate, run: _Run) -> dict[str, Any]:
                 "ledger_cost_nanos_since_the_boundary": owed,
                 "equal": True,
                 "first_cycle_ledger_cost_nanos": run.first_cycle_nanos,
-                "draft_invoice": invoice.id,
+                "draft_invoice": draft.id,
             }
         if time.monotonic() >= deadline:
             raise RuntimeError(
@@ -1096,7 +999,7 @@ def _advance_to(gate: BillingGate, run: _Run, target: datetime, *, label: str) -
                     "advancing": label,
                     "clock_status": clock.status,
                     "clock_now": clock.frozen_at.isoformat(),
-                    "clock_target": _moment(wanted),
+                    "clock_target": moment(wanted),
                     "real_now": utc_now().isoformat(timespec="seconds"),
                 },
                 sort_keys=True,
@@ -1125,73 +1028,16 @@ def _clock(gate: BillingGate, run: _Run) -> _Clock:
     return read(_Clock, gate.client, "GET", f"/test_helpers/test_clocks/{run.clock_id}")
 
 
-def _customer_invoices(gate: BillingGate, run: _Run) -> tuple[_Invoice, ...]:
-    listed = read(
-        _InvoiceList,
-        gate.client,
-        "GET",
-        "/invoices",
-        params=[
-            ("customer", run.provider_customer_id),
-            ("limit", "20"),
-            ("expand[]", "data.lines.data.pricing.price_details.price"),
-        ],
-    )
-    return tuple(listed.data)
-
-
-def _renewal_invoice(invoices: Sequence[_Invoice], first: _Cycle) -> _Invoice | None:
+def _renewal_invoice(invoices: Sequence[Invoice], first: _Cycle) -> Invoice | None:
     """The invoice Stripe raised for the cycle that just ended, named by its period."""
 
-    for invoice in invoices:
-        if invoice.billing_reason != RENEWAL_BILLING_REASON:
+    for entry in invoices:
+        if entry.billing_reason != RENEWAL_BILLING_REASON:
             continue
-        if datetime.fromtimestamp(invoice.period_end, tz=UTC) != first.ended_at:
+        if datetime.fromtimestamp(entry.period_end, tz=UTC) != first.ended_at:
             continue
-        return invoice
+        return entry
     return None
-
-
-def _invoice(gate: BillingGate, invoice_id: str) -> _Invoice:
-    return read(
-        _Invoice,
-        gate.client,
-        "GET",
-        f"/invoices/{invoice_id}",
-        params=[("expand[]", "lines.data.pricing.price_details.price")],
-    )
-
-
-def _grants(gate: BillingGate, run: _Run) -> tuple[_Grant, ...]:
-    listed = read(
-        _GrantList,
-        gate.client,
-        "GET",
-        "/billing/credit_grants",
-        params=[("customer", run.provider_customer_id), ("limit", "20")],
-    )
-    return tuple(listed.data)
-
-
-def _credits_applied(gate: BillingGate, run: _Run, invoice_id: str) -> list[dict[str, Any]]:
-    """What the customer's own credit ledger says was spent on one invoice."""
-
-    listed = read(
-        _CreditTransactionList,
-        gate.client,
-        "GET",
-        "/billing/credit_balance_transactions",
-        params=[("customer", run.provider_customer_id), ("limit", "100")],
-    )
-    return [
-        {
-            "id": transaction.id,
-            "credit_grant": transaction.credit_grant,
-            "amount_cents": transaction.applied_to(invoice_id),
-        }
-        for transaction in listed.data
-        if transaction.applied_to(invoice_id)
-    ]
 
 
 def _deliveries(gate: BillingGate, run: _Run) -> list[dict[str, Any]]:
@@ -1203,7 +1049,7 @@ def _deliveries(gate: BillingGate, run: _Run) -> list[dict[str, Any]]:
     """
 
     listed = read(
-        _EventList,
+        EventList,
         gate.client,
         "GET",
         "/events",
@@ -1213,26 +1059,18 @@ def _deliveries(gate: BillingGate, run: _Run) -> list[dict[str, Any]]:
             ("types[]", "invoice.paid"),
         ],
     )
-    mine = [
+    mine: list[Event] = [
         event
         for event in listed.data
         if event.data.object.id in {run.provider_subscription_id, run.renewal_invoice_id}
         or event.data.object.customer == run.provider_customer_id
     ]
-    with gate.database.session() as session:
-        claimed = {
-            row.event_id: row.received_at.isoformat()
-            for row in session.scalars(
-                select(BillingWebhookEventTable).where(
-                    BillingWebhookEventTable.event_id.in_([event.id for event in mine] or [""])
-                )
-            ).all()
-        }
+    claimed = claims(gate, [event.id for event in mine])
     return [
         {
             "event": event.id,
             "type": event.type,
-            "created": _moment(event.created),
+            "created": moment(event.created),
             "pending_webhooks": event.pending_webhooks,
             "claimed": claimed.get(event.id, ""),
         }
@@ -1272,13 +1110,19 @@ def _allowance_period_covering(
     )
 
 
+def _require_boundary(run: _Run) -> datetime:
+    if run.boundary_aimed_at is None:
+        raise RuntimeError("the run placed no boundary; the test clock was never created")
+    return run.boundary_aimed_at
+
+
 def _require_cycle(cycle: _Cycle | None, which: str) -> _Cycle:
     if cycle is None:
         raise RuntimeError(f"the {which} cycle was never read from the provider")
     return cycle
 
 
-def _a_month_before(moment: datetime) -> datetime:
+def _a_month_before(instant: datetime) -> datetime:
     """The same clock time one calendar month earlier, which is what Stripe adds back.
 
     A subscription's month is calendar arithmetic on the instant it was bought,
@@ -1288,10 +1132,10 @@ def _a_month_before(moment: datetime) -> datetime:
     actually opens rather than assumed away.
     """
 
-    month = moment.month - 1 or 12
-    year = moment.year - 1 if moment.month == 1 else moment.year
-    day = min(moment.day, _days_in(year, month))
-    return moment.replace(year=year, month=month, day=day)
+    month = instant.month - 1 or 12
+    year = instant.year - 1 if instant.month == 1 else instant.year
+    day = min(instant.day, _days_in(year, month))
+    return instant.replace(year=year, month=month, day=day)
 
 
 def _days_in(year: int, month: int) -> int:
@@ -1302,12 +1146,8 @@ def _days_in(year: int, month: int) -> int:
     return (following - first).days
 
 
-def _epoch(moment: datetime) -> str:
-    return str(int(moment.timestamp()))
-
-
-def _moment(epoch: int) -> str:
-    return datetime.fromtimestamp(epoch, tz=UTC).isoformat() if epoch else ""
+def _epoch(instant: datetime) -> str:
+    return str(int(instant.timestamp()))
 
 
 def _cleanup(gate: BillingGate, run: _Run) -> dict[str, Any]:
@@ -1319,12 +1159,10 @@ def _cleanup(gate: BillingGate, run: _Run) -> dict[str, Any]:
     """
 
     report: dict[str, Any]
-    voided = _void_the_allowances(gate, run)
     try:
         report = run_cleanup(gate.client, gate.admin, run.resources())
     except (InvalidInputError, UpstreamUnavailableError, httpx.HTTPError) as exc:
         report = {"failed": str(exc), "remaining": ["cleanup did not complete"]}
-    report["voided_allowances"] = voided
     clock: dict[str, Any] = _delete_the_clock(gate, run)
     report["test_clock"] = clock
     report["remaining"] = _remaining_after_the_clock(report, clock)
@@ -1335,17 +1173,13 @@ def _remaining_after_the_clock(report: dict[str, Any], clock: dict[str, Any]) ->
     """What this run still leaves live, judged on the clock its customer kept.
 
     The shared cleanup calls an allowance live until its expiry has passed here,
-    which is the right question for an ordinary customer and the wrong one for
-    this run's: ending a grant stamps the customer's own clock, and this run has
-    pushed that clock hours past this host's, so an allowance that is over reads
-    as ending later today. Stripe will not void one an invoice has already spent
-    against, so the run cannot restate it in a form this host reads directly.
-
-    Re-asked on the clock the expiry was written on, and only then: an allowance
-    whose expiry that clock has passed is over, and the clock and the customer
-    are both gone by the time this is read, so there is nothing left for it to
-    discount. Every other line the shared cleanup produced is kept exactly as it
-    wrote it.
+    which is right for an ordinary customer and wrong for this run's: ending a
+    grant stamps the customer's own clock, and this run has pushed that clock
+    hours past this host's, so an allowance that is over reads as ending later
+    today. Re-asked on the clock the expiry was written on, and only then — the
+    clock and the customer are both gone by the time this is read, so there is
+    nothing left for a live allowance to discount. Every other line the shared
+    cleanup produced is kept exactly as it wrote it.
     """
 
     grants: list[dict[str, Any]] = list(report.get("credit_grants", {}).get("grants", []))
@@ -1366,40 +1200,6 @@ def _remaining_after_the_clock(report: dict[str, Any], clock: dict[str, Any]) ->
     if clock["state"] not in {"deleted", "absent"}:
         remaining.append(f"test clock is {clock['state']}")
     return remaining
-
-
-def _void_the_allowances(gate: BillingGate, run: _Run) -> list[dict[str, Any]]:
-    """Invalidate this run's allowances outright rather than letting them expire.
-
-    Expiring a grant stamps the customer's own clock, and this run has pushed
-    that clock hours past this host's — so an allowance ended a moment ago reads
-    as ending in the future, and the shared cleanup rightly calls it live. Voiding
-    says the same thing without asking whose clock it is, and it is the stronger
-    statement of the two: the allowance is invalid rather than merely over.
-    """
-
-    if not run.provider_customer_id:
-        return []
-    try:
-        grants = _grants(gate, run)
-    except (InvalidInputError, UpstreamUnavailableError, httpx.HTTPError) as exc:
-        return [{"failed": str(exc)}]
-    voided: list[dict[str, Any]] = []
-    for grant in grants:
-        if grant.voided_at is not None:
-            voided.append(grant.payload())
-            continue
-        try:
-            settled = read(_Grant, gate.client, "POST", f"/billing/credit_grants/{grant.id}/void")
-        except (InvalidInputError, UpstreamUnavailableError, httpx.HTTPError) as exc:
-            # Per grant, because Stripe refuses to void one it has already
-            # expired, and one refusal must not leave the rest of this run's
-            # allowances untouched. Whatever is left here the shared cleanup
-            # still expires and still reports.
-            voided.append({"id": grant.id, "refused": str(exc)})
-            continue
-        voided.append(settled.payload())
-    return voided
 
 
 def _delete_the_clock(gate: BillingGate, run: _Run) -> dict[str, Any]:

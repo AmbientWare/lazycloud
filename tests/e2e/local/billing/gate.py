@@ -18,12 +18,16 @@ import os
 from dataclasses import dataclass
 
 import httpx
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from gateway.settings import GatewaySettings
 from lazycloud.config import get_profile
 from provider_stripe import StripeBilling, StripeCatalog, StripeSettings
-from shared.billing_quotes import BilledDimension, ContainerShape
-from shared.billing_rate_card import TEAM_PLAN_MONTHLY_NANOS
+from provider_stripe.api import StripeObject, read
+from shared.billing_accounts import BillingAccount
+from shared.billing_quotes import ContainerShape, LedgerComponent
+from shared.billing_rate_card import PUBLISHED_PLANS
+from shared.http.billing import BillingAllowanceResponse, BillingSummaryResponse
 from shared.http.system import TokenCreateRequest, TokenCreateResponse
 from shared.http.users import UserCreateRequest, UserResponse
 from shared.http.workspaces import WorkspaceCreateRequest, WorkspaceResponse
@@ -130,7 +134,12 @@ def billing_gate(*, live: bool, confirm_account: str) -> BillingGate:
         raise LivePrerequisiteError(
             f"the credential in hand belongs to {account_id}, not {confirm_account}"
         )
-    missing = catalog.plan(plan_price_nanos=TEAM_PLAN_MONTHLY_NANOS).missing
+    # Every plan, not only the one a scenario upgrades to: an account is put on
+    # the free plan the moment it reaches a billing surface, so a missing free
+    # price is a run that cannot register a customer at all.
+    missing = catalog.published(
+        plan_prices={plan.id: plan.monthly_nanos for plan in PUBLISHED_PLANS}
+    ).missing
     if missing:
         raise LivePrerequisiteError(
             "the catalog is not published in this account; run `lazycloud-admin billing "
@@ -198,6 +207,95 @@ def create_run_account(gate: BillingGate, run: RunAccount) -> None:
     run.workspace_name = workspace.name
 
 
+class _PaymentMethod(StripeObject):
+    id: str = ""
+
+
+def billing_account(gate: BillingGate, run: RunAccount) -> BillingAccount | None:
+    with gate.database.session() as session:
+        return BillingAccountRepository(session).get_by_user(run.user_id)
+
+
+def register_customer(gate: BillingGate, run: RunAccount) -> BillingAccount:
+    """Take the run's account through the surface that provisions it.
+
+    The card route, because that is where an account that was minted rather than
+    signed in acquires a payment relationship. Opening it provisions the whole
+    shape — a customer at the provider, a subscription on the free plan carrying
+    that plan's price and the three metered prices, the period that subscription's
+    own cycle defines, and the grant that funds it — so what comes back is an
+    account already able to be billed, and a scenario that later subscribes is
+    changing a price rather than creating a relationship.
+    """
+
+    run.channel(gate).post(
+        CARD_SESSION_ROUTE,
+        {"return_url": gate.public_url, "cancel_url": gate.public_url},
+    )
+    account = billing_account(gate, run)
+    if account is None or not account.provider_customer_id:
+        raise RuntimeError("the card route registered no customer for the run's account")
+    if not account.provider_subscription_id or account.plan is None:
+        raise RuntimeError(
+            "the card route left the run's account unprovisioned; it holds subscription "
+            f"{account.provider_subscription_id or 'nothing'} on plan {account.plan}"
+        )
+    return account
+
+
+def attach_card(gate: BillingGate, provider_customer_id: str, *, token: str) -> str:
+    """Save a card at the provider, which is the only half a customer does here.
+
+    Nothing about the default is decided here: which card the charges go to is
+    the platform's own card-saved handler's to set, and a scenario watching that
+    happen must not have done it first.
+    """
+
+    return read(
+        _PaymentMethod,
+        gate.client,
+        "POST",
+        f"/payment_methods/{token}/attach",
+        data=[("customer", provider_customer_id)],
+    ).id
+
+
+def attach_default_card(
+    gate: BillingGate, provider_customer_id: str, *, token: str = TEST_PAYMENT_METHOD
+) -> str:
+    """Put a working card on the customer, the way the product ends up with one.
+
+    Making it the default is the adapter call the card-saved handler makes, so
+    what comes back is a customer in the state the product leaves one in — what a
+    scenario whose subject is something later needs before it starts.
+    """
+
+    method_id = attach_card(gate, provider_customer_id, token=token)
+    gate.provider.set_default_payment_method(
+        provider_customer_id=provider_customer_id,
+        provider_payment_method_id=method_id,
+    )
+    return method_id
+
+
+def plan_allowance(summary: BillingSummaryResponse) -> BillingAllowanceResponse:
+    """The terms of the cycle this account is part-way through.
+
+    Both levels are nullable and mean different things: no plan is an account on
+    no subscription, and a plan with no allowance is the few minutes between a
+    cycle ending and the renewal that opens the next one. A caller here has just
+    put an account on a plan, so either is a failure.
+    """
+
+    if summary.plan is None:
+        raise RuntimeError("the account is on no plan, so it has no allowance to report")
+    if summary.plan.allowance is None:
+        raise RuntimeError(
+            f"the account is on {summary.plan.id.value} with no period covering this instant"
+        )
+    return summary.plan.allowance
+
+
 def _require_published_rates(database: DatabaseClient) -> None:
     """Refuse before creating anything if usage metered now would price at nothing.
 
@@ -216,11 +314,16 @@ def _require_published_rates(database: DatabaseClient) -> None:
                 memory_mib=1_024,
                 gpu_count=0,
             ),
+            components=(
+                LedgerComponent.ContainerTime,
+                LedgerComponent.Cpu,
+                LedgerComponent.Memory,
+            ),
             started_at=now,
             ended_at=now,
         )
         platform = PlatformRateRepository(session).quotes_for(
-            dimension=BilledDimension.NetworkEgress,
+            component=LedgerComponent.Egress,
             started_at=now,
             ended_at=now,
         )
@@ -267,6 +370,11 @@ __all__ = [
     "TEST_PAYMENT_METHOD",
     "BillingGate",
     "RunAccount",
+    "attach_card",
+    "attach_default_card",
+    "billing_account",
     "billing_gate",
     "create_run_account",
+    "plan_allowance",
+    "register_customer",
 ]

@@ -10,20 +10,20 @@ it the default because that is what it does with a card-saved delivery, Stripe
 attempts a real charge against it and refuses, and the failure comes back as
 `invoice.payment_failed` over the public endpoint.
 
-What is then read is not the delivery. `_read_standing` treats every such event as
-a cue to go and look at the subscription, so what must move is the account's own
+What is then read is not the delivery. The handler treats every such event as a
+cue to go and look at the subscription, so what must move is the account's own
 standing — and after it moves, a Function that ran a minute earlier must be
 refused with `402`. That refusal is the point of the entire path: the customer
 sees it, and nothing before it is visible to anybody.
 
 The charge is provoked by adding a seat to the plan rather than by waiting for
-the renewal that would provoke it in production. The sandbox credential this
-repository holds cannot write test clocks — `billing_clock_read` without
-`billing_clock_write` — so a month cannot be made to pass. A mid-cycle plan change
-is the same thing from the platform's side: Stripe raises a subscription invoice,
-charges the card on file, is refused, marks the subscription `past_due` and
-delivers `invoice.payment_failed`. What it does not reproduce is a renewal
-specifically, or Stripe's own retry schedule afterwards.
+the renewal that would provoke it in production, because a Stripe test clock has
+to be bound to a customer when that customer is created and this run lets the
+product register its own. A mid-cycle plan change is the same thing from the
+platform's side: Stripe raises a subscription invoice, charges the card on file,
+is refused, marks the subscription `past_due` and delivers
+`invoice.payment_failed`. What it does not reproduce is a renewal specifically,
+or Stripe's own retry schedule afterwards.
 
 ```sh
 uv run python -m tests.e2e.local.billing.failed_payment_refuses_new_work --live \
@@ -49,29 +49,38 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from database.repositories.billing import BillingAccountRepository
-from database.tables.billing_webhook_events import BillingWebhookEventTable
+from foundation.environment_file import load_environment_file
 from lazycloud.abstractions.function import Function, FunctionOperationError
 from lazycloud.config import reset_settings_cache
 from lazycloud.control import control_workspace_scope
-from provider_stripe.api import StripeObject, read
-from pydantic import Field
-from shared.billing_accounts import BillingAccount, BillingAccountStatus
+from provider_stripe.api import read
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.http.billing import BillingSummaryResponse
 from shared.http.errors import HttpApiError
-from sqlalchemy import select
 from tests.e2e._support.process import LivePrerequisiteError, blocked
 from tests.e2e.local.billing.cleanup import RunResources, run_cleanup
 from tests.e2e.local.billing.gate import (
-    CARD_SESSION_ROUTE,
     FAILING_PAYMENT_METHOD,
     SUBSCRIBE_ROUTE,
-    TEST_PAYMENT_METHOD,
     BillingGate,
     RunAccount,
+    attach_card,
+    attach_default_card,
+    billing_account,
     billing_gate,
     create_run_account,
+    register_customer,
+)
+from tests.e2e.local.billing.ledger import (
+    Invoice,
+    Subscription,
+    claims,
+    customer,
+    event_for_object,
+    invoice,
+    subscription,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parent
@@ -86,70 +95,6 @@ DELIVERY_POLL_SECONDS = 3.0
 PAYMENT_FAILED_EVENT = "invoice.payment_failed"
 CARD_SAVED_EVENT = "payment_method.attached"
 PLAN_PRICE_LOOKUP_KEY = "lazycloud_plan_team_monthly_usd"
-
-
-class _Price(StripeObject):
-    id: str = ""
-    lookup_key: str | None = None
-
-
-class _Item(StripeObject):
-    id: str = ""
-    quantity: int = 0
-    price: _Price = Field(default_factory=_Price)
-
-
-class _Items(StripeObject):
-    data: list[_Item] = Field(default_factory=list)
-
-
-class _Subscription(StripeObject):
-    id: str = ""
-    status: str = ""
-    latest_invoice: str = ""
-    items: _Items = Field(default_factory=_Items)
-
-
-class _PaymentMethod(StripeObject):
-    id: str = ""
-
-
-class _InvoiceSettings(StripeObject):
-    default_payment_method: str | None = None
-
-
-class _Customer(StripeObject):
-    id: str = ""
-    invoice_settings: _InvoiceSettings = Field(default_factory=_InvoiceSettings)
-
-
-class _Invoice(StripeObject):
-    id: str = ""
-    status: str = ""
-    attempted: bool = False
-    attempt_count: int = 0
-    amount_due: int = 0
-    amount_paid: int = 0
-
-
-class _EventObject(StripeObject):
-    id: str = ""
-    customer: str | None = None
-
-
-class _EventData(StripeObject):
-    object: _EventObject = Field(default_factory=_EventObject)
-
-
-class _Event(StripeObject):
-    id: str = ""
-    type: str = ""
-    pending_webhooks: int = 0
-    data: _EventData = Field(default_factory=_EventData)
-
-
-class _EventList(StripeObject):
-    data: list[_Event] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -184,6 +129,9 @@ class _Run:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # This process is the entrypoint that owns itself, which is where a
+    # developer `.env` is applied; nothing already exported is overridden.
+    load_environment_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--confirm-account", default="")
@@ -226,55 +174,40 @@ def _scenario(gate: BillingGate) -> int:
 
 
 def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
-    """Put the run's account on the plan with a card that works.
+    """Put the run's account on the Team plan with a card that works.
 
-    The working card matters: `create_subscription` refuses rather than leaving
-    an incomplete subscription behind, so a run that starts on the failing card
-    would never get as far as the failure it is here to cause. What fails later
-    has to be a card that was good and then was not.
+    The working card matters: the plan change is charged immediately and refused
+    if it cannot be taken, so a run that started on the failing card would never
+    get as far as the failure it is here to cause. What fails later has to be a
+    card that was good and then was not.
     """
 
     channel = run.account.channel(gate)
-    channel.post(
-        CARD_SESSION_ROUTE,
-        {"return_url": gate.public_url, "cancel_url": gate.public_url},
-    )
-    registered = _billing_account(gate, run)
-    if registered is None or not registered.provider_customer_id:
-        raise RuntimeError("the card route registered no customer for the run's account")
-    run.provider_customer_id = registered.provider_customer_id
-    method = read(
-        _PaymentMethod,
-        gate.client,
-        "POST",
-        f"/payment_methods/{TEST_PAYMENT_METHOD}/attach",
-        data=[("customer", run.provider_customer_id)],
-    )
-    gate.provider.set_default_payment_method(
-        provider_customer_id=run.provider_customer_id,
-        provider_payment_method_id=method.id,
-    )
+    free = register_customer(gate, run.account)
+    run.provider_customer_id = free.provider_customer_id
+    run.provider_subscription_id = free.provider_subscription_id
+    working = attach_default_card(gate, free.provider_customer_id)
+
     summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
-    if not summary.subscribed:
-        raise RuntimeError("the subscription route answered that the account is not subscribed")
-    account = _billing_account(gate, run)
-    if account is None or not account.provider_subscription_id:
-        raise RuntimeError("subscribing wrote no provider_subscription_id to the account row")
+    if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
+        raise RuntimeError(
+            f"the subscription route answered with plan {summary.plan.id if summary.plan else None}"
+        )
+    account = billing_account(gate, run.account)
+    if account is None or account.plan is not BillingPlanId.Team:
+        raise RuntimeError("subscribing did not record the Team plan on the account row")
     run.provider_subscription_id = account.provider_subscription_id
     run.provider_credit_grant_id = account.provider_credit_grant_id
-    subscription = _subscription(gate, run)
-    if subscription.status != "active":
-        raise RuntimeError(f"Stripe reports the subscription {subscription.status}, not active")
+    live = subscription(gate, run.provider_subscription_id)
+    if live.status != "active":
+        raise RuntimeError(f"Stripe reports the subscription {live.status}, not active")
+    if account.status is not BillingAccountStatus.Active:
+        raise RuntimeError(f"the account starts {account.status.value}, not active")
     return {
-        "status": subscription.status,
+        "status": live.status,
         "account_status": account.status.value,
-        "working_card": method.id,
+        "working_card": working,
     }
-
-
-def _billing_account(gate: BillingGate, run: _Run) -> BillingAccount | None:
-    with gate.database.session() as session:
-        return BillingAccountRepository(session).get_by_user(run.account.user_id)
 
 
 def _deploy(gate: BillingGate, run: _Run) -> Function[..., dict[str, float]]:
@@ -319,33 +252,31 @@ def _replace_the_card(gate: BillingGate, run: _Run) -> dict[str, Any]:
     charge that follows is aimed by production code.
     """
 
-    method = read(
-        _PaymentMethod,
-        gate.client,
-        "POST",
-        f"/payment_methods/{FAILING_PAYMENT_METHOD}/attach",
-        data=[("customer", run.provider_customer_id)],
-    )
-    run.failing_card = method.id
+    run.failing_card = attach_card(gate, run.provider_customer_id, token=FAILING_PAYMENT_METHOD)
     deadline = time.monotonic() + DELIVERY_DEADLINE_SECONDS
     while True:
-        event = _event_for(gate, CARD_SAVED_EVENT, object_id=method.id, run=run)
-        claims = _claims(gate, event.id) if event is not None else ()
-        default = _default_payment_method(gate, run)
+        event = event_for_object(
+            gate,
+            CARD_SAVED_EVENT,
+            object_id=run.failing_card,
+            provider_customer_id=run.provider_customer_id,
+        )
+        claimed = claims(gate, [event.id] if event is not None else [])
+        default = customer(gate, run.provider_customer_id).default_payment_method
         cycle: dict[str, Any] = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "attached_card": method.id,
+            "attached_card": run.failing_card,
             "event": event.id if event else "",
             "pending_webhooks": event.pending_webhooks if event else None,
-            "claimed": list(claims),
+            "claimed": dict(claimed),
             "default_payment_method_at_stripe": default,
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
-        if event is not None and claims and default == method.id:
+        if event is not None and claimed and default == run.failing_card:
             return {
-                "failing_card": method.id,
+                "failing_card": run.failing_card,
                 "event": event.id,
-                "claimed": list(claims),
+                "claimed": dict(claimed),
                 "default_payment_method_at_stripe": default,
             }
         if time.monotonic() >= deadline:
@@ -365,19 +296,12 @@ def _fail_the_charge(gate: BillingGate, run: _Run) -> dict[str, Any]:
     is then this platform's to change — from the delivery, not from this call.
     """
 
-    subscription = _subscription(gate, run)
-    plan_item = next(
-        (
-            item
-            for item in subscription.items.data
-            if item.price.lookup_key == PLAN_PRICE_LOOKUP_KEY
-        ),
-        None,
-    )
+    live = subscription(gate, run.provider_subscription_id)
+    plan_item = live.item_for(PLAN_PRICE_LOOKUP_KEY)
     if plan_item is None:
         raise RuntimeError("the subscription carries no plan line to charge")
     charged = read(
-        _Subscription,
+        Subscription,
         gate.client,
         "POST",
         f"/subscriptions/{run.provider_subscription_id}",
@@ -391,44 +315,45 @@ def _fail_the_charge(gate: BillingGate, run: _Run) -> dict[str, Any]:
     run.unpaid_invoice_id = charged.latest_invoice
     deadline = time.monotonic() + DELIVERY_DEADLINE_SECONDS
     while True:
-        subscription = _subscription(gate, run)
-        invoice = (
-            read(_Invoice, gate.client, "GET", f"/invoices/{run.unpaid_invoice_id}")
-            if run.unpaid_invoice_id
-            else _Invoice()
+        current = subscription(gate, run.provider_subscription_id)
+        unpaid = invoice(gate, run.unpaid_invoice_id) if run.unpaid_invoice_id else Invoice()
+        event = event_for_object(
+            gate,
+            PAYMENT_FAILED_EVENT,
+            object_id=unpaid.id,
+            provider_customer_id=run.provider_customer_id,
         )
-        event = _event_for(gate, PAYMENT_FAILED_EVENT, object_id=invoice.id, run=run)
-        claims = _claims(gate, event.id) if event is not None else ()
-        account = _billing_account(gate, run)
+        claimed = claims(gate, [event.id] if event is not None else [])
+        account = billing_account(gate, run.account)
         standing = account.status if account is not None else None
         cycle: dict[str, Any] = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "subscription_status_at_stripe": subscription.status,
+            "subscription_status_at_stripe": current.status,
             "invoice": {
-                "id": invoice.id,
-                "status": invoice.status,
-                "attempted": invoice.attempted,
-                "attempt_count": invoice.attempt_count,
-                "amount_due_cents": invoice.amount_due,
-                "amount_paid_cents": invoice.amount_paid,
+                "id": unpaid.id,
+                "status": unpaid.status,
+                "attempted": unpaid.attempted,
+                "attempt_count": unpaid.attempt_count,
+                "amount_due_cents": unpaid.amount_due,
+                "amount_paid_cents": unpaid.amount_paid,
             },
             "event": event.id if event else "",
             "pending_webhooks": event.pending_webhooks if event else None,
-            "claimed": list(claims),
+            "claimed": dict(claimed),
             "account_status": standing.value if standing is not None else "",
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
-        if event is not None and claims and standing is BillingAccountStatus.PastDue:
+        if event is not None and claimed and standing is BillingAccountStatus.PastDue:
             return {
-                "subscription_status_at_stripe": subscription.status,
-                "invoice_id": invoice.id,
-                "invoice_status": invoice.status,
-                "charge_attempts": invoice.attempt_count,
-                "amount_due_cents": invoice.amount_due,
-                "amount_paid_cents": invoice.amount_paid,
+                "subscription_status_at_stripe": current.status,
+                "invoice_id": unpaid.id,
+                "invoice_status": unpaid.status,
+                "charge_attempts": unpaid.attempt_count,
+                "amount_due_cents": unpaid.amount_due,
+                "amount_paid_cents": unpaid.amount_paid,
                 "event": event.id,
                 "event_type": event.type,
-                "claimed": list(claims),
+                "claimed": dict(claimed),
                 "account_status": standing.value,
             }
         if time.monotonic() >= deadline:
@@ -457,44 +382,6 @@ def _refused(run: _Run, function: Function[..., dict[str, float]]) -> dict[str, 
     raise RuntimeError(
         f"the platform started task {call.task_id} for an account whose payment failed"
     )
-
-
-def _default_payment_method(gate: BillingGate, run: _Run) -> str:
-    customer = read(_Customer, gate.client, "GET", f"/customers/{run.provider_customer_id}")
-    return customer.invoice_settings.default_payment_method or ""
-
-
-def _event_for(gate: BillingGate, event_type: str, *, object_id: str, run: _Run) -> _Event | None:
-    """Stripe's own record of a delivery about one of this run's objects."""
-
-    if not object_id:
-        return None
-    listed = read(
-        _EventList,
-        gate.client,
-        "GET",
-        "/events",
-        params=[("type", event_type), ("limit", "100")],
-    )
-    for event in listed.data:
-        if event.data.object.id != object_id:
-            continue
-        if event.data.object.customer not in {None, run.provider_customer_id}:
-            continue
-        return event
-    return None
-
-
-def _claims(gate: BillingGate, event_id: str) -> tuple[str, ...]:
-    with gate.database.session() as session:
-        rows = session.scalars(
-            select(BillingWebhookEventTable).where(BillingWebhookEventTable.event_id == event_id)
-        ).all()
-    return tuple(f"{row.event_id} {row.event_type} {row.received_at.isoformat()}" for row in rows)
-
-
-def _subscription(gate: BillingGate, run: _Run) -> _Subscription:
-    return read(_Subscription, gate.client, "GET", f"/subscriptions/{run.provider_subscription_id}")
 
 
 def _cleanup(gate: BillingGate, run: _Run) -> dict[str, Any]:

@@ -1,13 +1,13 @@
 """Remove exactly what one sandbox billing run created, and prove none of it is left.
 
-Independently callable, and named rather than searched: the customer, the
-subscription, the workspace and the account are all passed in by identifier, and
-the only thing this ever lists is what hangs off the run's own customer — the
-allowances it was granted and the invoices it was issued, neither of which a run
-can name in advance because the platform buys a fresh grant on every renewal and
-Stripe raises an invoice whenever a period closes.
+Independently callable, and named rather than searched: the workspace and the
+account are passed in by identifier, and the only thing this ever lists is what
+hangs off the run's own customer — the subscriptions it holds, the allowances it
+was granted and the invoices it was issued, none of which a run can name in
+advance because the platform buys a fresh grant on every renewal and Stripe
+raises an invoice whenever a period closes.
 
-The published catalog — the three meters, the four products, the four prices and
+The published catalog — the three meters, the five products, the five prices and
 the webhook endpoint — belongs to the account and not to any run, and is never
 touched here. Neither is a paid invoice: that one is the record that money moved,
 and deleting records of charges is not cleanup. An invoice still open is the
@@ -37,18 +37,26 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from foundation.environment_file import load_environment_file
 from lazycloud.config import get_profile
 from provider_stripe import StripeCatalog, StripeSettings
-from provider_stripe.api import StripeObject, read, send
-from pydantic import Field
+from provider_stripe.api import read, send
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.http.errors import HttpApiError
 from shared.http.users import UserResponse, UserStatusRequest
 from shared.http.workspaces import WorkspaceListResponse
 from shared.http_transport import HttpChannel
 from shared.identity import UserStatus, WorkspaceStatus
-from shared.timestamps import utc_now
 from tests.e2e._support.process import LivePrerequisiteError, blocked
+from tests.e2e.local.billing.ledger import (
+    Customer,
+    Grant,
+    GrantList,
+    Invoice,
+    InvoiceList,
+    Subscription,
+    SubscriptionList,
+)
 
 ADMIN_TIMEOUT_SECONDS = 60.0
 WORKSPACE_DELETION_TIMEOUT_SECONDS = 240.0
@@ -61,46 +69,6 @@ A draft would go on to be finalized and an open one is being collected, so both
 are things the run would leave running after it ended. Everything else — paid,
 void, uncollectible — is a record of what happened and is left exactly as it is.
 """
-
-
-class _Subscription(StripeObject):
-    id: str = ""
-    status: str = ""
-
-
-class _SubscriptionList(StripeObject):
-    data: list[_Subscription] = Field(default_factory=list)
-
-
-class _CreditGrant(StripeObject):
-    id: str = ""
-    expires_at: int | None = None
-    voided_at: int | None = None
-
-    @property
-    def settled(self) -> bool:
-        if self.voided_at is not None:
-            return True
-        return self.expires_at is not None and self.expires_at <= int(utc_now().timestamp())
-
-
-class _CreditGrantList(StripeObject):
-    data: list[_CreditGrant] = Field(default_factory=list)
-
-
-class _Customer(StripeObject):
-    id: str = ""
-    deleted: bool = False
-
-
-class _Invoice(StripeObject):
-    id: str = ""
-    status: str = ""
-    amount_paid: int = 0
-
-
-class _InvoiceList(StripeObject):
-    data: list[_Invoice] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +95,7 @@ def run_cleanup(
     """Settle every object this run made and report what the account holds now.
 
     Ordered so each step's outcome is still readable by the next: the grants are
-    expired and the subscription cancelled while the customer still exists, the
+    expired and the subscriptions cancelled while the customer still exists, the
     invoices are settled and the account re-read for residue before the customer
     goes, and the workspace is deleted last because its ledger rows are what the
     provider was metered for.
@@ -135,18 +103,19 @@ def run_cleanup(
     Whether the customer is still there is established first, because a second
     run of this — which is how "nothing is left" is demonstrated — happens after
     the first one deleted them, and Stripe refuses to list allowances against a
-    customer that no longer exists. The grant the run recorded is still readable
-    by its own id, so it is still checked.
+    customer that no longer exists. The objects the run recorded are still
+    readable by their own ids, so they are still checked.
     """
 
     reachable = _customer_reachable(client, resources.provider_customer_id)
+    live_customer_id = resources.provider_customer_id if reachable else ""
     report: dict[str, Any] = {
         "credit_grants": _expire_credit_grants(
-            client,
-            resources.provider_customer_id if reachable else "",
-            resources.provider_credit_grant_id,
+            client, live_customer_id, resources.provider_credit_grant_id
         ),
-        "subscription": _cancel_subscription(client, resources.provider_subscription_id),
+        "subscriptions": _cancel_subscriptions(
+            client, live_customer_id, resources.provider_subscription_id
+        ),
         "invoices": _settle_invoices(client, resources.provider_customer_id),
         "residue": _customer_residue(client, resources.provider_customer_id),
         "customer": _delete_customer(client, resources.provider_customer_id),
@@ -164,8 +133,9 @@ def _remaining(report: dict[str, Any]) -> list[str]:
     active_grants = report["credit_grants"].get("active", [])
     if active_grants:
         remaining.append(f"credit grants still active: {', '.join(active_grants)}")
-    if report["subscription"].get("state") not in {"canceled", "absent"}:
-        remaining.append(f"subscription is {report['subscription'].get('state')}")
+    live_subscriptions = report["subscriptions"].get("live", [])
+    if live_subscriptions:
+        remaining.append(f"subscriptions still live: {', '.join(live_subscriptions)}")
     unsettled = report["invoices"].get("unsettled", [])
     if unsettled:
         remaining.append(f"invoices still unsettled: {', '.join(unsettled)}")
@@ -190,6 +160,13 @@ def _expire_credit_grants(
     has been given more than one — the platform buys a fresh allowance each
     period and the row forgets the last. Listing them off the run's own customer
     is the only way to name all of them, and it can reach nobody else's.
+
+    Expired where Stripe allows it and voided where it does not. An allowance
+    bought for a cycle that has not opened yet is not yet effective, and Stripe
+    refuses to expire one of those — so cleanup that only knew how to expire
+    would abandon every object of a run whose grant was too new, which is every
+    run that upgraded a plan the day it registered. Voiding says the stronger
+    thing anyway: the allowance is invalid rather than merely over.
     """
 
     grant_ids = list(_customer_grant_ids(client, customer_id))
@@ -200,12 +177,23 @@ def _expire_credit_grants(
     settled: list[dict[str, Any]] = []
     active: list[str] = []
     for grant_id in grant_ids:
-        grant = read(_CreditGrant, client, "GET", f"/billing/credit_grants/{grant_id}")
-        if not grant.settled:
-            grant = read(_CreditGrant, client, "POST", f"/billing/credit_grants/{grant_id}/expire")
-        settled.append(
-            {"id": grant_id, "expires_at": grant.expires_at, "voided_at": grant.voided_at}
-        )
+        grant = read(Grant, client, "GET", f"/billing/credit_grants/{grant_id}")
+        refusals: list[str] = []
+        for action in ("expire", "void"):
+            if grant.settled:
+                break
+            try:
+                grant = read(Grant, client, "POST", f"/billing/credit_grants/{grant_id}/{action}")
+            except (InvalidInputError, UpstreamUnavailableError) as exc:
+                refusals.append(f"{action}: {exc}")
+        entry: dict[str, Any] = {
+            "id": grant_id,
+            "expires_at": grant.expires_at,
+            "voided_at": grant.voided_at,
+        }
+        if refusals:
+            entry["refused"] = refusals
+        settled.append(entry)
         if not grant.settled:
             active.append(grant_id)
     return {"grants": settled, "active": active}
@@ -215,7 +203,7 @@ def _customer_grant_ids(client: httpx.Client, customer_id: str) -> tuple[str, ..
     if not customer_id:
         return ()
     listed = read(
-        _CreditGrantList,
+        GrantList,
         client,
         "GET",
         "/billing/credit_grants",
@@ -224,8 +212,16 @@ def _customer_grant_ids(client: httpx.Client, customer_id: str) -> tuple[str, ..
     return tuple(grant.id for grant in listed.data)
 
 
-def _cancel_subscription(client: httpx.Client, subscription_id: str) -> dict[str, Any]:
-    """End the subscription without producing an invoice for it.
+def _cancel_subscriptions(
+    client: httpx.Client, customer_id: str, named_subscription_id: str
+) -> dict[str, Any]:
+    """End every subscription this run's customer holds, not only the one it named.
+
+    Listed off the customer for the same reason the allowances are: an account is
+    put on a subscription the moment it reaches a billing surface, so a run that
+    never recorded one still has one to cancel, and a run whose scenario is not
+    about subscribing at all would otherwise leave a live subscription behind and
+    report itself failed for it. The listing can reach nobody else's customer.
 
     `invoice_now=false` because Stripe otherwise raises a final invoice for
     whatever usage has not been billed yet, and a cleanup that creates an invoice
@@ -233,19 +229,40 @@ def _cancel_subscription(client: httpx.Client, subscription_id: str) -> dict[str
     record where the run's own comparison already read it.
     """
 
-    if not subscription_id:
-        return {"id": "", "state": "absent"}
-    current = read(_Subscription, client, "GET", f"/subscriptions/{subscription_id}")
-    if current.status == "canceled":
-        return {"id": subscription_id, "state": "canceled"}
-    cancelled = read(
-        _Subscription,
+    subscription_ids = list(_customer_subscription_ids(client, customer_id))
+    if named_subscription_id and named_subscription_id not in subscription_ids:
+        subscription_ids.append(named_subscription_id)
+    if not subscription_ids:
+        return {"subscriptions": [], "live": []}
+    settled: list[dict[str, Any]] = []
+    live: list[str] = []
+    for subscription_id in subscription_ids:
+        current = read(Subscription, client, "GET", f"/subscriptions/{subscription_id}")
+        if current.status != "canceled":
+            current = read(
+                Subscription,
+                client,
+                "DELETE",
+                f"/subscriptions/{subscription_id}",
+                data=[("invoice_now", "false"), ("prorate", "false")],
+            )
+        settled.append({"id": subscription_id, "state": current.status})
+        if current.status != "canceled":
+            live.append(subscription_id)
+    return {"subscriptions": settled, "live": live}
+
+
+def _customer_subscription_ids(client: httpx.Client, customer_id: str) -> tuple[str, ...]:
+    if not customer_id:
+        return ()
+    listed = read(
+        SubscriptionList,
         client,
-        "DELETE",
-        f"/subscriptions/{subscription_id}",
-        data=[("invoice_now", "false"), ("prorate", "false")],
+        "GET",
+        "/subscriptions",
+        params=[("customer", customer_id), ("status", "all"), ("limit", "100")],
     )
-    return {"id": subscription_id, "state": cancelled.status}
+    return tuple(item.id for item in listed.data)
 
 
 def _settle_invoices(client: httpx.Client, customer_id: str) -> dict[str, Any]:
@@ -282,9 +299,9 @@ def _settle_invoices(client: httpx.Client, customer_id: str) -> dict[str, Any]:
     }
 
 
-def _customer_invoices(client: httpx.Client, customer_id: str) -> tuple[_Invoice, ...]:
+def _customer_invoices(client: httpx.Client, customer_id: str) -> tuple[Invoice, ...]:
     listed = read(
-        _InvoiceList,
+        InvoiceList,
         client,
         "GET",
         "/invoices",
@@ -306,7 +323,7 @@ def _customer_residue(client: httpx.Client, customer_id: str) -> dict[str, list[
     if not customer_id:
         return {"subscriptions": [], "invoices": []}
     subscriptions = read(
-        _SubscriptionList,
+        SubscriptionList,
         client,
         "GET",
         "/subscriptions",
@@ -327,16 +344,16 @@ def _customer_reachable(client: httpx.Client, customer_id: str) -> bool:
 
     if not customer_id:
         return False
-    return not read(_Customer, client, "GET", f"/customers/{customer_id}").deleted
+    return not read(Customer, client, "GET", f"/customers/{customer_id}").deleted
 
 
 def _delete_customer(client: httpx.Client, customer_id: str) -> dict[str, Any]:
     if not customer_id:
         return {"id": "", "state": "absent"}
-    current = read(_Customer, client, "GET", f"/customers/{customer_id}")
+    current = read(Customer, client, "GET", f"/customers/{customer_id}")
     if current.deleted:
         return {"id": customer_id, "state": "deleted"}
-    removed = read(_Customer, client, "DELETE", f"/customers/{customer_id}")
+    removed = read(Customer, client, "DELETE", f"/customers/{customer_id}")
     return {"id": customer_id, "state": "deleted" if removed.deleted else "present"}
 
 
@@ -409,6 +426,9 @@ def build_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # This process is the entrypoint that owns itself, which is where a
+    # developer `.env` is applied; nothing already exported is overridden.
+    load_environment_file()
     parser = argparse.ArgumentParser(description=__doc__)
     build_arguments(parser)
     args = parser.parse_args(argv)

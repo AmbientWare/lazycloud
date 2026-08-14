@@ -1,4 +1,4 @@
-"""What the platform's own records hold for one run, and the wait for them to close.
+"""Both sides of one run's evidence: what this platform recorded, and what Stripe holds.
 
 The chain from a container to a charge has four links this side of the provider
 — the placement the control plane recorded, the segments the pricer priced, the
@@ -6,6 +6,12 @@ rows it queued, and the events the scheduler delivered — and one on theirs, wh
 is what Stripe has actually counted. A scenario that reads only the last one
 cannot say which link failed, so every reading here is taken and printed together
 whether or not any of them moved.
+
+The provider's own shapes live here too, beside the records they are compared
+against. Every scenario in this directory reads the same invoice, the same
+allowance and the same delivery, and four private descriptions of one Stripe
+object are four things to correct when Stripe adds a field — and four chances for
+two scenarios to disagree about what an invoice is.
 
 Nothing here asserts. It reads, it polls, and it says out loud which link is not
 holding; what that means is the scenario's to decide.
@@ -15,8 +21,9 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from database.tables.billing_ledger import (
@@ -24,8 +31,9 @@ from database.tables.billing_ledger import (
     ContainerBillingShapeTable,
 )
 from database.tables.billing_outbox import BillingMeterOutboxTable
+from database.tables.billing_webhook_events import BillingWebhookEventTable
 from provider_stripe.api import StripeObject, read
-from pydantic import Field
+from pydantic import Field, field_validator
 from shared.billing_quotes import BilledDimension
 from shared.payments import METER_EVENT_NAMES
 from shared.timestamps import utc_now
@@ -62,6 +70,14 @@ class _LinePrice(StripeObject):
 class _PriceDetails(StripeObject):
     price: _LinePrice = Field(default_factory=_LinePrice)
 
+    @field_validator("price", mode="before")
+    @classmethod
+    def _accept_an_unexpanded_price(cls, value: object) -> object:
+        """Stripe sends a bare id where the caller did not expand the object, so
+        a reader that only wants the invoice's money need not pay for one."""
+
+        return {"id": value} if isinstance(value, str) else value
+
 
 class LinePricing(StripeObject):
     price_details: _PriceDetails = Field(default_factory=_PriceDetails)
@@ -95,6 +111,327 @@ class PreviewInvoice(StripeObject):
     status: str = ""
     total: int = 0
     lines: PreviewLines = Field(default_factory=PreviewLines)
+
+
+def moment(epoch: int | None) -> str:
+    """A Stripe timestamp as an instant, and the empty string for no instant."""
+
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat() if epoch else ""
+
+
+class InvoiceSettings(StripeObject):
+    default_payment_method: str | None = None
+
+
+class Customer(StripeObject):
+    id: str = ""
+    deleted: bool = False
+    invoice_settings: InvoiceSettings = Field(default_factory=InvoiceSettings)
+
+    @property
+    def default_payment_method(self) -> str:
+        return self.invoice_settings.default_payment_method or ""
+
+
+class SubscriptionItem(StripeObject):
+    id: str = ""
+    quantity: int = 0
+    price: _LinePrice = Field(default_factory=_LinePrice)
+
+    @property
+    def price_name(self) -> str:
+        return self.price.lookup_key or self.price.id
+
+
+class SubscriptionItems(StripeObject):
+    data: list[SubscriptionItem] = Field(default_factory=list)
+
+
+class Subscription(StripeObject):
+    id: str = ""
+    status: str = ""
+    latest_invoice: str = ""
+    items: SubscriptionItems = Field(default_factory=SubscriptionItems)
+
+    @property
+    def price_names(self) -> list[str]:
+        return sorted(item.price_name for item in self.items.data)
+
+    def item_for(self, price_lookup_key: str) -> SubscriptionItem | None:
+        return next(
+            (item for item in self.items.data if item.price.lookup_key == price_lookup_key), None
+        )
+
+
+class SubscriptionList(StripeObject):
+    data: list[Subscription] = Field(default_factory=list)
+
+
+class StatusTransitions(StripeObject):
+    finalized_at: int | None = None
+    paid_at: int | None = None
+
+
+class PretaxCredit(StripeObject):
+    amount: int = 0
+    type: str = ""
+
+
+class Invoice(StripeObject):
+    id: str = ""
+    status: str = ""
+    billing_reason: str = ""
+    attempted: bool = False
+    attempt_count: int = 0
+    period_start: int = 0
+    period_end: int = 0
+    subtotal: int = 0
+    total: int = 0
+    amount_due: int = 0
+    amount_paid: int = 0
+    next_payment_attempt: int | None = None
+    status_transitions: StatusTransitions = Field(default_factory=StatusTransitions)
+    total_pretax_credit_amounts: list[PretaxCredit] = Field(default_factory=list)
+    lines: PreviewLines = Field(default_factory=PreviewLines)
+
+    @property
+    def credit_applied(self) -> int:
+        return sum(entry.amount for entry in self.total_pretax_credit_amounts)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "status": self.status,
+            "billing_reason": self.billing_reason,
+            "period_start": moment(self.period_start),
+            "period_end": moment(self.period_end),
+            "subtotal_cents": self.subtotal,
+            "credit_applied_cents": self.credit_applied,
+            "total_cents": self.total,
+            "amount_due_cents": self.amount_due,
+            "amount_paid_cents": self.amount_paid,
+            "charge_attempts": self.attempt_count,
+            "next_payment_attempt": moment(self.next_payment_attempt),
+            "finalized_at": moment(self.status_transitions.finalized_at),
+            "paid_at": moment(self.status_transitions.paid_at),
+            "lines": {
+                line.price_name: {"quantity": line.quantity_decimal, "amount_cents": line.amount}
+                for line in self.lines.data
+            },
+        }
+
+    def metered_nanos(self, price_lookup_key: str) -> int:
+        """One metered line's own quantity, read from the line the customer is
+        charged from rather than recomputed from the meter behind it."""
+
+        for line in self.lines.data:
+            if line.price_name != price_lookup_key:
+                continue
+            if line.quantity_decimal is None:
+                raise RuntimeError(f"invoice {self.id} bills {price_lookup_key} without a quantity")
+            return int(line.quantity_decimal)
+        raise RuntimeError(f"invoice {self.id} carries no {price_lookup_key} line")
+
+
+class InvoiceList(StripeObject):
+    data: list[Invoice] = Field(default_factory=list)
+
+
+class Grant(StripeObject):
+    id: str = ""
+    effective_at: int | None = None
+    """When the allowance becomes spendable, which is not when it was bought: a
+    grant must not be effective while the previous period's invoice is still
+    finalizing, or an overrun there is paid out of this period's allowance."""
+
+    expires_at: int | None = None
+    voided_at: int | None = None
+
+    @property
+    def settled(self) -> bool:
+        if self.voided_at is not None:
+            return True
+        return self.expires_at is not None and self.expires_at <= int(utc_now().timestamp())
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "effective_at": moment(self.effective_at),
+            "expires_at": moment(self.expires_at),
+            "voided_at": moment(self.voided_at),
+        }
+
+
+class GrantList(StripeObject):
+    data: list[Grant] = Field(default_factory=list)
+
+
+class _Monetary(StripeObject):
+    value: int = 0
+
+
+class _TransactionAmount(StripeObject):
+    monetary: _Monetary | None = None
+
+
+class _CreditsApplied(StripeObject):
+    invoice: str = ""
+
+
+class _Debit(StripeObject):
+    type: str = ""
+    amount: _TransactionAmount = Field(default_factory=_TransactionAmount)
+    credits_applied: _CreditsApplied | None = None
+
+
+class CreditTransaction(StripeObject):
+    id: str = ""
+    type: str = ""
+    credit_grant: str = ""
+    debit: _Debit | None = None
+
+    def applied_to(self, invoice_id: str) -> int:
+        if self.debit is None or self.debit.credits_applied is None:
+            return 0
+        if self.debit.credits_applied.invoice != invoice_id:
+            return 0
+        return self.debit.amount.monetary.value if self.debit.amount.monetary else 0
+
+
+class CreditTransactionList(StripeObject):
+    data: list[CreditTransaction] = Field(default_factory=list)
+
+
+class EventObject(StripeObject):
+    id: str = ""
+    customer: str | None = None
+
+
+class EventData(StripeObject):
+    object: EventObject = Field(default_factory=EventObject)
+
+
+class Event(StripeObject):
+    id: str = ""
+    type: str = ""
+    created: int = 0
+    pending_webhooks: int = 0
+    data: EventData = Field(default_factory=EventData)
+
+
+class EventList(StripeObject):
+    data: list[Event] = Field(default_factory=list)
+
+
+def customer(gate: BillingGate, provider_customer_id: str) -> Customer:
+    return read(Customer, gate.client, "GET", f"/customers/{provider_customer_id}")
+
+
+def subscription(gate: BillingGate, provider_subscription_id: str) -> Subscription:
+    return read(Subscription, gate.client, "GET", f"/subscriptions/{provider_subscription_id}")
+
+
+def invoice(gate: BillingGate, invoice_id: str) -> Invoice:
+    return read(
+        Invoice,
+        gate.client,
+        "GET",
+        f"/invoices/{invoice_id}",
+        params=[("expand[]", "lines.data.pricing.price_details.price")],
+    )
+
+
+def customer_invoices(gate: BillingGate, provider_customer_id: str) -> tuple[Invoice, ...]:
+    listed = read(
+        InvoiceList,
+        gate.client,
+        "GET",
+        "/invoices",
+        params=[
+            ("customer", provider_customer_id),
+            ("limit", "20"),
+            ("expand[]", "data.lines.data.pricing.price_details.price"),
+        ],
+    )
+    return tuple(listed.data)
+
+
+def customer_grants(gate: BillingGate, provider_customer_id: str) -> tuple[Grant, ...]:
+    listed = read(
+        GrantList,
+        gate.client,
+        "GET",
+        "/billing/credit_grants",
+        params=[("customer", provider_customer_id), ("limit", "100")],
+    )
+    return tuple(listed.data)
+
+
+def credits_applied(
+    gate: BillingGate, *, provider_customer_id: str, invoice_id: str
+) -> list[dict[str, Any]]:
+    """What the customer's own credit ledger says was spent on one invoice."""
+
+    listed = read(
+        CreditTransactionList,
+        gate.client,
+        "GET",
+        "/billing/credit_balance_transactions",
+        params=[("customer", provider_customer_id), ("limit", "100")],
+    )
+    return [
+        {
+            "id": transaction.id,
+            "credit_grant": transaction.credit_grant,
+            "amount_cents": transaction.applied_to(invoice_id),
+        }
+        for transaction in listed.data
+        if transaction.applied_to(invoice_id)
+    ]
+
+
+def event_for_object(
+    gate: BillingGate, event_type: str, *, object_id: str, provider_customer_id: str
+) -> Event | None:
+    """Stripe's own record of a delivery about one of this run's objects."""
+
+    if not object_id:
+        return None
+    listed = read(
+        EventList,
+        gate.client,
+        "GET",
+        "/events",
+        params=[("type", event_type), ("limit", "100")],
+    )
+    for entry in listed.data:
+        if entry.data.object.id != object_id:
+            continue
+        if entry.data.object.customer not in {None, provider_customer_id}:
+            continue
+        return entry
+    return None
+
+
+def claims(gate: BillingGate, event_ids: Sequence[str]) -> Mapping[str, str]:
+    """When this platform durably claimed each delivery, for the ones it did.
+
+    Written in the transaction that acted on the delivery, so it is the only
+    signal separating a delivery Stripe believes it made from one this platform
+    verified and applied.
+    """
+
+    if not event_ids:
+        return {}
+    with gate.database.session() as session:
+        return {
+            row.event_id: row.received_at.isoformat()
+            for row in session.scalars(
+                select(BillingWebhookEventTable).where(
+                    BillingWebhookEventTable.event_id.in_(list(event_ids))
+                )
+            ).all()
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,14 +669,31 @@ def _closed(ledger: RunLedger, totals: Mapping[str, int], owed: int) -> bool:
 __all__ = [
     "COMPUTE_METER",
     "ZERO_RATED_METERS",
+    "CreditTransaction",
+    "Customer",
+    "Event",
+    "EventList",
+    "Grant",
+    "Invoice",
     "MeteredUsage",
     "OutboxRow",
     "PreviewInvoice",
     "PreviewLine",
     "RunLedger",
+    "Subscription",
+    "SubscriptionItem",
+    "claims",
+    "credits_applied",
+    "customer",
+    "customer_grants",
+    "customer_invoices",
     "drain_metered_usage",
+    "event_for_object",
+    "invoice",
     "ledger_cost_nanos",
+    "moment",
     "outstanding",
     "preview_invoice",
     "read_run_ledger",
+    "subscription",
 ]
