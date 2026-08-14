@@ -50,6 +50,14 @@ admission decision, and the sweep.
   an upgrade landing in the renewal seam behave as a renewal, and a plan change
   arriving as a delivery behave as a plan change — the two are indistinguishable
   from the call site and obvious from the row.
+- When a bought allowance becomes spendable is decided the same way, from the
+  cycle that came before this one — which the same write reports, because these
+  rows are the only record of it. The account row holds the newest grant and
+  forgets the one before, and the outgoing grant a plan change expires says
+  nothing about what came earlier. An account's first cycle follows nothing, and
+  its allowance is spendable at once: held back for a predecessor that does not
+  exist, the plan somebody has just paid for includes nothing until three days
+  after they bought it.
 - Provisioning writes the plan the provider answered with rather than the plan it
   asked for, and every column of the account row is stated on every write. A
   parameter that can be left out is one that keeps a subscription which ended or

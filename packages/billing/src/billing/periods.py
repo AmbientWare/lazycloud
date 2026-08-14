@@ -45,27 +45,36 @@ def carry_plan_into_cycle(
     cycle unfunded until the next attempt or the next renewal, where the other
     order would leave the customer holding both and nothing to notice it.
 
+    When the allowance becomes spendable is decided from the cycle before it,
+    which the same write reports. A cycle that follows one keeps its allowance
+    out of reach until the invoice that cycle raises has been settled; an
+    account's first cycle follows nothing, so holding its allowance back would
+    only be a customer denied for three days what they were told they had. The
+    two are told apart by the rows rather than by which caller is asking, for the
+    reason the grant itself is: registration and a plan change and a renewal all
+    reach here, and only the period knows which cycle it is funding.
+
     Every caller holds the account row lock before reaching here, which is what
     makes the read-then-write inside safe against a delivery arriving mid-change.
     """
 
     included_nanos = published_plan(plan).included_nanos
-    outcome = BillingAllowanceRepository(session).set_subscription_period(
+    written = BillingAllowanceRepository(session).set_subscription_period(
         user_id=account_id,
         period_started_at=subscription.current_period_started_at,
         period_ended_at=subscription.current_period_ended_at,
         allowance_nanos=included_nanos,
     )
-    if outcome is SubscriptionPeriodOutcome.Unchanged:
+    if written.outcome is SubscriptionPeriodOutcome.Unchanged:
         return provider_credit_grant_id
-    if outcome is SubscriptionPeriodOutcome.ReTermed and provider_credit_grant_id:
+    if written.outcome is SubscriptionPeriodOutcome.ReTermed and provider_credit_grant_id:
         payments.expire_credit_grant(provider_credit_grant_id=provider_credit_grant_id)
     return payments.create_credit_grant(
         account_id=account_id,
         provider_customer_id=provider_customer_id,
         amount_nanos=included_nanos,
-        period_started_at=subscription.current_period_started_at,
         period_ended_at=subscription.current_period_ended_at,
+        previous_period_ended_at=written.previous_period_ended_at,
     ).provider_credit_grant_id
 
 

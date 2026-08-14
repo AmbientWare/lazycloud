@@ -119,10 +119,10 @@ class _RegistrationCountingProvider:
         account_id: str,
         provider_customer_id: str,
         amount_nanos: int,
-        period_started_at: datetime,
         period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
-        del provider_customer_id, amount_nanos, period_started_at
+        del provider_customer_id, amount_nanos, previous_period_ended_at
         self.grants.append(account_id)
         return ProviderCreditGrant(
             provider_credit_grant_id=f"credgr_{len(self.grants)}",

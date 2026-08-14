@@ -30,6 +30,25 @@ class SubscriptionPeriodOutcome(StringEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class WrittenSubscriptionPeriod:
+    """What writing a subscription's cycle did, and what cycle it followed.
+
+    Both answers decide what happens to the grant that funds the cycle, and both
+    are read at the moment the cycle is written, under the lock its caller holds.
+    """
+
+    outcome: SubscriptionPeriodOutcome
+    previous_period_ended_at: datetime | None
+    """When the cycle before this one ended, `None` where none precedes it.
+
+    An instant rather than a verdict: a cycle keeps claiming credit for a while
+    after it ends, and how long that is belongs to the provider whose invoice is
+    doing the claiming. An account's first cycle has nothing behind it, which is
+    what makes its allowance spendable the moment it is bought.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class SpentAllowancePeriod:
     """One stretch of time, the terms that hold over it, and what they have cost.
 
@@ -71,7 +90,7 @@ class BillingAllowanceRepository:
         period_started_at: datetime,
         period_ended_at: datetime,
         allowance_nanos: int,
-    ) -> SubscriptionPeriodOutcome:
+    ) -> WrittenSubscriptionPeriod:
         """Make this cycle's terms be these, reporting what that did to them.
 
         Bounds come from the provider's own cycle rather than a calendar month:
@@ -89,6 +108,13 @@ class BillingAllowanceRepository:
         bought — and opening a cycle is a different act from re-terming the one
         in progress, because only the second has an outgoing grant to void.
 
+        The cycle this one follows is reported beside the outcome, because the
+        allowance bought here must not be reachable by the invoice that cycle
+        raises. These rows are the only record of it: the account row holds the
+        newest grant and forgets the one before, and a cycle re-termed part-way
+        through has an outgoing grant of its own that says nothing about what
+        came earlier.
+
         A cycle opened for the first time starts with whatever the ledger already
         priced inside it. Cost is priced on its own schedule and the cycle is
         opened by a delivery, so usage between a cycle beginning at the provider
@@ -104,6 +130,9 @@ class BillingAllowanceRepository:
             raise InvalidInputError("an allowance period must end after it starts")
         if allowance_nanos < 0:
             raise InvalidInputError("an allowance is never negative")
+        previous_period_ended_at = self._preceding_period_ended_at(
+            user_id=user_id, period_started_at=period_started_at
+        )
         existing = self.session.execute(
             select(
                 BillingAllowancePeriodTable.id,
@@ -130,13 +159,19 @@ class BillingAllowanceRepository:
                 )
             )
             self.session.flush()
-            return SubscriptionPeriodOutcome.Opened
+            return WrittenSubscriptionPeriod(
+                outcome=SubscriptionPeriodOutcome.Opened,
+                previous_period_ended_at=previous_period_ended_at,
+            )
         period_id, existing_ended_at, existing_allowance_nanos = existing
         if (
             to_utc(existing_ended_at) == to_utc(period_ended_at)
             and existing_allowance_nanos == allowance_nanos
         ):
-            return SubscriptionPeriodOutcome.Unchanged
+            return WrittenSubscriptionPeriod(
+                outcome=SubscriptionPeriodOutcome.Unchanged,
+                previous_period_ended_at=previous_period_ended_at,
+            )
         self.session.execute(
             update(BillingAllowancePeriodTable)
             .where(BillingAllowancePeriodTable.id == period_id)
@@ -147,7 +182,10 @@ class BillingAllowanceRepository:
             )
         )
         self.session.flush()
-        return SubscriptionPeriodOutcome.ReTermed
+        return WrittenSubscriptionPeriod(
+            outcome=SubscriptionPeriodOutcome.ReTermed,
+            previous_period_ended_at=previous_period_ended_at,
+        )
 
     def increment(self, *, user_id: str, at: datetime, cost_nanos: int) -> None:
         """Add a cost to the period that covers `at`, if one does.
@@ -212,6 +250,27 @@ class BillingAllowanceRepository:
             spent_nanos=spent_nanos,
         )
 
+    def _preceding_period_ended_at(
+        self, *, user_id: str, period_started_at: datetime
+    ) -> datetime | None:
+        """When the latest cycle beginning before this one ended.
+
+        The latest rather than any, because it is the only one whose invoice can
+        still be settling, and cycles meet without overlapping so there is one
+        answer. `None` is an account's first cycle, which follows nothing.
+        """
+
+        ended_at = self.session.scalars(
+            select(BillingAllowancePeriodTable.period_ended_at)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at < period_started_at,
+            )
+            .order_by(BillingAllowancePeriodTable.period_started_at.desc())
+            .limit(1)
+        ).first()
+        return to_utc(ended_at) if ended_at is not None else None
+
     def _priced_within(self, *, user_id: str, started_at: datetime, ended_at: datetime) -> int:
         """What the ledger already holds for this payer inside a cycle's bounds.
 
@@ -244,4 +303,5 @@ __all__ = [
     "BillingAllowanceRepository",
     "SpentAllowancePeriod",
     "SubscriptionPeriodOutcome",
+    "WrittenSubscriptionPeriod",
 ]

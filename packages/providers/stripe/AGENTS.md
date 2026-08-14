@@ -79,15 +79,33 @@ against them, and the signature on what Stripe sends back.
   value here that changes exactly when a second subscription is wanted, which is
   the only kind a key may be derived from. Reading also outlives the day Stripe
   remembers a key, which the crash it protects against does not.
-- A credit grant's applicable window is its period shifted later by
-  `CREDIT_GRANT_SETTLEMENT_GRACE`, at both ends. Credit is applied when an
-  invoice is finalized rather than when it is raised, so a grant has to outlive
-  its own period to reach its invoice — and must not yet be effective when the
-  previous period's invoice finalizes, or an overrun there is paid out of this
-  period's allowance. Overrun is the design rather than an edge case, so that is
-  the ordinary path. Effective no earlier than now, because a grant cannot be
-  spendable before it is bought, which is what a plan change part-way through a
-  cycle needs.
+- A credit grant expires `CREDIT_GRANT_SETTLEMENT_GRACE` after the cycle it
+  funds. Credit is applied when an invoice is finalized rather than when it is
+  raised, so a grant has to outlive its own period to reach its invoice.
+- When a grant becomes spendable is a fact about the cycle *before* it and never
+  about the cycle it funds. One bought for a cycle that follows another is held
+  back until that cycle has had the same grace to settle, or an overrun there is
+  paid out of this cycle's allowance — overrun is the design rather than an edge
+  case, so that is the ordinary path. One that follows nothing says nothing about
+  its start, and Stripe stamps it on the clock the customer's own subscription
+  runs on. The caller names the cycle before, because holding an account's first
+  allowance back is a customer charged for the three days before they could spend
+  what they were told they had, and a plan change bought minutes after sign-up is
+  exactly that account.
+- No timestamp this host computed is ever sent as a start. Stripe refuses any
+  `effective_at` at or before their own now — measured, not read: two seconds
+  back is refused as flatly as an hour — so a deferred start is a value that
+  cannot be sent late, and a clamp to this host's clock would put a test-clock
+  customer's allowance a month into their own future. The host clock decides only
+  whether the cycle before can still be settling, which is a question about the
+  past.
+- Stripe will not expire a grant that has not become effective yet, and will not
+  void one that is already over. So expiring is tried first and voiding is what
+  answers the refusal: a grant that has funded an invoice is ended and keeps what
+  it paid for, and one that was never spendable is invalidated, which is the only
+  way to stop it. Ending an allowance is never allowed to fail — the caller has
+  already collected the customer's money for the plan whose allowance it is
+  replacing, so a refusal here is a charge with no plan recorded against it.
 - Stripe deduplicates a meter event on its `identifier` for 24 hours and refuses
   a timestamp older than 35 days. The first is what makes at-least-once delivery
   safe rather than a compromise, and it is the ceiling every retry schedule that
