@@ -9,7 +9,7 @@ whatever sits in front of the control plane — is verified, claimed and applied
 The delivery is caused rather than constructed. The run registers a customer
 through the card route, attaches Stripe's test card to it, and that attach is
 what makes Stripe send `payment_method.attached` to the endpoint. The durable
-effect is the one `_remember_card` exists for: the saved card becomes the
+effect is the one the card-saved handler exists for: the saved card becomes the
 customer's default, which is a fact readable at Stripe rather than an
 acknowledgement readable here.
 
@@ -19,6 +19,12 @@ the whole point: if a replayed event were applied a second time it would put the
 old card back, so the default staying on the second card is the claim refusing —
 observable in what a customer would be charged on next month, not merely in a
 row that says "seen".
+
+Registering the customer also puts the account on the free plan, so this run's
+customer holds a subscription, a grant and the invoices that come with them even
+though none of that is its subject. All of it is named to cleanup, because a
+scenario that leaves a live subscription behind has left one whatever it was
+about.
 
 Three independent signals are read every cycle and printed whether or not they
 moved: Stripe's own `/v1/events`, including how many endpoints still owe a
@@ -42,29 +48,37 @@ import json
 import secrets
 import sys
 import time
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
-from database.repositories.billing import BillingAccountRepository
 from database.tables.billing_webhook_events import BillingWebhookEventTable
+from foundation.environment_file import load_environment_file
 from provider_stripe.api import StripeObject, read
 from pydantic import Field
 from shared.errors import InvalidInputError, UpstreamUnavailableError
-from sqlalchemy import select
+from shared.timestamps import utc_now
+from sqlalchemy import func, select
 from tests.e2e._support.process import LivePrerequisiteError, blocked, run_text_process
 from tests.e2e.local.billing.cleanup import RunResources, run_cleanup
 from tests.e2e.local.billing.gate import (
-    CARD_SESSION_ROUTE,
     REPLACEMENT_PAYMENT_METHOD,
     TEST_PAYMENT_METHOD,
     BillingGate,
     RunAccount,
+    attach_card,
     billing_gate,
     create_run_account,
+    register_customer,
+)
+from tests.e2e.local.billing.ledger import (
+    Event,
+    EventList,
+    claims,
+    customer,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -85,40 +99,6 @@ that it had not moved yet.
 LOG_READ_TIMEOUT_SECONDS = 60.0
 
 
-class _EventObject(StripeObject):
-    id: str = ""
-    customer: str | None = None
-
-
-class _EventData(StripeObject):
-    object: _EventObject = Field(default_factory=_EventObject)
-
-
-class _Event(StripeObject):
-    id: str = ""
-    type: str = ""
-    created: int = 0
-    pending_webhooks: int = 0
-    data: _EventData = Field(default_factory=_EventData)
-
-
-class _EventList(StripeObject):
-    data: list[_Event] = Field(default_factory=list)
-
-
-class _InvoiceSettings(StripeObject):
-    default_payment_method: str | None = None
-
-
-class _Customer(StripeObject):
-    id: str = ""
-    invoice_settings: _InvoiceSettings = Field(default_factory=_InvoiceSettings)
-
-
-class _PaymentMethod(StripeObject):
-    id: str = ""
-
-
 class _WebhookEndpoint(StripeObject):
     id: str = ""
     url: str = ""
@@ -130,22 +110,12 @@ class _WebhookEndpointList(StripeObject):
     data: list[_WebhookEndpoint] = Field(default_factory=list)
 
 
-@dataclass(frozen=True, slots=True)
-class _Claim:
-    """The durable record that one delivery has already been acted on."""
-
-    event_id: str
-    event_type: str
-    received_at: str
-
-    def payload(self) -> dict[str, str]:
-        return {"event_id": self.event_id, "type": self.event_type, "received_at": self.received_at}
-
-
 @dataclass(slots=True)
 class _Run:
     account: RunAccount
     provider_customer_id: str = ""
+    provider_subscription_id: str = ""
+    provider_credit_grant_id: str = ""
     endpoint_id: str = ""
     first_card: str = ""
     second_card: str = ""
@@ -158,6 +128,8 @@ class _Run:
             user_id=self.account.user_id,
             workspace_id=self.account.workspace_id,
             provider_customer_id=self.provider_customer_id,
+            provider_subscription_id=self.provider_subscription_id,
+            provider_credit_grant_id=self.provider_credit_grant_id,
         )
 
     def identifiers(self) -> dict[str, str]:
@@ -166,6 +138,8 @@ class _Run:
             "workspace_name": self.account.workspace_name,
             "user_id": self.account.user_id,
             "customer_id": self.provider_customer_id,
+            "subscription_id": self.provider_subscription_id,
+            "credit_grant_id": self.provider_credit_grant_id,
             "webhook_endpoint_id": self.endpoint_id,
             "first_card_event": self.first_event,
             "second_card_event": self.second_event,
@@ -173,6 +147,9 @@ class _Run:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # This process is the entrypoint that owns itself, which is where a
+    # developer `.env` is applied; nothing already exported is overridden.
+    load_environment_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--confirm-account", default="")
@@ -246,15 +223,10 @@ def _scenario(gate: BillingGate, endpoint_id: str) -> int:
 def _register_customer(gate: BillingGate, run: _Run) -> None:
     """Register the customer the way the product does, from the card route."""
 
-    run.account.channel(gate).post(
-        CARD_SESSION_ROUTE,
-        {"return_url": gate.public_url, "cancel_url": gate.public_url},
-    )
-    with gate.database.session() as session:
-        account = BillingAccountRepository(session).get_by_user(run.account.user_id)
-    if account is None or not account.provider_customer_id:
-        raise RuntimeError("the card route registered no customer for the run's account")
+    account = register_customer(gate, run.account)
     run.provider_customer_id = account.provider_customer_id
+    run.provider_subscription_id = account.provider_subscription_id
+    run.provider_credit_grant_id = account.provider_credit_grant_id
 
 
 def _save_card(gate: BillingGate, run: _Run, token: str, *, first: bool) -> dict[str, Any]:
@@ -266,17 +238,11 @@ def _save_card(gate: BillingGate, run: _Run, token: str, *, first: bool) -> dict
     default. Nothing here sets a default.
     """
 
-    method = read(
-        _PaymentMethod,
-        gate.client,
-        "POST",
-        f"/payment_methods/{token}/attach",
-        data=[("customer", run.provider_customer_id)],
-    )
+    method_id = attach_card(gate, run.provider_customer_id, token=token)
     if first:
-        run.first_card = method.id
+        run.first_card = method_id
     else:
-        run.second_card = method.id
+        run.second_card = method_id
     event = _poll(
         gate,
         run,
@@ -284,22 +250,22 @@ def _save_card(gate: BillingGate, run: _Run, token: str, *, first: bool) -> dict
         done=lambda state: (
             state.event is not None
             and state.event.pending_webhooks == 0
-            and state.claims_for(state.event.id)
-            and state.default_payment_method == method.id
+            and state.event.id in state.claims
+            and state.default_payment_method == method_id
         ),
-        find_event=lambda: _event_for_payment_method(gate, method.id, run.provider_customer_id),
+        find_event=lambda: _event_for_payment_method(gate, method_id, run.provider_customer_id),
     )
     if first:
         run.first_event = event.id
     else:
         run.second_event = event.id
     return {
-        "payment_method": method.id,
+        "payment_method": method_id,
         "event": event.id,
         "event_type": event.type,
         "pending_webhooks": event.pending_webhooks,
-        "default_payment_method_at_stripe": method.id,
-        "claim": [claim.payload() for claim in _claims(gate, event.id)],
+        "default_payment_method_at_stripe": method_id,
+        "claim": dict(claims(gate, [event.id])),
     }
 
 
@@ -309,16 +275,25 @@ def _replay_first_delivery(gate: BillingGate, run: _Run) -> dict[str, Any]:
     Replayed from Stripe rather than posted here: a body this run signed would
     prove only that this run can sign, where a replay exercises the same
     signature, the same public route and the same handler that the original did.
+
+    Arrival is established as a request that produced no claim, rather than as a
+    request at all. This run's own account holds a subscription, so Stripe has
+    other deliveries in flight about it — but every one of those writes a claim
+    row when it lands, so each adds one to both counts and leaves the difference
+    alone. Only a delivery the platform refused to act on twice can raise it.
     """
 
-    before_claims = _claims(gate, run.first_event)
+    before_claims = claims(gate, [run.first_event])
     if len(before_claims) != 1:
         raise RuntimeError(
             f"{run.first_event} is claimed {len(before_claims)} times before any replay"
         )
-    before_deliveries = _delivered_requests(run)
+    # Both counts restart at the replay, so neither carries the provisioning
+    # deliveries this run caused before it.
+    replayed_at = utc_now()
+    run.log_since = _log_timestamp()
     replayed = read(
-        _Event,
+        Event,
         gate.client,
         "POST",
         f"/events/{run.first_event}/retry",
@@ -328,29 +303,31 @@ def _replay_first_delivery(gate: BillingGate, run: _Run) -> dict[str, Any]:
     deadline = time.monotonic() + DELIVERY_DEADLINE_SECONDS
     while True:
         state = _read_state(gate, run, event=_event(gate, run.first_event))
-        arrived = state.deliveries > before_deliveries
+        unclaimed = state.deliveries - _claims_recorded_since(gate, replayed_at)
         cycle: dict[str, Any] = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
             "replayed_event": run.first_event,
             "pending_webhooks": state.event.pending_webhooks if state.event else None,
-            "requests_reaching_the_control_plane": state.deliveries,
-            "requests_before_replay": before_deliveries,
-            "claims_for_replayed_event": [claim.payload() for claim in state.claims],
+            "requests_reaching_the_control_plane_since_the_replay": state.deliveries,
+            "claims_recorded_since_the_replay": _claims_recorded_since(gate, replayed_at),
+            "requests_that_claimed_nothing": unclaimed,
+            "claims_for_replayed_event": dict(state.claims),
             "default_payment_method_at_stripe": state.default_payment_method,
             "held_cycles": held,
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
         _assert_untouched(run, state, before_claims)
-        if arrived and state.event is not None and state.event.pending_webhooks == 0:
+        if unclaimed >= 1 and state.event is not None and state.event.pending_webhooks == 0:
             held += 1
             if held >= REPLAY_OBSERVATION_CYCLES:
                 return {
                     "replayed_event": run.first_event,
                     "stripe_accepted_the_replay": replayed.id == run.first_event,
-                    "requests_before_replay": before_deliveries,
-                    "requests_after_replay": state.deliveries,
+                    "requests_since_the_replay": state.deliveries,
+                    "claims_recorded_since_the_replay": _claims_recorded_since(gate, replayed_at),
+                    "requests_that_claimed_nothing": unclaimed,
                     "pending_webhooks_after_delivery": state.event.pending_webhooks,
-                    "claims_for_replayed_event": [claim.payload() for claim in state.claims],
+                    "claims_for_replayed_event": dict(state.claims),
                     "default_payment_method_at_stripe": state.default_payment_method,
                     "second_card": run.second_card,
                     "first_card": run.first_card,
@@ -364,7 +341,7 @@ def _replay_first_delivery(gate: BillingGate, run: _Run) -> dict[str, Any]:
         time.sleep(DELIVERY_POLL_SECONDS)
 
 
-def _assert_untouched(run: _Run, state: _State, before: Sequence[_Claim]) -> None:
+def _assert_untouched(run: _Run, state: _State, before: Mapping[str, str]) -> None:
     """Fail the instant a replay changes anything, rather than at the end.
 
     Checked every cycle because the failure this guards against is transient in
@@ -373,9 +350,10 @@ def _assert_untouched(run: _Run, state: _State, before: Sequence[_Claim]) -> Non
     that a pass.
     """
 
-    if state.claims != tuple(before):
+    if dict(state.claims) != dict(before):
         raise RuntimeError(
-            f"the replay of {run.first_event} changed the claim: {before} became {state.claims}"
+            f"the replay of {run.first_event} changed the claim: {dict(before)} became "
+            f"{dict(state.claims)}"
         )
     if state.default_payment_method != run.second_card:
         raise RuntimeError(
@@ -389,13 +367,10 @@ def _assert_untouched(run: _Run, state: _State, before: Sequence[_Claim]) -> Non
 class _State:
     """Every signal, read in one cycle."""
 
-    event: _Event | None = None
-    claims: tuple[_Claim, ...] = ()
+    event: Event | None = None
+    claims: Mapping[str, str] = field(default_factory=lambda: {})
     default_payment_method: str = ""
     deliveries: int = 0
-
-    def claims_for(self, event_id: str) -> bool:
-        return any(claim.event_id == event_id for claim in self.claims)
 
 
 def _poll(
@@ -404,8 +379,8 @@ def _poll(
     *,
     label: str,
     done: Callable[[_State], bool],
-    find_event: Callable[[], _Event | None],
-) -> _Event:
+    find_event: Callable[[], Event | None],
+) -> Event:
     """Read every signal each cycle, print them, and stop when they all agree."""
 
     deadline = time.monotonic() + DELIVERY_DEADLINE_SECONDS
@@ -417,7 +392,7 @@ def _poll(
             "event": state.event.id if state.event else "",
             "pending_webhooks": state.event.pending_webhooks if state.event else None,
             "requests_reaching_the_control_plane": state.deliveries,
-            "claims": [claim.payload() for claim in state.claims],
+            "claims": dict(state.claims),
             "default_payment_method_at_stripe": state.default_payment_method,
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
@@ -431,51 +406,57 @@ def _poll(
         time.sleep(DELIVERY_POLL_SECONDS)
 
 
-def _read_state(gate: BillingGate, run: _Run, *, event: _Event | None) -> _State:
-    customer = read(_Customer, gate.client, "GET", f"/customers/{run.provider_customer_id}")
+def _read_state(gate: BillingGate, run: _Run, *, event: Event | None) -> _State:
     return _State(
         event=event,
-        claims=_claims(gate, event.id) if event is not None else (),
-        default_payment_method=customer.invoice_settings.default_payment_method or "",
+        claims=claims(gate, [event.id]) if event is not None else {},
+        default_payment_method=customer(gate, run.provider_customer_id).default_payment_method,
         deliveries=_delivered_requests(run),
     )
 
 
-def _event(gate: BillingGate, event_id: str) -> _Event:
-    return read(_Event, gate.client, "GET", f"/events/{event_id}")
+def _event(gate: BillingGate, event_id: str) -> Event:
+    return read(Event, gate.client, "GET", f"/events/{event_id}")
 
 
 def _event_for_payment_method(
-    gate: BillingGate, payment_method_id: str, customer_id: str
-) -> _Event | None:
+    gate: BillingGate, payment_method_id: str, provider_customer_id: str
+) -> Event | None:
     """Stripe's own record of the delivery this run caused, matched on its object."""
 
     listed = read(
-        _EventList,
+        EventList,
         gate.client,
         "GET",
         "/events",
         params=[("type", CARD_SAVED_EVENT), ("limit", "100")],
     )
     for event in listed.data:
-        if event.data.object.id == payment_method_id and event.data.object.customer == customer_id:
+        if (
+            event.data.object.id == payment_method_id
+            and event.data.object.customer == provider_customer_id
+        ):
             return event
     return None
 
 
-def _claims(gate: BillingGate, event_id: str) -> tuple[_Claim, ...]:
+def _claims_recorded_since(gate: BillingGate, moment: datetime) -> int:
+    """How many deliveries this platform durably acted on since an instant.
+
+    Counted across every account rather than this run's, because it is subtracted
+    from a request count that is also every account's: the two have to be asked
+    the same question for their difference to mean anything.
+    """
+
     with gate.database.session() as session:
-        rows = session.scalars(
-            select(BillingWebhookEventTable).where(BillingWebhookEventTable.event_id == event_id)
-        ).all()
-    return tuple(
-        _Claim(
-            event_id=row.event_id,
-            event_type=row.event_type,
-            received_at=row.received_at.isoformat(),
+        return int(
+            session.scalar(
+                select(func.count(BillingWebhookEventTable.event_id)).where(
+                    BillingWebhookEventTable.received_at >= moment
+                )
+            )
+            or 0
         )
-        for row in rows
-    )
 
 
 def _delivered_requests(run: _Run) -> int:

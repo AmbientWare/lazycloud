@@ -1,18 +1,18 @@
 """Prove one container's cost reaches a real Stripe invoice as the same integer.
 
-It puts one account on the plan through the public route, runs one real GPU-less
-container in a workspace made for the run, and then follows that container's cost
-the whole way: the placement the control plane recorded, the ledger segments it
-priced, the outbox rows the pricer queued, the meter events the scheduler
-delivered, and finally the draft invoice Stripe builds from them. The last step
-is the one that matters — Stripe's metered total for the draft invoice against
-the ledger's summed `cost_nanos` for the same usage records, compared as exact
-integers. Anything short of equality means what was sent is not what was billed.
+It puts one account on the Team plan through the public route, runs one real
+GPU-less container in a workspace made for the run, and then follows that
+container's cost the whole way: the placement the control plane recorded, the
+ledger segments it priced, the outbox rows the pricer queued, the meter events
+the scheduler delivered, and finally the draft invoice Stripe builds from them.
+The last step is the one that matters — Stripe's metered total for the draft
+invoice against the ledger's summed `cost_nanos` for the same usage records,
+compared as exact integers. Anything short of equality means what was sent is not
+what was billed.
 
 What this stops at is the draft. That the same figures survive finalization and
-collection is
-`tests.e2e.local.billing.metered_invoice_settled`, which closes a period and
-reads the settled invoice.
+collection is `tests.e2e.local.billing.metered_invoice_settled`, which closes a
+period and reads the settled invoice.
 
 Prerequisites are checked and named by `tests.e2e.local.billing.gate` before
 anything is created.
@@ -47,61 +47,38 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from database.repositories.billing import BillingAccountRepository
+from foundation.environment_file import load_environment_file
 from lazycloud.config import reset_settings_cache
 from lazycloud.control import control_workspace_scope
-from provider_stripe.api import StripeObject, read
-from provider_stripe.catalog import SUBSCRIPTION_PRICE_LOOKUP_KEYS
-from pydantic import Field
-from shared.billing_accounts import BillingAccount
+from provider_stripe.catalog import subscription_price_lookup_keys
+from shared.billing_plans import BillingPlanId
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.http.billing import BillingSummaryResponse
 from tests.e2e._support.process import LivePrerequisiteError, blocked
 from tests.e2e.local.billing.cleanup import RunResources, run_cleanup
 from tests.e2e.local.billing.gate import (
-    CARD_SESSION_ROUTE,
     SUBSCRIBE_ROUTE,
-    TEST_PAYMENT_METHOD,
     BillingGate,
     RunAccount,
+    attach_default_card,
+    billing_account,
     billing_gate,
     create_run_account,
+    plan_allowance,
+    register_customer,
 )
 from tests.e2e.local.billing.ledger import (
     COMPUTE_METER,
     ZERO_RATED_METERS,
     MeteredUsage,
     drain_metered_usage,
+    subscription,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parent
 
 CLIENT_TIMEOUT_SECONDS = 900.0
 TASK_TIMEOUT_SECONDS = 300
-
-
-class _Price(StripeObject):
-    id: str = ""
-    lookup_key: str | None = None
-
-
-class _SubscriptionItem(StripeObject):
-    id: str = ""
-    price: _Price = Field(default_factory=_Price)
-
-
-class _SubscriptionItems(StripeObject):
-    data: list[_SubscriptionItem] = Field(default_factory=list)
-
-
-class _Subscription(StripeObject):
-    id: str = ""
-    status: str = ""
-    items: _SubscriptionItems = Field(default_factory=_SubscriptionItems)
-
-
-class _PaymentMethod(StripeObject):
-    id: str = ""
 
 
 @dataclass(slots=True)
@@ -136,6 +113,9 @@ class _Run:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # This process is the entrypoint that owns itself, which is where a
+    # developer `.env` is applied; nothing already exported is overridden.
+    load_environment_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--confirm-account", default="")
@@ -166,105 +146,80 @@ def _scenario(gate: BillingGate) -> int:
         primary = exc
     cleanup = _cleanup(gate, run)
     gate.close()
+    report: dict[str, Any] = {
+        "accepted": primary is None,
+        "account": gate.account_id,
+        "run": run.identifiers(),
+        "evidence": evidence,
+        "cleanup": cleanup,
+    }
     if primary is not None:
-        print(
-            json.dumps(
-                {
-                    "accepted": False,
-                    "run": run.identifiers(),
-                    "evidence": evidence,
-                    "cleanup": cleanup,
-                },
-                indent=1,
-                sort_keys=True,
-            ),
-            file=sys.stderr,
-        )
+        print(json.dumps(report, indent=1, sort_keys=True), file=sys.stderr)
         raise primary
-    print(
-        json.dumps(
-            {
-                "accepted": True,
-                "account": gate.account_id,
-                "run": run.identifiers(),
-                "evidence": evidence,
-                "cleanup": cleanup,
-            },
-            indent=1,
-            sort_keys=True,
-        )
-    )
+    print(json.dumps(report, indent=1, sort_keys=True))
     return 0 if not cleanup["remaining"] else 1
 
 
 def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
-    """Put the run's account on the plan, and check both sides agree it is on it.
+    """Move the run's account up a plan, and check what that did and did not change.
 
-    The customer is registered by the card route, which is where a customer
-    record comes from in production. The card itself is attached at Stripe
-    because their hosted page is the only thing that can collect one, and making
-    it the default is the adapter call the card-saved webhook makes — so what
-    subscribes is a customer in exactly the state the product leaves one in.
+    The account arrives here already able to be billed: opening the card page
+    registered the customer, put them on the free plan and bought the grant that
+    funds it. So subscribing is a price swapped on the subscription that already
+    exists, and the two halves of that are what this checks — the subscription
+    identifier survives, because a second subscription would carry the same
+    metered prices and split one customer's usage across two invoices; and the
+    grant does not, because the free plan's allowance is expired and replaced by
+    the one the larger plan includes.
     """
 
     channel = run.account.channel(gate)
-    channel.post(
-        CARD_SESSION_ROUTE,
-        {"return_url": gate.public_url, "cancel_url": gate.public_url},
-    )
-    registered = _billing_account(gate, run)
-    if registered is None or not registered.provider_customer_id:
-        raise RuntimeError("the card route registered no customer for the run's account")
-    run.provider_customer_id = registered.provider_customer_id
-    method = read(
-        _PaymentMethod,
-        gate.client,
-        "POST",
-        f"/payment_methods/{TEST_PAYMENT_METHOD}/attach",
-        data=[("customer", run.provider_customer_id)],
-    )
-    gate.provider.set_default_payment_method(
-        provider_customer_id=run.provider_customer_id,
-        provider_payment_method_id=method.id,
-    )
+    free = register_customer(gate, run.account)
+    run.provider_customer_id = free.provider_customer_id
+    run.provider_subscription_id = free.provider_subscription_id
+    run.provider_credit_grant_id = free.provider_credit_grant_id
+    card = attach_default_card(gate, free.provider_customer_id)
 
     summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
-    if not summary.subscribed:
-        raise RuntimeError("the subscription route answered that the account is not subscribed")
-    account = _billing_account(gate, run)
-    if account is None or not account.provider_subscription_id:
-        raise RuntimeError("subscribing wrote no provider_subscription_id to the account row")
-    if not account.provider_credit_grant_id:
-        raise RuntimeError("subscribing wrote no provider_credit_grant_id to the account row")
-    run.provider_subscription_id = account.provider_subscription_id
-    run.provider_credit_grant_id = account.provider_credit_grant_id
-
-    subscription = read(
-        _Subscription,
-        gate.client,
-        "GET",
-        f"/subscriptions/{run.provider_subscription_id}",
-    )
-    if subscription.status != "active":
-        raise RuntimeError(f"Stripe reports the subscription {subscription.status}, not active")
-    carried = sorted(item.price.lookup_key or item.price.id for item in subscription.items.data)
-    if carried != sorted(SUBSCRIPTION_PRICE_LOOKUP_KEYS):
+    if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
         raise RuntimeError(
-            f"the subscription carries {carried}, not the four published prices "
-            f"{sorted(SUBSCRIPTION_PRICE_LOOKUP_KEYS)}"
+            f"the subscription route answered with plan {summary.plan.id if summary.plan else None}"
         )
+    allowance = plan_allowance(summary)
+    team = billing_account(gate, run.account)
+    if team is None or team.plan is not BillingPlanId.Team:
+        raise RuntimeError("subscribing did not record the Team plan on the account row")
+    if team.provider_subscription_id != free.provider_subscription_id:
+        raise RuntimeError(
+            f"subscribing moved the account from subscription {free.provider_subscription_id} to "
+            f"{team.provider_subscription_id}; a plan change swaps a price in place"
+        )
+    if team.provider_credit_grant_id == free.provider_credit_grant_id:
+        raise RuntimeError(
+            "subscribing left the free plan's grant in place; the account holds the larger "
+            "plan on the smaller allowance"
+        )
+    run.provider_credit_grant_id = team.provider_credit_grant_id
+
+    live = subscription(gate, run.provider_subscription_id)
+    if live.status != "active":
+        raise RuntimeError(f"Stripe reports the subscription {live.status}, not active")
+    expected = sorted(subscription_price_lookup_keys(BillingPlanId.Team))
+    if live.price_names != expected:
+        raise RuntimeError(f"the subscription carries {live.price_names}, not {expected}")
     return {
-        "status": subscription.status,
-        "price_lookup_keys": carried,
-        "allowance_nanos": summary.allowance.allowance_nanos,
-        "period_started_at": summary.allowance.period_started_at.isoformat(),
-        "period_ended_at": summary.allowance.period_ended_at.isoformat(),
+        "status": live.status,
+        "price_lookup_keys": live.price_names,
+        "card": card,
+        "plan_before": free.plan.value if free.plan else None,
+        "plan_after": team.plan.value,
+        "subscription_survived_the_plan_change": True,
+        "credit_grant_before": free.provider_credit_grant_id,
+        "credit_grant_after": team.provider_credit_grant_id,
+        "allowance_nanos": allowance.allowance_nanos,
+        "period_started_at": allowance.period_started_at.isoformat(),
+        "period_ended_at": allowance.period_ended_at.isoformat(),
     }
-
-
-def _billing_account(gate: BillingGate, run: _Run) -> BillingAccount | None:
-    with gate.database.session() as session:
-        return BillingAccountRepository(session).get_by_user(run.account.user_id)
 
 
 def _run_metered_container(gate: BillingGate, run: _Run) -> dict[str, Any]:

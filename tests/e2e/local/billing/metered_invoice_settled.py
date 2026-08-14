@@ -6,8 +6,8 @@ happens between them — the period closes, the lines are frozen, the allowance 
 applied, and Stripe collects or does not — and none of it had ever been observed
 against this platform's own numbers.
 
-So this run puts an account on the plan through the public route, runs one real
-container priced to more than a cent, waits for the whole chain to close, and
+So this run puts an account on the Team plan through the public route, runs one
+real container priced to more than a cent, waits for the whole chain to close, and
 then closes the billing period. Stripe raises the invoice, finalizes it, applies
 the allowance and settles it. What is then compared is the metered line's own
 quantity against the ledger's summed `cost_nanos` for the same usage records, as
@@ -16,15 +16,15 @@ exact integers, on an invoice nobody can edit any more.
 Two things are worth stating plainly about what this does and does not prove.
 
 The period is closed by resetting the subscription's billing cycle anchor rather
-than by advancing a Stripe test clock. The sandbox credential this repository
-holds carries `billing_clock_read` and not `billing_clock_write`, so no test
-clock can be created with it; an anchor reset is the same event asked for
-directly — Stripe ends the period, raises the invoice for the metered usage
-inside it, finalizes it and settles it, all on their side. What it does not
-reproduce is a month passing: this invoice's `billing_reason` is
-`subscription_update` rather than `subscription_cycle`, and it carries no plan
-fee, because `proration_behavior=none` keeps the closure from re-charging or
-refunding the subscription itself.
+than by advancing a Stripe test clock, because a clock has to be bound to a
+customer when that customer is created and this run lets the product register its
+own. An anchor reset is the same event asked for directly — Stripe ends the
+period, raises the invoice for the metered usage inside it, finalizes it and
+settles it, all on their side. What it does not reproduce is a month passing:
+this invoice's `billing_reason` is `subscription_update` rather than
+`subscription_cycle`, and it carries no plan fee, because `proration_behavior=none`
+keeps the closure from re-charging or refunding the subscription itself. A month
+actually passing is `tests.e2e.local.billing.subscription_renewal_over_time`.
 
 The metered total is settled by the allowance rather than by the card, and that
 is the correct outcome rather than a shortfall: the plan includes a hundred
@@ -32,8 +32,8 @@ dollars of usage, and no container a single worker can run gets near it. What th
 run proves about collection is therefore exact — the allowance covered precisely
 the cents the usage came to, and the invoice closed at nothing owed — and what it
 leaves unproven is a metered charge that exceeds the allowance and reaches the
-card. The money that does move here is the plan itself, on the invoice
-subscribing raised.
+card. The money that does move here is the plan change itself, on the proration
+invoice Stripe raises and charges the moment the price is swapped.
 
 ```sh
 uv run python -m tests.e2e.local.billing.metered_invoice_settled --live \
@@ -59,33 +59,37 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from database.repositories.billing import BillingAccountRepository
+from foundation.environment_file import load_environment_file
 from lazycloud.config import reset_settings_cache
 from lazycloud.control import control_workspace_scope
-from provider_stripe.api import StripeObject, read
-from provider_stripe.catalog import SUBSCRIPTION_PRICE_LOOKUP_KEYS
-from pydantic import Field
-from shared.billing_accounts import BillingAccount
+from provider_stripe.api import read
+from provider_stripe.catalog import subscription_price_lookup_keys
+from shared.billing_plans import BillingPlanId
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.http.billing import BillingSummaryResponse
 from tests.e2e._support.process import LivePrerequisiteError, blocked
 from tests.e2e.local.billing.cleanup import RunResources, run_cleanup
 from tests.e2e.local.billing.gate import (
-    CARD_SESSION_ROUTE,
     SUBSCRIBE_ROUTE,
-    TEST_PAYMENT_METHOD,
     BillingGate,
     RunAccount,
+    attach_default_card,
+    billing_account,
     billing_gate,
     create_run_account,
+    plan_allowance,
+    register_customer,
 )
 from tests.e2e.local.billing.ledger import (
     COMPUTE_METER,
-    PreviewLine,
-    PreviewLines,
+    Invoice,
+    Subscription,
+    credits_applied,
     drain_metered_usage,
+    invoice,
     ledger_cost_nanos,
     read_run_ledger,
+    subscription,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parent
@@ -97,120 +101,8 @@ SETTLEMENT_DEADLINE_SECONDS = 300.0
 SETTLEMENT_POLL_SECONDS = 5.0
 SETTLED_INVOICE_STATUSES = frozenset({"paid", "void", "uncollectible"})
 
+COMPUTE_PRICE_LOOKUP_KEY = "lazycloud_meter_compute_usd"
 SUMMARY_ROUTE = "/api/v1/billing/summary"
-
-
-class _Price(StripeObject):
-    id: str = ""
-    lookup_key: str | None = None
-
-
-class _Item(StripeObject):
-    id: str = ""
-    price: _Price = Field(default_factory=_Price)
-    current_period_start: int = 0
-    current_period_end: int = 0
-
-
-class _Items(StripeObject):
-    data: list[_Item] = Field(default_factory=list)
-
-
-class _Subscription(StripeObject):
-    id: str = ""
-    status: str = ""
-    latest_invoice: str = ""
-    items: _Items = Field(default_factory=_Items)
-
-
-class _PaymentMethod(StripeObject):
-    id: str = ""
-
-
-class _StatusTransitions(StripeObject):
-    finalized_at: int | None = None
-    paid_at: int | None = None
-
-
-class _PretaxCredit(StripeObject):
-    amount: int = 0
-    type: str = ""
-
-
-class _Invoice(StripeObject):
-    id: str = ""
-    status: str = ""
-    billing_reason: str = ""
-    attempted: bool = False
-    subtotal: int = 0
-    total: int = 0
-    amount_due: int = 0
-    amount_paid: int = 0
-    status_transitions: _StatusTransitions = Field(default_factory=_StatusTransitions)
-    total_pretax_credit_amounts: list[_PretaxCredit] = Field(default_factory=list)
-    lines: PreviewLines = Field(default_factory=PreviewLines)
-
-    @property
-    def credit_applied(self) -> int:
-        return sum(entry.amount for entry in self.total_pretax_credit_amounts)
-
-    def metered_lines(self) -> tuple[PreviewLine, ...]:
-        return tuple(line for line in self.lines.data if line.metered)
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "status": self.status,
-            "billing_reason": self.billing_reason,
-            "attempted": self.attempted,
-            "subtotal_cents": self.subtotal,
-            "credit_applied_cents": self.credit_applied,
-            "total_cents": self.total,
-            "amount_due_cents": self.amount_due,
-            "amount_paid_cents": self.amount_paid,
-            "finalized_at": self.status_transitions.finalized_at,
-            "paid_at": self.status_transitions.paid_at,
-            "lines": {
-                line.price_name: {"quantity": line.quantity_decimal, "amount_cents": line.amount}
-                for line in self.lines.data
-            },
-        }
-
-
-class _Monetary(StripeObject):
-    value: int = 0
-
-
-class _TransactionAmount(StripeObject):
-    monetary: _Monetary | None = None
-
-
-class _CreditsApplied(StripeObject):
-    invoice: str = ""
-
-
-class _Debit(StripeObject):
-    type: str = ""
-    amount: _TransactionAmount = Field(default_factory=_TransactionAmount)
-    credits_applied: _CreditsApplied | None = None
-
-
-class _CreditTransaction(StripeObject):
-    id: str = ""
-    type: str = ""
-    credit_grant: str = ""
-    debit: _Debit | None = None
-
-    def applied_to(self, invoice_id: str) -> int:
-        if self.debit is None or self.debit.credits_applied is None:
-            return 0
-        if self.debit.credits_applied.invoice != invoice_id:
-            return 0
-        return self.debit.amount.monetary.value if self.debit.amount.monetary else 0
-
-
-class _CreditTransactionList(StripeObject):
-    data: list[_CreditTransaction] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -243,6 +135,9 @@ class _Run:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # This process is the entrypoint that owns itself, which is where a
+    # developer `.env` is applied; nothing already exported is overridden.
+    load_environment_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--confirm-account", default="")
@@ -268,8 +163,8 @@ def _scenario(gate: BillingGate) -> int:
             provider_subscription_id=run.provider_subscription_id,
         )
         before = _summary(gate, run)
-        invoice = _close_the_period(gate, run)
-        evidence["settled_invoice"] = _compare(gate, run, invoice, drained.ledger_cost_nanos)
+        settled = _close_the_period(gate, run)
+        evidence["settled_invoice"] = _compare(gate, run, settled, drained.ledger_cost_nanos)
         evidence["allowance_carried"] = _allowance_carried(gate, run, before)
     except BaseException as exc:
         primary = exc
@@ -290,68 +185,52 @@ def _scenario(gate: BillingGate) -> int:
 
 
 def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
-    """Put the run's account on the plan, and record what the plan itself cost.
+    """Move the run's account up a plan, and read what the change itself cost.
 
-    The customer is registered by the card route, the card is attached at Stripe
-    because their hosted page is the only thing that can collect one, and the
-    subscription is bought by the platform's own route. The invoice that route
-    produces is read back for its `amount_paid`: it is the one place in this run
-    where money actually leaves a card, and the figure belongs in the evidence
-    beside the metered one that does not.
+    Opening the card page registered the customer and put them on the free plan,
+    so subscribing swaps the price on the subscription that already exists. Stripe
+    raises and charges the prorated difference at once, and that invoice is read
+    back for its `amount_paid`: it is the one place in this run where money
+    actually leaves a card, and the figure belongs in the evidence beside the
+    metered one that never does.
     """
 
     channel = run.account.channel(gate)
-    channel.post(
-        CARD_SESSION_ROUTE,
-        {"return_url": gate.public_url, "cancel_url": gate.public_url},
-    )
-    registered = _billing_account(gate, run)
-    if registered is None or not registered.provider_customer_id:
-        raise RuntimeError("the card route registered no customer for the run's account")
-    run.provider_customer_id = registered.provider_customer_id
-    method = read(
-        _PaymentMethod,
-        gate.client,
-        "POST",
-        f"/payment_methods/{TEST_PAYMENT_METHOD}/attach",
-        data=[("customer", run.provider_customer_id)],
-    )
-    gate.provider.set_default_payment_method(
-        provider_customer_id=run.provider_customer_id,
-        provider_payment_method_id=method.id,
-    )
-    summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
-    if not summary.subscribed:
-        raise RuntimeError("the subscription route answered that the account is not subscribed")
-    account = _billing_account(gate, run)
-    if account is None or not account.provider_subscription_id:
-        raise RuntimeError("subscribing wrote no provider_subscription_id to the account row")
-    run.provider_subscription_id = account.provider_subscription_id
-    run.provider_credit_grant_id = account.provider_credit_grant_id
+    free = register_customer(gate, run.account)
+    run.provider_customer_id = free.provider_customer_id
+    run.provider_subscription_id = free.provider_subscription_id
+    attach_default_card(gate, free.provider_customer_id)
 
-    subscription = _subscription(gate, run)
-    if subscription.status != "active":
-        raise RuntimeError(f"Stripe reports the subscription {subscription.status}, not active")
-    carried = sorted(item.price.lookup_key or item.price.id for item in subscription.items.data)
-    if carried != sorted(SUBSCRIPTION_PRICE_LOOKUP_KEYS):
-        raise RuntimeError(f"the subscription carries {carried}, not the four published prices")
-    first = _invoice(gate, subscription.latest_invoice)
-    if first.status != "paid" or first.amount_paid <= 0:
+    summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
+    if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
         raise RuntimeError(
-            f"the plan's own invoice is {first.status} with {first.amount_paid} paid; "
-            "the run has no working card"
+            f"the subscription route answered with plan {summary.plan.id if summary.plan else None}"
+        )
+    team = billing_account(gate, run.account)
+    if team is None or team.plan is not BillingPlanId.Team:
+        raise RuntimeError("subscribing did not record the Team plan on the account row")
+    run.provider_subscription_id = team.provider_subscription_id
+    run.provider_credit_grant_id = team.provider_credit_grant_id
+
+    live = subscription(gate, run.provider_subscription_id)
+    if live.status != "active":
+        raise RuntimeError(f"Stripe reports the subscription {live.status}, not active")
+    expected = sorted(subscription_price_lookup_keys(BillingPlanId.Team))
+    if live.price_names != expected:
+        raise RuntimeError(f"the subscription carries {live.price_names}, not {expected}")
+    proration = invoice(gate, live.latest_invoice)
+    if proration.status != "paid" or proration.amount_paid <= 0:
+        raise RuntimeError(
+            f"the plan change's proration invoice is {proration.status} with "
+            f"{proration.amount_paid} paid; the plan change was not collected"
         )
     return {
-        "status": subscription.status,
-        "price_lookup_keys": carried,
+        "status": live.status,
+        "price_lookup_keys": live.price_names,
         "credit_grant": run.provider_credit_grant_id,
-        "plan_invoice": first.summary(),
+        "allowance_nanos": plan_allowance(summary).allowance_nanos,
+        "proration_invoice": proration.summary(),
     }
-
-
-def _billing_account(gate: BillingGate, run: _Run) -> BillingAccount | None:
-    with gate.database.session() as session:
-        return BillingAccountRepository(session).get_by_user(run.account.user_id)
 
 
 def _run_billable_container(gate: BillingGate, run: _Run) -> dict[str, Any]:
@@ -389,7 +268,7 @@ def _run_billable_container(gate: BillingGate, run: _Run) -> dict[str, Any]:
     }
 
 
-def _close_the_period(gate: BillingGate, run: _Run) -> _Invoice:
+def _close_the_period(gate: BillingGate, run: _Run) -> Invoice:
     """End the billing period and let Stripe raise, finalize and settle the invoice.
 
     `proration_behavior=none` because the subject is the metered usage: with
@@ -400,7 +279,7 @@ def _close_the_period(gate: BillingGate, run: _Run) -> _Invoice:
     """
 
     closed = read(
-        _Subscription,
+        Subscription,
         gate.client,
         "POST",
         f"/subscriptions/{run.provider_subscription_id}",
@@ -411,36 +290,38 @@ def _close_the_period(gate: BillingGate, run: _Run) -> _Invoice:
     run.settled_invoice_id = closed.latest_invoice
     deadline = time.monotonic() + SETTLEMENT_DEADLINE_SECONDS
     while True:
-        invoice = _invoice(gate, run.settled_invoice_id)
-        credits = _credits_applied(gate, run, invoice.id)
+        current = invoice(gate, run.settled_invoice_id)
+        applied = credits_applied(
+            gate, provider_customer_id=run.provider_customer_id, invoice_id=current.id
+        )
         with gate.database.session() as session:
             ledger = read_run_ledger(session, run.account.workspace_id)
         cycle: dict[str, Any] = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "invoice": invoice.summary(),
-            "credit_transactions_against_this_invoice": credits,
+            "invoice": current.summary(),
+            "credit_transactions_against_this_invoice": applied,
             "ledger_segment_cost_nanos": ledger.segment_cost_nanos,
             "billing_meter_outbox_unsettled": [row.payload() for row in ledger.unsettled],
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
-        if invoice.status in SETTLED_INVOICE_STATUSES:
-            return invoice
+        if current.status in SETTLED_INVOICE_STATUSES:
+            return current
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"invoice {invoice.id} was still {invoice.status} after "
+                f"invoice {current.id} was still {current.status} after "
                 f"{SETTLEMENT_DEADLINE_SECONDS:.0f}s; last cycle: "
                 f"{json.dumps(cycle, sort_keys=True)}"
             )
         time.sleep(SETTLEMENT_POLL_SECONDS)
 
 
-def _compare(gate: BillingGate, run: _Run, invoice: _Invoice, drained_nanos: int) -> dict[str, Any]:
+def _compare(gate: BillingGate, run: _Run, settled: Invoice, drained_nanos: int) -> dict[str, Any]:
     """The comparison this scenario exists for, against an invoice nobody can edit."""
 
-    if invoice.status != "paid":
-        raise RuntimeError(f"invoice {invoice.id} settled as {invoice.status}, not paid")
-    if invoice.status_transitions.finalized_at is None:
-        raise RuntimeError(f"invoice {invoice.id} reads paid without ever being finalized")
+    if settled.status != "paid":
+        raise RuntimeError(f"invoice {settled.id} settled as {settled.status}, not paid")
+    if settled.status_transitions.finalized_at is None:
+        raise RuntimeError(f"invoice {settled.id} reads paid without ever being finalized")
     with gate.database.session() as session:
         ledger = read_run_ledger(session, run.account.workspace_id)
     owed = ledger_cost_nanos(gate, ledger, COMPUTE_METER)
@@ -449,23 +330,25 @@ def _compare(gate: BillingGate, run: _Run, invoice: _Invoice, drained_nanos: int
             f"the ledger held {drained_nanos} nanodollars when the period closed and {owed} "
             "when the invoice was read; usage arrived after the line was frozen"
         )
-    billed = _metered_quantity(invoice)
+    billed = settled.metered_nanos(COMPUTE_PRICE_LOOKUP_KEY)
     if billed != owed:
         raise RuntimeError(
             f"the settled invoice bills {billed} nanodollars on {COMPUTE_METER} and the ledger "
             f"holds {owed} for the same usage records"
         )
-    if invoice.subtotal <= 0:
+    if settled.subtotal <= 0:
         raise RuntimeError(
-            f"the settled invoice came to {invoice.subtotal} cents, which is too little usage "
+            f"the settled invoice came to {settled.subtotal} cents, which is too little usage "
             "for an allowance to visibly discount"
         )
-    credit = invoice.credit_applied
-    applied = _credits_applied(gate, run, invoice.id)
-    if credit != invoice.subtotal or invoice.total != 0 or invoice.amount_due != 0:
+    credit = settled.credit_applied
+    applied = credits_applied(
+        gate, provider_customer_id=run.provider_customer_id, invoice_id=settled.id
+    )
+    if credit != settled.subtotal or settled.total != 0 or settled.amount_due != 0:
         raise RuntimeError(
-            f"the allowance covered {credit} of {invoice.subtotal} cents and left "
-            f"{invoice.amount_due} owed"
+            f"the allowance covered {credit} of {settled.subtotal} cents and left "
+            f"{settled.amount_due} owed"
         )
     if sum(entry["amount_cents"] for entry in applied) != credit:
         raise RuntimeError(
@@ -473,56 +356,18 @@ def _compare(gate: BillingGate, run: _Run, invoice: _Invoice, drained_nanos: int
             f"records {applied}"
         )
     return {
-        "invoice": invoice.summary(),
+        "invoice": settled.summary(),
         "meter": COMPUTE_METER,
         "stripe_metered_nanos": billed,
         "ledger_cost_nanos": owed,
         "equal": True,
-        "subtotal_cents": invoice.subtotal,
+        "subtotal_cents": settled.subtotal,
         "allowance_applied_cents": credit,
-        "owed_after_allowance_cents": invoice.amount_due,
+        "owed_after_allowance_cents": settled.amount_due,
         "credit_transactions": applied,
         "ledger_segments": ledger.segment_count,
         "meter_events_sent": len(ledger.outbox),
     }
-
-
-def _metered_quantity(invoice: _Invoice) -> int:
-    """The compute meter's own quantity on the settled invoice, as an integer.
-
-    Read from the line rather than recomputed from the meter, because the line is
-    what the customer is charged from and the quantity on it is the number that
-    has to equal the ledger.
-    """
-
-    for line in invoice.metered_lines():
-        if line.price_name != "lazycloud_meter_compute_usd":
-            continue
-        if line.quantity_decimal is None:
-            raise RuntimeError(f"invoice {invoice.id} bills compute without a quantity")
-        return int(line.quantity_decimal)
-    raise RuntimeError(f"invoice {invoice.id} carries no compute line")
-
-
-def _credits_applied(gate: BillingGate, run: _Run, invoice_id: str) -> list[dict[str, Any]]:
-    """What the customer's own credit ledger says was spent on this invoice."""
-
-    listed = read(
-        _CreditTransactionList,
-        gate.client,
-        "GET",
-        "/billing/credit_balance_transactions",
-        params=[("customer", run.provider_customer_id), ("limit", "100")],
-    )
-    return [
-        {
-            "id": transaction.id,
-            "credit_grant": transaction.credit_grant,
-            "amount_cents": transaction.applied_to(invoice_id),
-        }
-        for transaction in listed.data
-        if transaction.applied_to(invoice_id)
-    ]
 
 
 def _allowance_carried(
@@ -535,32 +380,38 @@ def _allowance_carried(
     with the new cycle is a period this platform opens and an allowance it buys,
     both readable through the account's own summary — so this is the renewal path
     observed end to end, from a delivery nothing here asked for.
+
+    The summary reports no allowance at all between the cycle ending and the
+    renewal that opens the next one, which is precisely the seam this crosses, so
+    an absent one is a cycle to keep polling rather than a failure.
     """
 
+    opened_at = plan_allowance(before).period_started_at
     deadline = time.monotonic() + SETTLEMENT_DEADLINE_SECONDS
     while True:
         summary = _summary(gate, run)
-        account = _billing_account(gate, run)
+        allowance = summary.plan.allowance if summary.plan is not None else None
+        account = billing_account(gate, run.account)
         grant = account.provider_credit_grant_id if account is not None else ""
-        moved = summary.allowance.period_started_at > before.allowance.period_started_at
         cycle: dict[str, Any] = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "period_started_at_before": before.allowance.period_started_at.isoformat(),
-            "period_started_at_now": summary.allowance.period_started_at.isoformat(),
-            "allowance_nanos": summary.allowance.allowance_nanos,
-            "remaining_nanos": summary.allowance.remaining_nanos,
+            "period_started_at_before": opened_at.isoformat(),
+            "period_started_at_now": allowance.period_started_at.isoformat() if allowance else "",
+            "allowance_nanos": allowance.allowance_nanos if allowance else None,
+            "remaining_nanos": allowance.remaining_nanos if allowance else None,
             "credit_grant_before": run.provider_credit_grant_id,
             "credit_grant_now": grant,
             "status": summary.status.value,
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
+        moved = allowance is not None and allowance.period_started_at > opened_at
         if moved and grant and grant != run.provider_credit_grant_id:
             return {
-                "period_started_at_before": before.allowance.period_started_at.isoformat(),
-                "period_started_at_after": summary.allowance.period_started_at.isoformat(),
+                "period_started_at_before": opened_at.isoformat(),
+                "period_started_at_after": cycle["period_started_at_now"],
                 "credit_grant_before": run.provider_credit_grant_id,
                 "credit_grant_after": grant,
-                "allowance_nanos": summary.allowance.allowance_nanos,
+                "allowance_nanos": cycle["allowance_nanos"],
                 "status": summary.status.value,
             }
         if time.monotonic() >= deadline:
@@ -574,20 +425,6 @@ def _allowance_carried(
 
 def _summary(gate: BillingGate, run: _Run) -> BillingSummaryResponse:
     return BillingSummaryResponse.model_validate(run.account.channel(gate).get(SUMMARY_ROUTE))
-
-
-def _subscription(gate: BillingGate, run: _Run) -> _Subscription:
-    return read(_Subscription, gate.client, "GET", f"/subscriptions/{run.provider_subscription_id}")
-
-
-def _invoice(gate: BillingGate, invoice_id: str) -> _Invoice:
-    return read(
-        _Invoice,
-        gate.client,
-        "GET",
-        f"/invoices/{invoice_id}",
-        params=[("expand[]", "lines.data.pricing.price_details.price")],
-    )
 
 
 def _cleanup(gate: BillingGate, run: _Run) -> dict[str, Any]:
