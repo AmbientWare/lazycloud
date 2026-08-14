@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from time import monotonic, sleep
 
 from shared.realtime.contracts import ContainerMetricsPayload
 from shared.usage import UsageBillingOwner
@@ -15,7 +16,6 @@ from worker.events import (
     WorkerPoolMode,
     WorkerUsageEvidence,
     WorkerUsageMetricName,
-    WorkerUsageMetricPlan,
     plan_worker_usage_metrics,
 )
 from worker.monitoring import ContainerRuntimeMonitorSettings, WorkerContainerRuntimeMonitor
@@ -65,6 +65,13 @@ class ConstantDiskUsage:
 
 @dataclass(slots=True)
 class UsageRecorder:
+    refuse: bool = False
+    """Raise on every write, as a control plane that no longer holds the container does."""
+
+    refusals_left: int = 0
+    """Raise on this many writes and then accept, as a restarting one does."""
+
+    offered: list[tuple[int, int]] = field(default_factory=list)
     durations: list[int] = field(default_factory=list)
     windows: list[tuple[int, int]] = field(default_factory=list)
     metering_windows: list[tuple[datetime, datetime]] = field(default_factory=list)
@@ -81,6 +88,15 @@ class UsageRecorder:
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
     ) -> WorkerUsageEmissionResult:
+        self.offered.append(
+            (
+                window_start_ms,
+                window_start_ms + duration_ms if window_end_ms is None else window_end_ms,
+            )
+        )
+        if self.refuse or self.refusals_left > 0:
+            self.refusals_left -= 1
+            raise RuntimeError("worker repository refused the usage record")
         self.durations.append(duration_ms)
         end_ms = window_start_ms + duration_ms if window_end_ms is None else window_end_ms
         self.windows.append((window_start_ms, end_ms))
@@ -224,6 +240,73 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
     assert sink.payloads[-1].metrics.disk_used_bytes == 64 * 1024**2
 
 
+def test_a_refused_usage_write_is_retried_with_the_window_it_claimed() -> None:
+    """A retry offers the same bounds, never bounds that reach the present.
+
+    The platform derives a usage record's identity from the window, and prices a
+    window against the capacity that window held. Widening after a failure would
+    hand it ground it may already have priced under ids that cannot collide with
+    the charge holding it, which bills those seconds twice — once at the floor,
+    and once again for whatever burst the wider window's evidence carries.
+    """
+
+    usage = UsageRecorder(refuse=True)
+    monitor = WorkerContainerRuntimeMonitor(
+        usage_recorder=usage,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="workspace-1",
+        cpu_millicores=1000,
+        memory_mib=128,
+    )
+
+    handle = monitor.start_monitoring(request, started_pid=123)
+    deadline = monotonic() + 10
+    while len(usage.offered) < 3 and monotonic() < deadline:
+        sleep(0.01)
+    handle.stop()
+
+    assert len(usage.offered) >= 3, "the monitor stopped retrying the refused window"
+    assert set(usage.offered) == {usage.offered[0]}
+    assert usage.offered[0][0] == 0
+    assert usage.windows == []
+
+
+def test_windows_accepted_after_a_refusal_tile_the_whole_container() -> None:
+    """Nothing is billed twice and nothing is billed nowhere.
+
+    A window held through a refusal is offered again before any new ground is
+    claimed, so what the platform ends up holding is one unbroken run of
+    disjoint windows from the first millisecond to the last — the same set it
+    would have held had nothing failed.
+    """
+
+    usage = UsageRecorder(refusals_left=2)
+    monitor = WorkerContainerRuntimeMonitor(
+        usage_recorder=usage,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="workspace-1",
+        cpu_millicores=1000,
+        memory_mib=128,
+    )
+
+    handle = monitor.start_monitoring(request, started_pid=123)
+    deadline = monotonic() + 10
+    while len(usage.windows) < 2 and monotonic() < deadline:
+        sleep(0.01)
+    result = handle.stop()
+
+    assert len(usage.windows) >= 2, "the monitor never recovered from the refusals"
+    assert usage.windows[0][0] == 0
+    assert usage.windows[-1][1] == result.duration_ms
+    assert [start for start, _ in usage.windows[1:]] == [end for _, end in usage.windows[:-1]]
+
+
 def test_worker_container_metrics_service_primes_without_publishing_first_sample() -> None:
     sink = MetricsSink()
     service = WorkerContainerMetricsService(worker_id="worker-1", sink=sink)
@@ -246,49 +329,6 @@ def test_worker_container_metrics_service_primes_without_publishing_first_sample
     assert sink.payloads == []
     assert result.next_state.process_io.disk_read_bytes == 100
     assert result.next_state.network_io.bytes_recv == 100
-
-
-def test_billing_takes_the_greater_of_reservation_and_measured_usage() -> None:
-    """A request is a floor, so a bursting container must not bill as if capped."""
-    request = ContainerRequestContext(
-        container_id="ctr-1",
-        workspace_id="ws-1",
-        cpu_millicores=125,
-        memory_mib=128,
-    )
-
-    def value_of(
-        plans: tuple[WorkerUsageMetricPlan, ...],
-        name: WorkerUsageMetricName,
-    ) -> float:
-        for plan in plans:
-            if plan.name is name:
-                return plan.value
-        raise AssertionError(f"{name} was not emitted")
-
-    # Idle: the reservation is the floor.
-    idle = plan_worker_usage_metrics(
-        worker_id="w",
-        request=request,
-        duration_ms=10_000,
-        billing_owner=UsageBillingOwner.PlatformFleet,
-        evidence=WorkerUsageEvidence(cpu_used_core_seconds=0.1),
-    )
-    assert value_of(idle, WorkerUsageMetricName.Cpu) == 1.25
-
-    # Bursting past the request bills the usage, not the reservation.
-    bursting = plan_worker_usage_metrics(
-        worker_id="w",
-        request=request,
-        duration_ms=10_000,
-        billing_owner=UsageBillingOwner.PlatformFleet,
-        evidence=WorkerUsageEvidence(
-            cpu_used_core_seconds=80.0,
-            memory_rss_byte_seconds=8 * 1024**3,
-        ),
-    )
-    assert value_of(bursting, WorkerUsageMetricName.Cpu) == 80.0
-    assert value_of(bursting, WorkerUsageMetricName.Memory) == 8.0
 
 
 def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> None:

@@ -17,7 +17,6 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.usage_billing import UsageBillingRepository
 from database.tables.observability import (
     MetricTable,
     UsageRecordTable,
@@ -126,22 +125,16 @@ class UsageRepository:
         )
 
     def append(self, record: UsageRecord) -> UsageRecord:
-        billing = UsageBillingRepository(self.session)
-        billing.lock_record(workspace_id=record.workspace_id, record_id=record.id)
-        saved = self.records.upsert(
+        return self.records.upsert(
             record,
             workspace_id=record.workspace_id,
         )
-        billing.apply_record_change(current=saved)
-        return saved
 
     def append_for_workspace_deletion(self, record: UsageRecord) -> UsageRecord:
         """Persist final billing evidence for a workspace in Deleting state."""
         workspace = WorkspaceRepository(self.session).lock_for_deletion(record.workspace_id)
         if workspace.status is not WorkspaceStatus.Deleting:
             raise ConflictError(f"workspace cleanup requires deleting state: {record.workspace_id}")
-        billing = UsageBillingRepository(self.session)
-        billing.lock_record(workspace_id=record.workspace_id, record_id=record.id)
         row = self.session.get(UsageRecordTable, record.id)
         if row is None:
             row = UsageRecordTable(
@@ -164,7 +157,6 @@ class UsageRepository:
             row.payload = record.model_dump(mode="json")
             flag_modified(row, "payload")
         self.session.flush()
-        billing.apply_record_change(current=record)
         return record
 
     def record(
@@ -206,14 +198,10 @@ class UsageRepository:
             "labels": json_labels,
             "metadata": metadata or {},
         }
-        record = self.records.create(
+        return self.records.create(
             payload,
             workspace_id=workspace_id,
         )
-        UsageBillingRepository(self.session).apply_record_change(
-            current=record,
-        )
-        return record
 
     def record_for_workspace_deletion(
         self,

@@ -2,21 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Response
-from observability.billing import UsageBillingReport, usage_billing_report_csv
+from billing.costs import MAX_COST_PAGE, UsageCostService
+from fastapi import APIRouter, Depends, Query
 from shared.http.usage import (
     UsageAggregationResponse,
-    UsageBillingAppSummaryResponse,
-    UsageBillingAttributionResponse,
-    UsageBillingBucketResponse,
-    UsageBillingLineResponse,
-    UsageBillingOverviewResponse,
-    UsageBillingPeriod,
-    UsageBillingWorkloadListResponse,
+    UsageCostComponentResponse,
+    UsageCostGroupKey,
+    UsageCostListResponse,
+    UsageCostRowResponse,
     UsageRecordListResponse,
     UsageRecordResponse,
     UsageSummaryResponse,
 )
+from shared.payments import BILLING_CURRENCY
 from shared.usage import UsageGroupKey, UsageMetric
 from shared.usage_query import UsageQuery
 
@@ -29,110 +27,70 @@ router = APIRouter()
 
 
 @router.get(
-    "/api/v1/usage/billing.csv",
-    response_class=Response,
-    operation_id="export_usage_billing_report_csv",
+    "/api/v1/usage/costs",
+    response_model=UsageCostListResponse,
+    operation_id="list_usage_costs",
 )
-def usage_billing_report_csv_export(
+def usage_costs(
     start: datetime,
     end: datetime,
-    bucket_seconds: int = Query(3600, ge=300, le=86_400),
+    group_by: UsageCostGroupKey = UsageCostGroupKey.App,
+    app_id: str | None = None,
+    workload_id: str | None = None,
+    limit: int = Query(50, ge=1, le=MAX_COST_PAGE),
+    cursor: str | None = None,
     *,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
-) -> Response:
-    report = _full_billing_report(
-        workspace_id=workspace_id,
-        start=start,
-        end=end,
-        bucket_seconds=bucket_seconds,
-        services=services,
-    )
-    filename = f"usage-{report.start.date().isoformat()}-to-{report.end.date().isoformat()}.csv"
-    return Response(
-        content=usage_billing_report_csv(report),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+) -> UsageCostListResponse:
+    """What this workspace's usage cost, attributed to what ran it.
 
+    Read from the priced ledger, which is the same set of rows the provider is
+    metered from — so the figure here and the figure on an invoice are one
+    total summed twice rather than two calculations that have to agree.
+    """
 
-@router.get(
-    "/api/v1/usage/billing",
-    response_model=UsageBillingOverviewResponse,
-    operation_id="get_usage_billing_overview",
-)
-def usage_billing_overview(
-    start: datetime | None = None,
-    end: datetime | None = None,
-    period: UsageBillingPeriod | None = None,
-    bucket_seconds: int = Query(3600, ge=300, le=86_400),
-    *,
-    workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-) -> UsageBillingOverviewResponse:
-    report = services.usage.billing_overview(
-        workspace_id=workspace_id,
-        start=start,
-        end=end,
-        period=period,
-        bucket_seconds=bucket_seconds,
-    )
-    return UsageBillingOverviewResponse(
-        workspace_id=report.workspace_id,
-        start=report.start,
-        end=report.end,
-        currency=report.currency,
-        total_cost_nanos=report.total_cost_nanos,
-        summary=[UsageBillingLineResponse.model_validate(item) for item in report.summary],
-        apps=[UsageBillingAppSummaryResponse.model_validate(item) for item in report.apps],
-        activity=[UsageBillingBucketResponse.model_validate(item) for item in report.activity],
-    )
-
-
-@router.get(
-    "/api/v1/usage/billing/workloads",
-    response_model=UsageBillingWorkloadListResponse,
-    operation_id="list_usage_billing_workloads",
-)
-def usage_billing_workloads(
-    start: datetime,
-    end: datetime,
-    app_id: str = Query(),
-    bucket_seconds: int = Query(3600, ge=300, le=86_400),
-    *,
-    workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-) -> UsageBillingWorkloadListResponse:
-    report = services.usage.billing_workloads(
-        workspace_id=workspace_id,
-        app_id=app_id,
-        start=start,
-        end=end,
-        bucket_seconds=bucket_seconds,
-    )
-    return UsageBillingWorkloadListResponse(
-        workspace_id=report.workspace_id,
-        app_id=report.app_id,
-        start=report.start,
-        end=report.end,
-        currency=report.currency,
-        data=[UsageBillingAttributionResponse.model_validate(item) for item in report.data],
-    )
-
-
-def _full_billing_report(
-    *,
-    workspace_id: str,
-    start: datetime,
-    end: datetime,
-    bucket_seconds: int,
-    services: ApiServices,
-) -> UsageBillingReport:
-    return services.usage.billing_report(
-        workspace_id=workspace_id,
-        start=start,
-        end=end,
-        bucket_seconds=bucket_seconds,
+    with services.context.database.session() as session:
+        page = UsageCostService(session).costs(
+            workspace_id=workspace_id,
+            start=start,
+            end=end,
+            group_by=group_by,
+            limit=limit,
+            app_id=app_id,
+            workload_id=workload_id,
+            cursor=cursor,
+        )
+    return UsageCostListResponse(
+        workspace_id=page.workspace_id,
+        start=page.start,
+        end=page.end,
+        currency=BILLING_CURRENCY,
+        group_by=page.group_by,
+        cost_nanos=page.cost_nanos,
+        data=[
+            UsageCostRowResponse(
+                app_id=row.app_id,
+                app_name=row.app_name,
+                workload_id=row.workload_id,
+                workload_name=row.workload_name,
+                workload_kind=row.workload_kind,
+                task_id=row.task_id,
+                cost_nanos=row.cost_nanos,
+                components=[
+                    UsageCostComponentResponse(
+                        dimension=total.dimension,
+                        component=total.component,
+                        unit=total.unit,
+                        quantity=float(total.quantity),
+                        cost_nanos=total.cost_nanos,
+                    )
+                    for total in row.components
+                ],
+            )
+            for row in page.rows
+        ],
+        next=page.next,
     )
 
 

@@ -26,9 +26,12 @@ x-cloudflare-env: &cloudflare-env
   LAZYCLOUD_CLOUDFLARE_API_TOKEN: "${LAZYCLOUD_CLOUDFLARE_API_TOKEN:-}"
   LAZYCLOUD_CLOUDFLARE_ZONE_ID: "${LAZYCLOUD_CLOUDFLARE_ZONE_ID:-}"
 
-# The payment provider money is collected through. Empty by default: usage is
-# still metered and priced, and only the step that issues an invoice is absent,
-# which the scheduler says once at startup rather than failing to boot.
+# The payment provider customers are registered with. Empty by default: the stack
+# boots and goes on metering and pricing usage, but nothing can be registered or
+# charged until this is set, and both places that need it name the missing
+# variable rather than going quiet — sign-in registers the customer before it
+# mints a session, and the scheduler sweep that delivers priced usage says so
+# every tick.
 x-stripe-env: &stripe-env
   LAZYCLOUD_STRIPE_API_KEY: "${LAZYCLOUD_STRIPE_API_KEY:-}"
   LAZYCLOUD_STRIPE_WEBHOOK_SECRET: "${LAZYCLOUD_STRIPE_WEBHOOK_SECRET:-}"
@@ -675,6 +678,9 @@ services:
           *redis-env,
           *gateway-env,
           *cloudflare-env,
+          # The scheduler drains the meter outbox, so it holds the payment
+          # credential the control plane holds. Without it this process runs and
+          # never delivers, which is metered usage nobody is charged for.
           *stripe-env,
           *object-store-env,
           *release-env,

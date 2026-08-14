@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from pydantic import JsonValue
-from sqlalchemy import DateTime, ForeignKey, String, Uuid, func, text
+from sqlalchemy import DDL, DateTime, ForeignKey, String, Uuid, event, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -19,6 +19,23 @@ class DatabaseBase(DeclarativeBase):
 
 json_type = JSON().with_variant(JSONB(), "postgresql")
 uuid_type = Uuid(as_uuid=False)
+
+
+def _require_extension(name: str) -> None:
+    event.listen(
+        DatabaseBase.metadata,
+        "before_create",
+        DDL(f"CREATE EXTENSION IF NOT EXISTS {name}").execute_if(dialect="postgresql"),
+    )
+
+
+# Declared with the metadata rather than in the migration because the schema
+# cannot be created without them at all: every path that builds it needs them,
+# not only the one that goes through Alembic. `pgcrypto` backs the
+# `gen_random_uuid()` server defaults below; `btree_gist` is what lets an
+# exclusion constraint index an equality column beside a range.
+_require_extension("pgcrypto")
+_require_extension("btree_gist")
 
 
 class TimestampMixin:

@@ -4,7 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export type MarketingRoute = "/" | "/dashboard";
+export type MarketingRoute = "/" | "/pricing" | "/dashboard";
 
 /* Shared page rhythm: compact phone gutters that open up with the viewport. */
 export const shell =
@@ -41,12 +41,14 @@ export function StatusDot() {
 
 export function MarketingButton({
   to,
+  hash,
   children,
   className,
   endGlyph = "↗",
   onClick,
 }: {
   to: MarketingRoute;
+  hash?: string;
   children: ReactNode;
   className?: string;
   endGlyph?: ReactNode | null;
@@ -63,7 +65,7 @@ export function MarketingButton({
         className,
       )}
     >
-      <Link to={to} onClick={onClick}>
+      <Link to={to} hash={hash} onClick={onClick}>
         <span>{children}</span>
         {endGlyph === null ? null : <Glyph>{endGlyph}</Glyph>}
       </Link>

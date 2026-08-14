@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import logging
 from contextlib import ExitStack
+from dataclasses import dataclass, field
 
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from control.service import WorkspaceStorageError
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from shared.external_identity import ExternalIdentityProfile
 from shared.http.errors import ErrorResponse
+from shared.identity import IdentityProvider, WorkspaceRecord
 from tests.service_fixtures import administrator_credential
 
 
@@ -141,3 +145,59 @@ def test_unexpected_exception_mints_request_id_when_absent(
     minted = response.headers["x-request-id"]
     assert minted
     assert minted in ErrorResponse.model_validate_json(response.content).detail
+
+
+@dataclass(slots=True)
+class _StubIdentityProvider:
+    """The provider half of the sign-in round trip, answering with one person."""
+
+    states: list[str] = field(default_factory=list)
+
+    def authorize_url(self, *, state: str, code_challenge: str) -> str:
+        del code_challenge
+        self.states.append(state)
+        return f"https://identity.invalid/authorize?state={state}"
+
+    def identify(self, *, code: str, code_verifier: str) -> ExternalIdentityProfile:
+        del code, code_verifier
+        return ExternalIdentityProfile(
+            provider=IdentityProvider.Github,
+            subject="99001",
+            login="storage-failed",
+            display_name="Storage Failed",
+            email="storage-failed@example.invalid",
+        )
+
+
+def test_a_sign_in_that_cannot_be_provisioned_lands_the_browser_on_the_sign_in_page(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    """The one route whose caller is a browser mid-navigation, not a client.
+
+    Provisioning reaches object storage and the payment provider, and neither
+    fails with a domain error — a bucket that cannot be created raises
+    `WorkspaceStorageError`, which is a plain `RuntimeError`. Answered as an
+    `ErrorResponse` it would be rendered to the person as a bare JSON document
+    with no way forward, which is the whole reason this route redirects.
+    """
+
+    identity = _StubIdentityProvider()
+    isolated_services.sign_in.provider_factory = lambda: identity
+
+    def storage_unavailable(user_id: str, login: str) -> WorkspaceRecord:
+        del user_id, login
+        raise WorkspaceStorageError("unable to create workspace storage bucket 'workspace-1'")
+
+    isolated_services.sign_in.provision_default_workspace = storage_unavailable
+    _, client, _ = _client(isolated_services, client_stack, raise_server_exceptions=False)
+
+    isolated_services.sign_in.start()
+    response = client.get(
+        "/auth/github/callback",
+        params={"code": "auth-code", "state": identity.states[-1]},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/signin?error=provider_unavailable"

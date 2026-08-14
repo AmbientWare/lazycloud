@@ -227,9 +227,6 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
     assert result.metering_window_ended_at == METERING_WINDOW_ENDED_AT
     assert [record.metric for record in result.records] == [
         UsageMetric.ContainerDurationMilliseconds,
-        UsageMetric.CpuSeconds,
-        UsageMetric.MemoryGibSeconds,
-        UsageMetric.GpuSeconds,
         UsageMetric.CpuUsedCoreSeconds,
         UsageMetric.MemoryRssByteSeconds,
         UsageMetric.MemorySwapByteSeconds,
@@ -241,10 +238,8 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
         UsageMetric.DiskReadBytes,
         UsageMetric.DiskWriteBytes,
     ]
-    assert result.records[1].quantity == 1
-    assert result.records[2].quantity == 0.25
-    assert result.records[3].quantity == 0.5
     assert result.records[0].quantity == 500
+    assert result.records[1].quantity == 0.25
     assert result.records[-4].quantity == 4
     assert result.records[-3].quantity == 2
     assert result.records[-2].quantity == 4096
@@ -326,15 +321,8 @@ def test_worker_supervision_usage_windows_are_idempotent(
         )
 
     assert [record.id for record in second.records] == [record.id for record in first.records]
-    assert sorted(record.metric for record in records) == [
-        UsageMetric.ContainerDurationMilliseconds,
-        UsageMetric.CpuSeconds,
-        UsageMetric.MemoryGibSeconds,
-    ]
     assert {record.metric: record.quantity for record in records} == {
         UsageMetric.ContainerDurationMilliseconds: 500,
-        UsageMetric.CpuSeconds: 1,
-        UsageMetric.MemoryGibSeconds: 0.25,
     }
 
 
@@ -374,8 +362,6 @@ def test_worker_supervision_records_the_billing_owner_it_was_configured_with() -
     assert result.records == recorder.records
     assert {record.metric for record in result.records} == {
         UsageMetric.ContainerDurationMilliseconds,
-        UsageMetric.CpuSeconds,
-        UsageMetric.MemoryGibSeconds,
     }
     assert all(
         record.labels["pool_mode"] == WorkerPoolMode.Private.value for record in result.records

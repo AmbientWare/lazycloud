@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from functools import cache
 from pathlib import Path
 
 from agent.binary import AgentBinarySettings
@@ -45,7 +44,6 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
@@ -82,7 +80,6 @@ from scheduler.state import (
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
-from shared.payments import PaymentProvider
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -97,7 +94,7 @@ from storage.volume_filesystem import (
 from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
-from billing import BillingCloseJob, BillingDailyJob, DatabaseBillingAdmission
+from billing import BillingMeterOutboxService, DatabaseBillingAdmission
 from database import DatabaseClient
 from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 
@@ -105,7 +102,6 @@ from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 @dataclass(frozen=True, slots=True)
 class SchedulerObservabilitySettings:
     workspace_changes: WorkspaceChangeStreamSettings
-    usage_pricing: UsagePricingSettings
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,8 +148,7 @@ class SchedulerAppServices:
     usage: UsageService
     object_storage: ObjectStorage
     volume_metering: PersistentVolumeMeteringService
-    billing_daily: BillingDailyJob
-    billing_close: BillingCloseJob
+    meter_outbox: BillingMeterOutboxService
     retention: SchedulerRetention | None
     redis_client: RedisClient
 
@@ -196,7 +191,6 @@ class SchedulerAppServices:
         compute_policies = WorkspaceComputePolicyService(context)
         usage = UsageService(
             context,
-            price_catalog=observability.usage_pricing.to_price_catalog(),
             workspace_changes=workspace_changes,
         )
         volume_metering = PersistentVolumeMeteringService.from_settings(
@@ -211,6 +205,7 @@ class SchedulerAppServices:
             interval_seconds=storage.volume_metering.interval_seconds,
         )
         object_storage = ObjectStorage.from_settings(context, storage.object_store)
+        meter_outbox = _meter_outbox(context, events, StripeSettings())
         retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
@@ -373,8 +368,7 @@ class SchedulerAppServices:
             usage=usage,
             object_storage=object_storage,
             volume_metering=volume_metering,
-            billing_daily=BillingDailyJob(context, usage),
-            billing_close=BillingCloseJob(context, _payment_provider),
+            meter_outbox=meter_outbox,
             retention=retention,
             redis_client=redis,
         )
@@ -384,6 +378,28 @@ class SchedulerAppServices:
             self.redis_client.close()
         finally:
             self.context.database.dispose()
+
+
+def _meter_outbox(
+    context: ServiceContext,
+    events: EventService,
+    settings: StripeSettings,
+) -> BillingMeterOutboxService:
+    """The sweep that delivers the priced usage the pricer already queued.
+
+    Composed whether or not a payment credential exists. A deployment without one
+    is misconfigured rather than in a mode: dropping the sweep for it would leave
+    usage metered, priced, owed and never charged, with nothing said about why —
+    and a sweep that is never going to run is exactly what nobody notices. The
+    adapter is built on the first drain instead, which names the missing variable
+    on every tick until it is set.
+    """
+
+    return BillingMeterOutboxService(
+        database=context.database,
+        payments=settings.provider_factory(),
+        events=events,
+    )
 
 
 @dataclass(slots=True)
@@ -403,20 +419,6 @@ class SchedulerRetention:
             active_recent_stub_keys=self.protected_checkpoint_stub_keys(now=now),
             now=now,
         )
-
-
-@cache
-def _payment_provider() -> PaymentProvider:
-    """The payment adapter, built once and reused.
-
-    Cached because the close runs every interval and each build opens a
-    connection pool. Failures are not cached, so a deployment that has no
-    credential raises here on every run, naming the variable, rather than once at
-    startup — usage that meters correctly and is never charged is not a state a
-    single line in a boot log should be the only record of.
-    """
-
-    return StripeSettings().provider()
 
 
 def scheduler_retention(

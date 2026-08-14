@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from pydantic import JsonValue
 from scheduler.fleet import SchedulerContainerStatus
@@ -22,6 +23,13 @@ from worker.container_execution import (
     ContainerExecutionPhaseResult,
     ContainerExecutionResult,
 )
+from worker.events import (
+    ContainerRequestContext,
+    WorkerPoolMode,
+    WorkerUsageEvidence,
+    WorkerUsageMetricName,
+    WorkerUsageMetricPlan,
+)
 from worker.image_build_execution import (
     WorkerImageBuildExecutionResult,
     WorkerImageBuildStatus,
@@ -33,6 +41,7 @@ from worker.scheduler_requests import (
     WorkerSchedulerRequestStatus,
     container_execution_context_from_scheduler_request,
 )
+from worker.supervision import WorkerUsageEmissionResult
 from worker.worker_lifecycle import WorkerLifecycleOrchestrator
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -98,6 +107,7 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
         execution=execution,
         worker_gpu_type="",
         image_builds=image_builds,
+        usage_recorder=_UsageWindowRecorder(),
     )
 
     result = processor.run_once()
@@ -118,6 +128,57 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
         DEFAULT_CONTAINER_STATE_TTL_SECONDS,
         DEFAULT_CONTAINER_STATE_TTL_SECONDS,
     ]
+
+
+def test_worker_scheduler_request_processor_bills_an_image_build_that_failed() -> None:
+    """A build that fails held the capacity it was placed with and is billed for it.
+
+    The window carries the placed cpu, memory and card, which is what the ledger
+    prices the build's recorded placement against.
+    """
+
+    request = _request(
+        payload={
+            "kind": "image-build",
+            "build_id": "build-1",
+            "image_id": "image-1",
+            "build_options": {"dockerfile": "FROM python:3.12-slim\n"},
+        },
+        gpu_type="A100",
+        gpu_count=1,
+    )
+    workers = _WorkerRepository(requests=[request])
+    containers = _ContainerRepository(
+        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
+    )
+    usage = _UsageWindowRecorder()
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id="worker-1",
+        workers=workers,
+        containers=containers,
+        execution=_ExecutionService(),
+        worker_gpu_type="A100",
+        image_builds=_FailingImageBuildExecutionService(),
+        usage_recorder=usage,
+    )
+
+    result = processor.run_once()
+
+    assert result.status is WorkerSchedulerRequestStatus.Error
+    assert containers.exit_codes == [("ctr-1", 1)]
+    [window] = usage.windows
+    assert window.container_id == "ctr-1"
+    assert window.duration_ms > 0
+    assert window.window_start_ms == 0
+    assert window.window_end_ms == window.duration_ms
+    assert (
+        window.metering_window_ended_at - window.metering_window_started_at
+    ).total_seconds() * 1000 == window.duration_ms
+    [plan] = window.plans
+    assert plan.labels["cpu_millicores"] == 1000
+    assert plan.labels["mem_mb"] == 512
+    assert plan.labels["gpu"] == "A100"
+    assert plan.labels["gpu_count"] == 1
 
 
 def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown() -> None:
@@ -437,6 +498,65 @@ class _ImageBuildExecutionService:
             object_key=f"{request.payload['image_id']}.rclip",
             status=WorkerImageBuildStatus.Complete,
         )
+
+
+@dataclass(slots=True)
+class _FailingImageBuildExecutionService:
+    def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
+        return WorkerImageBuildExecutionResult(
+            ok=False,
+            container_id=request.container_id,
+            image_id=str(request.payload["image_id"]),
+            build_id=str(request.payload["build_id"]),
+            status=WorkerImageBuildStatus.Failed,
+            error_message="image archive build failed",
+        )
+
+
+@dataclass(slots=True)
+class _UsageWindowRecorder:
+    windows: list[WorkerUsageEmissionResult] = field(default_factory=list)
+    failure: Exception | None = None
+
+    def record_usage_window(
+        self,
+        request: ContainerRequestContext,
+        *,
+        duration_ms: int,
+        window_start_ms: int = 0,
+        window_end_ms: int | None = None,
+        metering_window_started_at: datetime,
+        metering_window_ended_at: datetime,
+        evidence: WorkerUsageEvidence | None = None,
+    ) -> WorkerUsageEmissionResult:
+        _ = evidence
+        if self.failure is not None:
+            raise self.failure
+        result = WorkerUsageEmissionResult(
+            worker_id="worker-1",
+            container_id=request.container_id,
+            duration_ms=duration_ms,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_end_ms if window_end_ms is not None else duration_ms,
+            metering_window_started_at=metering_window_started_at,
+            metering_window_ended_at=metering_window_ended_at,
+            pool_mode=WorkerPoolMode.Public,
+            plans=(
+                WorkerUsageMetricPlan(
+                    name=WorkerUsageMetricName.ContainerDuration,
+                    labels={
+                        "container_id": request.container_id,
+                        "cpu_millicores": request.cpu_millicores,
+                        "mem_mb": request.memory_mib,
+                        "gpu": request.gpu,
+                        "gpu_count": request.gpu_count,
+                    },
+                    value=float(duration_ms),
+                ),
+            ),
+        )
+        self.windows.append(result)
+        return result
 
 
 @dataclass(slots=True)

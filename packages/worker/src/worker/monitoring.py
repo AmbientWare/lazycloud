@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from dataclasses import dataclass, field, replace
@@ -7,7 +8,7 @@ from datetime import datetime, timedelta
 from time import monotonic
 from typing import Protocol
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsData
 from shared.timestamps import utc_now
@@ -19,6 +20,8 @@ from worker.container_metrics import (
 )
 from worker.events import ContainerLifecyclePayload, ContainerRequestContext, WorkerUsageEvidence
 from worker.supervision import WorkerUsageEmissionResult
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ContainerRuntimeMonitorHandle(Protocol):
@@ -62,7 +65,6 @@ class ContainerRuntimeMonitoringResult(ContractModel):
     metrics_samples: int = 0
     metrics_published: int = 0
     usage: WorkerUsageEmissionResult | None = None
-    errors: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,13 +202,12 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _stop: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _usage_cursor_ms: int = 0
-    _pending_usage_window: _UsageWindow | None = None
     _pending_usage_evidence: WorkerUsageEvidence = field(default_factory=WorkerUsageEvidence)
+    _held: list[tuple[_UsageWindow, WorkerUsageEvidence]] = field(default_factory=list)
     _previous: ContainerMetricsCounterState | None = None
     _last_sample_at: float | None = None
     _samples: int = 0
     _published: int = 0
-    _errors: list[str] = field(default_factory=list)
     _thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -235,7 +236,6 @@ class _ThreadedContainerRuntimeMonitorHandle:
             metrics_samples=self._samples,
             metrics_published=self._published,
             usage=usage,
-            errors=list(self._errors),
         )
 
     def _run(self) -> None:
@@ -263,8 +263,12 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 previous=self._previous,
                 sample_interval_ms=sample_interval_ms,
             )
-        except Exception as exc:  # pragma: no cover - defensive worker boundary
-            self._record_error(exc)
+        except Exception:  # pragma: no cover - defensive worker boundary
+            LOGGER.warning(
+                "container metrics sample failed",
+                exc_info=True,
+                extra={"container_id": self.request.container_id},
+            )
             return
         with self._lock:
             self._samples += 1
@@ -277,19 +281,36 @@ class _ThreadedContainerRuntimeMonitorHandle:
                     _usage_evidence_from_metrics(result.payload.metrics)
                 )
 
-    def _record_error(self, exc: Exception) -> None:
-        with self._lock:
-            self._errors.append(f"{type(exc).__name__}: {exc}")
-
     def _record_usage_until(self, *, recorded_at: float) -> WorkerUsageEmissionResult | None:
-        if self.usage_recorder is None:
+        """Emit every window this container owes the meter, oldest first.
+
+        A window that failed is offered again before any new ground is claimed,
+        so the platform sees the same bounds and the same evidence it saw the
+        first time. Stopping at the first failure leaves the rest of the
+        lifetime unclaimed rather than piling up windows against a control plane
+        that is not answering.
+        """
+
+        recorder = self.usage_recorder
+        if recorder is None:
             return None
-        window = self._pending_usage_window or self._usage_window_for(recorded_at)
-        if window.duration_ms <= 0:
-            return None
-        self._pending_usage_window = window
+        emitted: WorkerUsageEmissionResult | None = None
+        while (claimed := self._claim_usage_window(recorded_at)) is not None:
+            window, evidence = claimed
+            usage = self._emit_usage_window(recorder, window, evidence)
+            if usage is None:
+                break
+            emitted = usage
+        return emitted
+
+    def _emit_usage_window(
+        self,
+        recorder: WorkerUsageWindowRecorder,
+        window: _UsageWindow,
+        evidence: WorkerUsageEvidence,
+    ) -> WorkerUsageEmissionResult | None:
         try:
-            usage = self.usage_recorder.record_usage_window(
+            return recorder.record_usage_window(
                 self.request,
                 duration_ms=window.duration_ms,
                 window_start_ms=window.start_ms,
@@ -298,22 +319,77 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 + timedelta(milliseconds=window.start_ms),
                 metering_window_ended_at=self._started_at_utc
                 + timedelta(milliseconds=window.end_ms),
-                evidence=self._pending_usage_evidence,
+                evidence=evidence,
             )
-        except Exception as exc:  # pragma: no cover - defensive worker boundary
-            self._record_error(exc)
+        except Exception:  # pragma: no cover - defensive worker boundary
+            LOGGER.warning(
+                "container usage window was not recorded",
+                exc_info=True,
+                extra={
+                    "container_id": self.request.container_id,
+                    "window_start_ms": window.start_ms,
+                    "window_end_ms": window.end_ms,
+                },
+            )
+            self._hold_usage_window(window, evidence)
             return None
-        self._usage_cursor_ms = window.end_ms
-        self._pending_usage_window = None
-        self._pending_usage_evidence = WorkerUsageEvidence()
-        return usage
 
-    def _usage_window_for(self, recorded_at: float) -> _UsageWindow:
-        end_ms = max(
-            self._usage_cursor_ms + 1,
-            int((recorded_at - self._started_at) * 1000),
-        )
-        return _UsageWindow(start_ms=self._usage_cursor_ms, end_ms=end_ms)
+    def _claim_usage_window(
+        self,
+        recorded_at: float,
+    ) -> tuple[_UsageWindow, WorkerUsageEvidence] | None:
+        """The next window owed: one held from a failure, or ground since the cursor.
+
+        Claiming before the write rather than after is what keeps two emitters —
+        the sample loop and a `stop()` whose join timed out on a slow write —
+        from offering overlapping windows and billing the same seconds twice.
+
+        A held window is re-offered with the bounds and the evidence it was
+        claimed with, never widened to reach the present. The record ids the
+        platform derives are a function of those bounds, so a write whose reply
+        was lost after it committed is re-sent under the ids it already has and
+        is refused as a duplicate. Widening instead would ask the platform to
+        price ground it had already priced, under ids that cannot collide with
+        the ones holding that charge.
+
+        `None` once nothing is owed, which is how the drain loop ends.
+        """
+
+        with self._lock:
+            if self._held:
+                return self._held.pop(0)
+            start_ms = self._usage_cursor_ms
+            elapsed_ms = int((recorded_at - self._started_at) * 1000)
+            if elapsed_ms <= start_ms and start_ms > 0:
+                return None
+            # A container that existed for less than a millisecond still ran, and
+            # a zero-length window is refused downstream as unbillable.
+            end_ms = max(start_ms + 1, elapsed_ms)
+            self._usage_cursor_ms = end_ms
+            evidence = self._pending_usage_evidence
+            self._pending_usage_evidence = WorkerUsageEvidence()
+            return (_UsageWindow(start_ms=start_ms, end_ms=end_ms), evidence)
+
+    def _hold_usage_window(
+        self,
+        window: _UsageWindow,
+        evidence: WorkerUsageEvidence,
+    ) -> None:
+        """Keep a failed window intact until the next attempt.
+
+        The cursor stays past it, so samples taken since accumulate against the
+        ground that follows rather than joining evidence measured over this
+        window. That pairing is what stops a retry from charging current
+        evidence against a window that did not measure it.
+
+        A list because two emitters can be in flight at once — the sample loop
+        and a `stop()` whose join timed out on a slow write — and a slot would
+        let the second failure drop the first window's ground on the floor. It
+        cannot grow past them: no new ground is claimed while anything is held.
+        """
+
+        with self._lock:
+            self._held.append((window, evidence))
 
 
 def _usage_evidence_from_metrics(metrics: ContainerMetricsData) -> WorkerUsageEvidence:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -31,6 +32,7 @@ from worker.events import (
 from worker.execution import WorkerOomWatcherPlan
 
 WORKER_OOM_EVENT_TYPE = "container.oom_killed"
+WORKER_USAGE_FAILED_EVENT_TYPE = "container.usage_record_failed"
 WORKER_OOM_EVENT_ID = "runtime.oom_killed"
 WORKER_OOM_MESSAGE = "container exceeded its memory limit"
 WORKER_OOM_EXIT_MESSAGE = "container exited with code 137 due to out-of-memory kill"
@@ -213,17 +215,26 @@ class WorkerSupervisionService:
                 reason="pool mode does not emit worker usage",
             )
 
-        records = [
-            self._record_usage_plan(
+        try:
+            records = [
+                self._record_usage_plan(
+                    request,
+                    plan,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
+                    metering_window_started_at=metering_window_started_at,
+                    metering_window_ended_at=metering_window_ended_at,
+                )
+                for plan in plans
+            ]
+        except Exception as exc:
+            self._publish_usage_failure(
                 request,
-                plan,
                 window_start_ms=window_start_ms,
                 window_end_ms=window_end_ms,
-                metering_window_started_at=metering_window_started_at,
-                metering_window_ended_at=metering_window_ended_at,
+                error=f"{type(exc).__name__}: {exc}",
             )
-            for plan in plans
-        ]
+            raise
         return WorkerUsageEmissionResult(
             worker_id=self.worker_id,
             container_id=request.container_id,
@@ -237,6 +248,41 @@ class WorkerSupervisionService:
             records=records,
             reason="worker usage emitted",
         )
+
+    def _publish_usage_failure(
+        self,
+        request: ContainerRequestContext,
+        *,
+        window_start_ms: int,
+        window_end_ms: int,
+        error: str,
+    ) -> None:
+        """Leave a durable trace of usage the platform did not accept.
+
+        The monitor offers the same window again, so a transient failure costs
+        nothing and needs no operator. A persistent one — a container the control
+        plane no longer holds, a token that no longer authorizes it — bills
+        nothing until someone acts, and the worker's own log dies with the
+        machine. The event is best effort against the same control plane that
+        just refused the record: its failure must not replace the failure the
+        caller is being told about.
+        """
+
+        with suppress(Exception):
+            self.event_sink.append(
+                WorkerEventRecord(
+                    id=str(uuid4()),
+                    worker_id=self.worker_id,
+                    event_type=WORKER_USAGE_FAILED_EVENT_TYPE,
+                    resource_id=request.container_id,
+                    payload={
+                        "workspace_id": request.workspace_id,
+                        "window_start_ms": window_start_ms,
+                        "window_end_ms": window_end_ms,
+                        "error": error,
+                    },
+                )
+            )
 
     def _oom_event_payload(
         self,
@@ -308,12 +354,6 @@ class WorkerSupervisionService:
 def usage_record_kind(metric: WorkerUsageMetricName) -> tuple[UsageMetric, UsageUnit]:
     if metric is WorkerUsageMetricName.ContainerDuration:
         return (UsageMetric.ContainerDurationMilliseconds, UsageUnit.Milliseconds)
-    if metric is WorkerUsageMetricName.Cpu:
-        return (UsageMetric.CpuSeconds, UsageUnit.Seconds)
-    if metric is WorkerUsageMetricName.Memory:
-        return (UsageMetric.MemoryGibSeconds, UsageUnit.GibSeconds)
-    if metric is WorkerUsageMetricName.Gpu:
-        return (UsageMetric.GpuSeconds, UsageUnit.Seconds)
     if metric is WorkerUsageMetricName.ContainerDisk:
         return (UsageMetric.ContainerDiskByteSeconds, UsageUnit.ByteSeconds)
     if metric is WorkerUsageMetricName.CpuUsed:

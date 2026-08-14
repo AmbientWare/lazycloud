@@ -145,7 +145,7 @@ def _upsert_workspace_row(
     metadata: Mapping[str, JsonValue] | None = None,
 ) -> WorkspaceRecord:
     repository = _workspace_records(session)
-    existing = _workspace_by_name(repository.list(), name)
+    existing = WorkspaceRepository(session).by_name(name)
     now = utc_now()
     metadata_payload = dict(metadata) if metadata is not None else {}
     if existing is None:
@@ -166,7 +166,7 @@ def _upsert_workspace_row(
             status=WorkspaceStatus.Active.value,
         )
     if existing.status is not WorkspaceStatus.Active:
-        raise ConflictError(f"workspace name is retained after deletion: {name}")
+        raise ConflictError(f"workspace is not active: {name}")
     if storage is not None:
         # The response model never carries the connection settings, so a caller naming
         # a bucket cannot resend the credentials that reach it. Keeping the existing
@@ -1500,10 +1500,6 @@ def _workspace_name_from(preferred: str) -> str:
     if not lowered[0].isalpha():
         lowered = f"w-{lowered}"
     return lowered[:63].rstrip("-_")
-
-
-def _workspace_by_name(records: list[WorkspaceRecord], name: str) -> WorkspaceRecord | None:
-    return next((item for item in records if item.name == name), None)
 
 
 def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:

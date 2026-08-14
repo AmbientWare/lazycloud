@@ -9,10 +9,11 @@ import { currentSessionQueryOptions, signOut } from "@/lib/queries/auth";
 import { SessionContext, type SessionContextValue } from "@/components/shared/AuthGate/session";
 import { SignInScreen } from "@/components/shared/AuthGate/SignInScreen";
 
-// `/callback` and `/signin` both run before there is a session to gate on. Gating
-// `/callback` would drop the code it arrived to redeem, and gating `/signin` would
-// hide the reason a sign-in failed behind the screen that failed to explain it.
-const UNAUTHENTICATED_PATHS = new Set(["/", "/callback", "/signin"]);
+// The public marketing pages, plus the two routes that run before there is a
+// session to gate on. Gating `/callback` would drop the code it arrived to
+// redeem, and gating `/signin` would hide the reason a sign-in failed behind the
+// screen that failed to explain it.
+const UNAUTHENTICATED_PATHS = new Set(["/", "/pricing", "/callback", "/signin"]);
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const unauthenticatedRoute = useRouterState({

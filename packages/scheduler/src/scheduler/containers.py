@@ -10,6 +10,7 @@ from typing import Protocol
 
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
+from shared.billing_quotes import ContainerShape
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
@@ -204,6 +205,7 @@ class SchedulerContainerAssignmentRecorder(Protocol):
         runtime_machine_id: str,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
+        shape: ContainerShape | None = None,
     ) -> None: ...
 
     def clear_runtime_assignment(
@@ -875,15 +877,26 @@ class SchedulerContainerRequestService:
             recorded_state = self.containers.set_container_state(assigned_state)
             if recorded_state.status is SchedulerContainerStatus.Stopping:
                 raise RuntimeError(f"container request {request.container_id} was cancelled")
-            if request.record_runtime_assignment:
-                self.assignments.assign_runtime(
-                    container_id=request.container_id,
-                    workspace_id=request.workspace_id,
-                    runtime_worker_id=worker.worker_id,
-                    runtime_machine_id=worker.machine_id,
-                    compute_worker_id=(worker.worker_id if worker.private_worker else None),
-                    compute_machine_id=(worker.machine_id if worker.private_worker else None),
-                )
+            self.assignments.assign_runtime(
+                container_id=request.container_id,
+                workspace_id=request.workspace_id,
+                runtime_worker_id=worker.worker_id,
+                runtime_machine_id=worker.machine_id,
+                compute_worker_id=(worker.worker_id if worker.private_worker else None),
+                compute_machine_id=(worker.machine_id if worker.private_worker else None),
+                # What was reserved, not what the request asked for: the
+                # reservation is the capacity actually held against the
+                # worker, and it is what the customer is paying to have kept
+                # for them. The owner and the card come from the worker the
+                # control plane registered, never from the container.
+                shape=ContainerShape(
+                    billing_owner=worker.billing_owner,
+                    gpu_type=worker.gpu_type,
+                    cpu_millicores=reserved_capacity.cpu_millicores,
+                    memory_mib=reserved_capacity.memory_mib,
+                    gpu_count=reserved_capacity.gpu_count,
+                ),
+            )
             self.workers.dispatch_claimed_container_request(
                 worker_id,
                 claim,
@@ -892,11 +905,10 @@ class SchedulerContainerRequestService:
                 now=now,
             )
         except ContainerRequestCancelledError as exc:
-            if request.record_runtime_assignment:
-                self.assignments.clear_runtime_assignment(
-                    container_id=request.container_id,
-                    runtime_worker_id=worker_id,
-                )
+            self.assignments.clear_runtime_assignment(
+                container_id=request.container_id,
+                runtime_worker_id=worker_id,
+            )
             self.containers.delete_container_state(request.container_id)
             self._release_capacity_reservation(request.container_id, now=now)
             return SchedulerContainerDispatchResult(
@@ -906,25 +918,23 @@ class SchedulerContainerRequestService:
                 reason=str(exc),
             )
         except ContainerRequestClaimNotOwnedError as exc:
-            if request.record_runtime_assignment:
-                self.assignments.clear_runtime_assignment(
-                    container_id=request.container_id,
-                    runtime_worker_id=worker_id,
-                )
+            self.assignments.clear_runtime_assignment(
+                container_id=request.container_id,
+                runtime_worker_id=worker_id,
+            )
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Waiting,
                 container_id=request.container_id,
                 reason=str(exc),
             )
         except Exception as exc:
-            if request.record_runtime_assignment:
-                try:
-                    self.assignments.clear_runtime_assignment(
-                        container_id=request.container_id,
-                        runtime_worker_id=worker_id,
-                    )
-                except Exception as cleanup_exc:
-                    exc = RuntimeError(f"{exc}; failed to clear runtime assignment: {cleanup_exc}")
+            try:
+                self.assignments.clear_runtime_assignment(
+                    container_id=request.container_id,
+                    runtime_worker_id=worker_id,
+                )
+            except Exception as cleanup_exc:
+                exc = RuntimeError(f"{exc}; failed to clear runtime assignment: {cleanup_exc}")
             if not self.containers.is_container_cancelled(request.container_id):
                 self.containers.set_container_state(_container_state(request))
             self._requeue(claim, now)
@@ -1000,11 +1010,10 @@ class SchedulerContainerRequestService:
                 failure_reason=reason,
             )
         )
-        if request.record_runtime_assignment:
-            try:
-                self.failure_handler.mark_scheduling_failed(request, reason, now=now)
-            except Exception as exc:  # pragma: no cover - defensive callback boundary
-                return f"{reason}; failed to sync runtime state: {type(exc).__name__}"
+        try:
+            self.failure_handler.mark_scheduling_failed(request, reason, now=now)
+        except Exception as exc:  # pragma: no cover - defensive callback boundary
+            return f"{reason}; failed to sync runtime state: {type(exc).__name__}"
         if _request_uses_quota(request):
             try:
                 self.containers.release_concurrency_reservation(

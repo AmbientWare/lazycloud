@@ -381,8 +381,7 @@ def update_container_status(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> UpdateContainerStatusResponse:
-    _ = principal
-    return service.update_container_status(request)
+    return service.update_container_status(request, principal=principal)
 
 
 @router.post(
@@ -394,8 +393,7 @@ def set_container_exit_code(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> SetContainerExitCodeResponse:
-    _ = principal
-    return service.set_container_exit_code(request)
+    return service.set_container_exit_code(request, principal=principal)
 
 
 @router.post(
@@ -407,8 +405,7 @@ def get_container_state(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> GetContainerStateResponse:
-    _ = principal
-    return service.get_container_state(request)
+    return service.get_container_state(request, principal=principal)
 
 
 @router.post(
@@ -420,8 +417,7 @@ def delete_container_state(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> DeleteContainerStateResponse:
-    _ = principal
-    return service.delete_container_state(request)
+    return service.delete_container_state(request, principal=principal)
 
 
 @router.post(
@@ -433,8 +429,7 @@ def set_worker_address(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> SetWorkerAddressResponse:
-    _ = principal
-    return service.set_worker_address(request)
+    return service.set_worker_address(request, principal=principal)
 
 
 @router.post(
@@ -660,8 +655,7 @@ def record_worker_usage(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> RecordWorkerUsageResponse:
-    _ = principal
-    return service.record_worker_usage(request)
+    return service.record_worker_usage(request, worker_id=principal.worker_id)
 
 
 @router.post(

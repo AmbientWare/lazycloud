@@ -7,7 +7,8 @@ from database.repositories.billing import BillingAccountRepository
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
-from shared.billing_accounts import BillingAccountStatus, BillingPlan
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.errors import PaymentRequiredError
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
@@ -51,13 +52,22 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
 
 
 def _past_due(services: ApiServices, workspace_id: str) -> None:
+    """A fully provisioned account whose card the provider says was refused.
+
+    Provisioned deliberately: an account holding no subscription is refused too,
+    and on a different sentence. Leaving one out here would pass this test
+    without the standing it names ever being read.
+    """
+
     user_id = workspace_owner_user_id(services.context, workspace_id)
     with services.context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
-            plan=BillingPlan.Free,
             status=BillingAccountStatus.PastDue,
             provider_customer_id="cus_gate",
+            provider_subscription_id="sub_gate",
+            provider_credit_grant_id="credgr_gate",
+            plan=BillingPlanId.Team,
         )
         session.commit()
 

@@ -1,85 +1,72 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
-
-from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_periods import BillingPeriodRepository
-from shared.billing_accounts import BillingPlan
-from shared.billing_periods import BillingPeriod
-from shared.billing_plans import DEFAULT_BILLING_PLANS
+from database.repositories.billing_allowance import (
+    BillingAllowanceRepository,
+    SubscriptionPeriodOutcome,
+)
+from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import published_plan
+from shared.payments import PaymentProvider, ProviderSubscription
 from sqlalchemy.orm import Session
 
 
-def month_bounds(day: date) -> tuple[date, date]:
-    """The month a day belongs to, as a half-open interval.
+def carry_plan_into_cycle(
+    session: Session,
+    payments: PaymentProvider,
+    *,
+    account_id: str,
+    provider_customer_id: str,
+    provider_credit_grant_id: str,
+    subscription: ProviderSubscription,
+    plan: BillingPlanId,
+) -> str:
+    """Give this cycle the terms the plan comes with, and buy them once.
 
-    Exclusive end so consecutive months tile: a day is in exactly one period, and
-    the last day of a month is not also the first of the next.
+    Takes the grant the account currently names and returns the grant that funds
+    the cycle once this has run — the same one where nothing was bought, so a
+    caller writes what comes back without having to work out whether it changed.
+
+    The period is written first and what happens to the grants is decided from
+    what that did to it. A renewal and a plan change both reach here by more than
+    one route — a renewal by two deliveries describing one event, a plan change
+    by a retry after a transaction that died — and a grant is money given away,
+    so the period is what settles which caller buys the allowance and which finds
+    it already bought.
+
+    Opening a cycle leaves the outgoing grant alone: that grant is what funds the
+    invoice finalizing at that moment, and expiring it would take back an
+    allowance the customer has already been invoiced against. Re-terming the
+    cycle in progress is the opposite — one plan swapped for another inside a
+    single cycle — and its outgoing grant is expired before the replacement is
+    bought, because two live grants are two allowances for one cycle and nothing
+    downstream can tell which of them a charge was spent on.
+
+    Expiring before buying is deliberate: a failure between the two leaves the
+    cycle unfunded until the next attempt or the next renewal, where the other
+    order would leave the customer holding both and nothing to notice it.
+
+    Every caller holds the account row lock before reaching here, which is what
+    makes the read-then-write inside safe against a delivery arriving mid-change.
     """
 
-    start = day.replace(day=1)
-    end = (
-        start.replace(year=start.year + 1, month=1)
-        if start.month == 12
-        else start.replace(month=start.month + 1)
+    included_nanos = published_plan(plan).included_nanos
+    outcome = BillingAllowanceRepository(session).set_subscription_period(
+        user_id=account_id,
+        period_started_at=subscription.current_period_started_at,
+        period_ended_at=subscription.current_period_ended_at,
+        allowance_nanos=included_nanos,
     )
-    return start, end
+    if outcome is SubscriptionPeriodOutcome.Unchanged:
+        return provider_credit_grant_id
+    if outcome is SubscriptionPeriodOutcome.ReTermed and provider_credit_grant_id:
+        payments.expire_credit_grant(provider_credit_grant_id=provider_credit_grant_id)
+    return payments.create_credit_grant(
+        account_id=account_id,
+        provider_customer_id=provider_customer_id,
+        amount_nanos=included_nanos,
+        period_started_at=subscription.current_period_started_at,
+        period_ended_at=subscription.current_period_ended_at,
+    ).provider_credit_grant_id
 
 
-@dataclass(frozen=True, slots=True)
-class BillingPeriodService:
-    """Opens and closes what an account is billed for."""
-
-    session: Session
-
-    def open_for_month(self, *, user_id: str, day: date) -> BillingPeriod:
-        start, end = month_bounds(day)
-        plan = self._plan_for(user_id)
-        return BillingPeriodRepository(self.session).open_period(
-            user_id=user_id,
-            period_start=start,
-            period_end=end,
-            plan=plan,
-            currency=DEFAULT_BILLING_PLANS.for_plan(plan).currency,
-        )
-
-    def close_for_month(self, *, user_id: str, day: date) -> BillingPeriod:
-        """Settle the month: total the usage, apply the plan, freeze the result.
-
-        The plan is read now and written onto the period, so an account that
-        upgraded mid-month is billed on what it ends the month holding rather
-        than on whatever it was when the period first opened. Whatever it is, the
-        numbers stop moving here: a rate change tomorrow moves next month.
-        """
-
-        start, end = month_bounds(day)
-        periods = BillingPeriodRepository(self.session)
-        plan = self._plan_for(user_id)
-        config = DEFAULT_BILLING_PLANS.for_plan(plan)
-        periods.open_period(
-            user_id=user_id,
-            period_start=start,
-            period_end=end,
-            plan=plan,
-            currency=config.currency,
-        )
-        usage_cost_nanos = periods.usage_cost_for(
-            user_id=user_id, period_start=start, period_end=end
-        )
-        return periods.close_period(
-            user_id=user_id,
-            period_start=start,
-            plan=plan,
-            usage_cost_nanos=usage_cost_nanos,
-            included_cost_nanos=config.included_cost_nanos,
-            subscription_cost_nanos=config.monthly_price_nanos,
-            charged_cost_nanos=config.charge_for(usage_cost_nanos),
-        )
-
-    def _plan_for(self, user_id: str) -> BillingPlan:
-        account = BillingAccountRepository(self.session).get_by_user(user_id)
-        return account.plan if account is not None else BillingPlan.Free
-
-
-__all__ = ["BillingPeriodService", "month_bounds"]
+__all__ = ["carry_plan_into_cycle"]

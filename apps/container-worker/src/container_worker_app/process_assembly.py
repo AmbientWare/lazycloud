@@ -359,6 +359,7 @@ def assemble_worker_process_services(
             execution=execution,
             lifecycle=lifecycle,
             image_builds=image_builds,
+            usage_recorder=usage_supervisor,
             worker_gpu_type=registration.gpu_type,
         ),
         retention=retention,

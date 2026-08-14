@@ -7,7 +7,6 @@ from shared.image_building.records import BuildStatus, ImageBuildPhase
 
 from images.building.models import (
     ImageBuildCancellationPlan,
-    ImageBuildKeyEventOperation,
     ImageBuildLifecycleAction,
     ImageBuildSessionPlan,
     ImageBuildSessionStep,
@@ -15,10 +14,6 @@ from images.building.models import (
     ImageBuildSpinupTimeoutReason,
     ImageBuildStreamEventKind,
     ImageBuildStreamEventPlan,
-    ImageBuildTtlEventKind,
-    ImageBuildTtlKeyEventPlan,
-    ImageBuildTtlKeyFamily,
-    ImageBuildTtlPlan,
     ImageBuildWaitOutcome,
     ImageBuildWaitPlan,
     ImageBuildWorkReason,
@@ -29,9 +24,7 @@ BUILD_CONTAINER_KEEPALIVE_INTERVAL_SECONDS = 10
 IMAGE_BUILD_CONTAINER_TTL_SECONDS = 60
 DEFAULT_BUILD_CONTAINER_SPINUP_TIMEOUT_SECONDS = 600
 DOCKERFILE_BUILD_CONTAINER_SPINUP_TIMEOUT_SECONDS = 60 * 60
-BUILD_CONTAINER_ID_PREFIX = "build-"
 IMAGE_BUILD_CONTAINER_TTL_KEY_PREFIX = "image:build_container_ttl:"
-SCHEDULER_CONTAINER_STATE_KEY_PREFIX = "scheduler:container:state:"
 
 
 def plan_image_build_session(
@@ -41,7 +34,6 @@ def plan_image_build_session(
     clip_version: int = 2,
     image_id: str = "",
     build_id: str = "",
-    container_id: str = "",
     context_cancelled: bool = False,
     build_succeeded: bool = False,
     container_connected: bool = False,
@@ -67,7 +59,7 @@ def plan_image_build_session(
             clip_version=clip_version,
             image_id=image_id,
             build_id=build_id,
-            container_id=container_id,
+            container_id=build_id,
             build_container_required=False,
             v2=v2,
             steps=[ImageBuildSessionStep.Complete],
@@ -104,7 +96,7 @@ def plan_image_build_session(
         clip_version=clip_version,
         image_id=image_id,
         build_id=build_id,
-        container_id=container_id,
+        container_id=build_id,
         build_container_required=True,
         v2=v2,
         steps=steps,
@@ -267,54 +259,6 @@ def image_build_container_ttl_key(container_id: str) -> str:
     return f"{IMAGE_BUILD_CONTAINER_TTL_KEY_PREFIX}{container_id}"
 
 
-def image_build_scheduler_container_state_key(container_id: str) -> str:
-    return f"{SCHEDULER_CONTAINER_STATE_KEY_PREFIX}{container_id}"
-
-
-def plan_image_build_ttl_key_event(
-    *,
-    operation: ImageBuildKeyEventOperation | str,
-    key: str,
-    has_build_container_ttl: bool = True,
-    build_container_prefix: str = BUILD_CONTAINER_ID_PREFIX,
-) -> ImageBuildTtlKeyEventPlan:
-    normalized_operation = _normalize_key_event_operation(operation)
-    ttl_container_id = _container_id_from_key(key, IMAGE_BUILD_CONTAINER_TTL_KEY_PREFIX)
-    if normalized_operation is ImageBuildKeyEventOperation.Expired and ttl_container_id:
-        ttl_plan = plan_image_build_ttl_event(
-            ImageBuildTtlEventKind.BuildTtlExpired,
-            container_id=ttl_container_id,
-        )
-        return ImageBuildTtlKeyEventPlan(
-            family=ImageBuildTtlKeyFamily.BuildContainerTtl,
-            event_kind=ImageBuildTtlEventKind.BuildTtlExpired,
-            container_id=ttl_container_id,
-            relevant=True,
-            ttl_plan=ttl_plan,
-            reason=ttl_plan.reason,
-        )
-
-    state_container_id = _container_id_from_key(key, SCHEDULER_CONTAINER_STATE_KEY_PREFIX)
-    if normalized_operation is ImageBuildKeyEventOperation.Set and state_container_id.startswith(
-        build_container_prefix
-    ):
-        ttl_plan = plan_image_build_ttl_event(
-            ImageBuildTtlEventKind.SchedulerStateSet,
-            has_build_container_ttl=has_build_container_ttl,
-            container_id=state_container_id,
-        )
-        return ImageBuildTtlKeyEventPlan(
-            family=ImageBuildTtlKeyFamily.SchedulerContainerState,
-            event_kind=ImageBuildTtlEventKind.SchedulerStateSet,
-            container_id=state_container_id,
-            relevant=ttl_plan.stop_container,
-            ttl_plan=ttl_plan,
-            reason=ttl_plan.reason,
-        )
-
-    return ImageBuildTtlKeyEventPlan(reason="key event is not an image build TTL signal")
-
-
 def plan_image_build_cancellation(
     *,
     context_cancelled: bool,
@@ -349,31 +293,6 @@ def plan_image_build_cancellation(
         delete_pending_state=True,
         reason="cancel pending build container",
     )
-
-
-def plan_image_build_ttl_event(
-    event_kind: ImageBuildTtlEventKind,
-    *,
-    has_build_container_ttl: bool = True,
-    container_id: str = "",
-) -> ImageBuildTtlPlan:
-    if event_kind is ImageBuildTtlEventKind.BuildTtlExpired:
-        return ImageBuildTtlPlan(
-            action=ImageBuildLifecycleAction.StopExpiredContainer,
-            stop_container=True,
-            container_id=container_id,
-            reason="build container TTL expired",
-        )
-
-    if event_kind is ImageBuildTtlEventKind.SchedulerStateSet and not has_build_container_ttl:
-        return ImageBuildTtlPlan(
-            action=ImageBuildLifecycleAction.StopExpiredContainer,
-            stop_container=True,
-            container_id=container_id,
-            reason="scheduler state exists without build container TTL",
-        )
-
-    return ImageBuildTtlPlan(reason="build container TTL is still active")
 
 
 def plan_image_build_spinup_timeout(
@@ -553,23 +472,3 @@ def _stream_kind_for_status(status: BuildStatus) -> ImageBuildStreamEventKind:
     if status is BuildStatus.Timeout:
         return ImageBuildStreamEventKind.Timeout
     return ImageBuildStreamEventKind.Failed
-
-
-def _normalize_key_event_operation(
-    operation: ImageBuildKeyEventOperation | str,
-) -> ImageBuildKeyEventOperation:
-    if isinstance(operation, ImageBuildKeyEventOperation):
-        return operation
-    normalized = operation.strip().lower()
-    if normalized in {"set", "create", "created"}:
-        return ImageBuildKeyEventOperation.Set
-    if normalized in {"expired", "expire"}:
-        return ImageBuildKeyEventOperation.Expired
-    return ImageBuildKeyEventOperation.Other
-
-
-def _container_id_from_key(key: str, prefix: str) -> str:
-    index = key.find(prefix)
-    if index < 0:
-        return ""
-    return key[index + len(prefix) :].strip()

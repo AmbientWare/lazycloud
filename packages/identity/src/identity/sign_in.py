@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Protocol
 
 from coordination.redis_client import RedisClient
 from database.repositories.identity import UserIdentityRepository, UserRepository
@@ -44,6 +45,18 @@ _SIGN_IN_EXCHANGE_KEY_NAMESPACE = "identity:sign-in-exchange"
 
 class SignInStateStoreError(RuntimeError):
     pass
+
+
+class BillingProvisioner(Protocol):
+    """Set a signed-in account up with whoever bills it.
+
+    Named parameters rather than a bare two-string callable: the other
+    collaborator sign-in is handed takes two strings as well, and a shape that
+    cannot tell them apart is one a comment has to. Idempotent, because sign-in
+    calls it on every attempt and repairs a failed one by trying again.
+    """
+
+    def __call__(self, *, user_id: str, workspace_id: str) -> None: ...
 
 
 class _SignInStatePayload(ContractModel):
@@ -87,6 +100,7 @@ class SignInService:
     redis: RedisClient
     provider_factory: Callable[[], ExternalIdentityProvider]
     provision_default_workspace: Callable[[str, str], WorkspaceRecord]
+    provision_billing_account: BillingProvisioner
     ttl_seconds: int = SESSION_TTL_SECONDS
 
     def start(self, *, return_to: str = "") -> SignInStart:
@@ -127,10 +141,13 @@ class SignInService:
             raise AuthError("invalid sign-in state") from exc
         profile = self._provider().identify(code=code, code_verifier=payload.code_verifier)
         user = self._resolve_account(profile)
-        # Unconditional, and outside the transaction because it reaches object storage.
-        # Idempotent, so an account whose workspace creation failed once is repaired at
-        # the next sign-in rather than left without one forever.
-        self.provision_default_workspace(user.id, profile.login)
+        # Unconditional, and idempotent by contract, so an account whose provisioning
+        # failed once is repaired at the next sign-in rather than left short of it
+        # forever. A failure refuses the sign-in — no exchange code is minted, so no
+        # session can exist — because an account the platform cannot finish
+        # provisioning must never start work.
+        workspace = self.provision_default_workspace(user.id, profile.login)
+        self.provision_billing_account(user_id=user.id, workspace_id=workspace.id)
         return self._store(
             _SIGN_IN_EXCHANGE_KEY_NAMESPACE,
             _SIGN_IN_EXCHANGE_PREFIX,
@@ -267,6 +284,7 @@ __all__ = [
     "SIGN_IN_EXCHANGE_TTL_SECONDS",
     "SIGN_IN_STATE_TTL_SECONDS",
     "AuthenticatedSession",
+    "BillingProvisioner",
     "SignInService",
     "SignInStart",
     "SignInStateStoreError",

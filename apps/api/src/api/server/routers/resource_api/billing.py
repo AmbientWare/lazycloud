@@ -2,19 +2,90 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from billing.costs import BillingStanding, BillingStandingService
 from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import APIRouter, Depends, status
-from shared.billing_plans import DEFAULT_BILLING_PLANS
 from shared.errors import InvalidInputError, NotFoundError
-from shared.http.billing import BillingHostedSessionRequest, BillingHostedSessionResponse
+from shared.http.billing import (
+    BillingAllowanceResponse,
+    BillingHostedSessionRequest,
+    BillingHostedSessionResponse,
+    BillingPlanResponse,
+    BillingSummaryResponse,
+)
+from shared.payments import BILLING_CURRENCY
+from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
-from api.server.auth import write_user
+from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
 from api.server.services import ApiServices
 from billing import BillingAccountService
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+
+
+@router.get(
+    "/summary",
+    response_model=BillingSummaryResponse,
+    operation_id="get_billing_summary",
+)
+def billing_summary(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> BillingSummaryResponse:
+    """What this account is on, and what it has left to spend.
+
+    Answered about the signed-in person rather than a workspace: the provider
+    invoices an account, and someone running dev, staging and prod holds three
+    workspaces against one payment relationship.
+    """
+
+    with services.context.database.session() as session:
+        standing = BillingStandingService(session).standing(user_id=user_id, at=utc_now())
+    return _summary(standing)
+
+
+@router.post(
+    "/subscription",
+    response_model=BillingSummaryResponse,
+    operation_id="subscribe_billing_plan",
+)
+def subscribe_billing_plan(
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> BillingSummaryResponse:
+    """Move this account onto the Team plan, with the usage that plan includes.
+
+    A price changed on the subscription the account already holds rather than a
+    subscription created: the billing anniversary and the usage already metered
+    this cycle both survive it, and the provider charges the prorated difference
+    at once. `200` rather than `201` for that reason — every account already
+    holds the subscription this modifies, and nothing here has a new address for
+    a caller to follow.
+
+    Bodiless, because there is one plan to move to: a body naming which would be
+    a caller holding a catalog this platform publishes, and two callers naming it
+    differently would be two customers on different subscriptions for one plan.
+
+    Answers with the standing the account now has rather than the provider's
+    record of the subscription. What the caller does next is decided by what they
+    may spend and until when, and the subscription's own identifiers are the
+    provider's business — publishing them here would put a second name for the
+    same relationship on the wire.
+    """
+
+    provider = services.payment_provider()
+    with services.context.database.session() as session:
+        BillingAccountService(session).subscribe(
+            provider,
+            user_id=user_id,
+            workspace_id=_workspace_of(session, user_id),
+        )
+        # Committed before the standing is read, so what comes back is what the
+        # next request will read rather than what this transaction can still lose.
+        session.commit()
+        return _summary(BillingStandingService(session).standing(user_id=user_id, at=utc_now()))
 
 
 @router.post(
@@ -35,9 +106,11 @@ def start_billing_card_setup(
     a payment method now exists. Nothing here ever sees a card number, which is
     what keeps this repository outside the scope of cardholder data rules.
 
-    Registering the customer happens here too, because the page cannot be opened
-    without one — which is the moment a person first sets out to pay, and the
-    right moment for the account row to start existing.
+    The account is provisioned here too, because the page cannot be opened
+    without a customer. Anyone who signed in was provisioned then, so this reads
+    what already exists; an account reaching this page is one this platform will
+    bill, so an administrator-minted one gets its customer, its subscription and
+    its allowance here for the same reason sign-in gives them.
     """
 
     # Checked before anything else happens. A rejected address must not leave a
@@ -47,7 +120,7 @@ def start_billing_card_setup(
     cancel_url = _own_url(services, request.cancel_url or request.return_url)
     provider = services.payment_provider()
     with services.context.database.session() as session:
-        account = BillingAccountService(session).payment_customer_for(
+        account = BillingAccountService(session).billing_account_for(
             provider,
             user_id=user_id,
             workspace_id=_workspace_of(session, user_id),
@@ -55,7 +128,9 @@ def start_billing_card_setup(
         session.commit()
     session_url = provider.card_setup_session(
         provider_customer_id=account.provider_customer_id,
-        currency=DEFAULT_BILLING_PLANS.for_plan(account.plan).currency,
+        # Required by the provider even though the page charges nothing, and it
+        # has to be the currency the customer is later charged in.
+        currency=BILLING_CURRENCY,
         success_url=return_url,
         cancel_url=cancel_url,
     )
@@ -75,9 +150,10 @@ def start_billing_portal(
 ) -> BillingHostedSessionResponse:
     """Open the provider's page for managing what this platform bills.
 
-    Replacing a card and reading past invoices. Refused for an account that has
-    never registered to pay, because there is nothing there to manage and the
-    provider has nobody to show — such a caller wants the card page instead.
+    Replacing a card and reading past invoices. Refused for an account named
+    nowhere at the provider — one that has never signed in — because there is
+    nothing there to manage and the provider has nobody to show; such a caller
+    wants the card page instead.
     """
 
     return_url = _own_url(services, request.return_url)
@@ -88,6 +164,33 @@ def start_billing_portal(
         return_url=return_url,
     )
     return BillingHostedSessionResponse(url=session_url.url)
+
+
+def _summary(standing: BillingStanding) -> BillingSummaryResponse:
+    allowance = standing.allowance
+    return BillingSummaryResponse(
+        status=standing.status,
+        currency=BILLING_CURRENCY,
+        plan=(
+            BillingPlanResponse(
+                id=standing.plan,
+                allowance=(
+                    BillingAllowanceResponse(
+                        period_started_at=allowance.period.started_at,
+                        period_ended_at=allowance.period.ended_at,
+                        allowance_nanos=allowance.period.allowance_nanos,
+                        spent_nanos=allowance.spent_nanos,
+                        remaining_nanos=allowance.remaining_nanos,
+                    )
+                    if allowance is not None
+                    else None
+                ),
+            )
+            if standing.plan is not None
+            else None
+        ),
+        portal_available=standing.portal_available,
+    )
 
 
 def _own_url(services: ApiServices, candidate: str) -> str:

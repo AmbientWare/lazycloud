@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import (
@@ -13,6 +14,7 @@ from database.repositories.orchestration import (
 )
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
+from shared.billing_quotes import ContainerShape
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
@@ -43,6 +45,7 @@ class ContainerSchedulingPersistenceService:
         runtime_machine_id: str,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
+        shape: ContainerShape | None = None,
     ) -> None:
         if not runtime_worker_id:
             raise InvalidInputError("runtime worker id is required")
@@ -97,6 +100,18 @@ class ContainerSchedulingPersistenceService:
                 "worker_id": compute_worker_id,
                 "machine_id": compute_machine_id,
             }
+            if shape is not None:
+                # Written here because this is where the control plane decides
+                # where a container runs: a container that is running has a shape
+                # and one that never started has none. Recorded from what was
+                # placed rather than from what the worker later reports, and in
+                # this transaction so the two cannot disagree.
+                ContainerBillingShapeRepository(session).record(
+                    container_id=container_id,
+                    workspace_id=workspace_id,
+                    shape=shape,
+                )
+
             if any(getattr(container, field) != value for field, value in update.items()):
                 container = containers.upsert(container.model_copy(update=update))
                 changed = True

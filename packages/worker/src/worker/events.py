@@ -95,9 +95,6 @@ class WorkerPoolMode(StrEnum):
 
 class WorkerUsageMetricName(StrEnum):
     ContainerDuration = "container_duration_milliseconds"
-    Cpu = "cpu_seconds"
-    Memory = "memory_gib_seconds"
-    Gpu = "gpu_seconds"
     CpuUsed = "cpu_used_core_seconds"
     MemoryRss = "memory_rss_byte_seconds"
     MemorySwap = "memory_swap_byte_seconds"
@@ -622,42 +619,22 @@ def plan_worker_usage_metrics(
         "gpu_count": request.gpu_count,
         "duration_ms": duration_ms,
         "pool_mode": pool_mode.value,
+        # Telemetry, deciding nothing. What this worker believes it is, beside the
+        # rest of what it believes about itself; cost comes from the placement the
+        # control plane recorded in `container_billing_shapes`, which a worker
+        # cannot write.
         "billing_owner": billing_owner.value,
     }
-    duration_seconds = duration_ms / 1_000
     measured = evidence or WorkerUsageEvidence()
-    # A request is a floor, not a cap: a container can burst well past what it
-    # reserved, so billing the reservation alone would undercount the burst. Bill
-    # the greater of the two, per window, so a short burst is not charged as if it
-    # lasted the whole container.
-    billable_cpu_core_seconds = max(
-        request.cpu_millicores / 1_000 * duration_seconds,
-        measured.cpu_used_core_seconds,
-    )
-    billable_memory_gib_seconds = max(
-        request.memory_mib / 1_024 * duration_seconds,
-        measured.memory_rss_byte_seconds / 1_024**3,
-    )
+    # The window and what was measured over it. What the container reserved is
+    # not restated as its own metric: the ledger prices the reservation from the
+    # placement the control plane recorded, and this worker's view of it is a
+    # label on a machine a customer has root on.
     plans = [
         WorkerUsageMetricPlan(
             name=WorkerUsageMetricName.ContainerDuration,
             labels=labels,
             value=float(duration_ms),
-        ),
-        WorkerUsageMetricPlan(
-            name=WorkerUsageMetricName.Cpu,
-            labels=labels,
-            value=billable_cpu_core_seconds,
-        ),
-        WorkerUsageMetricPlan(
-            name=WorkerUsageMetricName.Memory,
-            labels=labels,
-            value=billable_memory_gib_seconds,
-        ),
-        WorkerUsageMetricPlan(
-            name=WorkerUsageMetricName.Gpu,
-            labels=labels,
-            value=request.gpu_count * duration_seconds,
         ),
     ]
     if measured.disk_used_byte_seconds > 0:

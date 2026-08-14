@@ -39,6 +39,7 @@ from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
 )
+from shared.billing_quotes import ContainerShape
 from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import (
@@ -303,6 +304,7 @@ class _Assignments:
         runtime_machine_id: str,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
+        shape: ContainerShape | None = None,
     ) -> None:
         _ = (
             container_id,

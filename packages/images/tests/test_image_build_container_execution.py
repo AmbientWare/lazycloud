@@ -30,6 +30,7 @@ from scheduler.state import (
     SchedulerContainerAddress,
     SchedulerWorkerRequest,
 )
+from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
 from shared.image_building.records import BuildStatus
@@ -231,6 +232,7 @@ def test_scheduler_image_build_executor_submits_waits_and_delegates(
         scheduler,
         factory,
         pending_state,
+        _ContainerRecords(),
         pool_selector="image-build",
         address_wait_timeout_seconds=1,
         address_poll_interval_seconds=0,
@@ -264,6 +266,7 @@ def test_scheduler_image_build_executor_reports_scheduler_error(tmp_path: Path) 
         scheduler,
         factory,
         pending_state,
+        _ContainerRecords(),
     )
 
     result = executor.execute(request)
@@ -284,6 +287,7 @@ def test_scheduler_image_build_executor_does_not_expose_submission_exception(
         _FailingContainerRequestScheduler(secret),
         _SequencedExecutorFactory([]),
         pending_state,
+        _ContainerRecords(),
     )
 
     result = executor.execute(request)
@@ -304,6 +308,7 @@ def test_scheduler_image_build_executor_cancels_pending_request_after_address_ti
         _ContainerRequestScheduler(),
         _SequencedExecutorFactory([]),
         pending_state,
+        _ContainerRecords(),
         address_wait_timeout_seconds=0,
     )
 
@@ -338,6 +343,7 @@ def test_scheduler_image_build_executor_tombstone_drops_queued_request_after_tim
         _ContainerRequestScheduler(),
         _SequencedExecutorFactory([]),
         SchedulerImageBuildContainerStateStore(containers),
+        _ContainerRecords(),
         address_wait_timeout_seconds=0,
     )
 
@@ -380,6 +386,7 @@ def test_scheduler_image_build_executor_cancels_pending_request_when_credentials
         _ContainerRequestScheduler(),
         _SequencedExecutorFactory([]),
         pending_state,
+        _ContainerRecords(),
     )
 
     result = executor.execute(request)
@@ -412,6 +419,7 @@ def test_scheduler_image_build_executor_defers_placement_to_the_workspace_policy
             ]
         ),
         _PendingContainerState(),
+        _ContainerRecords(),
     )
 
     result = executor.execute(request)
@@ -463,6 +471,7 @@ def test_scheduler_stages_and_cleans_private_build_credentials(tmp_path: Path) -
         scheduler,
         factory,
         _PendingContainerState(),
+        _ContainerRecords(),
         credential_cache=credential_cache,
     )
 
@@ -509,6 +518,7 @@ def test_scheduler_private_input_validation_never_emits_secret_values(tmp_path: 
         scheduler,
         _SequencedExecutorFactory([]),
         pending_state,
+        _ContainerRecords(),
         credential_cache=_RecordingCredentialCache(),
     )
 
@@ -544,6 +554,7 @@ def test_scheduler_failure_reaches_real_image_service_and_cleans_pending_state_a
             ]
         ),
         pending_state,
+        isolated_services.containers,
         credential_cache=credential_cache,
     )
     service = ImageBuildService(
@@ -570,6 +581,10 @@ def test_scheduler_failure_reaches_real_image_service_and_cleans_pending_state_a
     assert len(credential_cache.puts) == 1
     assert credential_cache.deletes == [credential_cache.puts[0][0]]
     assert service.get(execution.record.id).error == scheduling_failure
+    # The row the scheduler assigns a worker to and the ledger prices the
+    # build's placement against. Without it a build is unbillable capacity.
+    reserved = isolated_services.containers.get(execution.session.container_id)
+    assert reserved.id == execution.record.id
 
 
 def _request(
@@ -591,7 +606,6 @@ def _request(
         clip_version=clip_version,
         image_id=plan.image_id,
         build_id="build-1",
-        container_id="build-container-1",
     )
     return ImageBuildExecutionRequest(
         build_id="build-1",
@@ -605,6 +619,33 @@ def _request(
         session=session,
         build_args=build_args or {},
     )
+
+
+class _ContainerRecords:
+    """Stands in for the control plane's container rows.
+
+    The reservation's own refusals belong to `ContainerService`; what these cases
+    prove is what the build executor does around it.
+    """
+
+    def __init__(self) -> None:
+        self.reserved: list[tuple[str, str, str]] = []
+
+    def reserve_image_build_container(
+        self,
+        *,
+        container_id: str,
+        workspace_id: str,
+        image_id: str,
+    ) -> ContainerRecord:
+        self.reserved.append((container_id, workspace_id, image_id))
+        return ContainerRecord(
+            id=container_id,
+            name=f"image-build-{container_id}",
+            image=image_id,
+            command=[],
+            workspace_id=workspace_id,
+        )
 
 
 class _FakeBuildContainerClient:

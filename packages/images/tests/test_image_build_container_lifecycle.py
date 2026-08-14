@@ -25,7 +25,6 @@ def test_image_build_container_lifecycle_service_refreshes_ttl_and_cancels() -> 
         ImageSpec(packages=["httpx"]),
         image_id="image-1",
         build_id="build-1",
-        container_id="build-container-1",
     )
 
     start = service.start_session(session)
@@ -38,8 +37,8 @@ def test_image_build_container_lifecycle_service_refreshes_ttl_and_cancels() -> 
     )
 
     assert start.status is ImageBuildContainerLifecycleStatus.Complete
-    assert ttl.sets == [("build-container-1", IMAGE_BUILD_CONTAINER_TTL_SECONDS)]
-    assert start.cache_metadata["build_container_id"] == "build-container-1"
+    assert ttl.sets == [("build-1", IMAGE_BUILD_CONTAINER_TTL_SECONDS)]
+    assert start.cache_metadata["build_container_id"] == "build-1"
     assert start.cache_metadata["build_container_ttl_status"] == "complete"
     assert cancel.status is ImageBuildContainerLifecycleStatus.Complete
     assert cancel.actions == [
@@ -47,9 +46,9 @@ def test_image_build_container_lifecycle_service_refreshes_ttl_and_cancels() -> 
         ImageBuildLifecycleAction.MarkStopping,
         ImageBuildLifecycleAction.KillContainer,
     ]
-    assert stop.sent == ["build-container-1"]
-    assert state.marked == [("build-container-1", IMAGE_BUILD_CONTAINER_TTL_SECONDS)]
-    assert killer.killed == ["build-container-1"]
+    assert stop.sent == ["build-1"]
+    assert state.marked == [("build-1", IMAGE_BUILD_CONTAINER_TTL_SECONDS)]
+    assert killer.killed == ["build-1"]
     assert cancel.cache_metadata["build_container_cancel_status"] == "complete"
 
 

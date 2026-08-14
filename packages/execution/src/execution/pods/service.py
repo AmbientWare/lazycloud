@@ -669,7 +669,6 @@ class PodControlService:
             resource=stub.kind,
             stub_id=stub.id,
             port=request.port,
-            public=self._stub_is_public(stub),
             container_id=container.id,
         )
         self._store_url(container_id, request.port, url)
@@ -1279,17 +1278,6 @@ class PodControlService:
         with self.services.context.database.session() as session:
             records = PodExecutionRepository(session).urls.list_for_container(container_id)
         return {item.port: item.url for item in records}
-
-    def _stub_is_public(self, stub: StubRecord) -> bool:
-        if stub.public:
-            return True
-        if stub.app_id is None:
-            return False
-        try:
-            app = self.services.apps.get(stub.app_id, workspace=stub.workspace_id)
-            return app.workspace_id == stub.workspace_id and app.public
-        except NotFoundError:
-            return False
 
 
 def _file_info(value: ContainerSandboxFileInfo) -> PodSandboxFileInfo:

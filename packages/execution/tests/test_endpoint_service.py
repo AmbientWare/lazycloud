@@ -9,7 +9,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import ContainerRepository
-from execution.endpoints.dispatch import EndpointDispatchUnavailable
+from execution.endpoints.dispatch import EndpointDispatchUnavailable, EndpointInstanceDispatcher
 from execution.endpoints.service import EndpointControlService
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.state import SchedulerWorkerRequest
@@ -89,13 +89,6 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
     assert payload.checkpoint_exposed_ports == [8001]
 
 
-class _NoStatesDispatcher:
-    """A scheduler holding no account of the container, so the exit code answers."""
-
-    def container_states(self, stub_id: str) -> list[object]:
-        return []
-
-
 def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
     isolated_services: ApiServices,
 ) -> None:
@@ -107,6 +100,9 @@ def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
 
     Driving the whole wait loop here would prove no more and cost a fake scheduler:
     warmup writes a pending container, and only a scheduler moves that to failed.
+
+    The dispatcher is the production one: the scheduler holds no account of a
+    container nothing ever scheduled, so the exit code is what answers.
     """
 
     control = ControlPlaneService(isolated_services.context)
@@ -129,7 +125,6 @@ def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
                 exit_code=1,
             )
         )
+    dispatcher = EndpointInstanceDispatcher(isolated_services.scheduler_containers)
     with pytest.raises(EndpointDispatchUnavailable, match="exit code 1"):
-        EndpointControlService(isolated_services)._raise_if_capacity_is_dead(
-            _NoStatesDispatcher(), stub
-        )
+        EndpointControlService(isolated_services)._raise_if_capacity_is_dead(dispatcher, stub)

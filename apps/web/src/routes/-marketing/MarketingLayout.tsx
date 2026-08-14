@@ -4,15 +4,29 @@ import { Menu, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import { Glyph, PendingLink, PendingMarketingButton, shell } from "./MarketingPrimitives";
+import {
+  Glyph,
+  PendingLink,
+  PendingMarketingButton,
+  shell,
+  type MarketingRoute,
+} from "./MarketingPrimitives";
 
 import "./marketing.css";
 
-/* Docs-owned destinations stay visible but inert until their public URLs are set. */
-const navigation = ["Examples", "Pricing", "Docs"] as const;
+/* A destination without a page stays visible but inert until one exists. */
+const navigation: readonly { label: string; to?: MarketingRoute }[] = [
+  { label: "Examples" },
+  { label: "Pricing", to: "/pricing" },
+  { label: "Docs" },
+];
 
 const navLink =
   "inline-flex min-h-11 items-center rounded-md px-3 py-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:min-h-9 [@media(pointer:coarse)]:!min-h-11";
+
+/* The attribute selector outranks the base colour, which two competing text
+   utilities would decide by stylesheet order instead. */
+const navLinkActive = "data-[status=active]:font-semibold data-[status=active]:text-foreground";
 
 const footerLink =
   "inline-flex min-h-8 w-max items-center text-xs text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:min-h-11";
@@ -70,11 +84,17 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
           </Link>
 
           <nav className="flex items-center gap-1 max-md:hidden" aria-label="Primary navigation">
-            {navigation.map((label) => (
-              <PendingLink className={navLink} key={label}>
-                {label}
-              </PendingLink>
-            ))}
+            {navigation.map((entry) =>
+              entry.to ? (
+                <Link className={cn(navLink, navLinkActive)} key={entry.label} to={entry.to}>
+                  {entry.label}
+                </Link>
+              ) : (
+                <PendingLink className={navLink} key={entry.label}>
+                  {entry.label}
+                </PendingLink>
+              ),
+            )}
           </nav>
 
           <div className="flex items-center gap-2 justify-self-end">
@@ -114,7 +134,9 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
           >
             <FooterColumn title="Product">
               <PendingLink className={footerLink}>Examples</PendingLink>
-              <PendingLink className={footerLink}>Pricing</PendingLink>
+              <Link className={footerLink} to="/pricing">
+                Pricing
+              </Link>
             </FooterColumn>
             <FooterColumn title="Developers">
               <PendingLink className={footerLink}>Docs</PendingLink>
@@ -206,15 +228,27 @@ function MobileNavigation() {
           aria-label="Mobile navigation"
         >
           <div className="px-4 pt-2 pb-4">
-            {navigation.map((label) => (
-              <PendingLink
-                className="flex min-h-11 w-full items-center justify-between border-b border-border px-0.5 py-2.5"
-                key={label}
-              >
-                <span>{label}</span>
-                <Glyph>↗</Glyph>
-              </PendingLink>
-            ))}
+            {navigation.map((entry) =>
+              entry.to ? (
+                <Link
+                  className="flex min-h-11 w-full items-center justify-between border-b border-border px-0.5 py-2.5 data-[status=active]:font-semibold"
+                  key={entry.label}
+                  onClick={() => setOpen(false)}
+                  to={entry.to}
+                >
+                  <span>{entry.label}</span>
+                  <Glyph>↗</Glyph>
+                </Link>
+              ) : (
+                <PendingLink
+                  className="flex min-h-11 w-full items-center justify-between border-b border-border px-0.5 py-2.5"
+                  key={entry.label}
+                >
+                  <span>{entry.label}</span>
+                  <Glyph>↗</Glyph>
+                </PendingLink>
+              ),
+            )}
             <PendingMarketingButton className="marketing-action-primary stamp mt-3 border-brand/45">
               Private beta
             </PendingMarketingButton>

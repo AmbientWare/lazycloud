@@ -171,9 +171,23 @@ class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
 class WorkspaceTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "workspaces"
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("name", name="uq_workspaces_name"),
+        # A workspace is never removed, so uniqueness on the bare name would retain
+        # every name any workspace ever had. Only a workspace that still exists to
+        # its members holds its name; the deleted tombstone has released it, and the
+        # row stays for the billing, usage and audit history that points at it.
+        Index(
+            "uq_workspaces_name",
+            "name",
+            unique=True,
+            postgresql_where=text("status <> 'deleted'"),
+            sqlite_where=text("status <> 'deleted'"),
+        ),
         UniqueConstraint("external_id", name="uq_workspaces_external_id"),
         Index("ix_workspaces_external_id", "external_id"),
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'deleting', 'deleted')",
+            name="ck_workspaces_status",
+        ),
     )
 
     external_id: Mapped[str] = mapped_column(
@@ -182,6 +196,10 @@ class WorkspaceTable(IdPayloadTable, DatabaseBase):
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    """Lifecycle state, a column rather than a payload key because the index that
+    frees a name and every query that hides an inactive workspace filter on it."""
+
     signing_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     storage_id: Mapped[str | None] = mapped_column(
         uuid_type,

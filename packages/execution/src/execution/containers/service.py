@@ -32,7 +32,7 @@ from shared.container_requests import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.errors import InvalidInputError, NotFoundError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.scheduling import (
@@ -185,6 +185,40 @@ class ContainerService:
             name=reservation.name,
             status=ContainerStatus.Pending.value,
         )
+
+    def reserve_image_build_container(
+        self,
+        *,
+        container_id: str,
+        workspace_id: str,
+        image_id: str,
+    ) -> ContainerRecord:
+        """Record the container an image build is about to run in.
+
+        A build holds a worker's cpu and memory for as long as it runs and is
+        billed for them, and the control plane prices a container from the
+        placement it recorded against this row. Without it a build is capacity
+        the platform gave away with nothing durable naming what ran, and its
+        usage arrives bounded by no lifetime the control plane can vouch for.
+
+        Owns its session because a build reaches here outside the transaction an
+        ordinary container is reserved in; the solvency refusal `reserve_pending`
+        makes is the same one, asked before the build costs anything.
+        """
+
+        with self.context.database.session() as session:
+            record = self.reserve_pending(
+                session,
+                PendingContainerReservation(
+                    id=container_id,
+                    name=f"image-build-{container_id}",
+                    image=image_id,
+                    command=[],
+                    workspace_id=workspace_id,
+                ),
+            )
+        self.publish_lifecycle_change(record, WorkspaceChangeType.Created)
+        return record
 
     def run(
         self,
@@ -612,6 +646,13 @@ class ContainerService:
 
     def delete(self, container_id: str) -> None:
         record = self.get(container_id)
+        if record.status in {ContainerStatus.Pending, ContainerStatus.Running}:
+            # The row is what authorizes the worker's usage writes and what the
+            # ledger prices the placement from, so deleting it under a live
+            # container silently ends metering while the work goes on running.
+            raise ConflictError(
+                f"container {container_id} is {record.status.value}: stop it before deleting"
+            )
         with self.context.database.session() as session:
             ContainerRepository(session).records.delete(
                 container_id,

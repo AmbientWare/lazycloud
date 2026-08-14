@@ -29,6 +29,7 @@ from images.scheduling import (
     IMAGE_BUILD_REQUEST_KIND,
     plan_image_build_container_request,
 )
+from shared.containers import ContainerRecord
 from shared.errors import DomainError
 from shared.image_building.records import BuildStatus
 from shared.scheduling import SchedulerContainerSubmitResult, SchedulerWorkerRequest
@@ -48,15 +49,23 @@ class ImageBuildContainerRequestScheduler(Protocol):
     def submit(self, request: SchedulerWorkerRequest) -> SchedulerContainerSubmitResult: ...
 
 
-class ImageBuildSolvency(Protocol):
-    """Whether this workspace's account may start a build.
+class ImageBuildContainerRecords(Protocol):
+    """The durable container row a build runs in.
 
-    A build is compute the platform pays for like any other, and it reaches the
-    worker without ever creating a container record — so the gate every other
-    workload passes through is one it would otherwise walk around.
+    A build holds a worker's capacity like any other container and is billed
+    from the placement the control plane records against that row, so the row
+    has to exist before the request is queued. Reserving it is also where the
+    account's solvency is settled, which is the gate every other workload
+    passes through on its way to a worker.
     """
 
-    def assert_solvent(self, *, workspace_id: str) -> None: ...
+    def reserve_image_build_container(
+        self,
+        *,
+        container_id: str,
+        workspace_id: str,
+        image_id: str,
+    ) -> ContainerRecord: ...
 
 
 class ImageBuildContainerExecutorFactory(Protocol):
@@ -76,6 +85,10 @@ class SchedulerImageBuildExecutor:
     scheduler: ImageBuildContainerRequestScheduler
     executor_factory: ImageBuildContainerExecutorFactory
     pending_container_state: ImageBuildContainerStateStore
+    containers: ImageBuildContainerRecords
+    """No default: a build the platform cannot record a container for is compute
+    it cannot price, and the scheduler refuses to place it anyway."""
+
     workspace_id: str = ""
     stub_id: str = IMAGE_BUILD_REQUEST_KIND
     pool_selector: str = ""
@@ -85,9 +98,6 @@ class SchedulerImageBuildExecutor:
     address_poll_interval_seconds: float = DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_SECONDS
     sleep: ImageBuildSleep = time.sleep
     credential_cache: ImageBuildCredentialStore | None = None
-    solvency: ImageBuildSolvency | None = None
-    """Absent only where nothing composes one. A deployment that bills has it, and
-    a build then costs the account nothing it has not agreed to pay for."""
 
     def execute(self, request: ImageBuildExecutionRequest) -> ImageBuildExecutionResult:
         events = [
@@ -145,13 +155,19 @@ class SchedulerImageBuildExecutor:
                     f"image build credential staging failed ({type(exc).__name__})",
                 )
 
-        if self.solvency is not None:
-            try:
-                self.solvency.assert_solvent(workspace_id=workspace_id)
-            except DomainError as exc:
-                # Before the container request, so a refused build reserves no
-                # worker and leaves no pending state behind it.
-                return self._failure_before_connection(request, events, str(exc))
+        try:
+            self.containers.reserve_image_build_container(
+                container_id=request.session.container_id,
+                workspace_id=workspace_id,
+                image_id=request.image_id,
+            )
+        except DomainError as exc:
+            # Before the container request, so a build the account may not start
+            # reserves no worker and leaves no pending state behind it. The
+            # scheduler assigns this container to a worker and records the
+            # placement the build is priced from, which needs the row already
+            # there.
+            return self._failure_before_connection(request, events, str(exc))
         try:
             try:
                 scheduled = self.scheduler.submit(plan.scheduler_request)

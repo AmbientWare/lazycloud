@@ -69,7 +69,7 @@ from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from gateway.shell_proxy import connect_shell_backend
 from identity.auth import AuthService, AuthTokenCache
-from identity.sign_in import SignInService
+from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
 from images.execution import (
@@ -107,7 +107,6 @@ from networking.tailnet_control import TailscaleTailnetControl
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
-    UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
@@ -253,7 +252,7 @@ from api.settings import (
     PublicIngressSettings,
     TcpIngressSettings,
 )
-from billing import DatabaseBillingAdmission, ImageBuildBillingAdmission
+from billing import BillingAccountService, DatabaseBillingAdmission
 from database import DatabaseClient
 
 
@@ -587,7 +586,6 @@ class ApiServices(ApiServiceCore):
         image_build_container_settings: ImageBuildContainerSettings | None = None,
         container_service_settings: ContainerServiceSettings | None = None,
         retention_settings: RetentionSettings | None = None,
-        usage_pricing_settings: UsagePricingSettings | None = None,
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
         volume_filesystem: VolumeFilesystem | None = None,
@@ -654,7 +652,6 @@ class ApiServices(ApiServiceCore):
         )
         container_service_config = container_service_settings or ContainerServiceSettings()
         retention_config = retention_settings or RetentionSettings()
-        usage_pricing_config = usage_pricing_settings or UsagePricingSettings()
         volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
         redis = redis_client
         stream_events = RedisEventStreamRepository(redis)
@@ -738,14 +735,17 @@ class ApiServices(ApiServiceCore):
             workspace_storage_client_factory=_workspace_storage_client,
             workspace_changes=workspace_changes,
         )
-        # The provider is built per call rather than once here, so a deployment that
-        # has not configured a GitHub App still starts and fails at the sign-in route
-        # naming what is missing, instead of refusing to serve anything at all.
+        payment_provider = stripe_config.provider_factory()
+        # Neither adapter is constructed here — both are callables that read their
+        # credential when first asked — so a deployment that has not configured a
+        # GitHub App or a payment credential still starts and fails at the sign-in
+        # route naming what is missing, instead of refusing to serve anything at all.
         sign_in = SignInService(
             context=context,
             redis=redis,
             provider_factory=GitHubAppSettings().provider,
             provision_default_workspace=control_plane.ensure_default_workspace,
+            provision_billing_account=_billing_account_provisioner(context, payment_provider),
         )
         resolved_volume_filesystem = volume_filesystem or WorkspaceVolumeFilesystem(
             resolve_store=workspace_volume_store_resolver(
@@ -772,7 +772,6 @@ class ApiServices(ApiServiceCore):
         )
         usage = UsageService(
             context,
-            price_catalog=usage_pricing_config.to_price_catalog(),
             workspace_changes=workspace_changes,
         )
         volume_metering_service = volume_metering or (
@@ -928,7 +927,7 @@ class ApiServices(ApiServiceCore):
             container_repository=container_repository,
             redis_client=redis,
             image_build_container_transport_factory=container_transport_factory,
-            database=database,
+            containers=containers,
         )
         resolved_image_archive_store = image_archive_store
         if resolved_image_archive_store is None and isinstance(
@@ -995,7 +994,7 @@ class ApiServices(ApiServiceCore):
             agent_route_reconciliation_settings=agent_route_reconciliation_config,
             gateway_settings=gateway_config,
             stripe_settings=stripe_config,
-            payment_provider=_payment_provider_factory(stripe_config),
+            payment_provider=payment_provider,
             workspace_change_stream_settings=workspace_change_stream_config,
             agent_binary_settings=agent_artifact_config,
             aws_account_connection_settings=aws_account_connection_config,
@@ -1543,27 +1542,27 @@ def _worker_repository_service(
     )
 
 
-def _payment_provider_factory(settings: StripeSettings) -> Callable[[], PaymentProvider]:
-    """A provider built at most once, from the settings this app composed.
+def _billing_account_provisioner(
+    context: ServiceContext, payments: Callable[[], PaymentProvider]
+) -> BillingProvisioner:
+    """Set a signed-in account up at the payment provider, in its own transaction.
 
-    Composition owns which credential the process uses, so this closes over the
-    settings object rather than reading the environment a second time — two
-    sources for one credential is two things to keep in step, and the endpoint
-    already reads its signing secret from the composed one.
+    Composed here because identity does not know what billing is: sign-in is
+    handed this the same way it is handed workspace provisioning.
 
-    Built lazily and not cached on failure: a deployment missing the credential
-    raises on each attempt, naming the variable, rather than once at startup
-    where the only evidence is a line in a boot log.
+    The provider is resolved before the row is read, so a deployment missing the
+    credential refuses every sign-in rather than only the first-ever ones, where
+    a returning person signing in quietly would hide the misconfiguration until
+    the first invoice.
     """
 
-    built: list[PaymentProvider] = []
+    def provision(*, user_id: str, workspace_id: str) -> None:
+        with context.database.session() as session:
+            BillingAccountService(session).billing_account_for(
+                payments(), user_id=user_id, workspace_id=workspace_id
+            )
 
-    def provider() -> PaymentProvider:
-        if not built:
-            built.append(settings.provider())
-        return built[0]
-
-    return provider
+    return provision
 
 
 def _workspace_storage_client(storage: WorkspaceStorageConfig) -> S3ObjectStoreClient:
@@ -1652,7 +1651,7 @@ def _image_build_executor(
     container_repository: RedisSchedulerContainerRepository,
     redis_client: RedisClient,
     image_build_container_transport_factory: ContainerServiceTransportFactory | None,
-    database: DatabaseClient,
+    containers: ContainerService,
 ) -> ImageBuildExecutor:
     if execution_settings.executor is not ImageBuildExecutorKind.BuildContainer:
         return execution_settings.create_executor()
@@ -1677,5 +1676,5 @@ def _image_build_executor(
         address_wait_timeout_seconds=container_settings.address_wait_timeout_seconds,
         address_poll_interval_seconds=container_settings.address_poll_interval_seconds,
         credential_cache=RedisImageBuildCredentialCache(redis_client),
-        solvency=ImageBuildBillingAdmission(database),
+        containers=containers,
     )

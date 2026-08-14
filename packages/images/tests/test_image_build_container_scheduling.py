@@ -116,7 +116,6 @@ def _request(
         image,
         image_id=plan.image_id,
         build_id="build-1",
-        container_id="build-container-1",
     )
     return ImageBuildExecutionRequest(
         build_id="build-1",

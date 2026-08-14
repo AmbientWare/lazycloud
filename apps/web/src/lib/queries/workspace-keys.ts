@@ -13,6 +13,14 @@ export type TaskListKeyParts = {
   rootOnly: boolean;
 };
 
+export type UsageCostKeyParts = {
+  start: string;
+  end: string;
+  groupBy: string;
+  appId: string | null;
+  workloadId: string | null;
+};
+
 const workspaceRoot = (workspaceId: string) => ["workspace", workspaceId] as const;
 
 export const workspaceQueryKeys = {
@@ -172,31 +180,8 @@ export const workspaceQueryKeys = {
   },
   usage: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "usage"] as const,
-    overview: (
-      workspaceId: string,
-      window: {
-        period: string | null;
-        start: string | null;
-        end: string | null;
-      },
-      bucketSeconds: number,
-    ) => [...workspaceRoot(workspaceId), "usage", "overview", window, bucketSeconds] as const,
-    workloads: (
-      workspaceId: string,
-      appId: string,
-      start: string,
-      end: string,
-      bucketSeconds: number,
-    ) =>
-      [
-        ...workspaceRoot(workspaceId),
-        "usage",
-        "workloads",
-        appId,
-        start,
-        end,
-        bucketSeconds,
-      ] as const,
+    costs: (workspaceId: string, scope: UsageCostKeyParts) =>
+      [...workspaceRoot(workspaceId), "usage", "costs", scope] as const,
   },
   settings: {
     concurrency: (workspaceId: string) =>
@@ -223,6 +208,7 @@ export const accountQueryKeys = {
     instances: () => [...accountRoot, "compute", "instances"] as const,
     machines: () => [...accountRoot, "compute", "machines"] as const,
   },
+  billing: () => [...accountRoot, "billing"] as const,
   domains: () => [...accountRoot, "custom-domains"] as const,
   tokens: () => [...accountRoot, "tokens"] as const,
 } as const;

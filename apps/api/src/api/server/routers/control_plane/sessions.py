@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import RedirectResponse
 from identity.auth import AuthError
 from identity.sign_in import SIGN_IN_STATE_TTL_SECONDS, SignInStateStoreError
-from shared.errors import DomainError
+from shared.deployment_settings import MissingDeploymentSettingError
+from shared.errors import InvalidInputError
 from shared.http.users import (
     CurrentSessionResponse,
     SessionCreateRequest,
@@ -109,14 +110,25 @@ def complete_github_sign_in(
     except AuthError:
         LOGGER.info("github sign-in state was expired, replayed, or unknown")
         return _failed(_SIGN_IN_LANDING_PATH, "invalid_state")
-    except ValueError as exc:
-        LOGGER.error("github sign-in is not configured: %s", exc)
+    except MissingDeploymentSettingError as exc:
+        LOGGER.error("sign-in cannot complete, a required integration is not configured: %s", exc)
         return _failed(_SIGN_IN_LANDING_PATH, "provider_unavailable")
     except SignInStateStoreError:
         LOGGER.exception("sign-in state storage is unavailable")
         return _failed(_SIGN_IN_LANDING_PATH, "provider_unavailable")
-    except DomainError:
-        LOGGER.exception("github rejected the sign-in exchange")
+    except InvalidInputError:
+        # Refused rather than failed: an integration rejected something about
+        # this account, and the same attempt made again is refused again. Telling
+        # the person to come back shortly would be telling them to keep doing the
+        # one thing that cannot work.
+        LOGGER.exception("sign-in was refused by an integration and will be refused again")
+        return _failed(_SIGN_IN_LANDING_PATH, "provider_refused")
+    except Exception:
+        # This route answers a browser mid-navigation, so every failure has to
+        # land on the sign-in page. Anything reaching here uncaught would
+        # otherwise be rendered to the person as a bare JSON document — including
+        # the ones provisioning raises, which are not domain errors.
+        LOGGER.exception("sign-in could not be completed")
         return _failed(_SIGN_IN_LANDING_PATH, "provider_unavailable")
     return RedirectResponse(
         f"{_SIGN_IN_COMPLETE_PATH}#code={exchange_code}",

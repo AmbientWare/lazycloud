@@ -26,7 +26,11 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.tables.base import DatabaseBase
-from database.tables.billing_ledger import BillingLedgerEntryTable
+from database.tables.billing_ledger import (
+    BillingLedgerSegmentTable,
+    ContainerBillingShapeTable,
+)
+from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.execution import EventTable
 from database.tables.identity import (
     ConcurrencyLimitTable,
@@ -44,8 +48,6 @@ from database.tables.identity import (
     WorkspaceTable,
 )
 from database.tables.observability import (
-    UsageBillingContributionTable,
-    UsageBillingWindowTable,
     UsageRecordTable,
 )
 from database.tables.source_cache import (
@@ -572,13 +574,13 @@ class WorkspaceMemberRepository:
         rows = self.session.scalars(
             select(WorkspaceTable)
             .join(WorkspaceMemberTable, WorkspaceMemberTable.workspace_id == WorkspaceTable.id)
-            .where(WorkspaceMemberTable.user_id == user_id)
+            .where(
+                WorkspaceMemberTable.user_id == user_id,
+                WorkspaceTable.status == WorkspaceStatus.Active.value,
+            )
             .order_by(WorkspaceTable.created_at.asc())
         )
-        # Status lives in the workspace payload rather than a column, so the filter
-        # happens after mapping, the same way WorkspaceRepository.list does it.
-        workspaces = [WorkspaceRecord.model_validate(row.payload) for row in rows]
-        return [item for item in workspaces if item.status is WorkspaceStatus.Active]
+        return [WorkspaceRecord.model_validate(row.payload) for row in rows]
 
     def set_role(self, *, workspace_id: str, user_id: str, role: WorkspaceRole) -> None:
         self.session.execute(
@@ -628,11 +630,23 @@ class WorkspaceRepository:
         return self.records.get(workspace_id)
 
     def by_name(self, name: str) -> WorkspaceRecord | None:
-        matches = self.records.list(name=name)
-        return matches[0] if matches else None
+        """The workspace that currently holds this name, in whatever state.
+
+        A deleted tombstone holds nothing: it kept its row so the ledger, usage and
+        audit history pointing at it stay readable, and released the name so the
+        next workspace can take it. The partial unique index is what makes "the"
+        singular here.
+        """
+        row = self.session.scalars(
+            select(WorkspaceTable).where(
+                WorkspaceTable.name == name,
+                WorkspaceTable.status != WorkspaceStatus.Deleted.value,
+            )
+        ).first()
+        return WorkspaceRecord.model_validate(row.payload) if row is not None else None
 
     def resolve_for_deletion(self, workspace_id_or_name: str) -> WorkspaceRecord | None:
-        """System lookup that retains Deleting and Deleted tombstones."""
+        """System lookup by id that retains tombstones, or by whoever holds the name."""
         return self.get(workspace_id_or_name) or self.by_name(workspace_id_or_name)
 
     def lock_for_deletion(self, workspace_id: str) -> WorkspaceRecord:
@@ -659,27 +673,29 @@ class WorkspaceRepository:
         """
         row = self.session.scalars(
             select(WorkspaceTable)
-            .where(WorkspaceTable.id == workspace_id)
+            .where(
+                WorkspaceTable.id == workspace_id,
+                WorkspaceTable.status == WorkspaceStatus.Active.value,
+            )
             .with_for_update(read=True, key_share=True)
             .execution_options(populate_existing=True)
         ).first()
-        workspace = _workspace_record(row, workspace_id)
-        if workspace.status is not WorkspaceStatus.Active:
-            raise NotFoundError(f"workspace not found: {workspace_id}")
-        return workspace
+        return _workspace_record(row, workspace_id)
 
     def lock_object_write_completion_owner(self, workspace_id: str) -> WorkspaceRecord:
         """Fence completion of a write admitted before deletion began."""
         row = self.session.scalars(
             select(WorkspaceTable)
-            .where(WorkspaceTable.id == workspace_id)
+            .where(
+                WorkspaceTable.id == workspace_id,
+                WorkspaceTable.status.in_(
+                    (WorkspaceStatus.Active.value, WorkspaceStatus.Deleting.value)
+                ),
+            )
             .with_for_update(read=True, key_share=True)
             .execution_options(populate_existing=True)
         ).first()
-        workspace = _workspace_record(row, workspace_id)
-        if workspace.status not in {WorkspaceStatus.Active, WorkspaceStatus.Deleting}:
-            raise NotFoundError(f"workspace not found: {workspace_id}")
-        return workspace
+        return _workspace_record(row, workspace_id)
 
     def deletion_blockers(self, workspace_id: str) -> tuple[str, ...]:
         """Return every live customer resource table still owned by the workspace."""
@@ -785,12 +801,20 @@ class WorkspaceRepository:
         current = self.by_name(name)
         if current is not None:
             if current.status is not WorkspaceStatus.Active:
-                raise ConflictError(f"workspace name is retained after deletion: {name}")
+                raise ConflictError(f"workspace is not active: {name}")
             return current
         return self.create(name=name, signing_key=signing_key)
 
 
 def _workspace_purge_excluded_tables() -> set[str]:
+    """Tables a workspace owns rows in that its deletion does not clear.
+
+    Two reasons, and both are why `deletion_blockers` reads the same set: identity
+    and history the workspace lifecycle owns elsewhere, and the money. The priced
+    ledger, the unsent meter events and the placements they price against are
+    what a customer owed, so a deletion that removed them would destroy the
+    evidence for a charge while carefully keeping the usage it derives from.
+    """
     return {
         _mapped_table_name(EventTable),
         _mapped_table_name(WorkspaceAuditEventTable),
@@ -802,9 +826,9 @@ def _workspace_purge_excluded_tables() -> set[str]:
         _mapped_table_name(SourceCacheCleanupTargetTable),
         _mapped_table_name(WorkerCacheGenerationTable),
         _mapped_table_name(UsageRecordTable),
-        _mapped_table_name(UsageBillingWindowTable),
-        _mapped_table_name(UsageBillingContributionTable),
-        _mapped_table_name(BillingLedgerEntryTable),
+        _mapped_table_name(ContainerBillingShapeTable),
+        _mapped_table_name(BillingLedgerSegmentTable),
+        _mapped_table_name(BillingMeterOutboxTable),
     }
 
 

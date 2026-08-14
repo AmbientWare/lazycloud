@@ -1,81 +1,48 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import uuid4
 
+import pytest
 from api.server.services import ApiServices
-from billing.invoices import payment_outcome
-from billing.jobs import closable_month
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_periods import BillingPeriodRepository
-from pydantic import JsonValue
-from shared.billing_accounts import BillingAccountStatus, BillingPlan
-from shared.billing_periods import BillingPeriodStatus
+from database.repositories.billing_allowance import BillingAllowanceRepository
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS
+from shared.errors import PaymentRequiredError
 from shared.payments import (
     HostedPaymentSession,
-    InvoiceLine,
     PaymentCustomer,
     PaymentEvent,
-    ProviderInvoice,
+    ProviderCreditGrant,
+    ProviderSubscription,
 )
-from shared.usage import UsageMetric, UsageRecord, UsageUnit
 from tests.service_fixtures import workspace_owner_user_id
 
-from billing import BillingCloseJob, BillingDailyJob, BillingWebhookService
+from billing import BillingWebhookService, DatabaseBillingAdmission
 
-_USAGE_DAY = datetime(2026, 9, 15, 12, tzinfo=UTC)
-_CLOSE_RUN = datetime(2026, 10, 3, 6, tzinfo=UTC)
+CYCLE_STARTED_AT = datetime(2026, 8, 1, tzinfo=UTC)
+CYCLE_ENDED_AT = datetime(2026, 9, 1, tzinfo=UTC)
 
 
 @dataclass(slots=True)
 class _Provider:
-    """A payment provider whose invoices can be made to say anything.
+    """A payment provider that answers about the cards it holds."""
 
-    The outcome is set on the provider rather than carried in the call, because
-    that is where it comes from in production: a delivery says only that
-    something changed, and the invoice is read back to find out what.
-    """
-
-    drafts: dict[str, list[InvoiceLine]] = field(default_factory=dict)
-    finalized: list[str] = field(default_factory=list)
-    period_keys: dict[str, str] = field(default_factory=dict)
-    status: str = "open"
-    attempted: bool = False
-    card_pays: bool = False
-    """False here: these tests drive outcomes through the webhook, so the charge
-    at close must leave the invoice exactly as the test set it."""
     default_payment_methods: dict[str, str] = field(default_factory=dict)
     payment_method_owners: dict[str, str] = field(default_factory=dict)
     """Which customer each saved card currently belongs to, as the provider would
     answer it — the read-back that stops a retried notification about a replaced
     card from putting the old one back."""
 
-    def create_customer(self, *, email: str, workspace_id: str) -> PaymentCustomer:
-        raise AssertionError("settling a period must not create customers")
+    granted: list[int] = field(default_factory=list)
+    expired_grants: list[str] = field(default_factory=list)
+    subscription_plan: BillingPlanId = BillingPlanId.Team
 
-    def draft_invoice(self, *, provider_customer_id: str, period_key: str) -> ProviderInvoice:
-        for invoice_id, key in self.period_keys.items():
-            if key == period_key:
-                return self.fetch_invoice(provider_invoice_id=invoice_id)
-        invoice_id = f"in_{len(self.drafts) + 1}"
-        self.drafts[invoice_id] = []
-        self.period_keys[invoice_id] = period_key
-        return ProviderInvoice(provider_invoice_id=invoice_id, total_cents=0, status="draft")
-
-    def replace_invoice_lines(
-        self,
-        *,
-        provider_invoice_id: str,
-        provider_customer_id: str,
-        currency: str,
-        lines: tuple[InvoiceLine, ...],
-    ) -> None:
-        self.drafts[provider_invoice_id] = list(lines)
-
-    def finalize_invoice(self, *, provider_invoice_id: str) -> ProviderInvoice:
-        self.finalized.append(provider_invoice_id)
-        return self.fetch_invoice(provider_invoice_id=provider_invoice_id)
+    def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
+        raise AssertionError("applying a delivery must not create customers")
 
     def card_setup_session(
         self, *, provider_customer_id: str, currency: str, success_url: str, cancel_url: str
@@ -95,123 +62,76 @@ class _Provider:
     ) -> None:
         self.default_payment_methods[provider_customer_id] = provider_payment_method_id
 
-    def pay_invoice(self, *, provider_invoice_id: str) -> ProviderInvoice:
-        self.attempted = True
-        if self.card_pays:
-            self.status = "paid"
-        return self.fetch_invoice(provider_invoice_id=provider_invoice_id)
+    def record_meter_event(
+        self,
+        *,
+        event_name: str,
+        provider_customer_id: str,
+        value_nanos: int,
+        occurred_at: datetime,
+        identifier: str,
+        pricing_version: str,
+    ) -> None:
+        raise AssertionError("applying a delivery must not meter usage")
 
-    def fetch_invoice(self, *, provider_invoice_id: str) -> ProviderInvoice:
-        total = sum(line.amount_cents for line in self.drafts[provider_invoice_id])
-        status = self.status if provider_invoice_id in self.finalized else "draft"
-        return ProviderInvoice(
-            provider_invoice_id=provider_invoice_id,
-            total_cents=total,
-            status=status,
-            paid=status == "paid",
-            attempted=self.attempted,
+    subscription_status: str = "active"
+    """What the provider says the subscription is, read back rather than taken
+    from the delivery — the whole reason a standing delivery is believed about
+    nothing."""
+
+    def create_subscription(
+        self, *, provider_customer_id: str, plan: BillingPlanId
+    ) -> ProviderSubscription:
+        raise AssertionError("applying a delivery must not subscribe anyone")
+
+    def set_subscription_plan(
+        self, *, provider_subscription_id: str, plan: BillingPlanId
+    ) -> ProviderSubscription:
+        raise AssertionError("applying a delivery must not change anyone's plan")
+
+    def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
+        return ProviderSubscription(
+            provider_subscription_id=provider_subscription_id,
+            status=self.subscription_status,
+            current_period_started_at=CYCLE_STARTED_AT,
+            current_period_ended_at=CYCLE_ENDED_AT,
+            plan=self.subscription_plan,
         )
 
-
-def test_a_payment_outcome_settles_the_period_and_is_applied_only_once(
-    isolated_services: ApiServices,
-) -> None:
-    """A retried delivery must not apply its outcome a second time.
-
-    The provider retries anything it does not get a 2xx for, and retries again if
-    the acknowledgement is lost coming back — so one payment arriving twice is
-    ordinary traffic. Applied twice it would move an account's standing twice,
-    and the second move has no payment behind it.
-    """
-
-    provider, period = _invoiced_period(isolated_services)
-    provider.status = "paid"
-
-    with isolated_services.context.database.session() as session:
-        first = BillingWebhookService(session, lambda: provider).apply(
-            event=PaymentEvent(
-                id="evt_paid_1", type="invoice.paid", object_id=period.provider_invoice_id
-            )
+    def create_credit_grant(
+        self,
+        *,
+        account_id: str,
+        provider_customer_id: str,
+        amount_nanos: int,
+        period_started_at: datetime,
+        period_ended_at: datetime,
+    ) -> ProviderCreditGrant:
+        del account_id, provider_customer_id, period_started_at
+        self.granted.append(amount_nanos)
+        return ProviderCreditGrant(
+            provider_credit_grant_id=f"credgr_{self.subscription_plan.value}",
+            amount_nanos=amount_nanos,
+            expires_at=period_ended_at,
         )
-        session.commit()
-    with isolated_services.context.database.session() as session:
-        again = BillingWebhookService(session, lambda: provider).apply(
-            event=PaymentEvent(
-                id="evt_paid_1", type="invoice.paid", object_id=period.provider_invoice_id
-            )
-        )
-        session.commit()
 
-    assert first
-    assert not again
-    with isolated_services.context.database.session() as session:
-        settled = BillingPeriodRepository(session).get(
-            user_id=period.user_id, period_start=period.period_start
-        )
-        account = BillingAccountRepository(session).get_by_user(period.user_id)
-    assert settled is not None
-    assert settled.status is BillingPeriodStatus.Paid
-    assert account is not None
-    assert account.status is BillingAccountStatus.Active
+    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
+        self.expired_grants.append(provider_credit_grant_id)
+
+    def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
+        raise AssertionError("applying a card delivery must not read invoices")
 
 
-def test_a_payment_that_arrives_after_a_failure_clears_the_account(
-    isolated_services: ApiServices,
-) -> None:
-    """A customer who fixes their card must come out of arrears.
-
-    Deliveries are retried for days and overtake each other, so the account's
-    standing cannot be whatever the last one said — it has to be derived from
-    the months that are still owed, or a stale failure would keep barring an
-    account that has already paid.
-    """
-
-    provider, period = _invoiced_period(isolated_services)
-
-    # The charge at close already found this account behind.
-    with isolated_services.context.database.session() as session:
-        account = BillingAccountRepository(session).get_by_user(period.user_id)
-    assert account is not None
-    assert account.status is BillingAccountStatus.PastDue
-    with isolated_services.context.database.session() as session:
-        failed = BillingPeriodRepository(session).get(
-            user_id=period.user_id, period_start=period.period_start
-        )
-    assert failed is not None
-    assert failed.status is BillingPeriodStatus.PaymentFailed
-
-    # And the payment that follows clears both, in that order or any other.
-    provider.status = "paid"
-    with isolated_services.context.database.session() as session:
-        assert BillingWebhookService(session, lambda: provider).apply(
-            event=PaymentEvent(
-                id="evt_paid_after_failure",
-                type="invoice.paid",
-                object_id=period.provider_invoice_id,
-            )
-        )
-        session.commit()
-    with isolated_services.context.database.session() as session:
-        account = BillingAccountRepository(session).get_by_user(period.user_id)
-        settled = BillingPeriodRepository(session).get(
-            user_id=period.user_id, period_start=period.period_start
-        )
-    assert account is not None
-    assert account.status is BillingAccountStatus.Active
-    assert settled is not None
-    assert settled.status is BillingPeriodStatus.Paid
-
-
-def test_a_saved_card_becomes_the_one_invoices_are_charged_to(
+def test_a_saved_card_becomes_the_one_charges_are_taken_from(
     isolated_services: ApiServices,
 ) -> None:
     """Saving a card does not make it the default, and nothing does it implicitly.
 
     A customer who completed the hosted page and had this step skipped is
-    indistinguishable from one who never saved a card at all — until the month
-    closes and the charge is refused for want of a default. There is no other
-    moment this platform would know to look: the customer leaves for the
-    provider's page and may never return to the one that sent them.
+    indistinguishable from one who never saved a card at all — until the charge
+    is refused for want of a default. There is no other moment this platform
+    would know to look: the customer leaves for the provider's page and may never
+    return to the one that sent them.
     """
 
     provider = _Provider()
@@ -222,9 +142,11 @@ def test_a_saved_card_becomes_the_one_invoices_are_charged_to(
     with isolated_services.context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
-            plan=BillingPlan.Team,
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
+            provider_subscription_id="",
+            provider_credit_grant_id="",
+            plan=None,
         )
         session.commit()
 
@@ -260,7 +182,7 @@ def test_a_saved_card_becomes_the_one_invoices_are_charged_to(
 
     # A delivery about a card the customer has since replaced arrives after the
     # replacement, because deliveries are retried for days. Acting on it would
-    # put the old card back and charge next month to it.
+    # put the old card back and charge them on it.
     provider.payment_method_owners["pm_replaced"] = ""
     with isolated_services.context.database.session() as session:
         assert not BillingWebhookService(session, lambda: provider).apply(
@@ -276,77 +198,181 @@ def test_a_saved_card_becomes_the_one_invoices_are_charged_to(
     assert provider.default_payment_methods == {"cus_webhook": "pm_saved"}
 
 
-def test_an_invoice_nobody_has_tried_to_charge_is_not_arrears() -> None:
-    """Every invoice is unpaid the moment it is issued.
+def test_a_failed_payment_leaves_the_account_admission_refuses(
+    isolated_services: ApiServices,
+) -> None:
+    """`past_due` is written by a delivery and read by admission, or by nobody.
 
-    Reading that as failure would put every account into arrears at the instant
-    it was billed, and whatever reads standing to decide what may run would
-    refuse them their own compute for money that was not yet due.
+    An account is refused on one thing only — the provider saying a
+    payment did not go through — because the provider bills its overage and
+    chases its own card. Without this path that status has no writer, and a
+    customer whose card has failed for a month goes on starting work nobody can
+    collect for.
+
+    The delivery is a cue, not a claim: the subscription is read back, so the
+    same event arriving after the customer has paid finds `active` and clears the
+    standing rather than reinstating a refusal that no longer holds.
     """
 
-    issued = ProviderInvoice(
-        provider_invoice_id="in_fresh", total_cents=500, status="open", attempted=False
-    )
-    assert payment_outcome(issued) is None
-
-    tried = ProviderInvoice(
-        provider_invoice_id="in_tried", total_cents=500, status="open", attempted=True
-    )
-    assert payment_outcome(tried) is BillingPeriodStatus.PaymentFailed
-
-
-def _invoiced_period(services: ApiServices):
-    """Drive a real month all the way to an issued invoice.
-
-    Built through the production path rather than assembled, because what the
-    webhook resolves is the row that path writes: an invoice id nothing set the
-    same way would prove the lookup against a fixture instead of against the
-    close.
-    """
-
-    with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(services.context, workspace_id)
-    with services.context.database.session() as session:
+    provider = _Provider()
+    provider.subscription_status = "past_due"
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
-            plan=BillingPlan.Team,
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
+            provider_subscription_id="sub_webhook",
+            provider_credit_grant_id="credgr_webhook",
+            plan=BillingPlanId.Team,
         )
         session.commit()
 
-    metadata: dict[str, JsonValue] = {
-        "worker_id": "worker-webhook",
-        "window_start_ms": 0,
-        "window_end_ms": 1000,
-    }
-    services.usage.append(
-        UsageRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type="container",
-            resource_id="container-webhook",
-            metric=UsageMetric.CpuSeconds,
-            quantity=2_000.0,
-            unit=UsageUnit.Seconds,
-            labels={"cpu_millicores": "1000", "worker_id": "worker-webhook"},
-            metadata=metadata,
-            created_at=_USAGE_DAY,
+    with isolated_services.context.database.session() as session:
+        assert BillingWebhookService(session, lambda: provider).apply(
+            event=PaymentEvent(
+                id="evt_invoice_failed",
+                type="invoice.payment_failed",
+                object_id="in_1",
+                customer_id="cus_webhook",
+            )
         )
-    )
-    provider = _Provider()
-    BillingDailyJob(services.context, services.usage).run(now=_CLOSE_RUN)
-    BillingCloseJob(services.context, lambda: provider).run(now=_CLOSE_RUN)
+        session.commit()
 
-    month = closable_month(_CLOSE_RUN)
-    assert month is not None
-    with services.context.database.session() as session:
-        period = BillingPeriodRepository(session).get(user_id=user_id, period_start=month[0])
-    assert period is not None
-    # The card on file declined, which is the state a webhook has something left
-    # to say about: a month correctly invoiced, correctly unpaid, and an account
-    # the charge already put behind.
-    assert period.status is BillingPeriodStatus.PaymentFailed
-    assert period.provider_invoice_id
-    return provider, period
+    # A payment that failed buys nothing and voids nothing: the terms of the
+    # cycle the customer is part-way through are not what went wrong.
+    assert provider.granted == []
+    assert provider.expired_grants == []
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError),
+    ):
+        DatabaseBillingAdmission().assert_solvent(session, workspace_id=workspace_id)
+
+
+def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
+    isolated_services: ApiServices,
+) -> None:
+    """A plan change is a plan change whichever door it arrives through.
+
+    Somebody moves plan on the provider's own portal, or a subscribe dies after
+    the price swap and before it is recorded. Either way the delivery is the
+    first this platform hears of it, and the cycle it names is the one already
+    open: re-terming it and buying the larger allowance while the smaller one is
+    still live would give the customer both, and nothing on the invoice says
+    which of the two a charge was taken from.
+
+    A renewal reaching the same code must not be treated this way, which is why
+    the decision is read off the period rather than off the delivery.
+    """
+
+    provider = _Provider()
+    provider.subscription_plan = BillingPlanId.Team
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id="cus_webhook",
+            provider_subscription_id="sub_webhook",
+            provider_credit_grant_id="credgr_free",
+            plan=BillingPlanId.Free,
+        )
+        # The cycle the account is part-way through, on the free plan's terms.
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=user_id,
+            period_started_at=CYCLE_STARTED_AT,
+            period_ended_at=CYCLE_ENDED_AT,
+            allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
+        )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        assert BillingWebhookService(session, lambda: provider).apply(
+            event=PaymentEvent(
+                id="evt_plan_changed",
+                type="customer.subscription.updated",
+                object_id="sub_webhook",
+                customer_id="cus_webhook",
+            )
+        )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        allowance = BillingAllowanceRepository(session).current_period(
+            user_id=user_id, at=CYCLE_STARTED_AT
+        )
+
+    assert provider.expired_grants == ["credgr_free"]
+    assert account is not None
+    assert account.plan is BillingPlanId.Team
+    assert account.provider_credit_grant_id == "credgr_team"
+    assert allowance is not None
+    assert allowance.period.started_at == CYCLE_STARTED_AT
+    assert allowance.period.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
+
+
+def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
+    isolated_services: ApiServices,
+) -> None:
+    """A cancellation clears the plan as well as the subscription.
+
+    They say one thing together: what this account is on. A row that kept its
+    plan would report the terms of a subscription that no longer exists, offer
+    the customer no way back onto one — the dashboard hides subscribing from
+    anybody already on Team — and satisfy admission while every meter event it
+    sends lands on no invoice.
+
+    The standing is not touched, because a subscription ending says nothing about
+    whether the money it already owed was collected.
+    """
+
+    provider = _Provider()
+    provider.subscription_status = "canceled"
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id="cus_webhook",
+            provider_subscription_id="sub_webhook",
+            provider_credit_grant_id="credgr_final",
+            plan=BillingPlanId.Team,
+        )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        assert BillingWebhookService(session, lambda: provider).apply(
+            event=PaymentEvent(
+                id="evt_subscription_deleted",
+                type="customer.subscription.deleted",
+                object_id="sub_webhook",
+                customer_id="cus_webhook",
+            )
+        )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+
+    assert account is not None
+    assert account.plan is None
+    assert account.provider_subscription_id == ""
+    assert account.status is BillingAccountStatus.Active
+    # Left naming the grant, which funds the final invoice this cancellation
+    # raises for the part-cycle it ends.
+    assert account.provider_credit_grant_id == "credgr_final"
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError, match="no subscription"),
+    ):
+        DatabaseBillingAdmission().assert_solvent(session, workspace_id=workspace_id)

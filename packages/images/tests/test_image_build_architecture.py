@@ -40,7 +40,6 @@ def test_image_architecture_changes_cache_identity_and_scheduler_contract(
             amd64_plan.spec,
             image_id=amd64_plan.image_id,
             build_id="build-1",
-            container_id="build-container-1",
         ),
     )
 

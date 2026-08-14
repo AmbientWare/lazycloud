@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Protocol
 
 from pydantic import Field
 
+from shared.billing_plans import BillingPlanId
+from shared.billing_quotes import BilledDimension
 from shared.contracts import ContractModel
+
+BILLING_CURRENCY = "USD"
+"""The currency this platform bills in.
+
+Named once because a hosted page has to be opened in one before anything is
+charged, and a session opened in a currency nothing else uses is a customer who
+cannot be billed through the card they just saved.
+"""
+
+METER_EVENT_NAMES: Mapping[BilledDimension, str] = {
+    BilledDimension.ComputeRuntime: "lazycloud_compute_cost_nanos",
+    BilledDimension.NetworkEgress: "lazycloud_egress_cost_nanos",
+    BilledDimension.VolumeStorage: "lazycloud_volume_storage_cost_nanos",
+}
+"""What each dimension's usage is called at the provider.
+
+Constants rather than settings: the command that publishes the catalog, the
+process that queues meter events, and the one that reconciles an invoice have to
+agree on these names, and an environment variable is how three processes come to
+disagree. One meter per dimension so the invoice breaks down, which is also what
+makes a line priced at zero visible as metered-and-free rather than absent.
+"""
 
 
 class PaymentCustomer(ContractModel):
@@ -16,38 +42,6 @@ class PaymentCustomer(ContractModel):
     """
 
     provider_customer_id: str = Field(min_length=1, max_length=255)
-
-
-class InvoiceLine(ContractModel):
-    """One line the customer reads on their invoice.
-
-    `amount_cents` is signed: an allowance is a negative line rather than a
-    quantity netted out of a positive one, so the invoice says what was used and
-    what was covered instead of only their difference.
-    """
-
-    description: str = Field(min_length=1, max_length=255)
-    amount_cents: int
-
-
-class ProviderInvoice(ContractModel):
-    provider_invoice_id: str = Field(min_length=1, max_length=255)
-    total_cents: int
-    status: str = Field(min_length=1, max_length=32)
-    paid: bool = False
-    """Whether the money arrived, in full.
-
-    A boolean rather than a status string so the judgement is made once, in the
-    adapter that knows the provider's vocabulary, instead of by every caller
-    comparing values it would have to keep in step. Part-payment is not paid:
-    the month is still owed the remainder."""
-
-    attempted: bool = False
-    """Whether collection has been tried at all.
-
-    What separates an invoice waiting to be paid from one that failed. Both read
-    as unpaid, and treating them alike either marks an account behind the moment
-    it is billed or never marks it behind at all."""
 
 
 class PaymentEvent(ContractModel):
@@ -73,6 +67,57 @@ class PaymentEvent(ContractModel):
     """The instrument a delivery says was saved, empty on everything else."""
 
 
+class ProviderSubscription(ContractModel):
+    """What a customer is subscribed to, and the period it is currently in.
+
+    The period is the provider's rather than this platform's. The plan renews on
+    their clock and the invoice covers what they say it covers, so an allowance
+    or a reconciliation window derived from anything else would sit beside the
+    invoice it belongs to instead of on top of it.
+    """
+
+    provider_subscription_id: str = Field(min_length=1, max_length=255)
+    status: str = Field(min_length=1, max_length=64)
+    """The provider's own word for where the subscription stands.
+
+    Carried through rather than mapped to an enum, for the reason the event type
+    is: the provider owns this vocabulary and adds to it, and a value no adapter
+    had been taught would turn a delivery into a rejection. The domain owns the
+    set it acts on, and a value outside it is a decision rather than a parse
+    failure.
+    """
+
+    current_period_started_at: datetime
+    current_period_ended_at: datetime
+    plan: BillingPlanId | None = None
+    """Which published plan the subscription's licensed price names.
+
+    `None` where it names a price this platform did not publish, which is a
+    subscription nothing here can decide anything about — the allowance it would
+    carry and the grant it would be given are both the plan's.
+    """
+
+
+class ProviderCreditGrant(ContractModel):
+    """An allowance the provider applies before it charges for usage."""
+
+    provider_credit_grant_id: str = Field(min_length=1, max_length=255)
+    amount_nanos: int = Field(ge=0)
+    """Nanodollars, like every other figure this platform counts money in.
+
+    A provider that grants in a coarser unit converts at its own boundary and
+    refuses a figure it cannot express exactly, so nothing here has to hold two
+    units and decide which one a number is in.
+    """
+
+    expires_at: datetime
+    """Read back from the provider rather than echoed from the request.
+
+    A grant that outlives its period would fund the next one, so what the
+    provider recorded is the only version of this worth storing.
+    """
+
+
 class HostedPaymentSession(ContractModel):
     """A page at the provider for the customer to do something on.
 
@@ -86,42 +131,31 @@ class HostedPaymentSession(ContractModel):
 
 
 class PaymentProvider(Protocol):
-    """Where money moves, and nothing else.
+    """Where the money side of the relationship lives.
 
-    Provider-neutral by construction, and deliberately narrow: this platform
-    decides what is owed and hands over finished amounts. Nothing here returns a
-    price or holds a rate, so swapping providers cannot change a bill.
+    Provider-neutral by construction: who pays, the pages they manage their card
+    on, which instrument their charges go to, what they are subscribed to, what
+    their plan includes, and the usage reported against them. The subscription,
+    the allowance, the invoice and the retries when a card is refused are all the
+    provider's — collection machinery written on this side would be a second
+    implementation of a system that already exists.
+
+    Nothing here names a catalog object. A caller names a plan and the adapter
+    resolves it against its own published catalog, so no caller has to hold a
+    provider's identifiers to put somebody on one.
     """
 
-    def create_customer(self, *, email: str, workspace_id: str) -> PaymentCustomer:
-        """Register a payer, returning the identifier to store against them."""
-        ...
+    def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
+        """Register a payer, returning the identifier to store against them.
 
-    def draft_invoice(self, *, provider_customer_id: str, period_key: str) -> ProviderInvoice:
-        """Open a draft for one period, or return the draft already open for it.
-
-        Keyed on the period so a retried close finds its own draft rather than
-        opening a second one beside it.
+        `account_id` names who is being registered, so the provider settles a
+        repeat itself. A registration whose answer never arrived — a timeout, or
+        a process that died before it wrote the identifier down — is retried, and
+        with nothing naming the account that retry is indistinguishable from a
+        second person: the provider registers a second customer, this platform
+        stores one of them, and the invoices of one account are split across two
+        records only one of which anything here can name.
         """
-        ...
-
-    def replace_invoice_lines(
-        self,
-        *,
-        provider_invoice_id: str,
-        provider_customer_id: str,
-        currency: str,
-        lines: tuple[InvoiceLine, ...],
-    ) -> None:
-        """Make the draft say exactly these lines and nothing else.
-
-        Replaces rather than appends, because a period is recomputed and the
-        second run must state what is owed rather than add to it.
-        """
-        ...
-
-    def finalize_invoice(self, *, provider_invoice_id: str) -> ProviderInvoice:
-        """Issue the invoice. After this the amount is what the customer owes."""
         ...
 
     def card_setup_session(
@@ -164,7 +198,7 @@ class PaymentProvider(Protocol):
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
     ) -> None:
-        """Make a saved card the one invoices are charged to.
+        """Make a saved card the one charges are taken from.
 
         A separate step because saving a card does not make it the default, and
         nothing does it implicitly: a customer who has completed the hosted page
@@ -173,37 +207,127 @@ class PaymentProvider(Protocol):
         """
         ...
 
-    def pay_invoice(self, *, provider_invoice_id: str) -> ProviderInvoice:
-        """Collect what an issued invoice states, from the payer's stored method.
+    def record_meter_event(
+        self,
+        *,
+        event_name: str,
+        provider_customer_id: str,
+        value_nanos: int,
+        occurred_at: datetime,
+        identifier: str,
+        pricing_version: str,
+    ) -> None:
+        """Report one priced window of usage against a customer's meter.
 
-        Attempted here rather than left to the provider's own schedule, because
-        the result comes back in the response: the period records what happened
-        while the platform is still looking at it, instead of learning it later
-        from a notification that may not arrive for hours.
+        `identifier` is the usage record's own id, so a resend of an event the
+        provider already accepted is discarded by them rather than counted twice
+        — which is what makes at-least-once delivery the right guarantee here
+        rather than a compromise. How long that protection lasts is the
+        provider's own fact and bounds the retry schedule that sends these.
 
-        Returns the invoice as it stands after the attempt. A refusal by the
-        payer's bank is an outcome, not a transport failure — the invoice comes
-        back unpaid and attempted, and the caller records that.
+        `value_nanos` is the ledger segment's cost verbatim. Nothing is rederived
+        on the way out, so an invoice and the ledger behind it compare as exact
+        integers with no second rounding step to argue about.
         """
         ...
 
-    def fetch_invoice(self, *, provider_invoice_id: str) -> ProviderInvoice:
-        """Read back what the provider currently says about an invoice.
+    def create_subscription(
+        self, *, provider_customer_id: str, plan: BillingPlanId
+    ) -> ProviderSubscription:
+        """Put a customer on a named plan and the metered prices that go with it.
 
-        The authority for a payment outcome. A notification that something
-        changed can arrive twice, out of order, or from anyone who can reach the
-        endpoint, so what it says is treated as a claim and this is what settles
-        it — the state at the moment of asking, not the state some earlier
-        message described.
+        Which prices those are belongs to the adapter's published catalog. The
+        caller names the plan and nothing else; naming a price would be a caller
+        holding provider identifiers, and two callers naming them differently
+        would be two customers on different subscriptions for one plan.
+
+        Idempotent, and a customer who already holds a live subscription is
+        answered with it rather than given a second — whatever plan that one
+        carries, which the caller records instead of the plan it asked for. A
+        second subscription carries the same metered prices, so one customer's
+        usage would be counted onto two invoices. Converging on what the provider
+        holds rather than on a repeat key, because a key is forgotten while an
+        account is not, and a customer whose subscription has ended must be given
+        a new one rather than the one that ended.
+        """
+        ...
+
+    def set_subscription_plan(
+        self, *, provider_subscription_id: str, plan: BillingPlanId
+    ) -> ProviderSubscription:
+        """Move an existing subscription onto another plan's price.
+
+        The subscription, its identifier and its cycle survive: only the licensed
+        price changes, so the metered prices keep the usage already recorded
+        against them and the customer's billing anniversary does not move.
+
+        Idempotent — a subscription already on the plan is returned unchanged —
+        because the caller is a transaction that can die between changing this
+        and recording it, and its retry must converge rather than charge again.
+        """
+        ...
+
+    def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
+        """What the provider says the subscription is now.
+
+        Read back rather than taken from the delivery that named it: deliveries
+        are retried for days and arrive out of order, so one describing a period
+        that has since rolled would move an allowance backwards.
+        """
+        ...
+
+    def create_credit_grant(
+        self,
+        *,
+        account_id: str,
+        provider_customer_id: str,
+        amount_nanos: int,
+        period_started_at: datetime,
+        period_ended_at: datetime,
+    ) -> ProviderCreditGrant:
+        """Give a customer the usage their plan includes, for one period.
+
+        Spent against metered usage before anything is charged. The period is
+        stated rather than an expiry, because when a provider actually applies a
+        grant is the provider's own timing: an allowance has to reach the invoice
+        its period raises without reaching the one the period before it raises,
+        and only the adapter knows how far either sits from the boundary.
+
+        `account_id` names who it is for, and the provider is asked under a key
+        derived from it together with the period and the amount — a grant is
+        money given away, so a retry after an answer that never arrived must be
+        answered with the same grant rather than a second one.
+        """
+        ...
+
+    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
+        """End an allowance before its expiry, so nothing further is spent on it.
+
+        What a plan change does with the grant it is replacing: two live grants
+        would be two allowances for one cycle. Tolerates a grant that has already
+        expired or been voided, because a retry of the change that expired it has
+        to converge rather than fail on work it already did.
+        """
+        ...
+
+    def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
+        """What the provider billed as usage, keyed by meter event name.
+
+        The only guard that what this platform sent is what it was charged for.
+        Both sides are integer nanodollars, so the comparison is exact and a
+        difference is a fact rather than a rounding argument. Lines with no meter
+        behind them — the flat plan price — are not usage and are left out.
         """
         ...
 
 
 __all__ = [
+    "BILLING_CURRENCY",
+    "METER_EVENT_NAMES",
     "HostedPaymentSession",
-    "InvoiceLine",
     "PaymentCustomer",
     "PaymentEvent",
     "PaymentProvider",
-    "ProviderInvoice",
+    "ProviderCreditGrant",
+    "ProviderSubscription",
 ]

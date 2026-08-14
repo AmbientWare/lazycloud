@@ -1,127 +1,68 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { ApiError, apiRequest, withWorkspace } from "@/lib/api/client";
-import {
-  usageBillingOverviewSchema,
-  usageBillingWorkloadListSchema,
-  type UsageBillingPeriod,
-} from "@/lib/api/schemas";
-import { clearStoredAuthToken, getStoredAuthToken } from "@/lib/auth";
+import { apiRequest, withWorkspace } from "@/lib/api/client";
+import { usageCostListSchema, type UsageCostGroupKey } from "@/lib/api/schemas";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-export type UsageWindow = {
+export type UsageCostWindow = {
   start: string;
   end: string;
 };
 
-export type UsageWindowSelection = UsageWindow | { period: UsageBillingPeriod };
-
-export type UsageBillingExport = {
-  blob: Blob;
-  filename: string;
+export type UsageCostScope = {
+  groupBy: UsageCostGroupKey;
+  appId?: string;
+  workloadId?: string;
+  limit?: number;
 };
 
-export function usageBillingOverviewQueryOptions(
+/**
+ * A workspace's cost over one window, grouped at one level of the product model.
+ *
+ * Paged rather than fetched whole: rows come back most expensive first, so the
+ * first page already answers what somebody opened the page to ask, and the rest
+ * continues in its own scroll region.
+ */
+export function usageCostsQueryOptions(
   workspaceId: string,
-  window: UsageWindowSelection,
-  bucketSeconds: number,
+  window: UsageCostWindow,
+  scope: UsageCostScope,
 ) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.usage.overview(workspaceId, usageWindowKey(window), bucketSeconds),
-    queryFn: () => {
-      const params = usageWindowSearchParams(window, bucketSeconds);
-      return apiRequest(
-        withWorkspace(`/api/v1/usage/billing?${params.toString()}`, workspaceId),
-        usageBillingOverviewSchema,
-      );
-    },
-    staleTime: 30_000,
-    refetchInterval: "period" in window ? 60_000 : false,
-    meta: workspaceLiveQueryMeta(true),
-  });
-}
-
-function usageWindowKey(window: UsageWindowSelection) {
-  return "period" in window
-    ? { period: window.period, start: null, end: null }
-    : { period: null, start: window.start, end: window.end };
-}
-
-function usageWindowSearchParams(
-  window: UsageWindowSelection,
-  bucketSeconds: number,
-): URLSearchParams {
-  const params = new URLSearchParams({ bucket_seconds: String(bucketSeconds) });
-  if ("period" in window) {
-    params.set("period", window.period);
-  } else {
-    params.set("start", window.start);
-    params.set("end", window.end);
-  }
-  return params;
-}
-
-export function usageBillingWorkloadsQueryOptions(
-  workspaceId: string,
-  appId: string,
-  window: UsageWindow,
-  bucketSeconds: number,
-) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.usage.workloads(
-      workspaceId,
-      appId,
-      window.start,
-      window.end,
-      bucketSeconds,
-    ),
-    queryFn: () => {
+  const { groupBy, appId, workloadId, limit = 50 } = scope;
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.usage.costs(workspaceId, {
+      start: window.start,
+      end: window.end,
+      groupBy,
+      appId: appId ?? null,
+      workloadId: workloadId ?? null,
+    }),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({
-        app_id: appId,
         start: window.start,
         end: window.end,
-        bucket_seconds: String(bucketSeconds),
+        group_by: groupBy,
+        limit: String(limit),
       });
+      if (appId) params.set("app_id", appId);
+      if (workloadId) params.set("workload_id", workloadId);
+      if (pageParam) params.set("cursor", pageParam);
       return apiRequest(
-        withWorkspace(`/api/v1/usage/billing/workloads?${params.toString()}`, workspaceId),
-        usageBillingWorkloadListSchema,
+        withWorkspace(`/api/v1/usage/costs?${params.toString()}`, workspaceId),
+        usageCostListSchema,
       );
     },
-    staleTime: 60_000,
+    getNextPageParam: (page) => page.next || undefined,
+    staleTime: 30_000,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export async function downloadUsageBillingCsv(
-  workspaceId: string,
-  window: UsageWindow,
-  bucketSeconds: number,
-): Promise<UsageBillingExport> {
-  const params = new URLSearchParams({
-    start: window.start,
-    end: window.end,
-    bucket_seconds: String(bucketSeconds),
-  });
-  const headers = new Headers();
-  const token = getStoredAuthToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(
-    withWorkspace(`/api/v1/usage/billing.csv?${params.toString()}`, workspaceId),
-    { headers, credentials: "include" },
-  );
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    if (response.status === 401) clearStoredAuthToken();
-    throw new ApiError(response.status, response.statusText, body);
-  }
-  return {
-    blob: await response.blob(),
-    filename: attachmentFilename(response.headers.get("content-disposition")),
-  };
-}
-
-function attachmentFilename(contentDisposition: string | null): string {
-  const match = contentDisposition?.match(/filename="?([^";]+)"?/i);
-  return match?.[1]?.trim() || "usage.csv";
+/** The UTC calendar month an instant falls in, as the window the API takes. */
+export function calendarMonthWindow(at: Date): UsageCostWindow {
+  const start = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1));
+  return { start: start.toISOString(), end: end.toISOString() };
 }

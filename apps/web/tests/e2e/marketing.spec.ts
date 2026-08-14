@@ -17,9 +17,10 @@ test("canonical marketing routes are public, responsive, and accessible", async 
 
   await page.goto("/");
 
-  // The public route is not behind the token gate, and the internal admin CLI
-  // (`apps/cli`) is never advertised on a customer-facing page.
-  await expect(page.locator("body")).not.toContainText("Enter an access token");
+  // The public route is not behind the sign-in gate, and the internal admin CLI
+  // (`apps/cli`) is never advertised on a customer-facing page. Matched on the
+  // gate's heading rather than its text, so a marketing sign-in link stays legal.
+  await expect(page.getByRole("heading", { name: "Sign in" })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("lazycloud-admin");
 
   const sandboxTab = page.getByRole("tab", { name: "Sandboxes" });
@@ -41,6 +42,26 @@ test("canonical marketing routes are public, responsive, and accessible", async 
     accessibility.violations.map((violation) => violation.id),
     "Marketing accessibility violations",
   ).toEqual([]);
+
+  // Pricing is the one navigation entry with a page behind it, so it links
+  // rather than sitting inert like the destinations that have none.
+  await expect(marketingSurface.getByRole("button", { name: "Pricing" })).toHaveCount(0);
+  expect(await marketingSurface.locator('a[href="/pricing"]').count()).toBeGreaterThan(0);
+
+  await page.goto("/pricing");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("One meter");
+  const pricingOverflow = await marketingSurface.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  expect(pricingOverflow).toBeLessThanOrEqual(1);
+  const pricingAccessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  expect(
+    pricingAccessibility.violations.map((violation) => violation.id),
+    "Pricing accessibility violations",
+  ).toEqual([]);
+
   expect(authenticatedRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
@@ -57,6 +78,6 @@ test("dashboard entry remains protected while marketing routes stay public", asy
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Enter an access token" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   expect(workspaceRequests).toEqual([]);
 });

@@ -34,6 +34,7 @@ from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerControl
 from execution.containers.runtime_state import ContainerRuntimeStateRepository
 from foundation.network import worker_network_prefix
+from gateway.unit_state import billing_owner_for_unit
 from identity.auth import AuthorizationDeniedError, AuthService
 from images.service import ImageBuildService
 from observability.container_logs import (
@@ -43,6 +44,7 @@ from observability.container_logs import (
 from observability.stream_state import RedisEventStreamRepository
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import WorkspaceChangeService
+from pydantic import JsonValue
 from scheduler.state import (
     ContainerStateNotFoundError,
     RedisSchedulerContainerRepository,
@@ -77,7 +79,13 @@ from shared.scheduling import (
 )
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
+from shared.usage import (
+    METERING_WINDOW_ENDED_AT_METADATA_KEY,
+    METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageBillingOwner,
+    UsageRecord,
+)
 from storage.service import CacheStorage, ObjectStorage
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
@@ -214,6 +222,19 @@ from worker_repository.source_cache import (
 LOGGER = logging.getLogger(__name__)
 WORKER_REQUEST_BLOCK_SECONDS = 1.0
 IMAGE_BUILD_CONTEXT_DOWNLOAD_SECONDS = 300
+_CONTAINER_RESOURCE = "container"
+"""What a worker names as the subject of the usage it reports. It is the only
+resource a worker is dispatched, so it is the only one it may bill for."""
+
+_METERING_WINDOW_TOLERANCE = timedelta(minutes=1)
+"""How far past a container's recorded lifetime a worker's own window may reach.
+
+The worker times itself from the moment it launches the process, while the
+control plane stamps `started_at` when it is told the container is running and
+`finished_at` when it is told it exited; neither clock is synchronized with the
+other. A tolerance narrower than that lag would clamp away seconds a customer
+really used, and a much wider one is what a worker would claim to be paid for
+hours nobody ran."""
 
 
 class WorkerRepositoryObjectStorage(Protocol):
@@ -716,6 +737,11 @@ class WorkerRepositoryService:
                     if principal.is_private_worker
                     else ""
                 ),
+                # Same authority again, and the one with money behind it: a worker
+                # runs on hardware its owner may hold root on, so a registration
+                # naming its own billing owner could mark every container it runs
+                # self-hosted and drop them from the bill.
+                "billing_owner": self._billing_owner_for(request.worker, principal),
             }
         )
         try:
@@ -745,6 +771,31 @@ class WorkerRepositoryService:
             )
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
+
+    def _billing_owner_for(
+        self, worker: SchedulerWorkerRecord, principal: WorkerRepositoryPrincipal
+    ) -> UsageBillingOwner:
+        """Who pays for containers this worker runs.
+
+        The fleet is the platform's own capacity and is neither joined nor
+        enrolled, so it never has a unit to ask. A private worker takes the owner
+        of the unit that feeds its pool — a unit holding a provider connection is
+        a customer's own cloud account and earns the management fee, anything else
+        is hardware somebody brought.
+        """
+
+        if not principal.is_private_worker:
+            return UsageBillingOwner.PlatformFleet
+        if self.services is None:
+            raise UpstreamUnavailableError("service dependencies are required to price a worker")
+        with self.services.context.database.session() as session:
+            feeding = ComputeUnitRepository(session).list_for_machine_pool(
+                principal.workspace_id, worker.pool
+            )
+        for unit in feeding:
+            if unit.capacity_owner_id == worker.capacity_owner_id:
+                return billing_owner_for_unit(unit)
+        raise ConflictError(f"no compute unit feeds pool {worker.pool} for this worker")
 
     def _validate_runtime_worker_registration(
         self,
@@ -1039,7 +1090,14 @@ class WorkerRepositoryService:
     def update_container_status(
         self,
         request: UpdateContainerStatusRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> UpdateContainerStatusResponse:
+        self._authorize_worker_container(
+            request.container_id,
+            worker_id=principal.worker_id,
+            operation="container status update",
+        )
         try:
             plan = self.containers.update_container_status(
                 request.container_id,
@@ -1060,7 +1118,14 @@ class WorkerRepositoryService:
     def set_container_exit_code(
         self,
         request: SetContainerExitCodeRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> SetContainerExitCodeResponse:
+        self._authorize_worker_container(
+            request.container_id,
+            worker_id=principal.worker_id,
+            operation="container exit",
+        )
         self.containers.set_exit_code(
             request.container_id,
             request.exit_code,
@@ -1076,15 +1141,34 @@ class WorkerRepositoryService:
         )
         return SetContainerExitCodeResponse(container_id=request.container_id)
 
-    def get_container_state(self, request: GetContainerStateRequest) -> GetContainerStateResponse:
-        return GetContainerStateResponse(
-            state=self.containers.get_container_state(request.container_id)
-        )
+    def get_container_state(
+        self,
+        request: GetContainerStateRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> GetContainerStateResponse:
+        state = self.containers.get_container_state(request.container_id)
+        # A state that is not there discloses nothing, and a worker reads it to
+        # find out whether the request it was handed is still live — refusing
+        # that would turn a container cancelled before it started into an error
+        # on the worker that was told to drop it.
+        if state is not None and state.worker_id != principal.worker_id:
+            raise AuthorizationDeniedError(
+                "container state read names a container assigned to another worker"
+            )
+        return GetContainerStateResponse(state=state)
 
     def delete_container_state(
         self,
         request: DeleteContainerStateRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> DeleteContainerStateResponse:
+        self._authorize_worker_container(
+            request.container_id,
+            worker_id=principal.worker_id,
+            operation="container state deletion",
+        )
         routes = self._container_agent_routes(request.container_id)
         self._unpublish_agent_routes(routes)
         return DeleteContainerStateResponse(
@@ -1132,7 +1216,14 @@ class WorkerRepositoryService:
     def set_worker_address(
         self,
         request: SetWorkerAddressRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> SetWorkerAddressResponse:
+        self._authorize_worker_container(
+            request.container_id,
+            worker_id=principal.worker_id,
+            operation="worker address publication",
+        )
         address = self.containers.set_worker_address(
             request.container_id,
             request.address,
@@ -1692,11 +1783,173 @@ class WorkerRepositoryService:
     def record_worker_usage(
         self,
         request: RecordWorkerUsageRequest,
+        *,
+        worker_id: str,
     ) -> RecordWorkerUsageResponse:
-        if self.services is None:
+        services = self.services
+        if services is None:
             raise UpstreamUnavailableError("service dependencies are required for worker usage")
-        record = self.services.usage.append(request.record)
+        accepted = self._authorized_usage_record(request.record, worker_id=worker_id)
+        record = services.usage.append(accepted)
         return RecordWorkerUsageResponse(record=record)
+
+    def _authorized_usage_record(
+        self,
+        record: UsageRecord,
+        *,
+        worker_id: str,
+    ) -> UsageRecord:
+        """Refuse a usage record that is not this worker's to report.
+
+        The record arrives entirely worker-authored — workspace, quantity, window,
+        and the labels that decide who pays — and a worker token lives on a
+        machine a customer joined and has root on. Taking the workspace on trust
+        is what lets one account post GPU-seconds against another's, or relabel
+        its own as self-hosted and have the rollup drop them.
+
+        The window is worker-authored too, and the ledger prices from it, so the
+        accepted record carries a window bounded by the lifetime the control
+        plane recorded rather than the one the worker claimed.
+        """
+
+        if record.resource_type != _CONTAINER_RESOURCE:
+            raise AuthorizationDeniedError(
+                f"a worker may only record container usage, not {record.resource_type!r}"
+            )
+        self._authorize_worker_container(
+            record.resource_id,
+            worker_id=worker_id,
+            operation="usage",
+            workspace_id=record.workspace_id,
+        )
+        container = self._container_across_workspaces(record.resource_id, operation="usage")
+        if container is None:
+            # Still assigned in scheduler state but no durable row to bound it
+            # against. Accepted rather than dropped: usage that was measured is
+            # what this path exists to keep.
+            return record
+        return self._metered_within_lifetime(record, container, worker_id=worker_id)
+
+    def _authorize_worker_container(
+        self,
+        container_id: str,
+        *,
+        worker_id: str,
+        operation: str,
+        workspace_id: str = "",
+    ) -> None:
+        """Refuse a container this worker was not given.
+
+        A worker token authenticates a machine a customer joined and holds root
+        on, so the container id in its request proves nothing by itself: without
+        this, one worker can mark another tenant's container exited, delete the
+        state that keeps it alive, or bill against it.
+
+        The container is the fact that settles it, and the control plane already
+        holds it: it placed that container on a worker, in a workspace. Resolved
+        across workspaces on purpose, so the answer does not come from the same
+        claim being checked.
+
+        Placement is read the way `_authorize_network_container` reads it —
+        scheduler state first, the durable row second — because those are the
+        same question asked of the same dispatch. `runtime_worker_id` is the
+        column that carries it: `worker_id` is set only for a private worker, so
+        keying on it would authorize nothing for the platform fleet.
+        """
+
+        if not worker_id:
+            raise AuthorizationDeniedError(f"{operation} requires an authenticated worker")
+        state = self.containers.get_container_state(container_id)
+        if state is not None:
+            if state.worker_id != worker_id:
+                raise AuthorizationDeniedError(
+                    f"{operation} names a container assigned to another worker"
+                )
+            if workspace_id and state.workspace_id != workspace_id:
+                raise AuthorizationDeniedError(
+                    f"{operation} names a workspace the container does not belong to"
+                )
+            return
+        container = self._container_across_workspaces(container_id, operation=operation)
+        if container is None:
+            raise AuthorizationDeniedError(
+                f"{operation} names a container the platform did not reserve"
+            )
+        if container.runtime_worker_id != worker_id:
+            raise AuthorizationDeniedError(
+                f"{operation} names a container assigned to another worker"
+            )
+        if workspace_id and container.workspace_id != workspace_id:
+            raise AuthorizationDeniedError(
+                f"{operation} names a workspace the container does not belong to"
+            )
+
+    def _container_across_workspaces(
+        self,
+        container_id: str,
+        *,
+        operation: str,
+    ) -> ContainerRecord | None:
+        if self.services is None:
+            raise UpstreamUnavailableError(
+                f"{operation} cannot be resolved without the container record"
+            )
+        with self.services.context.database.session() as session:
+            return ContainerRepository(session).get_across_workspaces(container_id)
+
+    def _metered_within_lifetime(
+        self,
+        record: UsageRecord,
+        container: ContainerRecord,
+        *,
+        worker_id: str,
+    ) -> UsageRecord:
+        """Bound the billed window by the lifetime the control plane holds.
+
+        A worker states when its window opened and closed, and every reader of
+        the record downstream — the ledger's split across rate changes, the
+        period a charge lands in — takes those instants at their word. The
+        container row is the platform's own account of when the work could have
+        been running, so a window reaching outside it is cut back to it and one
+        lying entirely outside is refused.
+        """
+
+        window = _metering_window(record)
+        if window is None:
+            return record
+        started_at, ended_at = window
+        earliest = to_utc(container.started_at or container.created_at) - _METERING_WINDOW_TOLERANCE
+        latest = to_utc(container.finished_at or utc_now()) + _METERING_WINDOW_TOLERANCE
+        if ended_at <= earliest or started_at >= latest:
+            raise AuthorizationDeniedError(
+                "usage names a window outside the container's recorded lifetime"
+            )
+        bounded_start = max(started_at, earliest)
+        bounded_end = min(ended_at, latest)
+        if bounded_end <= bounded_start:
+            raise AuthorizationDeniedError(
+                "usage names a window outside the container's recorded lifetime"
+            )
+        if (bounded_start, bounded_end) == (started_at, ended_at):
+            return record
+        LOGGER.warning(
+            "clamped worker usage window to the container lifetime",
+            extra={
+                "container_id": container.id,
+                "worker_id": worker_id,
+                "reported_window": f"{started_at.isoformat()}/{ended_at.isoformat()}",
+                "bounded_window": f"{bounded_start.isoformat()}/{bounded_end.isoformat()}",
+            },
+        )
+        return record.model_copy(
+            update={
+                "metadata": {
+                    **record.metadata,
+                    METERING_WINDOW_STARTED_AT_METADATA_KEY: bounded_start.isoformat(),
+                    METERING_WINDOW_ENDED_AT_METADATA_KEY: bounded_end.isoformat(),
+                }
+            }
+        )
 
     def publish_container_lifecycle(
         self,
@@ -2424,3 +2677,30 @@ def _heartbeat_event() -> WorkerStreamEvent:
         event_id=WORKER_EVENT_HEARTBEAT_ID,
         kind=WorkerStreamEventKind.Heartbeat,
     )
+
+
+def _metering_window(record: UsageRecord) -> tuple[datetime, datetime] | None:
+    """The interval the producer says its quantity covers, or nothing.
+
+    Read exactly as the ledger reads it, down to refusing a naive timestamp: a
+    bound this cannot resolve to an instant is one the ledger will not price
+    either, so there is nothing here to hold to the container's lifetime.
+    """
+
+    started_at = _metering_instant(record.metadata.get(METERING_WINDOW_STARTED_AT_METADATA_KEY))
+    ended_at = _metering_instant(record.metadata.get(METERING_WINDOW_ENDED_AT_METADATA_KEY))
+    if started_at is None or ended_at is None or ended_at <= started_at:
+        return None
+    return (started_at, ended_at)
+
+
+def _metering_instant(value: JsonValue) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        return None
+    return to_utc(moment)

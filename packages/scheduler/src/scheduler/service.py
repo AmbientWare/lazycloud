@@ -78,11 +78,6 @@ CRON_JOB_LOCK_TTL_SECONDS = 10
 # Short enough that a scheduler dying mid-sweep does not hold expiry shut for
 # long, and long enough that one sweep finishes inside it.
 POD_EXPIRY_LOCK_TTL_SECONDS = 30
-
-# Long enough to outlive a sweep that talks to a payment provider for every
-# account, short enough that a replica dying mid-sweep does not hold the next
-# hour's run out. The work is idempotent, so an expired lease costs a repeat.
-BILLING_LOCK_TTL_SECONDS = 900
 CRON_JOB_DEPLOYMENT_KINDS = {DeploymentKind.Function, DeploymentKind.CronJob}
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
@@ -140,6 +135,25 @@ class SchedulerVolumeMeteringService(Protocol):
         now: datetime | None = None,
         limit: int = 100,
     ) -> SchedulerVolumeMeteringBatch: ...
+
+
+class SchedulerMeterEventBatch(Protocol):
+    @property
+    def sent_count(self) -> int: ...
+
+    @property
+    def retried_count(self) -> int: ...
+
+    @property
+    def abandoned_count(self) -> int: ...
+
+
+class SchedulerMeterOutboxService(Protocol):
+    """The sweep that hands the provider what the pricer already owed it."""
+
+    def drain(self, *, now: datetime | None = None) -> SchedulerMeterEventBatch: ...
+
+    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
 
 
 class SchedulerRetentionBatch(Protocol):
@@ -273,29 +287,13 @@ class SchedulerCapacityControls:
     capacity_interruptions: SchedulerCapacityInterruptionService | None = None
 
 
-class SchedulerBillingDailyJob(Protocol):
-    def run(self, *, now: datetime) -> bool: ...
-
-
-class SchedulerBillingCloseJob(Protocol):
-    def run(self, *, now: datetime) -> bool:
-        """Settle what is due, returning whether the work ran out.
-
-        A sweep bounded by the payment provider's latency cannot finish inside
-        one tick, so a run that stopped short says so and is resumed on the next
-        one rather than after the interval.
-        """
-        ...
-
-
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
+    meter_outbox: SchedulerMeterOutboxService | None = None
     retention: SchedulerRetentionService | None = None
     tailnet_cleanup: SchedulerTailnetCleanupService | None = None
     custom_domains: SchedulerCustomDomainService | None = None
-    billing_daily: SchedulerBillingDailyJob | None = None
-    billing_close: SchedulerBillingCloseJob | None = None
 
 
 @dataclass
@@ -311,10 +309,6 @@ class Scheduler:
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
     custom_domain_reconcile_interval_seconds: float = 60.0
     last_custom_domain_reconcile_at: datetime | None = field(default=None, init=False)
-    billing_daily_interval_seconds: float = 3600.0
-    last_billing_daily_at: datetime | None = field(default=None, init=False)
-    billing_close_interval_seconds: float = 3600.0
-    last_billing_close_at: datetime | None = field(default=None, init=False)
     token_prune_interval_seconds: float = 3600.0
     last_token_prune_at: datetime | None = field(default=None, init=False)
     retention_interval_seconds: float = 3600.0
@@ -325,6 +319,13 @@ class Scheduler:
     retention_consecutive_failures: int = field(default=0, init=False)
     event_prune_interval_seconds: float = 3600.0
     last_event_prune_at: datetime | None = field(default=None, init=False)
+    meter_event_prune_interval_seconds: float = 3600.0
+    """Acknowledged outbox rows are deleted on a retention cadence, not on the
+    drain's. A row is settled the moment the provider takes it; how long the
+    evidence of that is kept afterwards is a retention question and nothing the
+    sending loop should spend a query on every tick."""
+
+    last_meter_event_prune_at: datetime | None = field(default=None, init=False)
     worker_pool_drain_event_signatures: dict[str, tuple[str, ...]] = field(
         default_factory=dict,
         init=False,
@@ -556,6 +557,12 @@ class Scheduler:
             now=now,
             limit=container_limit,
         )
+        (
+            meter_events_sent_count,
+            meter_events_retried_count,
+            meter_events_abandoned_count,
+        ) = self._drain_meter_events(now=now)
+        meter_events_pruned = self._best_effort_prune_meter_events(now=now)
         expired_pods = self._best_effort_expire_pods(now=now) if include_containers else []
         worker_cleanups = self._best_effort_cleanup_workers(now=now) if include_containers else []
         task_queue_autoscaling = (
@@ -606,8 +613,6 @@ class Scheduler:
             limit=container_limit,
         )
         self._best_effort_reconcile_custom_domains(now=now)
-        self._best_effort_price_billing_days(now=now)
-        self._best_effort_close_billing_periods(now=now)
         worker_pool_drains = (
             self._best_effort_drain_worker_pools(now=now, limit=container_limit)
             if include_containers
@@ -645,6 +650,10 @@ class Scheduler:
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
             volume_metering_failure_count=volume_metering_failure_count,
+            meter_events_sent_count=meter_events_sent_count,
+            meter_events_retried_count=meter_events_retried_count,
+            meter_events_abandoned_count=meter_events_abandoned_count,
+            meter_events_pruned=meter_events_pruned,
             objects_removed=objects_removed,
             retention_failure_count=retention_failure_count,
         )
@@ -671,6 +680,53 @@ class Scheduler:
             LOGGER.exception("scheduler persistent-volume metering failed")
             return 0, 1
         return result.metered_count, result.failure_count
+
+    def _drain_meter_events(self, *, now: datetime | None) -> tuple[int, int, int]:
+        """Hand the payment provider the events the pricer already queued.
+
+        The sweep settles each row on its own, so a provider outage — or a
+        credential this process cannot read — shows up here as a rising retry
+        count against a queryable backlog and a line every tick, never as a lost
+        charge and never as silence.
+        """
+
+        meter_outbox = self.maintenance.meter_outbox
+        if meter_outbox is None:
+            return 0, 0, 0
+        try:
+            result = meter_outbox.drain(now=now)
+        except Exception:
+            LOGGER.exception("scheduler meter event delivery failed")
+            return 0, 0, 0
+        counts = (result.sent_count, result.retried_count, result.abandoned_count)
+        if any(counts):
+            # Only when a tick did something. The loop runs about once a second
+            # and an idle outbox is the ordinary case, so a line per tick would
+            # bury the one that says a charge was refused.
+            LOGGER.info(
+                "scheduler: meter events sent=%d retried=%d abandoned=%d",
+                *counts,
+            )
+        return counts
+
+    def _best_effort_prune_meter_events(self, *, now: datetime | None = None) -> int:
+        meter_outbox = self.maintenance.meter_outbox
+        if meter_outbox is None:
+            return 0
+        current = now or utc_now()
+        if (
+            self.last_meter_event_prune_at is not None
+            and (current - self.last_meter_event_prune_at).total_seconds()
+            < self.meter_event_prune_interval_seconds
+        ):
+            return 0
+        try:
+            pruned = meter_outbox.prune(now=current)
+        except Exception:
+            LOGGER.exception("scheduler meter event pruning failed")
+            return 0
+        self.last_meter_event_prune_at = current
+        return pruned
 
     def _best_effort_retain_artifacts(self, *, now: datetime | None = None) -> tuple[int, int]:
         retention = self.maintenance.retention
@@ -1008,10 +1064,9 @@ class Scheduler:
     ) -> list[Task]:
         """Retry due function tasks, and never let one of them end the pass.
 
-        Best effort like its neighbours, and for a reason this one makes sharper:
-        the steps after it include the billing that prices usage and collects
-        payment. A tenant whose task cannot be scheduled would otherwise stop the
-        machinery that would have made it schedulable, on every tick, forever.
+        Best effort like its neighbours: one tenant whose task cannot be
+        scheduled would otherwise end the pass for every other tenant, on every
+        tick, and take every step after it with it.
         """
 
         try:
@@ -1019,95 +1074,6 @@ class Scheduler:
         except Exception:
             LOGGER.exception("scheduler function retry scheduling failed")
             return []
-
-    def _best_effort_price_billing_days(self, *, now: datetime | None) -> bool:
-        """Price the days that have finished, wherever they are not priced yet.
-
-        Hourly rather than daily: the job only ever prices finished days, so a
-        repeat is a recomputation that converges, and running often means a
-        scheduler that was down at midnight costs an hour rather than a day.
-
-        Returns whether the work is settled for now — false where a sweep
-        stopped short and the next tick should carry on rather than wait out the
-        interval.
-        """
-        billing_daily = self.maintenance.billing_daily
-        if billing_daily is None:
-            return True
-        current_time = now or utc_now()
-        if (
-            self.last_billing_daily_at is not None
-            and (current_time - self.last_billing_daily_at).total_seconds()
-            < self.billing_daily_interval_seconds
-        ):
-            return True
-        cron_job_locks = self.states.cron_job_locks
-        if cron_job_locks is None:
-            return True
-        lock_key = cron_job_locks.key("scheduler", "leases", "billing-daily")
-        token = uuid4().hex
-        if not try_acquire_token_lock(
-            cron_job_locks, lock_key, token, ttl_seconds=BILLING_LOCK_TTL_SECONDS
-        ):
-            return False
-        self.last_billing_daily_at = current_time
-        try:
-            return billing_daily.run(now=current_time)
-        except Exception:
-            LOGGER.exception("scheduler billing daily pricing failed")
-            return False
-        finally:
-            release_token_lock(cron_job_locks, lock_key, token)
-
-    def _best_effort_close_billing_periods(self, *, now: datetime | None) -> bool:
-        """Settle and invoice the month that has ended.
-
-        Held under a lock for the whole sweep, not per account: issuing an
-        invoice is several calls to the payment provider with no transaction
-        around them, and two replicas racing would both be waiting on the same
-        provider rather than sharing the work.
-
-        The lock is also what keeps the deployment responsive. A sweep runs
-        inside this tick, so the replica holding it stops dispatching for the
-        duration — and the one that did not get it carries the tick meanwhile.
-        The sweep bounds itself as well, and says when it stopped short so the
-        next tick continues rather than waiting out the interval.
-        """
-        billing_close = self.maintenance.billing_close
-        if billing_close is None:
-            return True
-        current_time = now or utc_now()
-        if (
-            self.last_billing_close_at is not None
-            and (current_time - self.last_billing_close_at).total_seconds()
-            < self.billing_close_interval_seconds
-        ):
-            return True
-        cron_job_locks = self.states.cron_job_locks
-        if cron_job_locks is None:
-            return True
-        lock_key = cron_job_locks.key("scheduler", "leases", "billing-close")
-        token = uuid4().hex
-        if not try_acquire_token_lock(
-            cron_job_locks, lock_key, token, ttl_seconds=BILLING_LOCK_TTL_SECONDS
-        ):
-            return False
-        # Stamped only once the lock is held, so a replica that lost the race
-        # retries on the next tick instead of standing down for the interval on
-        # the strength of work it never did.
-        self.last_billing_close_at = current_time
-        try:
-            exhausted = billing_close.run(now=current_time)
-            if not exhausted:
-                # More accounts are waiting. Nothing is gained by holding them
-                # for an hour, and the next tick picks up where this one stopped.
-                self.last_billing_close_at = None
-            return exhausted
-        except Exception:
-            LOGGER.exception("scheduler billing close failed")
-            return False
-        finally:
-            release_token_lock(cron_job_locks, lock_key, token)
 
     def _best_effort_reconcile_custom_domains(self, *, now: datetime | None) -> int:
         """Advance domains still waiting on the edge.
@@ -1379,6 +1345,10 @@ class SchedulerRunResult(ContractModel):
     events_pruned: int = 0
     volume_metering_count: int = 0
     volume_metering_failure_count: int = 0
+    meter_events_sent_count: int = 0
+    meter_events_retried_count: int = 0
+    meter_events_abandoned_count: int = 0
+    meter_events_pruned: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
 

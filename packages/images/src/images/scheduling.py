@@ -185,7 +185,6 @@ def plan_image_build_container_request(
         workspace_id=workspace_id,
         stub_id=stub_id or IMAGE_BUILD_REQUEST_KIND,
         container_id=request.session.container_id,
-        record_runtime_assignment=False,
         cpu_millicores=cpu_millicores,
         memory_mib=memory_mib,
         gpu_type=gpu,
