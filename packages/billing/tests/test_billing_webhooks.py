@@ -104,10 +104,10 @@ class _Provider:
         account_id: str,
         provider_customer_id: str,
         amount_nanos: int,
-        period_started_at: datetime,
         period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
-        del account_id, provider_customer_id, period_started_at
+        del account_id, provider_customer_id, previous_period_ended_at
         self.granted.append(amount_nanos)
         return ProviderCreditGrant(
             provider_credit_grant_id=f"credgr_{self.subscription_plan.value}",

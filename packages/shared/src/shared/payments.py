@@ -282,16 +282,24 @@ class PaymentProvider(Protocol):
         account_id: str,
         provider_customer_id: str,
         amount_nanos: int,
-        period_started_at: datetime,
         period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
         """Give a customer the usage their plan includes, for one period.
 
-        Spent against metered usage before anything is charged. The period is
-        stated rather than an expiry, because when a provider actually applies a
-        grant is the provider's own timing: an allowance has to reach the invoice
-        its period raises without reaching the one the period before it raises,
-        and only the adapter knows how far either sits from the boundary.
+        Spent against metered usage before anything is charged. Cycle boundaries
+        are stated rather than the window the allowance applies in, because when
+        a provider actually applies a grant is the provider's own timing: an
+        allowance has to reach the invoice its own cycle raises without reaching
+        the one the cycle before it raises, and only the adapter knows how far
+        either sits from the boundary.
+
+        `previous_period_ended_at` is the cycle this one follows, and `None`
+        means none does. An allowance nothing precedes is spendable the moment it
+        is bought — an account's first three days are not free of charge because
+        an allowance was held back from them — while one that follows another
+        must stay out of reach until the invoice that cycle raises has been
+        settled, or an overrun there is paid out of this cycle's allowance.
 
         `account_id` names who it is for, and the provider is asked under a key
         derived from it together with the period and the amount — a grant is
@@ -306,7 +314,11 @@ class PaymentProvider(Protocol):
         What a plan change does with the grant it is replacing: two live grants
         would be two allowances for one cycle. Tolerates a grant that has already
         expired or been voided, because a retry of the change that expired it has
-        to converge rather than fail on work it already did.
+        to converge rather than fail on work it already did, and one the provider
+        will not let end early — an allowance bought for a cycle still waiting on
+        the one before it — by invalidating it instead. Ending an allowance is
+        never allowed to fail on a plan change the customer has already paid the
+        difference for.
         """
         ...
 

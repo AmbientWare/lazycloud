@@ -31,7 +31,7 @@ CREDIT_GRANT_NAME = "Included usage"
 """What the customer sees the allowance called on their invoice."""
 
 CREDIT_GRANT_SETTLEMENT_GRACE = timedelta(days=3)
-"""How far a grant's applicable window is shifted past the period it funds.
+"""How long a cycle can still be claiming credit after it has ended.
 
 Stripe applies credit when an invoice is *finalized*, not when it is raised, and
 a subscription invoice finalizes about an hour after the period ends. A grant
@@ -39,17 +39,17 @@ expiring exactly at the boundary is therefore already gone when the invoice it
 was bought for asks for it, and the next period's grant pays the last period's
 arrears — so a customer's included usage silently shrinks by whatever they
 overran the month before. Observed against a real account: the credit
-transaction for cycle one named the grant issued for cycle two.
+transaction for cycle one named the grant issued for cycle two. Every grant's
+expiry is shifted this far past its own cycle for that reason.
 
-The shift applies to both ends, and the second end is what keeps the first from
-recreating the problem it fixes. Extending only the expiry leaves two grants live
-at the moment a period's invoice finalizes — the one bought for it and the one
-bought for the period that has just begun — and an invoice that overran its
-allowance takes the difference out of the next period's grant. Overrun is the
-design here rather than an edge case, so that is the ordinary path and not a rare
-one. Becoming effective a grace after its own period starts means a grant is not
-yet spendable when the previous period's invoice finalizes, and is spendable long
-before its own does.
+The same span is what a grant bought for the *next* cycle has to stay out of
+reach for. Left spendable at the boundary, it is live at the moment the previous
+cycle's invoice finalizes, and an invoice that overran its own allowance takes
+the difference out of it. Overrun is the design here rather than an edge case, so
+that is the ordinary path and not a rare one. That is a fact about the cycle
+before, though, and never about the cycle being funded: an allowance nothing
+precedes is held back from nobody, and the account that has just been opened is
+exactly the one with no predecessor to avoid.
 
 Days rather than hours because the cost of being late is a customer billed
 against the wrong month's allowance, and an hour is what Stripe takes to finalize
@@ -440,27 +440,29 @@ class StripeBilling:
         account_id: str,
         provider_customer_id: str,
         amount_nanos: int,
-        period_started_at: datetime,
         period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
         """Give a customer the usage their plan includes.
 
         Scoped to metered prices, which is how "spent against usage before
         anything is charged" is stated to Stripe.
 
-        The caller states the period it is buying and this adapter turns that
-        into the window Stripe will actually apply the grant in, which is the
-        provider's own timing and the only thing this side knows it. Both bounds
-        move `CREDIT_GRANT_SETTLEMENT_GRACE` later, because credit is applied
-        when an invoice is *finalized* rather than when it is raised: a grant has
-        to outlive its own period to reach its invoice, and must not yet be
-        spendable when the previous period's invoice finalizes, or an overrun
-        there eats this period's allowance.
+        The caller states the cycle boundaries and this adapter turns them into
+        the window Stripe will actually apply the grant in, which is the
+        provider's own timing and the only thing this side knows it. The expiry
+        is always `CREDIT_GRANT_SETTLEMENT_GRACE` past the cycle's end, because
+        credit is applied when an invoice is *finalized* rather than when it is
+        raised and a grant has to outlive its own cycle to reach its invoice.
 
-        Effective no earlier than now, because a grant cannot become spendable
-        before it is bought. That is what the shifted start means for a plan
-        change, which buys a replacement part-way through a cycle whose start is
-        already behind it.
+        The start is held back only for the cycle before it, and only while that
+        cycle can still be finalizing. A grant nothing precedes says nothing to
+        Stripe about when it starts: they stamp it themselves, on the clock the
+        customer's own subscription runs on, and the allowance is spendable from
+        that moment. Sending an instant instead would be sending one this host
+        computed — Stripe refuses any `effective_at` at or before their own now,
+        so it is not a value that can be sent late, and a customer on a test
+        clock would be given a start a month into their own future.
 
         Stripe grants in cents where everything on this side counts nanodollars,
         so the conversion happens here and refuses a figure it cannot express
@@ -474,28 +476,32 @@ class StripeBilling:
 
         amount_cents = cents(amount_nanos)
         expiry = _epoch(period_ended_at + CREDIT_GRANT_SETTLEMENT_GRACE, "period_ended_at")
-        effective = _epoch(
-            max(period_started_at + CREDIT_GRANT_SETTLEMENT_GRACE, utc_now()),
-            "period_started_at",
-        )
+        fields: list[tuple[str, str]] = [
+            ("customer", provider_customer_id),
+            ("name", CREDIT_GRANT_NAME),
+            # Included with the plan rather than bought, which is what the
+            # provider's reporting divides these on.
+            ("category", "promotional"),
+            ("amount[type]", "monetary"),
+            ("amount[monetary][currency]", BILLING_CURRENCY.lower()),
+            ("amount[monetary][value]", str(amount_cents)),
+            ("applicability_config[scope][price_type]", "metered"),
+            ("expires_at", expiry),
+        ]
+        if previous_period_ended_at is not None:
+            settled_by = previous_period_ended_at + CREDIT_GRANT_SETTLEMENT_GRACE
+            # The comparison decides whether the previous cycle can still reach
+            # this allowance, never what instant is sent: a delivery retried past
+            # that moment, or a cycle re-termed long after it opened, has nothing
+            # left to be held back from.
+            if settled_by > utc_now():
+                fields.append(("effective_at", _epoch(settled_by, "previous_period_ended_at")))
         grant = read(
             _CreditGrant,
             self.client,
             "POST",
             "/billing/credit_grants",
-            data=[
-                ("customer", provider_customer_id),
-                ("name", CREDIT_GRANT_NAME),
-                # Included with the plan rather than bought, which is what the
-                # provider's reporting divides these on.
-                ("category", "promotional"),
-                ("amount[type]", "monetary"),
-                ("amount[monetary][currency]", BILLING_CURRENCY.lower()),
-                ("amount[monetary][value]", str(amount_cents)),
-                ("applicability_config[scope][price_type]", "metered"),
-                ("effective_at", effective),
-                ("expires_at", expiry),
-            ],
+            data=fields,
             idempotency_key=(f"{_CREDIT_GRANT_KEY_PREFIX}{account_id}-{amount_cents}-{expiry}"),
         )
         if grant.amount.monetary is None or grant.expires_at is None:
@@ -515,6 +521,18 @@ class StripeBilling:
         and the caller reaching here twice is the ordinary case: a plan change
         that died after expiring the outgoing grant has to converge on retry
         rather than fail on the work it already did.
+
+        Expiring is tried before voiding and never the other way round. Stripe
+        will not expire a grant that has not become effective yet — which is what
+        a plan change inside the settlement window of the cycle before finds the
+        outgoing allowance to be — and voiding is the only way to stop one of
+        those; nothing can have been spent from it, so calling it invalid rather
+        than over costs the customer nothing. A grant that has already funded an
+        invoice takes the first branch and keeps what it paid for.
+
+        Nothing here may raise on the ordinary path: the caller has already taken
+        the customer's money for the plan whose allowance this is replacing, and
+        a refusal at this point is a charge with no plan recorded against it.
         """
 
         grant = read(
@@ -527,11 +545,18 @@ class StripeBilling:
             return
         if grant.expires_at is not None and grant.expires_at <= int(utc_now().timestamp()):
             return
-        send(
-            self.client,
-            "POST",
-            f"/billing/credit_grants/{provider_credit_grant_id}/expire",
-        )
+        try:
+            send(
+                self.client,
+                "POST",
+                f"/billing/credit_grants/{provider_credit_grant_id}/expire",
+            )
+        except InvalidInputError:
+            send(
+                self.client,
+                "POST",
+                f"/billing/credit_grants/{provider_credit_grant_id}/void",
+            )
 
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         """Paged, because an invoice's lines are a list Stripe truncates."""

@@ -93,8 +93,8 @@ class _Provider:
         account_id: str,
         provider_customer_id: str,
         amount_nanos: int,
-        period_started_at: datetime,
         period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
         raise AssertionError("draining the outbox must not grant an allowance")
 

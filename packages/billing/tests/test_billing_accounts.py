@@ -42,6 +42,13 @@ class _Provider:
     subscriptions: list[BillingPlanId] = field(default_factory=list)
     plan_changes: list[BillingPlanId] = field(default_factory=list)
     grants: list[int] = field(default_factory=list)
+    grant_predecessors: list[datetime | None] = field(default_factory=list)
+    """The cycle each grant was told it follows, in the order they were bought.
+
+    What decides when an allowance becomes spendable, so it is money: a grant
+    told it follows a cycle is held back until that cycle's invoice has settled,
+    and one told it follows nothing is spendable at once."""
+
     expired_grants: list[str] = field(default_factory=list)
     plan: BillingPlanId = BillingPlanId.Free
     cycle_started_at: datetime = CYCLE_STARTED_AT
@@ -136,11 +143,12 @@ class _Provider:
         account_id: str,
         provider_customer_id: str,
         amount_nanos: int,
-        period_started_at: datetime,
         period_ended_at: datetime,
+        previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
-        del account_id, provider_customer_id, period_started_at
+        del account_id, provider_customer_id
         self.grants.append(amount_nanos)
+        self.grant_predecessors.append(previous_period_ended_at)
         return ProviderCreditGrant(
             provider_credit_grant_id=f"credgr_{len(self.grants)}",
             amount_nanos=amount_nanos,
@@ -318,6 +326,10 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     assert provider.grants == [FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS]
     assert provider.expired_grants == ["credgr_1"]
     assert provider.live_grants == [account.provider_credit_grant_id] == ["credgr_2"]
+    # Neither allowance follows a cycle, because this account has held only one.
+    # Held back for a predecessor that does not exist, the plan somebody just
+    # paid for would include nothing until three days after they bought it.
+    assert provider.grant_predecessors == [None, None]
 
     with isolated_services.context.database.session() as session:
         again = BillingAccountService(session).subscribe(
@@ -380,6 +392,10 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     assert account is not None
     assert provider.live_grants == ["credgr_1", "credgr_2"]
     assert account.provider_credit_grant_id == "credgr_2"
+    # Both grants are live at once here, which is the whole hazard: the second is
+    # bought for the cycle that opened at the seam and must stay out of reach
+    # until the invoice the first one funds has been settled.
+    assert provider.grant_predecessors == [None, CYCLE_ENDED_AT]
     # The closed period keeps the free terms it was granted and spent against,
     # and the new one opens on Team's.
     assert closing is not None
