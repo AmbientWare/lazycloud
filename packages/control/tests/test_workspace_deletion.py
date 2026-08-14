@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from threading import Event
 from typing import Never
@@ -25,8 +27,14 @@ from database.repositories.identity import (
 from database.repositories.orchestration import AutoscalerStateRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import ObjectRepository
+from database.tables.billing_ledger import (
+    BillingLedgerSegmentTable,
+    ContainerBillingShapeTable,
+)
+from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.execution import EventTable
 from database.tables.identity import SecretTable
+from database.tables.observability import UsageRecordTable
 from fastapi.testclient import TestClient
 from identity.auth import AuthError, AuthService
 from identity.device_auth import DeviceAuthorizationService
@@ -40,6 +48,7 @@ from shared.autoscaler_state import (
     autoscaler_state_name,
 )
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
+from shared.billing_quotes import BilledDimension, LedgerBasis, LedgerComponent
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.errors import ConflictError, NotFoundError
@@ -53,6 +62,7 @@ from shared.identity import (
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
 from tests.fakes import FakeObjectClient
@@ -110,8 +120,13 @@ def test_workspace_deletion_tombstones_identity_and_invalidates_tokens(
         AuthService(isolated_services.context).create_token(
             "replacement", workspace_id=workspace.id
         )
-    with pytest.raises(ConflictError, match="name is retained"):
-        owned_workspace(control, "tenant")
+    # The tombstone released the name and kept its row: the ledger, usage and audit
+    # history still point at the workspace that spent the money.
+    replacement = owned_workspace(control, "tenant")
+    assert replacement.id != workspace.id
+    assert replacement.status is WorkspaceStatus.Active
+    with isolated_services.context.database.session() as session:
+        assert WorkspaceRepository(session).by_name("tenant") == replacement
     with isolated_services.context.database.session() as session:
         audit_records = (
             WorkspaceAuditRepository(session)
@@ -356,6 +371,118 @@ def test_workspace_deletion_purges_owned_resources_and_protects_identity_scopes(
             isolated_services,
             default.id,
             audit_actor=admin_actor,
+        )
+
+
+def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
+    isolated_services: ApiServices,
+) -> None:
+    """Deleting a workspace never destroys what its owner owed.
+
+    The usage a charge derives from was already retained; the charge itself, the
+    placement it priced against and the events still owed to the payment provider
+    were not, so a deletion used to leave a customer's bill unprovable and the
+    provider's meter permanently short.
+    """
+    control = ControlPlaneService(isolated_services.context)
+    owned_workspace(control, "default")
+    workspace = owned_workspace(control, "tenant")
+    owner_user_id = workspace_owner_user_id(isolated_services.context, workspace.id)
+    _admin_token, audit_actor = administrator_credential(
+        isolated_services, "workspace-delete-admin"
+    )
+    usage_record_id = str(uuid4())
+    container_id = str(uuid4())
+    now = utc_now()
+    with isolated_services.context.database.session() as session:
+        session.add(
+            UsageRecordTable(
+                id=usage_record_id,
+                workspace_id=workspace.id,
+                resource_type="container",
+                resource_id=container_id,
+                metric="container_runtime_seconds",
+                quantity=60.0,
+                payload={},
+            )
+        )
+        session.flush()
+        session.add(
+            ContainerBillingShapeTable(
+                container_id=container_id,
+                workspace_id=workspace.id,
+                billing_owner="platform_fleet",
+                gpu_type="",
+                cpu_millicores=1000,
+                memory_mib=2048,
+                gpu_count=0,
+            )
+        )
+        session.add(
+            BillingLedgerSegmentTable(
+                id=str(uuid4()),
+                usage_record_id=usage_record_id,
+                segment_index=0,
+                workspace_id=workspace.id,
+                owner_user_id=owner_user_id,
+                dimension=BilledDimension.ComputeRuntime.value,
+                component=LedgerComponent.ContainerTime.value,
+                basis=LedgerBasis.Reserved.value,
+                subject_type="container",
+                subject_id=container_id,
+                span_started_at=now,
+                span_ended_at=now + timedelta(minutes=1),
+                segment_started_at=now,
+                segment_ended_at=now + timedelta(minutes=1),
+                duration_ms=60_000,
+                quantity=Decimal("60"),
+                quantity_unit="second",
+                pricing_version="test-pricing",
+                rate_nanos_per_unit=Decimal("1000"),
+                quote_effective_at=now,
+                cost_nanos=60_000,
+            )
+        )
+        session.add(
+            BillingMeterOutboxTable(
+                id=str(uuid4()),
+                workspace_id=workspace.id,
+                identifier=usage_record_id,
+                provider_customer_id="cus_test",
+                meter_event_name="compute_runtime",
+                value_nanos=60_000,
+                pricing_version="test-pricing",
+                occurred_at=now,
+                status="pending",
+                next_attempt_at=now,
+            )
+        )
+
+    with isolated_services.context.database.session() as session:
+        blockers = WorkspaceRepository(session).deletion_blockers(workspace.id)
+    assert "billing_ledger_segments" not in blockers
+    assert "billing_meter_outbox" not in blockers
+    assert "container_billing_shapes" not in blockers
+
+    deleted = _delete_identity_workspace(
+        isolated_services,
+        workspace.id,
+        audit_actor=audit_actor,
+    )
+
+    assert deleted.status is WorkspaceStatus.Deleted
+    with isolated_services.context.database.session() as session:
+        assert _rows_for_workspace(session, BillingLedgerSegmentTable, workspace.id) == 1
+        assert _rows_for_workspace(session, BillingMeterOutboxTable, workspace.id) == 1
+        assert _rows_for_workspace(session, ContainerBillingShapeTable, workspace.id) == 1
+        assert _rows_for_workspace(session, UsageRecordTable, workspace.id) == 1
+        assert (
+            session.scalar(
+                select(BillingMeterOutboxTable.status).where(
+                    BillingMeterOutboxTable.workspace_id == workspace.id
+                )
+            )
+            == "pending"
         )
 
 
@@ -801,6 +928,22 @@ def _delete_identity_workspace(
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _rows_for_workspace(
+    session: Session,
+    table: type[BillingLedgerSegmentTable]
+    | type[BillingMeterOutboxTable]
+    | type[ContainerBillingShapeTable]
+    | type[UsageRecordTable],
+    workspace_id: str,
+) -> int:
+    return int(
+        session.scalar(
+            select(func.count()).select_from(table).where(table.workspace_id == workspace_id)
+        )
+        or 0
+    )
 
 
 def _autoscaler_state(workspace_id: str, target_id: str) -> AutoscalerStateRecord:

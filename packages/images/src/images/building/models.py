@@ -54,7 +54,6 @@ class ImageBuildLifecycleAction(StrEnum):
     DeletePendingState = "delete-pending-state"
     MarkStopping = "mark-stopping"
     KillContainer = "kill-container"
-    StopExpiredContainer = "stop-expired-container"
 
 
 class ImageBuildWaitOutcome(StrEnum):
@@ -64,23 +63,6 @@ class ImageBuildWaitOutcome(StrEnum):
     Failed = "failed"
     Aborted = "aborted"
     Timeout = "timeout"
-
-
-class ImageBuildTtlEventKind(StrEnum):
-    SchedulerStateSet = "scheduler-state-set"
-    BuildTtlExpired = "build-ttl-expired"
-
-
-class ImageBuildKeyEventOperation(StrEnum):
-    Set = "set"
-    Expired = "expired"
-    Other = "other"
-
-
-class ImageBuildTtlKeyFamily(StrEnum):
-    BuildContainerTtl = "build-container-ttl"
-    SchedulerContainerState = "scheduler-container-state"
-    Unknown = "unknown"
 
 
 class ImageBuildSpinupTimeoutReason(StrEnum):
@@ -200,22 +182,6 @@ class ImageBuildCancellationPlan(ContractModel):
     reason: str = ""
 
 
-class ImageBuildTtlPlan(ContractModel):
-    action: ImageBuildLifecycleAction = ImageBuildLifecycleAction.Noop
-    stop_container: bool = False
-    container_id: str = ""
-    reason: str = ""
-
-
-class ImageBuildTtlKeyEventPlan(ContractModel):
-    family: ImageBuildTtlKeyFamily = ImageBuildTtlKeyFamily.Unknown
-    event_kind: ImageBuildTtlEventKind | None = None
-    container_id: str = ""
-    relevant: bool = False
-    ttl_plan: ImageBuildTtlPlan = Field(default_factory=ImageBuildTtlPlan)
-    reason: str = ""
-
-
 class ImageBuildSpinupTimeoutPlan(ContractModel):
     timeout_seconds: int
     reason: ImageBuildSpinupTimeoutReason
@@ -253,6 +219,14 @@ class ImageBuildSessionPlan(ContractModel):
     image_id: str = ""
     build_id: str = ""
     container_id: str = ""
+    """The container this build runs in, which carries the build's own id.
+
+    One identity, because the control plane holds one durable container row per
+    build and prices the placement it recorded against that row: a separate id
+    would need a mapping to get back to the build, and could not be a container
+    id the ledger recognises.
+    """
+
     build_container_required: bool = True
     v2: bool = True
     steps: list[ImageBuildSessionStep] = Field(default_factory=list)

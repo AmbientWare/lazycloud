@@ -13,3 +13,11 @@ Builds handle credentials, run long, and can fail halfway. Make durability,
 concurrency, terminal failure, publication, and cleanup explicit: a build that
 dies must not leave a half-published image that later loads as though it were
 whole.
+
+A build is a container the platform placed, and is admitted, recorded, metered
+and billed as one. It carries the build's own id as its container id, so the
+durable `containers` row, the `container_billing_shapes` placement written
+against it, and the usage the worker reports all name one thing; a separate id
+is one the ledger cannot resolve, and no row at all is compute nothing can
+price. A build that fails held the capacity it was given for as long as it ran
+and is billed for it.

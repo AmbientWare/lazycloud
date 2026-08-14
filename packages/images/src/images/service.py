@@ -462,7 +462,6 @@ class ImageBuildService:
             require_archive_publication=self.executor.requires_archive_publication,
             image_id=plan.image_id,
             build_id=record.id,
-            container_id=_build_container_id(record.id),
         )
         record = self._record_lifecycle_session(
             record,
@@ -536,7 +535,6 @@ class ImageBuildService:
             require_archive_publication=self.executor.requires_archive_publication,
             image_id=plan.image_id,
             build_id=record.id,
-            container_id=_build_container_id(record.id),
         )
         emitted: list[ImageBuildStreamEventPlan] = []
         sensitive_values = _image_build_sensitive_values(
@@ -662,7 +660,6 @@ class ImageBuildService:
             require_archive_publication=self.executor.requires_archive_publication,
             image_id=reused.image_id or plan.image_id,
             build_id=reused.id,
-            container_id=_build_container_id(reused.id),
         )
         return ImageBuildExecution(
             record=reused,
@@ -776,7 +773,7 @@ class ImageBuildService:
         if self.container_lifecycle is None:
             return
         result = self.container_lifecycle.cancel_container(
-            _build_container_id(record.id),
+            record.id,
             context_cancelled=True,
             build_succeeded=False,
             container_connected=True,
@@ -1235,7 +1232,7 @@ class ImageBuildService:
         lifecycle_metadata: dict[str, str] = {}
         if self.container_lifecycle is not None:
             lifecycle = self.container_lifecycle.cancel_container(
-                _build_container_id(record.id),
+                record.id,
                 context_cancelled=True,
                 build_succeeded=record.status is BuildStatus.Complete,
                 container_connected=container_connected,
@@ -1271,24 +1268,6 @@ class ImageBuildService:
                 "container_connected": container_connected,
                 **lifecycle_metadata,
             },
-        )
-
-    def cancel_build_container(
-        self,
-        container_id: str,
-        *,
-        workspace_id: str | None = None,
-        reason: str = "Build was aborted.",
-    ) -> ImageBuildRecord:
-        build_id = _build_id_from_container_id(container_id)
-        if not build_id:
-            msg = f"build container id is invalid: {container_id}"
-            raise NotFoundError(msg)
-        return self.cancel(
-            build_id,
-            workspace_id=workspace_id,
-            container_connected=True,
-            reason=reason,
         )
 
     def persist_image_metadata(
@@ -1950,16 +1929,6 @@ def _string_json_values(values: list[str]) -> list[JsonValue]:
 
 def _dockerfile_path_for_manifest(manifest_path: Path) -> Path:
     return manifest_path.with_name("Dockerfile")
-
-
-def _build_container_id(build_id: str) -> str:
-    return f"build-{build_id}"
-
-
-def _build_id_from_container_id(container_id: str) -> str:
-    if not container_id.startswith("build-"):
-        return ""
-    return container_id.removeprefix("build-")
 
 
 def _is_terminal_build_status(status: BuildStatus) -> bool:

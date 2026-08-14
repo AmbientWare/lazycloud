@@ -1,8 +1,10 @@
-"""Prove a bursting container bills what it used and a held disk bills its occupancy.
+"""Prove a bursting container is charged what it used and a held disk bills its occupancy.
 
-A request is a floor rather than a cap, so billing the reservation alone
-undercounts a burst. Ephemeral disk carries no reservation floor at all: its
-ceiling is oversubscribed by design, so only real occupancy is billable.
+A request is a floor rather than a cap, so charging the reservation alone
+undercounts a burst. What the app is charged is read from the priced ledger,
+which is where the floor and the burst are added together; what it consumed is
+read from its own metered records. Ephemeral disk carries no reservation floor at
+all: its ceiling is oversubscribed by design, so only real occupancy is billable.
 
 Prerequisite: an authenticated public lazycloud profile targeting a healthy
 root Compose stack. Creates one uniquely named app and deletes it through the
@@ -19,6 +21,8 @@ from pathlib import Path
 
 from lazycloud.cli.control import observability_client, resource_client
 from lazycloud.clients.observability.control import ObservabilityControlClient
+from shared.billing_quotes import LedgerComponent
+from shared.http.usage import UsageCostGroupKey
 from shared.usage import UsageMetric
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
@@ -30,12 +34,12 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SAMPLE_INTERVAL_SECONDS = 5.0
 USAGE_DEADLINE_SECONDS = 180.0
 
-BILLED_METRICS = (
-    UsageMetric.CpuSeconds,
+METERED_METRICS = (
     UsageMetric.CpuUsedCoreSeconds,
     UsageMetric.ContainerDurationMilliseconds,
     UsageMetric.ContainerDiskByteSeconds,
 )
+"""What the container itself reported, against which the charge is compared."""
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -65,20 +69,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             hold_seconds=HOLD_SECONDS,
         )
         app_id = _owned_app_id(APP_NAME, workspace)
-        billed = _await_container_billing(
-            observability_client(workspace=workspace, timeout_seconds=30),
-            app_id,
-            started_at,
-        )
-        _assert_cpu_bills_the_burst(billed, requested_cores=REQUESTED_CORES)
-        _assert_disk_bills_occupancy(billed, observed)
+        client = observability_client(workspace=workspace, timeout_seconds=30)
+        metered = _await_container_billing(client, app_id, started_at)
+        charged = _charged_core_seconds(client, app_id, started_at)
+        _assert_cpu_bills_the_burst(metered, charged, requested_cores=REQUESTED_CORES)
+        _assert_disk_bills_occupancy(metered, observed)
         print(
             json.dumps(
                 {
                     "app": APP_NAME,
                     "capability": "usage.container_resource_usage",
                     "in_container": observed,
-                    "billed": billed,
+                    "metered": metered,
+                    "charged_cpu_core_seconds": charged,
                 },
                 sort_keys=True,
             )
@@ -112,7 +115,7 @@ def _await_container_billing(
                 ).data
                 if record.labels.get("app_id") == app_id
             )
-            for metric in BILLED_METRICS
+            for metric in METERED_METRICS
         }
         if totals[UsageMetric.ContainerDiskByteSeconds.value] > 0:
             return totals
@@ -124,36 +127,64 @@ def _await_container_billing(
     )
 
 
-def _assert_cpu_bills_the_burst(billed: dict[str, float], *, requested_cores: float) -> None:
-    charged = billed[UsageMetric.CpuSeconds.value]
-    measured = billed[UsageMetric.CpuUsedCoreSeconds.value]
-    duration_seconds = billed[UsageMetric.ContainerDurationMilliseconds.value] / 1_000
+def _charged_core_seconds(
+    client: ObservabilityControlClient,
+    app_id: str,
+    started_at: datetime,
+) -> float:
+    """What the priced ledger charged this app for a processor.
+
+    Read from the cost breakdown rather than from the metered records, because
+    the ledger is where `max(reserved, measured)` is reached: the duration record
+    charges the core-seconds a window held and the CPU record charges what it
+    burnt above them, and only their sum says what the app pays for.
+    """
+
+    page = client.usage_costs(
+        start=started_at,
+        end=datetime.now(UTC),
+        group_by=UsageCostGroupKey.App,
+        app_id=app_id,
+    )
+    return sum(
+        component.quantity
+        for row in page.data
+        for component in row.components
+        if component.component is LedgerComponent.Cpu
+    )
+
+
+def _assert_cpu_bills_the_burst(
+    metered: dict[str, float], charged: float, *, requested_cores: float
+) -> None:
+    measured = metered[UsageMetric.CpuUsedCoreSeconds.value]
+    duration_seconds = metered[UsageMetric.ContainerDurationMilliseconds.value] / 1_000
     reservation = requested_cores * duration_seconds
     if charged < measured:
         raise RuntimeError(
-            f"billed {charged:.3f} cpu core-seconds against {measured:.3f} measured; "
+            f"charged {charged:.3f} cpu core-seconds against {measured:.3f} measured; "
             "billing is below what the container consumed"
         )
     if charged <= reservation:
         raise RuntimeError(
-            f"billed {charged:.3f} cpu core-seconds, no more than the {reservation:.3f} "
+            f"charged {charged:.3f} cpu core-seconds, no more than the {reservation:.3f} "
             f"reservation, despite consuming {measured:.3f}; the burst is not billed"
         )
 
 
-def _assert_disk_bills_occupancy(billed: dict[str, float], observed: dict[str, float]) -> None:
-    charged = billed[UsageMetric.ContainerDiskByteSeconds.value]
+def _assert_disk_bills_occupancy(metered: dict[str, float], observed: dict[str, float]) -> None:
+    charged = metered[UsageMetric.ContainerDiskByteSeconds.value]
     held_bytes = observed["held_bytes"]
     held_seconds = observed["held_seconds"]
     if charged < held_bytes * SAMPLE_INTERVAL_SECONDS:
         raise RuntimeError(
-            f"billed {charged:.0f} disk byte-seconds for {held_bytes:.0f} bytes held "
+            f"metered {charged:.0f} disk byte-seconds for {held_bytes:.0f} bytes held "
             f"{held_seconds:.0f}s; occupancy is not reaching billing"
         )
-    duration_seconds = billed[UsageMetric.ContainerDurationMilliseconds.value] / 1_000
+    duration_seconds = metered[UsageMetric.ContainerDurationMilliseconds.value] / 1_000
     if charged > held_bytes * duration_seconds:
         raise RuntimeError(
-            f"billed {charged:.0f} disk byte-seconds, more than the {held_bytes:.0f} bytes "
+            f"metered {charged:.0f} disk byte-seconds, more than the {held_bytes:.0f} bytes "
             f"held could accrue over the container's {duration_seconds:.1f}s lifetime"
         )
 

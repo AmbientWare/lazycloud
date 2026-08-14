@@ -1,195 +1,566 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
-from uuid import uuid4
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID, uuid4
 
-from database.tables.billing_ledger import BillingLedgerEntryTable
-from shared.billing import BillableMetric
-from shared.billing_ledger import BillingLedgerEntry
-from shared.usage import UsageUnit
-from sqlalchemy import delete, func, select
+from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
+from database.repositories.identity import WorkspaceMemberRepository
+from database.tables.billing import BillingAccountTable
+from database.tables.billing_ledger import (
+    BillingLedgerSegmentTable,
+    ContainerBillingShapeTable,
+)
+from database.tables.billing_outbox import BillingMeterOutboxTable
+from database.tables.observability import UsageRecordTable
+from pydantic import JsonValue
+from shared.billing_quotes import (
+    BILLED_METRICS,
+    BilledDimension,
+    BilledUsage,
+    ContainerShape,
+    LedgerBasis,
+    MeteredSpan,
+    PricedSegment,
+    PricedSpan,
+    SpanPricing,
+    UnpricedReason,
+    UnpricedSpan,
+    elapsed_seconds,
+    measured_excess,
+    measured_quantity,
+    price_span,
+    reserved_quantity,
+)
+from shared.payments import METER_EVENT_NAMES
+from shared.timestamps import to_utc, utc_now
+from shared.usage import (
+    METERING_WINDOW_ENDED_AT_METADATA_KEY,
+    METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageBillingOwner,
+    UsageRecord,
+)
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
+
+_CONTAINER_SUBJECT = "container"
+
+type SegmentValue = str | int | float | Decimal | datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBillingShapeRepository:
+    """Where the control plane records what it placed.
+
+    Written in the transaction that records the runtime worker, so a container
+    that is running has a shape and one that never started has none. Nothing a
+    worker reports reaches this table.
+    """
+
+    session: Session
+
+    def record(self, *, container_id: str, workspace_id: str, shape: ContainerShape) -> None:
+        values: dict[str, SegmentValue] = {
+            "container_id": container_id,
+            "workspace_id": workspace_id,
+            "billing_owner": shape.billing_owner.value,
+            "gpu_type": shape.gpu_type,
+            "cpu_millicores": shape.cpu_millicores,
+            "memory_mib": shape.memory_mib,
+            "gpu_count": shape.gpu_count,
+        }
+        dialect = self.session.get_bind().dialect.name
+        statement = (
+            postgresql_insert(ContainerBillingShapeTable)
+            if dialect == "postgresql"
+            else sqlite_insert(ContainerBillingShapeTable)
+        )
+        # A placement is decided once. A retried assignment restates the same
+        # shape, and accepting a differing one would reprice a live container.
+        self.session.execute(
+            statement.values(**values).on_conflict_do_nothing(
+                index_elements=[ContainerBillingShapeTable.container_id]
+            )
+        )
+        self.session.flush()
+
+    def shape_for(self, container_id: str) -> ContainerShape | None:
+        row = self.session.get(ContainerBillingShapeTable, container_id)
+        if row is None:
+            return None
+        return ContainerShape(
+            billing_owner=UsageBillingOwner(row.billing_owner),
+            gpu_type=row.gpu_type,
+            cpu_millicores=row.cpu_millicores,
+            memory_mib=row.memory_mib,
+            gpu_count=row.gpu_count,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordedSegments:
+    """The rows one call wrote, never the ones it merely computed."""
+
+    count: int
+    cost_nanos: int
+    pricing_versions: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenSpan:
+    """What the ledger already holds for a record it was asked to price again.
+
+    Segments are append-only, so a record priced once is priced: what a customer
+    was shown and what the provider was metered is `cost_nanos`, whatever a later
+    computation over the same record makes of it. `recomputed_cost_nanos` is that
+    later figure and charges nothing — it is carried only so a disagreement can be
+    named, which is what a quantity re-sent under an id that was already priced
+    produces.
+    """
+
+    dimension: BilledDimension
+    cost_nanos: int
+    recomputed_cost_nanos: int
+
+    @property
+    def disagrees(self) -> bool:
+        return self.cost_nanos != self.recomputed_cost_nanos
 
 
 @dataclass(frozen=True, slots=True)
 class BillingLedgerRepository:
+    """Turns one metered record into the cost it freezes.
+
+    Runs in the caller's session — the transaction that wrote the usage record it
+    prices — because a crash between the two would either lose money or count it
+    twice.
+    """
+
     session: Session
 
-    def record_day(
-        self,
-        *,
-        workspace_id: str,
-        day: date,
-        entries: tuple[BillingLedgerEntry, ...],
-    ) -> int:
-        """Make a day's rows say exactly what the recomputation says, and nothing else.
+    def price_unpriced_between(
+        self, *, started_at: datetime, ended_at: datetime
+    ) -> tuple[int, int]:
+        """Price billable usage in this window that has no segment yet.
 
-        Re-running a day is the normal case: usage arrives late, runs are
-        retried, and the sweep reprices the last few days every hour. The day is
-        rewritten whole — every row for it removed, then the new set inserted —
-        so a second run converges instead of accumulating.
+        First pricing, never repricing: a record with any segment is skipped, so
+        the append-only rule holds by construction rather than by care. Nothing
+        in production needs this — usage is priced as it is recorded — so it
+        exists for the one case that cannot be: usage metered before any rate
+        was published, which no later ingest will revisit. An operator runs it
+        once, over a window they name.
 
-        Written whole rather than merged row by row because the identity a merge
-        would key on includes `effective_date`, which is null for a line nothing
-        priced. Null is not equal to null, so those rows never conflict with
-        themselves and every re-price would insert another copy: an unpriced GPU
-        model would grow a row per sweep, forever, and `for_day` would return the
-        same line many times over.
+        The window is when usage was *recorded*, not when it ran: that is the
+        question an operator can answer from an outage, and it is the column a
+        record arrives with.
 
-        The whole day is replaced in one transaction so no reader sees it
-        half-written. Nothing refers to these rows by id — they are a computed
-        record of a finished day, not an audit trail — so replacing them costs
-        nothing a caller can observe.
+        Returns how many records segments were written for and how many were
+        found and left alone — still unpriced, because no rate or no placement
+        covered them. Counting the second as priced would report an outage as
+        closed by the run that failed to close it.
         """
 
-        self.session.execute(
-            delete(BillingLedgerEntryTable).where(
-                BillingLedgerEntryTable.workspace_id == workspace_id,
-                BillingLedgerEntryTable.day == day,
-            )
-        )
-        for entry in entries:
-            self.session.add(
-                BillingLedgerEntryTable(
-                    id=str(uuid4()),
-                    workspace_id=entry.workspace_id,
-                    user_id=entry.user_id,
-                    day=entry.day,
-                    metric=entry.metric.value,
-                    variant=entry.variant,
-                    effective_date=entry.effective_date,
-                    quantity=entry.quantity,
-                    unit=entry.unit.value,
-                    price_per_unit_nanos=entry.price_per_unit_nanos,
-                    cost_nanos=entry.cost_nanos,
-                    currency=entry.currency,
-                )
-            )
-        self.session.flush()
-        return len(entries)
-
-    def for_period(
-        self,
-        *,
-        user_id: str,
-        period_start: date,
-        period_end: date,
-    ) -> tuple[BillingLedgerEntry, ...]:
-        """Every line this account owes over a period, priced or not.
-
-        Keyed on the payer the line recorded, not on who owns its workspace now:
-        a workspace deleted before the month ended takes its membership with it
-        and would take the debt too.
-        """
-
+        if ended_at <= started_at:
+            raise ValueError("a repricing window must end after it starts")
         rows = self.session.scalars(
-            select(BillingLedgerEntryTable)
+            select(UsageRecordTable)
             .where(
-                BillingLedgerEntryTable.user_id == user_id,
-                BillingLedgerEntryTable.day >= period_start,
-                BillingLedgerEntryTable.day < period_end,
+                UsageRecordTable.created_at >= started_at,
+                UsageRecordTable.created_at < ended_at,
+                UsageRecordTable.metric.in_([metric.value for metric in BILLED_METRICS]),
+                ~select(BillingLedgerSegmentTable.id)
+                .where(BillingLedgerSegmentTable.usage_record_id == UsageRecordTable.id)
+                .exists(),
             )
-            .order_by(
-                BillingLedgerEntryTable.metric.asc(),
-                BillingLedgerEntryTable.variant.asc(),
-                BillingLedgerEntryTable.day.asc(),
-            )
+            .order_by(UsageRecordTable.created_at.asc())
         ).all()
-        return tuple(_entry(row) for row in rows)
 
-    def accrued_since(self, *, user_id: str, since: date) -> int:
-        """What this account has run up since a day, across every workspace it owns.
+        priced = 0
+        for row in rows:
+            if isinstance(self.price_record(UsageRecord.model_validate(row.payload)), PricedSpan):
+                priced += 1
+        return priced, len(rows) - priced
 
-        Read on the compute path, so it is a scalar sum over an indexed range
-        rather than the row fetch beside it — the gate asks this question far more
-        often than a month is closed.
+    def price_record(self, record: UsageRecord) -> SpanPricing | FrozenSpan | None:
+        """Price one usage record, or answer that it is not money.
 
-        Reads finished days only, because a day still accumulating would be
-        priced from a partial rollup. So it under-reports, always downward: a
-        gate built on it cuts off later than the true figure, never earlier.
+        One record alone, always. Nothing here reads another record, joins on
+        time or looks a sibling window up: the cost is a function of this
+        record's quantity, this record's metering window, the placement recorded
+        for its container, and the rates in force over that window. A duration
+        record charges the capacity its window held; a CPU or memory record
+        charges only what the same window used above the same floor. The two
+        therefore sum to `max(reserved, measured)` whatever order they arrive in,
+        whether they share a transaction, and whether the measured one arrives at
+        all.
 
-        The lag is a little over a day while pricing is keeping up — the current
-        day plus however long since the last hourly run, which has yesterday to
-        price too. It is unbounded when pricing is behind, and nothing here can
-        tell the difference. What that costs depends entirely on what the account
-        is running, and nothing caps that, so this is a floor on what an account
-        has spent rather than a measure of it.
+        `None` where the metric produces no charge at all: those records are
+        attribution and telemetry, and there is no dimension to look a rate up
+        for. `UnpricedSpan` is the different answer — something billable that no
+        published rate covered. It writes nothing, and the caller records it as a
+        durable error and publishes the missing rate.
+
+        `FrozenSpan` where the ledger already held segments for this record. The
+        answer is then what is on disk rather than what was just computed, and
+        neither the allowance nor the meter outbox moves again. The two figures
+        agreeing is the ordinary idempotent path; them disagreeing means a
+        quantity was re-sent under an id that was already priced, and the caller
+        records that.
         """
 
+        billed = BILLED_METRICS.get(record.metric)
+        if billed is None:
+            return None
+        window = _metering_window(record)
+        if window is None:
+            moment = to_utc(record.created_at)
+            return UnpricedSpan(
+                dimension=billed.dimension,
+                gap_started_at=moment,
+                gap_ended_at=moment,
+                reason=UnpricedReason.NoMeteringWindow,
+            )
+        started_at, ended_at = window
+        shape = self._shape(record)
+        quantity = Decimal(str(record.quantity))
+        if billed.dimension is BilledDimension.ComputeRuntime:
+            if shape is None:
+                return UnpricedSpan(
+                    dimension=billed.dimension,
+                    gap_started_at=started_at,
+                    gap_ended_at=ended_at,
+                    reason=UnpricedReason.NoRecordedPlacement,
+                )
+            quotes = ComputeRateRepository(self.session).quotes_for(
+                shape=shape,
+                components=billed.components,
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+            spans = _compute_spans(
+                billed=billed,
+                shape=shape,
+                started_at=started_at,
+                ended_at=ended_at,
+                quantity=quantity,
+            )
+        else:
+            component = billed.components[0]
+            quotes = PlatformRateRepository(self.session).quotes_for(
+                component=component,
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+            spans = (
+                MeteredSpan(
+                    component=component,
+                    basis=billed.basis,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    quantity=measured_quantity(component, quantity),
+                ),
+            )
+        priced: list[tuple[MeteredSpan, PricedSpan]] = []
+        for span in spans:
+            pricing = price_span(span, quotes)
+            if isinstance(pricing, UnpricedSpan):
+                return pricing
+            priced.append((span, pricing))
+        owner = WorkspaceMemberRepository(self.session).owner(record.workspace_id)
+        if owner is None:
+            return UnpricedSpan(
+                dimension=billed.dimension,
+                gap_started_at=started_at,
+                gap_ended_at=ended_at,
+                reason=UnpricedReason.NoAccountOwner,
+            )
+        recorded = self._insert_segments(
+            record=record,
+            priced=priced,
+            shape=shape,
+            owner_user_id=owner.user_id,
+        )
+        whole = PricedSpan(
+            segments=tuple(segment for _, pricing in priced for segment in pricing.segments)
+        )
+        if recorded.count == 0:
+            return FrozenSpan(
+                dimension=billed.dimension,
+                cost_nanos=self._frozen_cost_nanos(record.id),
+                recomputed_cost_nanos=whole.cost_nanos,
+            )
+        BillingAllowanceRepository(self.session).increment(
+            user_id=owner.user_id,
+            at=started_at,
+            cost_nanos=recorded.cost_nanos,
+        )
+        self._queue_meter_event(
+            record=record,
+            dimension=billed.dimension,
+            occurred_at=started_at,
+            recorded=recorded,
+            owner_user_id=owner.user_id,
+        )
+        return whole
+
+    def _shape(self, record: UsageRecord) -> ContainerShape | None:
+        if record.resource_type != _CONTAINER_SUBJECT:
+            return None
+        container_id = _uuid_text(record.resource_id)
+        if container_id is None:
+            return None
+        return ContainerBillingShapeRepository(self.session).shape_for(container_id)
+
+    def _frozen_cost_nanos(self, usage_record_id: str) -> int:
         total = self.session.scalar(
-            select(func.coalesce(func.sum(BillingLedgerEntryTable.cost_nanos), 0)).where(
-                BillingLedgerEntryTable.user_id == user_id,
-                BillingLedgerEntryTable.day >= since,
+            select(func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0)).where(
+                BillingLedgerSegmentTable.usage_record_id == usage_record_id
             )
         )
         return int(total or 0)
 
-    def payers_for_period(self, *, period_start: date, period_end: date) -> tuple[str, ...]:
-        """Every account with priced usage in a period.
-
-        The close sweeps these rather than every user, so a month opens a period
-        only where something ran. Enumerating accounts instead would write an
-        empty period for everyone who has ever signed up, every month.
-        """
-
-        rows = self.session.scalars(
-            select(BillingLedgerEntryTable.user_id)
-            .where(
-                BillingLedgerEntryTable.day >= period_start,
-                BillingLedgerEntryTable.day < period_end,
+    def _insert_segments(
+        self,
+        *,
+        record: UsageRecord,
+        priced: Sequence[tuple[MeteredSpan, PricedSpan]],
+        shape: ContainerShape | None,
+        owner_user_id: str,
+    ) -> _RecordedSegments:
+        rows = [
+            _segment_values(
+                record=record,
+                span=span,
+                segment=segment,
+                shape=shape,
+                owner_user_id=owner_user_id,
             )
-            .group_by(BillingLedgerEntryTable.user_id)
-            .order_by(BillingLedgerEntryTable.user_id.asc())
+            for span, pricing in priced
+            for segment in pricing.segments
+        ]
+        dialect = self.session.get_bind().dialect.name
+        statement = (
+            postgresql_insert(BillingLedgerSegmentTable)
+            if dialect == "postgresql"
+            else sqlite_insert(BillingLedgerSegmentTable)
+        )
+        inserted = self.session.execute(
+            statement.values(rows)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    BillingLedgerSegmentTable.usage_record_id,
+                    BillingLedgerSegmentTable.component,
+                    BillingLedgerSegmentTable.segment_index,
+                ]
+            )
+            .returning(
+                BillingLedgerSegmentTable.segment_index,
+                BillingLedgerSegmentTable.cost_nanos,
+                BillingLedgerSegmentTable.pricing_version,
+            )
         ).all()
-        return tuple(rows)
+        self.session.flush()
+        # By segment index, which is chronological, so the versions read out in
+        # the order they took effect rather than in whatever order the insert
+        # returned them. Components share an index where they share a rate row,
+        # which is every time: one row publishes all four figures.
+        ordered = sorted(inserted, key=lambda row: int(row.segment_index))
+        return _RecordedSegments(
+            count=len(ordered),
+            cost_nanos=sum(int(row.cost_nanos) for row in ordered),
+            pricing_versions=tuple(dict.fromkeys(str(row.pricing_version) for row in ordered)),
+        )
 
-    def last_payer_for(self, workspace_id: str) -> str | None:
-        """Who last owed for this workspace, or nothing if it never owed anything.
+    def _queue_meter_event(
+        self,
+        *,
+        record: UsageRecord,
+        dimension: BilledDimension,
+        occurred_at: datetime,
+        recorded: _RecordedSegments,
+        owner_user_id: str,
+    ) -> None:
+        """Owe the provider one event per priced record, or owe it nothing.
 
-        The ledger is the durable record of who pays for a workspace, and it is
-        the only one that survives the workspace. Deleting a workspace takes its
-        membership with it while its usage rows stay, so the final part-day would
-        otherwise be unpriceable — metered, real, and billable to nobody.
+        One event however many components the record wrote: a dimension is one
+        meter at the provider, and every component of one record belongs to one
+        dimension.
+
+        Owed is what was written, never what was computed beside it, so the
+        figure the provider adds up and the figure the ledger holds are one
+        number sent twice.
+
+        Nothing is owed for zero. The provider sums these values into a meter, so
+        a zero moves no total there, and the $0.00 line a customer reads comes
+        from the metered price their subscription carries rather than from events
+        against it. A zero row would buy a claim, a request and a retry schedule
+        for a charge nobody makes. That a dimension was metered and free is held
+        where it decides something: a ledger segment at an explicit rate of zero,
+        which a dimension no rate covered never gets.
+
+        An account named nowhere at the provider has nothing to meter there, so
+        its ledger is complete without a row here.
         """
 
-        return self.session.scalars(
-            select(BillingLedgerEntryTable.user_id)
-            .where(BillingLedgerEntryTable.workspace_id == workspace_id)
-            .order_by(BillingLedgerEntryTable.day.desc())
-            .limit(1)
+        if recorded.cost_nanos == 0:
+            return
+        provider_customer_id = self.session.scalars(
+            select(BillingAccountTable.provider_customer_id).where(
+                BillingAccountTable.user_id == owner_user_id
+            )
         ).first()
+        if not provider_customer_id:
+            return
+        now = utc_now()
+        dialect = self.session.get_bind().dialect.name
+        statement = (
+            postgresql_insert(BillingMeterOutboxTable)
+            if dialect == "postgresql"
+            else sqlite_insert(BillingMeterOutboxTable)
+        )
+        self.session.execute(
+            statement.values(
+                id=str(uuid4()),
+                workspace_id=record.workspace_id,
+                identifier=record.id,
+                provider_customer_id=provider_customer_id,
+                meter_event_name=METER_EVENT_NAMES[dimension],
+                value_nanos=recorded.cost_nanos,
+                # Every published version the span drew on. A span that crossed a
+                # rate change was priced under both, and naming only one of them
+                # is the provider's copy disagreeing with the segments behind it.
+                pricing_version=",".join(recorded.pricing_versions),
+                occurred_at=occurred_at,
+                status="pending",
+                attempts=0,
+                next_attempt_at=now,
+            ).on_conflict_do_nothing(index_elements=[BillingMeterOutboxTable.identifier])
+        )
+        self.session.flush()
 
-    def for_day(self, workspace_id: str, day: date) -> tuple[BillingLedgerEntry, ...]:
-        rows = self.session.scalars(
-            select(BillingLedgerEntryTable)
-            .where(
-                BillingLedgerEntryTable.workspace_id == workspace_id,
-                BillingLedgerEntryTable.day == day,
+
+def _compute_spans(
+    *,
+    billed: BilledUsage,
+    shape: ContainerShape,
+    started_at: datetime,
+    ended_at: datetime,
+    quantity: Decimal,
+) -> tuple[MeteredSpan, ...]:
+    """One span per component, over this record's window and no other.
+
+    The floor is recomputed here from the placement and the window rather than
+    read off whatever a sibling record charged, which is what makes a stale
+    window harmless: a window can only ever be priced against the capacity that
+    window held, so evidence from a longer window cannot be charged against a
+    shorter one's ground.
+    """
+
+    seconds = elapsed_seconds(started_at, ended_at)
+    spans: list[MeteredSpan] = []
+    for component in billed.components:
+        floor = reserved_quantity(component, shape, seconds)
+        spans.append(
+            MeteredSpan(
+                component=component,
+                basis=billed.basis,
+                started_at=started_at,
+                ended_at=ended_at,
+                quantity=(
+                    floor
+                    if billed.basis is LedgerBasis.Reserved
+                    else measured_excess(measured_quantity(component, quantity), floor)
+                ),
             )
-            .order_by(
-                BillingLedgerEntryTable.metric.asc(),
-                BillingLedgerEntryTable.variant.asc(),
-                BillingLedgerEntryTable.effective_date.asc(),
-            )
-        ).all()
-        return tuple(_entry(row) for row in rows)
+        )
+    return tuple(spans)
 
 
-def _entry(row: BillingLedgerEntryTable) -> BillingLedgerEntry:
-    return BillingLedgerEntry(
-        workspace_id=row.workspace_id,
-        user_id=row.user_id,
-        day=row.day,
-        metric=BillableMetric(row.metric),
-        variant=row.variant,
-        effective_date=row.effective_date,
-        quantity=row.quantity,
-        unit=UsageUnit(row.unit),
-        price_per_unit_nanos=row.price_per_unit_nanos,
-        cost_nanos=row.cost_nanos,
-        currency=row.currency,
-    )
+def _segment_values(
+    *,
+    record: UsageRecord,
+    span: MeteredSpan,
+    segment: PricedSegment,
+    shape: ContainerShape | None,
+    owner_user_id: str,
+) -> dict[str, SegmentValue]:
+    return {
+        "id": str(uuid4()),
+        "usage_record_id": record.id,
+        "segment_index": segment.index,
+        "workspace_id": record.workspace_id,
+        "owner_user_id": owner_user_id,
+        "dimension": span.dimension.value,
+        "component": span.component.value,
+        "basis": span.basis.value,
+        "subject_type": record.resource_type,
+        "subject_id": record.resource_id,
+        "app_id": record.labels.get("app_id", ""),
+        "workload_id": record.labels.get("stub_id", ""),
+        "task_id": record.labels.get("task_id", ""),
+        "worker_id": _text(record.metadata.get("worker_id")) or record.labels.get("worker_id", ""),
+        "billing_owner": shape.billing_owner.value if shape is not None else "",
+        "gpu_type": shape.gpu_type if shape is not None else "",
+        "span_started_at": span.started_at,
+        "span_ended_at": span.ended_at,
+        "segment_started_at": segment.started_at,
+        "segment_ended_at": segment.ended_at,
+        "duration_ms": segment.duration_ms,
+        "quantity": segment.quantity,
+        "quantity_unit": segment.quote.unit.value,
+        "pricing_version": segment.quote.pricing_version,
+        "rate_nanos_per_unit": segment.quote.rate_nanos_per_unit,
+        "quote_effective_at": segment.quote.effective_at,
+        "quote_valid_until": segment.quote.valid_until,
+        "cost_nanos": segment.cost_nanos,
+    }
 
 
-__all__ = ["BillingLedgerRepository"]
+def _metering_window(record: UsageRecord) -> tuple[datetime, datetime] | None:
+    started_at = _instant(record.metadata.get(METERING_WINDOW_STARTED_AT_METADATA_KEY))
+    ended_at = _instant(record.metadata.get(METERING_WINDOW_ENDED_AT_METADATA_KEY))
+    if started_at is None or ended_at is None or ended_at <= started_at:
+        return None
+    return started_at, ended_at
+
+
+def _instant(value: JsonValue) -> datetime | None:
+    """An interval bound a producer stated, or nothing.
+
+    A naive timestamp is refused rather than assumed to be UTC: it names no
+    instant, and guessing one is how a charge lands in the wrong period.
+    """
+
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        return None
+    return to_utc(moment)
+
+
+def _text(value: JsonValue) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _uuid_text(value: str) -> str | None:
+    try:
+        UUID(value)
+    except ValueError:
+        return None
+    return value
+
+
+__all__ = [
+    "BillingLedgerRepository",
+    "ContainerBillingShapeRepository",
+    "FrozenSpan",
+]

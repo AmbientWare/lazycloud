@@ -17,9 +17,13 @@ from database.tables.base import (
     uuid_type,
 )
 from database.tables.billing import BillingAccountTable
-from database.tables.billing_ledger import BillingLedgerEntryTable
-from database.tables.billing_periods import BillingPeriodTable
-from database.tables.billing_priced_days import BillingPricedDayTable
+from database.tables.billing_allowance import BillingAllowancePeriodTable
+from database.tables.billing_ledger import (
+    BillingLedgerSegmentTable,
+    ContainerBillingShapeTable,
+)
+from database.tables.billing_outbox import BillingMeterOutboxTable
+from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.compute import (
     AwsAccountConnectionTable,
@@ -65,8 +69,6 @@ from database.tables.images import (
 )
 from database.tables.observability import (
     MetricTable,
-    UsageBillingContributionTable,
-    UsageBillingWindowTable,
     UsageRecordTable,
     WorkerEventTable,
 )
@@ -95,9 +97,9 @@ __all__ = [
     "AwsAccountConnectionTable",
     "AwsAuthorizationCleanupTombstoneTable",
     "BillingAccountTable",
-    "BillingLedgerEntryTable",
-    "BillingPeriodTable",
-    "BillingPricedDayTable",
+    "BillingAllowancePeriodTable",
+    "BillingLedgerSegmentTable",
+    "BillingMeterOutboxTable",
     "BillingWebhookEventTable",
     "CacheEntryTable",
     "CheckpointTable",
@@ -105,8 +107,10 @@ __all__ = [
     "ComputeJoinCredentialTable",
     "ComputeMachineEnrollmentTable",
     "ComputeProviderInstanceTable",
+    "ComputeRateTable",
     "ComputeUnitTable",
     "ConcurrencyLimitTable",
+    "ContainerBillingShapeTable",
     "ContainerTable",
     "CredentialTable",
     "CronJobRunTable",
@@ -127,6 +131,7 @@ __all__ = [
     "NamedWorkspacePayloadTable",
     "ObjectTable",
     "PayloadMixin",
+    "PlatformRateTable",
     "PodProcessTable",
     "PodUrlTable",
     "QueueMessageTable",
@@ -140,8 +145,6 @@ __all__ = [
     "TaskTable",
     "TimestampMixin",
     "TokenTable",
-    "UsageBillingContributionTable",
-    "UsageBillingWindowTable",
     "UsageRecordTable",
     "UserIdentityTable",
     "UserTable",

@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as SigninRouteImport } from "./routes/signin"
+import { Route as PricingRouteImport } from "./routes/pricing"
 import { Route as DashboardRouteImport } from "./routes/dashboard"
 import { Route as CallbackRouteImport } from "./routes/callback"
 import { Route as ActivateRouteImport } from "./routes/activate"
@@ -33,6 +34,11 @@ const SigninRoute = SigninRouteImport.update({
   path: "/signin",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PricingRoute = PricingRouteImport.update({
+  id: "/pricing",
+  path: "/pricing",
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import("./routes/pricing.lazy").then((d) => d.Route))
 const DashboardRoute = DashboardRouteImport.update({
   id: "/dashboard",
   path: "/dashboard",
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
+  "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
@@ -149,6 +156,7 @@ export interface FileRoutesByTo {
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
+  "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace": typeof WWorkspaceIndexRoute
@@ -169,6 +177,7 @@ export interface FileRoutesById {
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
+  "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
@@ -191,6 +200,7 @@ export interface FileRouteTypes {
     | "/activate"
     | "/callback"
     | "/dashboard"
+    | "/pricing"
     | "/signin"
     | "/w/$workspace"
     | "/w/$workspace/tasks"
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | "/activate"
     | "/callback"
     | "/dashboard"
+    | "/pricing"
     | "/signin"
     | "/w/$workspace/tasks"
     | "/w/$workspace"
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | "/activate"
     | "/callback"
     | "/dashboard"
+    | "/pricing"
     | "/signin"
     | "/w/$workspace"
     | "/w/$workspace/tasks"
@@ -251,6 +263,7 @@ export interface RootRouteChildren {
   ActivateRoute: typeof ActivateRoute
   CallbackRoute: typeof CallbackRoute
   DashboardRoute: typeof DashboardRoute
+  PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
   WWorkspaceRouteRoute: typeof WWorkspaceRouteRouteWithChildren
 }
@@ -262,6 +275,13 @@ declare module "@tanstack/react-router" {
       path: "/signin"
       fullPath: "/signin"
       preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/pricing": {
+      id: "/pricing"
+      path: "/pricing"
+      fullPath: "/pricing"
+      preLoaderRoute: typeof PricingRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/dashboard": {
@@ -459,6 +479,7 @@ const rootRouteChildren: RootRouteChildren = {
   ActivateRoute: ActivateRoute,
   CallbackRoute: CallbackRoute,
   DashboardRoute: DashboardRoute,
+  PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
   WWorkspaceRouteRoute: WWorkspaceRouteRouteWithChildren,
 }

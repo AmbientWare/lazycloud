@@ -4,44 +4,29 @@ from dataclasses import dataclass
 
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.identity import UserRepository
-from shared.billing_accounts import (
-    FREE_BILLING_ACCOUNT,
-    BillingAccount,
-    BillingAccountState,
-    BillingAccountStatus,
-    BillingPlan,
-)
-from shared.errors import NotFoundError
+from shared.billing_accounts import BillingAccount
+from shared.billing_plans import BillingPlanId
+from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.payments import PaymentProvider
 from sqlalchemy.orm import Session
+
+from billing.periods import carry_plan_into_cycle
 
 
 @dataclass(frozen=True, slots=True)
 class BillingAccountService:
-    """What a workspace is on, and who to charge for it."""
+    """Who pays for a workspace, and how they are reached at the provider."""
 
     session: Session
 
-    def resolve_for_workspace(self, workspace_id: str) -> BillingAccountState:
-        """What is in force for this workspace right now.
-
-        Absence is the free plan rather than an error. Nothing writes a row to
-        record that an account has not agreed to pay, so every workspace has an
-        answer here from the moment it exists, and no caller has to decide what a
-        missing row means.
-        """
-
-        account = BillingAccountRepository(self.session).get_for_workspace_owner(workspace_id)
-        return account.state if account is not None else FREE_BILLING_ACCOUNT
-
     def payment_account_for(self, *, user_id: str) -> BillingAccount:
-        """The account of someone who has already registered to pay.
+        """The account of someone already registered at the payment provider.
 
         Refuses rather than registering. The caller wanting this has something to
         show a person about a payment relationship that exists — past invoices, a
-        card to replace — and creating one on the way there would open a page
-        with nothing on it and leave a provider customer behind for someone who
-        never meant to make one.
+        card to replace — and the only accounts that reach here without one never
+        signed in, so there is nothing at the provider to show them. Registering
+        on the way there would open a page with nothing on it.
         """
 
         account = BillingAccountRepository(self.session).get_by_user(user_id)
@@ -49,46 +34,191 @@ class BillingAccountService:
             raise NotFoundError(f"no payment relationship to manage for user: {user_id}")
         return account
 
-    def payment_customer_for(
+    def billing_account_for(
         self, payments: PaymentProvider, *, user_id: str, workspace_id: str
     ) -> BillingAccount:
-        """The account to bill this person through, registering them if needed.
+        """The account this person is billed through, provisioned if it is not.
 
-        The first production writer of a `billing_accounts` row, and the answer to
-        where one comes from: a customer has to exist at the provider before
-        anyone can be shown a page to save a card on, so the row is created at
-        the moment somebody sets out to pay rather than at sign-up. An account
-        per person who ever registered would be a provider customer per signup,
-        almost all of whom never pay.
+        The writer of a `billing_accounts` row, and the answer to where one comes
+        from: sign-in provisions before it mints a session, so an account that
+        exists is an account that can be billed, and every later page that needs
+        one — a card to save, a plan to change — finds it here rather than
+        creating it.
 
-        The plan is not touched. Saving a card is not choosing a plan, and an
-        account that had already chosen one must not be moved back by coming here
-        to replace an expired card.
+        Provisioning is a customer at the provider, a subscription on the free
+        plan carrying that plan's price and the three metered prices, the
+        allowance period the subscription's own cycle defines, and the grant that
+        funds it. One plan shape rather than two: the account that has never paid
+        and the account that pays are the same objects with a different price, so
+        overage is billed for both instead of refused for one.
 
-        Idempotent by the row, not by the provider: an account that already names
-        a customer returns it rather than registering a second, which would leave
-        two customers holding one person's invoices and only one of them known
-        here.
+        Idempotent, because every one of those can be repeated. An account whose
+        row already names a subscription returns it and reaches no provider at
+        all. An account part-way through — a customer registered and a
+        subscription that was not — is finished here, and the calls it repeats
+        are keyed on the account so the provider answers with what the first
+        attempt made rather than a second of each.
         """
 
         accounts = BillingAccountRepository(self.session)
-        # Locked, not merely read. Two card pages opened at once would otherwise
-        # both find no customer and both register one; the row insert settles
-        # which wins, but only after the loser has already created a customer at
-        # the provider that nothing here will ever name again.
-        existing = accounts.get_by_user(user_id, for_update=True)
-        if existing is not None and existing.provider_customer_id:
+        # Read before anything is written or locked. Every sign-in after the
+        # first is answered here, so the ordinary path takes no lock and holds no
+        # transaction open across a provider it never calls.
+        registered = accounts.get_by_user(user_id)
+        if registered is not None and _provisioned(registered):
+            return registered
+        # Provisioning is serialized on the account's own row, which is created
+        # first so that there is a row to serialize on. The lock is deliberately
+        # held across the provider calls: it is what makes the second of two
+        # simultaneous first sign-ins wait and then read what the first created,
+        # instead of creating a second customer and a second subscription — a
+        # person turned away for racing themselves, and their usage metered onto
+        # two invoices.
+        return self._provision(
+            payments,
+            accounts.lock_for_registration(user_id),
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+
+    def subscribe(
+        self, payments: PaymentProvider, *, user_id: str, workspace_id: str
+    ) -> BillingAccount:
+        """Move this account onto the Team plan.
+
+        A price swapped on the subscription it already holds, not a second
+        subscription: the identifier, the billing anniversary and the three
+        metered items survive, so the usage already recorded this cycle stays
+        where it is and is billed on the invoice it belongs to.
+
+        The open period is re-termed in place rather than replaced, keeping what
+        has been spent against it, and the grant that funded the smaller
+        allowance is expired so that one grant covers the cycle. A customer
+        neither loses the allowance they already had nor holds both.
+
+        An upgrade landing in the seam between a cycle ending and its invoice
+        finalizing is a different act, and `carry_plan_into_cycle` is what tells
+        them apart: the cycle the provider answers with is a new one, so the
+        outgoing grant is left to fund the invoice it was bought for rather than
+        voided out from under it.
+
+        The provider raises and charges the prorated difference immediately and
+        refuses if it cannot be taken, so an account never comes back from here
+        holding the larger plan on a payment that did not go through.
+        """
+
+        accounts = BillingAccountRepository(self.session)
+        account = self._provision(
+            payments,
+            accounts.lock_for_registration(user_id),
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        if account.plan is BillingPlanId.Team:
+            return account
+        subscription = payments.set_subscription_plan(
+            provider_subscription_id=account.provider_subscription_id,
+            plan=BillingPlanId.Team,
+        )
+        return accounts.upsert(
+            user_id=user_id,
+            status=account.status,
+            provider_customer_id=account.provider_customer_id,
+            provider_subscription_id=subscription.provider_subscription_id,
+            provider_credit_grant_id=carry_plan_into_cycle(
+                self.session,
+                payments,
+                account_id=user_id,
+                provider_customer_id=account.provider_customer_id,
+                provider_credit_grant_id=account.provider_credit_grant_id,
+                subscription=subscription,
+                plan=BillingPlanId.Team,
+            ),
+            plan=BillingPlanId.Team,
+        )
+
+    def _provision(
+        self,
+        payments: PaymentProvider,
+        existing: BillingAccount,
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> BillingAccount:
+        """Finish this account's provisioning under the lock the caller took.
+
+        Takes the locked row rather than reading it again, so registering a
+        customer, subscribing them and granting what the plan includes are one
+        decision made under one lock instead of several that can disagree.
+
+        The plan written down is the one the provider's answer carries rather
+        than the one asked for. A customer who already holds a live subscription
+        is given it back instead of a second, and an account whose row lost track
+        of a Team subscription must not be recorded as free — it would be shown
+        terms cheaper than the ones it is being charged for.
+        """
+
+        if _provisioned(existing):
             return existing
+        customer_id = self._customer_id(
+            payments, existing, user_id=user_id, workspace_id=workspace_id
+        )
+        subscription = payments.create_subscription(
+            provider_customer_id=customer_id,
+            plan=BillingPlanId.Free,
+        )
+        plan = subscription.plan
+        if plan is None:
+            raise UpstreamUnavailableError(
+                f"the payment provider holds a subscription for {user_id} on a price this "
+                "platform did not publish, so there are no terms to open its cycle on"
+            )
+        return BillingAccountRepository(self.session).upsert(
+            user_id=user_id,
+            status=existing.status,
+            provider_customer_id=customer_id,
+            provider_subscription_id=subscription.provider_subscription_id,
+            provider_credit_grant_id=carry_plan_into_cycle(
+                self.session,
+                payments,
+                account_id=user_id,
+                provider_customer_id=customer_id,
+                provider_credit_grant_id=existing.provider_credit_grant_id,
+                subscription=subscription,
+                plan=plan,
+            ),
+            plan=plan,
+        )
+
+    def _customer_id(
+        self,
+        payments: PaymentProvider,
+        existing: BillingAccount,
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> str:
+        """Who the provider bills for this person, registering them if needed."""
+
+        if existing.provider_customer_id:
+            return existing.provider_customer_id
         user = UserRepository(self.session).get(user_id)
         if user is None:
             raise NotFoundError(f"no user to bill: {user_id}")
-        customer = payments.create_customer(email=user.email, workspace_id=workspace_id)
-        return accounts.upsert(
-            user_id=user_id,
-            plan=existing.plan if existing is not None else BillingPlan.Free,
-            status=existing.status if existing is not None else BillingAccountStatus.Active,
-            provider_customer_id=customer.provider_customer_id,
-        )
+        return payments.create_customer(
+            account_id=user_id, email=user.email, workspace_id=workspace_id
+        ).provider_customer_id
+
+
+def _provisioned(account: BillingAccount) -> bool:
+    """Whether this row holds everything provisioning creates.
+
+    All three, because provisioning is not one write and can stop between them:
+    a row naming a customer and no subscription is a registration that got half
+    way, and every later call has to finish it rather than read it as done.
+    """
+
+    return bool(account.provider_customer_id and account.provider_subscription_id and account.plan)
 
 
 __all__ = ["BillingAccountService"]

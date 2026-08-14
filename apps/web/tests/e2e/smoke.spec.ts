@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { emptyUsageBillingOverviewFixture } from "./usage-fixtures";
 import { activeWorkspaceDefaults } from "./fixtures/workspaces";
 
 const workspaceDefaults = activeWorkspaceDefaults;
@@ -142,9 +141,6 @@ async function mockControlPlane(page: Page) {
   });
   await page.route("**/api/v1/tasks?*", async (route) => {
     await route.fulfill({ json: { data: [], next: "" } });
-  });
-  await page.route("**/api/v1/usage/billing*", async (route) => {
-    await route.fulfill({ json: emptyUsageBillingOverviewFixture("workspace-test") });
   });
   // The shell probes admin scope through this route; answering 403 keeps the
   // signed-in surface deterministic for a non-admin token.

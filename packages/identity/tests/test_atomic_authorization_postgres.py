@@ -249,8 +249,11 @@ def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
         assert replay.record.id == created.record.id
         assert auth.authenticate(publication.read_published() or "").id == created.record.id
         with database.session() as session:
+            # The workspace the recovery resolved, not the token's own: an
+            # administrator credential names an account rather than a workspace,
+            # so its `workspace_id` is empty and the audit it wrote is not there.
             audits = WorkspaceAuditRepository(session).page(
-                workspace_id=created.record.workspace_id,
+                workspace_id=context.default_workspace_id(session),
                 limit=20,
             )
         assert (

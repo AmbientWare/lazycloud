@@ -26,3 +26,12 @@ it from the environment.
 Do not create request and body twins, duplicate a path field inside a body, add
 soft-error envelopes, or keep initializer compatibility facades. A contract
 shared by several owners is only worth its cost while there is exactly one of it.
+
+The published rate card is a contract with a consumer that cannot import it: the
+pricing page renders in a browser without calling the API, so the card has to
+reach it as source. `shared.billing_rate_card_typescript` renders that source, and
+lives here rather than in `apps/web` or `apps/cli` because the alternative is a
+second copy of every price maintained by hand, and the drift a customer finds by
+being charged something the page did not say. It is a deterministic function of
+the card and nothing else—no clock, no locale, no environment—because the check
+that keeps the generated file current is a byte comparison against it.

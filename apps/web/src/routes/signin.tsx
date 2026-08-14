@@ -5,7 +5,7 @@ import { SignInScreen } from "@/components/shared/AuthGate/SignInScreen";
 /**
  * Where a failed sign-in lands.
  *
- * The API answers a broken GitHub round trip with a redirect rather than JSON,
+ * The API answers a failed sign-in with a redirect rather than JSON,
  * because the caller is a browser navigating and a bare error document is a dead
  * end. This is the page that makes that worth doing: it says what went wrong and
  * offers the only way forward.
@@ -24,7 +24,11 @@ const SIGN_IN_ERRORS: Record<string, string> = {
   invalid_state: "That sign-in link expired or was already used. Try again.",
   invalid_return_to: "That sign-in link was malformed. Try again.",
   account_disabled: "This account is disabled. Ask an administrator to re-enable it.",
-  provider_unavailable: "Signing in with GitHub is unavailable right now.",
+  provider_unavailable: "Signing in is unavailable right now. Try again shortly.",
+  // Distinct from the line above because the advice is the opposite one: this
+  // account was refused rather than unlucky, and trying again produces the same
+  // refusal until somebody looks at it.
+  provider_refused: "Signing in was refused for this account. Contact support.",
 };
 
 function SignInPage() {

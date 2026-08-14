@@ -14,7 +14,7 @@ from shared.http.observability import (
     LogQueryResponse,
     LogRecord,
 )
-from shared.http.usage import UsageRecordListResponse
+from shared.http.usage import UsageCostGroupKey, UsageCostListResponse, UsageRecordListResponse
 from shared.http_transport import HttpChannel
 from shared.usage import UsageMetric
 
@@ -44,6 +44,18 @@ class ObservabilityClient(Protocol):
         limit: int = 100,
         cursor: str | None = None,
     ) -> UsageRecordListResponse: ...
+
+    def usage_costs(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        group_by: UsageCostGroupKey = UsageCostGroupKey.App,
+        app_id: str | None = None,
+        workload_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> UsageCostListResponse: ...
 
     def stream_logs(
         self,
@@ -121,6 +133,42 @@ class ObservabilityControlClient:
             query["cursor"] = cursor
         return UsageRecordListResponse.model_validate(
             self.channel.get(f"/api/v1/usage/records?{urlencode(query)}")
+        )
+
+    def usage_costs(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        group_by: UsageCostGroupKey = UsageCostGroupKey.App,
+        app_id: str | None = None,
+        workload_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> UsageCostListResponse:
+        """What usage cost, read from the priced ledger rather than recomputed.
+
+        The same rows the payment provider is metered from, broken to the
+        component each rate is published per — so what a container was charged
+        for a processor is answerable without holding the rate card or knowing
+        which of its windows measured anything.
+        """
+
+        query: dict[str, str | int] = {
+            "workspace": self.workspace,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "group_by": group_by.value,
+            "limit": limit,
+        }
+        if app_id is not None:
+            query["app_id"] = app_id
+        if workload_id is not None:
+            query["workload_id"] = workload_id
+        if cursor:
+            query["cursor"] = cursor
+        return UsageCostListResponse.model_validate(
+            self.channel.get(f"/api/v1/usage/costs?{urlencode(query)}")
         )
 
     def stream_logs(

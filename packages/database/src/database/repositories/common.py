@@ -10,7 +10,7 @@ from database.tables.base import IdPayloadTable, NamedWorkspacePayloadTable, utc
 from database.tables.identity import UserTable, WorkspaceTable
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.errors import NotFoundError
-from shared.identity import UserStatus, WorkspaceRecord, WorkspaceStatus
+from shared.identity import UserStatus, WorkspaceStatus
 from sqlalchemy import DateTime, Select, Uuid, select
 from sqlalchemy.orm import Session, class_mapper
 from sqlalchemy.orm.attributes import flag_modified
@@ -37,14 +37,14 @@ type PayloadValue = (
 def _lock_active_workspace(session: Session, workspace_id: str) -> None:
     row = session.scalars(
         select(WorkspaceTable)
-        .where(WorkspaceTable.id == workspace_id)
+        .where(
+            WorkspaceTable.id == workspace_id,
+            WorkspaceTable.status == WorkspaceStatus.Active.value,
+        )
         .with_for_update(read=True, key_share=True)
         .execution_options(populate_existing=True)
     ).first()
     if row is None:
-        raise NotFoundError(f"workspace not found: {workspace_id}")
-    workspace = WorkspaceRecord.model_validate(row.payload)
-    if workspace.status is not WorkspaceStatus.Active:
         raise NotFoundError(f"workspace not found: {workspace_id}")
 
 

@@ -16,8 +16,11 @@ from shared.autoscaler_state import (
     autoscaler_state_name,
 )
 from shared.errors import NotFoundError
+from shared.identity import WorkspaceStatus
 from shared.objects import ObjectWriteCommand
 from sqlalchemy import delete
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import IntegrityError
 
 from database import (
     DatabaseApplicationName,
@@ -25,6 +28,50 @@ from database import (
     DatabaseSettings,
     WorkspaceDeletionFence,
 )
+
+
+def test_postgresql_workspace_name_belongs_to_one_live_workspace(
+    postgres_database_url: URL,
+) -> None:
+    """A name is held while a workspace exists and released when it stops existing.
+
+    Both halves are one partial unique index, so both are proven against the
+    database that enforces it rather than against a mapping in Python: the row
+    stays for the ledger and the audit trail that point at it, and the name does
+    not stay with it.
+    """
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(
+            url=postgres_database_url.render_as_string(hide_password=False),
+            application_name=DatabaseApplicationName.Test,
+        )
+    )
+    database.create_schema()
+    try:
+        with database.session() as session:
+            original = WorkspaceRepository(session).create(name="tenant")
+
+        with (
+            pytest.raises(IntegrityError, match="uq_workspaces_name"),
+            database.session() as session,
+        ):
+            WorkspaceRepository(session).create(name="tenant")
+
+        with database.session() as session:
+            workspaces = WorkspaceRepository(session)
+            workspaces.tombstone(workspaces.mark_deleting(original))
+
+        with database.session() as session:
+            replacement = WorkspaceRepository(session).create(name="tenant")
+
+        assert replacement.id != original.id
+        with database.session() as session:
+            workspaces = WorkspaceRepository(session)
+            assert workspaces.by_name("tenant") == replacement
+            tombstone = workspaces.get(original.id)
+        assert tombstone is not None and tombstone.status is WorkspaceStatus.Deleted
+    finally:
+        database.dispose()
 
 
 def test_postgresql_workspace_deletion_serializes_complete_attempts() -> None:

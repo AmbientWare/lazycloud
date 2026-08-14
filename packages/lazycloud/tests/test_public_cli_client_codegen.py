@@ -202,6 +202,7 @@ class _FakeUntypedClientManifestGateway:
                     deployment_id="dep-health",
                     deployment_version=3,
                     invoke_url=f"{request.external_url}/endpoint/public/stub-health",
+                    invoke_path="/api/v1/endpoints/health/latest",
                     route="/health",
                     methods=["GET"],
                     inputs={"fields": {}},

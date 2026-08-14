@@ -15,7 +15,6 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from observability.settings import (
-    UsagePricingSettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
@@ -67,6 +66,10 @@ class SchedulerProcessResult:
     orphaned_container_failure_count: int = 0
     volume_metering_count: int = 0
     volume_metering_failure_count: int = 0
+    meter_events_sent_count: int = 0
+    meter_events_retried_count: int = 0
+    meter_events_abandoned_count: int = 0
+    meter_events_pruned: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
     tailnet_cleanup_processed_count: int = 0
@@ -93,6 +96,10 @@ class SchedulerProcessResult:
             "orphaned_container_failure_count": self.orphaned_container_failure_count,
             "volume_metering_count": self.volume_metering_count,
             "volume_metering_failure_count": self.volume_metering_failure_count,
+            "meter_events_sent_count": self.meter_events_sent_count,
+            "meter_events_retried_count": self.meter_events_retried_count,
+            "meter_events_abandoned_count": self.meter_events_abandoned_count,
+            "meter_events_pruned": self.meter_events_pruned,
             "objects_removed": self.objects_removed,
             "retention_failure_count": self.retention_failure_count,
             "tailnet_cleanup_processed_count": self.tailnet_cleanup_processed_count,
@@ -179,6 +186,10 @@ def run_scheduler(
                 orphaned_container_failure_count=len(result.orphaned_containers_failed),
                 volume_metering_count=result.volume_metering_count,
                 volume_metering_failure_count=result.volume_metering_failure_count,
+                meter_events_sent_count=result.meter_events_sent_count,
+                meter_events_retried_count=result.meter_events_retried_count,
+                meter_events_abandoned_count=result.meter_events_abandoned_count,
+                meter_events_pruned=result.meter_events_pruned,
                 objects_removed=result.objects_removed,
                 retention_failure_count=result.retention_failure_count,
                 tailnet_cleanup_processed_count=result.tailnet_cleanup_processed_count,
@@ -211,7 +222,6 @@ def build_scheduler_runtime(
         runtime_callback_http_url=runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=WorkspaceChangeStreamSettings(),
-            usage_pricing=UsagePricingSettings(),
         ),
         storage=SchedulerStorageSettings(
             object_store=S3ObjectStoreSettings(),

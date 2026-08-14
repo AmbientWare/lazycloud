@@ -15,6 +15,7 @@ from coordination.event_bus import (
     event_id_for_event,
     event_key,
 )
+from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -30,11 +31,13 @@ from scheduler.containers import (
     SchedulerContainerSubmitStatus,
 )
 from scheduler.state import SchedulerWorkerRequest
+from shared.billing_quotes import ContainerShape
 from shared.compute_fleet import Machine, Worker
 from shared.container_requests import WorkerStartupKind
 from shared.containers import ContainerRecord
-from shared.errors import ConflictError, InvalidInputError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.tasks import TaskStatus
+from shared.usage import UsageBillingOwner
 from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
@@ -326,6 +329,48 @@ def test_container_stop_does_not_broadcast_for_unassigned_request(
     assert events.events == []
 
 
+def test_deleting_a_live_container_is_refused_until_it_is_stopped(
+    isolated_services: ApiServices,
+) -> None:
+    """Deleting the row under a running container is what ends its metering.
+
+    The worker's usage writes are authorized against that row and the ledger
+    prices from the placement recorded beside it, so a delete accepted while the
+    container runs bills nothing for the rest of the run.
+    """
+
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=_Scheduler(),
+            scheduler_cancellation=_Cancellation(
+                SchedulerContainerCancellationResult(
+                    container_id="placeholder",
+                    state_found=True,
+                    pending_request_removed=True,
+                )
+            ),
+            event_bus=_EventBus(),
+        ),
+    )
+    container = isolated_services.containers.run(
+        "live-container",
+        "python:3.12",
+        ["python", "-c", "print('ok')"],
+    )
+
+    with pytest.raises(ConflictError):
+        isolated_services.containers.delete(container.id)
+    assert isolated_services.containers.get(container.id).id == container.id
+
+    isolated_services.containers.stop(container.id)
+    isolated_services.containers.delete(container.id)
+
+    with pytest.raises(NotFoundError):
+        isolated_services.containers.get(container.id)
+
+
 @pytest.mark.parametrize(
     ("failure_phase", "expected_error"),
     [
@@ -437,3 +482,69 @@ def test_stopping_a_container_gives_up_the_redis_state_it_held(
     # The stub total drops by exactly this container's share, so the containers
     # still serving traffic keep theirs.
     assert int(str(redis.get(total))) == 3
+
+
+def test_placing_a_container_records_the_shape_it_will_be_priced_on(
+    isolated_services: ApiServices,
+) -> None:
+    """The control plane's own account of what it placed, written where it decides.
+
+    Pricing reads this and nothing else: the worker's own claims about its
+    hardware never reach it. Without the write a container prices against
+    nothing, which is indistinguishable at every total from a container that cost
+    nothing — so the platform bills a full GPU hour as free and says so nowhere.
+    """
+
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="priced-placement",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+            )
+        )
+    persistence = ContainerSchedulingPersistenceService(
+        isolated_services.context,
+        isolated_services.events,
+        isolated_services.workspace_changes,
+    )
+    placed = ContainerShape(
+        billing_owner=UsageBillingOwner.SelfHosted,
+        gpu_type="H100",
+        cpu_millicores=4_000,
+        memory_mib=8_192,
+        gpu_count=2,
+    )
+
+    persistence.assign_runtime(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        runtime_worker_id="compose-worker",
+        runtime_machine_id="compose-machine",
+        shape=placed,
+    )
+
+    with isolated_services.context.database.session() as session:
+        recorded = ContainerBillingShapeRepository(session).shape_for(container.id)
+    assert recorded == placed
+
+    # A placement is decided once. A retried assignment restates it rather than
+    # repricing a container that is already running.
+    persistence.assign_runtime(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        runtime_worker_id="compose-worker",
+        runtime_machine_id="compose-machine",
+        shape=ContainerShape(
+            billing_owner=UsageBillingOwner.PlatformFleet,
+            gpu_type="",
+            cpu_millicores=1,
+            memory_mib=1,
+            gpu_count=0,
+        ),
+    )
+    with isolated_services.context.database.session() as session:
+        assert ContainerBillingShapeRepository(session).shape_for(container.id) == placed

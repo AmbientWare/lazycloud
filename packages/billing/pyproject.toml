@@ -1,12 +1,11 @@
 [project]
 name = "billing"
 version = "0.1.0"
-description = "Billing accounts, plans, and what an account owes."
+description = "Billing accounts and the standing decisions that read them."
 requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",
     "database",
-    "observability",
 ]
 
 [build-system]

@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -94,6 +94,13 @@ from shared.source_cache_cleanup import (
 )
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
+from shared.usage import (
+    METERING_WINDOW_ENDED_AT_METADATA_KEY,
+    METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageMetric,
+    UsageRecord,
+    UsageUnit,
+)
 from storage.image_archive import ResolvedImageArchiveSettings
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
 from tests.real_redis import RealRedisActors
@@ -125,6 +132,7 @@ from worker.repository_payloads import (
     PrepareCheckpointArchiveUploadRequest,
     PrepareImageBuildContextDownloadRequest,
     PublishContainerLifecycleRequest,
+    RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
     SaveCheckpointStateRequest,
     SetContainerAddressMapRequest,
@@ -1982,6 +1990,7 @@ def test_worker_repository_exit_preserves_function_retry_state(
                 "command": ["python", "-m", "runner.function"],
                 "workspace_id": workspace_id,
                 "task_id": task.id,
+                "runtime_worker_id": "worker-1",
                 "status": ContainerStatus.Running.value,
             },
             workspace_id=workspace_id,
@@ -1993,7 +2002,8 @@ def test_worker_repository_exit_preserves_function_retry_state(
     isolated_services.tasks.save(task)
 
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=container.id, exit_code=1)
+        SetContainerExitCodeRequest(container_id=container.id, exit_code=1),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
     updated = isolated_services.tasks.get(task.id)
@@ -2017,6 +2027,7 @@ def test_worker_repository_stale_container_exit_does_not_fail_new_attempt(
                 "command": ["python", "-m", "runner.function"],
                 "workspace_id": workspace_id,
                 "task_id": task.id,
+                "runtime_worker_id": "worker-1",
                 "status": ContainerStatus.Running.value,
             },
             workspace_id=workspace_id,
@@ -2041,7 +2052,8 @@ def test_worker_repository_stale_container_exit_does_not_fail_new_attempt(
     isolated_services.tasks.save(task)
 
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=old_container.id, exit_code=1)
+        SetContainerExitCodeRequest(container_id=old_container.id, exit_code=1),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
     updated = isolated_services.tasks.get(task.id)
@@ -2097,13 +2109,15 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
             container_id=container.id,
             exit_code=137,
             termination_reason=StopContainerReason.Preempted,
-        )
+        ),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
     service.update_container_status(
         UpdateContainerStatusRequest(
             container_id=container.id,
             status=SchedulerContainerStatus.Failed,
-        )
+        ),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
     with isolated_services.context.database.session() as session:
@@ -2191,7 +2205,8 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         route=routes[0],
     )
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=container_id, exit_code=0)
+        SetContainerExitCodeRequest(container_id=container_id, exit_code=0),
+        principal=WorkerRepositoryPrincipal(worker_id="compose-container-worker"),
     )
 
     before = compute_states.list_agent_route_states(
@@ -2200,7 +2215,8 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         "compose-machine",
     )
     response = service.delete_container_state(
-        DeleteContainerStateRequest(container_id=container_id)
+        DeleteContainerStateRequest(container_id=container_id),
+        principal=WorkerRepositoryPrincipal(worker_id="compose-container-worker"),
     )
 
     assert {route.route_id for route in before} == {route.route_id for route in routes}
@@ -2869,3 +2885,216 @@ def _fake_object_record(
         size=len(payload),
         sha256=hashlib.sha256(payload).hexdigest(),
     )
+
+
+def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+    client_stack: ExitStack,
+) -> None:
+    """A worker may bill for and act on a container placed on it, and no other.
+
+    Both requests are worker-authored down to the workspace that pays, and a
+    worker token lives on hardware a customer joined. Without this the cheapest
+    attack on the platform is billing somebody else's workspace for GPU-seconds
+    nobody ran, or ending somebody else's container by declaring it failed.
+    """
+
+    redis = real_redis_actors.client()
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(control, "usage-owner")
+    workspace_owner_user_id(isolated_services.context, workspace.id)
+    for pool in ("pool-assigned", "pool-stranger"):
+        isolated_services.compute.create_unit(
+            UnitName(pool),
+            workspace=workspace.id,
+            worker_cpu_millicores=1000,
+            worker_memory_mib=1024,
+        )
+    stub = control.create_stub("usage-owner", workspace=workspace.id)
+    container_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="usage-owner",
+                image="",
+                command=[],
+                workspace_id=workspace.id,
+                stub_id=stub.id,
+                runtime_worker_id="worker-assigned",
+                runtime_machine_id="machine-worker-assigned",
+            )
+        )
+
+    client = client_stack.enter_context(
+        TestClient(create_app(_api_services(isolated_services, redis)))
+    )
+    sessions = {
+        name: _register_worker_session(
+            isolated_services,
+            workspace.id,
+            client,
+            _worker_token(isolated_services, "usage-owner"),
+            SchedulerWorkerRecord(
+                capacity_owner_id="11111111-1111-4111-8111-111111111111",
+                worker_id=name,
+                machine_id=f"machine-{name}",
+                pool=MachinePool(pool),
+                status=SchedulerWorkerStatus.Available,
+                total_cpu_millicores=1000,
+                total_memory_mib=1024,
+                free_cpu_millicores=1000,
+                free_memory_mib=1024,
+            ),
+        )
+        for name, pool in (
+            ("worker-assigned", "pool-assigned"),
+            ("worker-stranger", "pool-stranger"),
+        )
+    }
+
+    def _record(worker: str) -> int:
+        return client.post(
+            "/worker-repository/record-worker-usage",
+            json={
+                "record": UsageRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace.id,
+                    resource_type="container",
+                    resource_id=container_id,
+                    metric=UsageMetric.CpuUsedCoreSeconds,
+                    unit=UsageUnit.Seconds,
+                    quantity=3600.0,
+                ).model_dump(mode="json")
+            },
+            headers=sessions[worker],
+        ).status_code
+
+    def _declare_failed(worker: str) -> int:
+        return client.post(
+            "/worker-repository/update-container-status",
+            json={
+                "container_id": container_id,
+                "status": SchedulerContainerStatus.Failed.value,
+            },
+            headers=sessions[worker],
+        ).status_code
+
+    assert _record("worker-assigned") == 200
+    assert _record("worker-stranger") == 403
+    # Nothing holds scheduler state for this container, so the worker it was
+    # placed on gets as far as finding none (404) and the stranger never does.
+    assert _declare_failed("worker-stranger") == 403
+    assert _declare_failed("worker-assigned") == 404
+
+
+def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+    client_stack: ExitStack,
+) -> None:
+    """The ledger prices from the window, and the worker is not its only author.
+
+    A window reaching outside the lifetime the control plane recorded is cut back
+    to it, and one lying entirely outside is refused: otherwise a worker states
+    the interval it is paid for, and every reader downstream — the split across a
+    rate change, the period the charge lands in — believes it.
+    """
+
+    redis = real_redis_actors.client()
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(control, "window-owner")
+    workspace_owner_user_id(isolated_services.context, workspace.id)
+    isolated_services.compute.create_unit(
+        UnitName("pool-window"),
+        workspace=workspace.id,
+        worker_cpu_millicores=1000,
+        worker_memory_mib=1024,
+    )
+    stub = control.create_stub("window-owner", workspace=workspace.id)
+    started_at = utc_now() - timedelta(hours=1)
+    finished_at = started_at + timedelta(minutes=30)
+    container_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="window-owner",
+                image="",
+                command=[],
+                workspace_id=workspace.id,
+                stub_id=stub.id,
+                runtime_worker_id="worker-window",
+                runtime_machine_id="machine-worker-window",
+                status=ContainerStatus.Exited,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        )
+
+    client = client_stack.enter_context(
+        TestClient(create_app(_api_services(isolated_services, redis)))
+    )
+    headers = _register_worker_session(
+        isolated_services,
+        workspace.id,
+        client,
+        _worker_token(isolated_services, "window-owner"),
+        SchedulerWorkerRecord(
+            capacity_owner_id="22222222-2222-4222-8222-222222222222",
+            worker_id="worker-window",
+            machine_id="machine-worker-window",
+            pool=MachinePool("pool-window"),
+            status=SchedulerWorkerStatus.Available,
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=1000,
+            free_memory_mib=1024,
+        ),
+    )
+
+    def _record(window_started_at: datetime, window_ended_at: datetime) -> tuple[int, bytes]:
+        response = client.post(
+            "/worker-repository/record-worker-usage",
+            json={
+                "record": UsageRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace.id,
+                    resource_type="container",
+                    resource_id=container_id,
+                    metric=UsageMetric.CpuUsedCoreSeconds,
+                    unit=UsageUnit.Seconds,
+                    quantity=3600.0,
+                    metadata={
+                        METERING_WINDOW_STARTED_AT_METADATA_KEY: window_started_at.isoformat(),
+                        METERING_WINDOW_ENDED_AT_METADATA_KEY: window_ended_at.isoformat(),
+                    },
+                ).model_dump(mode="json")
+            },
+            headers=headers,
+        )
+        return (response.status_code, response.content)
+
+    claimed_start = started_at - timedelta(hours=6)
+    claimed_end = finished_at + timedelta(hours=6)
+    status_code, body = _record(claimed_start, claimed_end)
+    assert status_code == 200
+    accepted = RecordWorkerUsageResponse.model_validate_json(body).record
+    assert accepted is not None
+    window_start, window_end = (
+        datetime.fromisoformat(str(accepted.metadata[key]))
+        for key in (
+            METERING_WINDOW_STARTED_AT_METADATA_KEY,
+            METERING_WINDOW_ENDED_AT_METADATA_KEY,
+        )
+    )
+    # The whole lifetime is kept and only a clock-skew margin beyond it: the
+    # eleven hours the worker claimed either side are not billable.
+    assert window_start <= started_at
+    assert window_end >= finished_at
+    assert window_start - claimed_start > timedelta(hours=5)
+    assert claimed_end - window_end > timedelta(hours=5)
+
+    refused, _ = _record(finished_at + timedelta(days=1), finished_at + timedelta(days=2))
+    assert refused == 403

@@ -11,6 +11,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.identity import (
     UserRepository,
     WorkspaceMemberRepository,
@@ -24,6 +25,8 @@ from identity.auth import TokenIssuer
 from identity.users import UserService
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from pydantic import JsonValue
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.identity import (
     AuthTokenRecord,
     PlatformRole,
@@ -40,8 +43,31 @@ from tests.redis_fakes import FakeRedis
 
 
 def _fixture_account(database: DatabaseClient, display_name: str) -> str:
+    """An account as sign-in leaves one: a user, and a billing account behind it.
+
+    Both, because production has no account that holds one without the other.
+    Signing in registers the customer, subscribes them to the free plan and grants
+    what it includes before the session exists, and admission refuses an account
+    whose usage would reach no invoice — so a fixture that created only the user
+    would build a workspace nothing in it may run anything in.
+
+    The provider identifiers are this repository's own rather than a payment
+    provider's, which is the one thing here that is not what production wrote.
+    Nothing offline can register a real customer, and what every caller of this
+    reads is the durable row rather than the objects it names.
+    """
+
     with database.session() as session:
-        return UserRepository(session).create(display_name=display_name).id
+        user_id = UserRepository(session).create(display_name=display_name).id
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_fixture_{user_id}",
+            provider_subscription_id=f"sub_fixture_{user_id}",
+            provider_credit_grant_id=f"credgr_fixture_{user_id}",
+            plan=BillingPlanId.Free,
+        )
+        return user_id
 
 
 @dataclass(slots=True)

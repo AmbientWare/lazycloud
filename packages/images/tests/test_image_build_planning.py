@@ -642,10 +642,14 @@ def test_runtime_image_build_start_and_cancel_are_persisted(isolated_services: A
 
     assert execution.record.status is BuildStatus.Running
     assert execution.session.build_container_required is True
-    assert execution.session.container_id.startswith("build-")
+    assert execution.session.container_id == execution.record.id
     assert execution.events[0].message == "Building image...\n"
 
-    cancelled = isolated_services.images.cancel_build_container(execution.session.container_id)
+    cancelled = isolated_services.images.cancel(
+        execution.session.container_id,
+        container_connected=True,
+        reason="Build was aborted.",
+    )
     assert cancelled.status is BuildStatus.Cancelled
     assert cancelled.phase is ImageBuildPhase.Failed
     assert cancelled.error == "Build was aborted."

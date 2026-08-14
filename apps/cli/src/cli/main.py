@@ -16,6 +16,7 @@ from lazycloud.cli.main import (
 )
 
 from cli.agent import agent_app
+from cli.billing import billing_app
 from cli.components.errors import ADMIN_ERROR_POLICY
 from cli.control_plane import concurrency_app, stub_app, workspace_app
 from cli.database import database_app
@@ -88,6 +89,7 @@ _ADMIN_GROUP_ORDER = (
     "auth",
     "client",
     "usage",
+    "billing",
     "example",
 )
 
@@ -135,6 +137,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("cache", cache_app)
     registry.add_group("stub", stub_app)
     registry.add_group("concurrency", concurrency_app)
+    registry.add_group("billing", billing_app)
     registry.add_group("database", database_app)
     registry.add_group("auth", auth_app)
     registry.add_group("user", user_app)

@@ -38,3 +38,18 @@ A worker holds credentials, runs untrusted code, and can die at any point in a
 long sequence. Every stage has to be explicit about what it acquired and what
 releases it: image handling, credential scope, retries, event emission, terminal
 state, and cleanup.
+
+A metering window is claimed once and, if its write fails, offered again exactly
+as it was claimed — same bounds, same evidence. The platform derives a usage
+record's identity from those bounds and prices the window against the capacity it
+held, so re-sending an unchanged window is refused as a duplicate, while widening
+it to reach the present asks for ground that may already be priced under ids that
+cannot collide with the charge holding it. Ground metered after the failure
+belongs to the window that follows, not to the one being retried: evidence and
+window travel together, and a retry that carried current samples against an
+earlier window would bill a burst that window never saw.
+
+What a container reserved is not restated as a usage metric. The reservation
+prices from the placement the control plane recorded, so a worker's own copy of
+it is a label — and a second copy that decided nothing would still have to be
+kept in step with the one that does.

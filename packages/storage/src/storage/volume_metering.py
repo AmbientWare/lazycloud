@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from database.repositories.observability import UsageRepository
 from database.repositories.storage import VolumeMeteringTarget, VolumeRepository
+from observability.usage_pricing import MeteredUsagePricer
 from pydantic import JsonValue
 from shared.timestamps import to_utc, utc_now
 from shared.usage import (
@@ -25,6 +27,9 @@ from storage.volume_filesystem import VolumeFilesystem, VolumeNamespace
 
 LOGGER = logging.getLogger(__name__)
 
+_MILLISECOND = timedelta(milliseconds=1)
+_MILLISECONDS_PER_SECOND = Decimal(1_000)
+
 
 @dataclass(frozen=True, slots=True)
 class PersistentVolumeMeteringResult:
@@ -34,7 +39,13 @@ class PersistentVolumeMeteringResult:
     observed_size_bytes: int | None
     window_started_at: datetime
     window_ended_at: datetime
-    byte_seconds: float
+    byte_seconds: Decimal
+    """Bytes held times the seconds they were held for, exactly.
+
+    A terabyte-scale volume over an hour is already past the range a binary float
+    holds every integer in, and this is the quantity the ledger prices from.
+    """
+
     usage_record: UsageRecord
 
 
@@ -203,8 +214,8 @@ class PersistentVolumeMeteringService:
             window_started_at = to_utc(checkpoint.metered_at)
             if window_started_at >= observed_at:
                 return None
-            elapsed_seconds = (observed_at - window_started_at).total_seconds()
-            byte_seconds = checkpoint.size_bytes * elapsed_seconds
+            elapsed_ms = (observed_at - window_started_at) // _MILLISECOND
+            byte_seconds = Decimal(checkpoint.size_bytes * elapsed_ms) / _MILLISECONDS_PER_SECOND
             metadata: dict[str, JsonValue] = {
                 METERING_WINDOW_STARTED_AT_METADATA_KEY: window_started_at.isoformat(),
                 METERING_WINDOW_ENDED_AT_METADATA_KEY: observed_at.isoformat(),
@@ -229,7 +240,10 @@ class PersistentVolumeMeteringService:
                 resource_type="volume",
                 resource_id=checkpoint.name,
                 metric=UsageMetric.PersistentVolumeByteSeconds,
-                quantity=byte_seconds,
+                # `UsageRecord.quantity` is a float, so the exact figure narrows
+                # here and nowhere earlier: every step before this one is integer
+                # bytes times integer milliseconds.
+                quantity=float(byte_seconds),
                 unit=UsageUnit.ByteSeconds,
                 labels={
                     "volume_name": checkpoint.name,
@@ -243,6 +257,10 @@ class PersistentVolumeMeteringService:
                 if deletion_authority
                 else usage.append(record)
             )
+            # In the transaction that wrote the record, never after it. Volume
+            # storage is a billed dimension, and a window recorded without its
+            # cost is money this platform measured and can no longer charge for.
+            MeteredUsagePricer(session).price(record)
             volumes.advance_metering_checkpoint(
                 checkpoint.id,
                 size_bytes=next_size_bytes,

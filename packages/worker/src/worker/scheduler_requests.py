@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import StrEnum
+from time import monotonic
 from typing import Protocol
 
 from shared.container_requests import (
@@ -23,6 +25,7 @@ from shared.scheduling import (
     WorkerCapacityPlan,
     gpu_count_for_capacity,
 )
+from shared.timestamps import utc_now
 
 from worker.container_execution import (
     ContainerExecutionContext,
@@ -34,6 +37,8 @@ from worker.image_build_execution import (
     WorkerImageBuildExecutionResult,
     is_image_build_scheduler_request,
 )
+from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
+from worker.monitoring import WorkerUsageWindowRecorder
 from worker.status import (
     WorkerCancelledRequestAction,
     WorkerCancelledRequestPlan,
@@ -133,6 +138,12 @@ class WorkerSchedulerRequestProcessor:
 
     lifecycle: WorkerSchedulerRequestLifecycle | None = None
     image_builds: WorkerSchedulerRequestImageBuildExecutor | None = None
+    usage_recorder: WorkerUsageWindowRecorder | None = None
+    """Meters an image build, which runs here rather than under the runtime
+    monitor an ordinary container is watched by. Required to run a build at all:
+    a worker that cannot report what a build consumed would give the capacity
+    away."""
+
     _background: dict[str, _BackgroundExecution] = field(default_factory=dict, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
@@ -297,14 +308,20 @@ class WorkerSchedulerRequestProcessor:
         self,
         request: SchedulerWorkerRequest,
     ) -> WorkerSchedulerRequestResult:
-        if self.image_builds is None:
+        image_builds = self.image_builds
+        usage_recorder = self.usage_recorder
+        if image_builds is None or usage_recorder is None:
             return WorkerSchedulerRequestResult(
                 worker_id=self.worker_id,
                 status=WorkerSchedulerRequestStatus.Error,
                 action=WorkerSchedulerRequestAction.Execute,
                 container_id=request.container_id,
                 request=request,
-                error_message="image build executor is not configured",
+                error_message=(
+                    "image build executor is not configured"
+                    if image_builds is None
+                    else "image build usage recorder is not configured"
+                ),
             )
         try:
             self.containers.update_container_status(
@@ -312,7 +329,11 @@ class WorkerSchedulerRequestProcessor:
                 SchedulerContainerStatus.Running,
                 ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
             )
-            image_build = self.image_builds.execute(request)
+            image_build = self._metered_image_build(
+                request,
+                image_builds,
+                usage_recorder,
+            )
             self.containers.set_exit_code(
                 request.container_id,
                 0 if image_build.ok else 1,
@@ -364,6 +385,56 @@ class WorkerSchedulerRequestProcessor:
             image_build=image_build,
             error_message=image_build.error_message,
         )
+
+    def _metered_image_build(
+        self,
+        request: SchedulerWorkerRequest,
+        image_builds: WorkerSchedulerRequestImageBuildExecutor,
+        usage_recorder: WorkerUsageWindowRecorder,
+    ) -> WorkerImageBuildExecutionResult:
+        """Run the build and bill the capacity it held while it ran.
+
+        A build that fails held the same cpu, memory and card as one that
+        succeeds, for as long as it ran, so the window is reported whichever way
+        it ends and whatever it produced. Reported before the container is
+        marked finished, so the window closes inside the lifetime the control
+        plane holds rather than an instant past it.
+
+        The window is measured monotonically and the wall-clock end derived from
+        it, so the quantity billed and the interval it is priced over cannot
+        disagree when the host's clock steps.
+        """
+
+        started_at = monotonic()
+        started_at_utc = utc_now()
+        try:
+            return image_builds.execute(request)
+        finally:
+            duration_ms = max(int((monotonic() - started_at) * 1000), 1)
+            try:
+                usage_recorder.record_usage_window(
+                    image_build_request_context(
+                        request,
+                        worker_gpu_type=self.worker_gpu_type,
+                    ),
+                    duration_ms=duration_ms,
+                    window_start_ms=0,
+                    window_end_ms=duration_ms,
+                    metering_window_started_at=started_at_utc,
+                    metering_window_ended_at=started_at_utc + timedelta(milliseconds=duration_ms),
+                )
+            except Exception:
+                # The control plane holds the durable trace through the worker
+                # event the recorder publishes; losing it must not also lose the
+                # build's own result.
+                LOGGER.warning(
+                    "image build usage window was not recorded",
+                    exc_info=True,
+                    extra={
+                        "container_id": request.container_id,
+                        "duration_ms": duration_ms,
+                    },
+                )
 
     def _drop_request(
         self,
@@ -424,6 +495,31 @@ def _billable_gpu(*, gpu_count: int, worker_gpu_type: str) -> str:
     if gpu_count <= 0:
         return ""
     return concrete_gpu_type(worker_gpu_type)
+
+
+def image_build_request_context(
+    request: SchedulerWorkerRequest,
+    *,
+    worker_gpu_type: str,
+) -> ContainerRequestContext:
+    """What an image build is billed for.
+
+    The capacity the control plane placed the build with, read from the request
+    it dispatched — the same figures it recorded the placement from, so the
+    metered window and the priced shape describe one container.
+    """
+
+    gpu_count = gpu_count_for_capacity(request.gpu_type, request.gpu_request, request.gpu_count)
+    return ContainerRequestContext(
+        container_id=request.container_id,
+        stub_id=request.stub_id,
+        stub_type=IMAGE_BUILD_REQUEST_KIND,
+        workspace_id=request.workspace_id,
+        cpu_millicores=request.cpu_millicores,
+        memory_mib=request.memory_mib,
+        gpu=_billable_gpu(gpu_count=gpu_count, worker_gpu_type=worker_gpu_type),
+        gpu_count=gpu_count,
+    )
 
 
 def container_execution_context_from_scheduler_request(

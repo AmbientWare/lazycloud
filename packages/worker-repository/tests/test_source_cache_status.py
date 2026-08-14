@@ -13,9 +13,14 @@ from tests.service_fixtures import owned_workspace
 from worker_repository.source_cache_status import SourceCacheCleanupStatusService
 
 
-def test_source_cache_cleanup_status_is_bounded_and_resolves_deleted_workspace(
+def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
     isolated_services: ApiServices,
 ) -> None:
+    """Cleanup outlives the workspace, so its status is still readable by id.
+
+    By id and not by name: a deleted workspace releases its name, and the next
+    workspace to take it is a different tenant whose cleanup this is not.
+    """
     workspace = owned_workspace(ControlPlaneService(isolated_services.context), "cleanup-status")
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with isolated_services.context.database.session() as session:
@@ -37,7 +42,7 @@ def test_source_cache_cleanup_status_is_bounded_and_resolves_deleted_workspace(
         workspaces.tombstone(deleting)
 
     result = SourceCacheCleanupStatusService(isolated_services.context).get(
-        workspace.name,
+        workspace.id,
         now=started_at + timedelta(seconds=73, microseconds=900_000),
     )
 

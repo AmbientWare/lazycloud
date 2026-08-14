@@ -12,6 +12,7 @@ from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 
 DEFAULT_CONTAINER_STATE_TTL_SECONDS = 900
 
@@ -62,7 +63,6 @@ class SchedulerWorkerRequest(ContractModel):
     stub_id: str
     deployment_id: str = ""
     container_id: str
-    record_runtime_assignment: bool = True
     cpu_millicores: int = 0
     memory_mib: int = 0
     gpu_type: str = ""
@@ -165,6 +165,16 @@ class SchedulerWorkerRecord(ContractModel):
 
     Stamped from the same authority as `workspace_id`. Compared rather than the
     workspace because one account's capacity serves every workspace it owns.
+    """
+
+    billing_owner: UsageBillingOwner = UsageBillingOwner.PlatformFleet
+    """Who pays for what runs here, decided by the control plane at registration.
+
+    Stamped from the same authority as `workspace_id` and `owner_user_id`, and for
+    the same reason: a worker runs on hardware a customer may hold root on, so a
+    worker that named its own billing owner could mark its compute self-hosted and
+    have it dropped from every bill. The default is the fleet because a worker the
+    platform started is the only kind that arrives without an enrolling unit.
     """
 
     machine_id: str = ""

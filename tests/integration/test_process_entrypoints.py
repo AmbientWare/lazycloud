@@ -16,7 +16,6 @@ from container_worker_app import runtime as worker_runtime
 from coordination.redis_client import RedisClient
 from images.settings import ImageBuildContainerSettings
 from observability.settings import (
-    UsagePricingSettings,
     VolumeMeteringSettings,
 )
 from scheduler.containers import SchedulerContainerRequestService
@@ -69,7 +68,6 @@ def _create_scheduler_app_services(
         runtime_callback_origin=services.gateway_settings.runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=services.workspace_change_stream_settings,
-            usage_pricing=UsagePricingSettings(),
         ),
         storage=SchedulerStorageSettings(
             object_store=services.object_store_settings,
@@ -129,11 +127,10 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         image_build_container_settings=ImageBuildContainerSettings(),
         retention_settings=RetentionSettings(),
         volume_metering=app_services.volume_metering,
+        meter_outbox=app_services.meter_outbox,
         retention=app_services.retention,
         tailnet_cleanup=app_services.tailnet_cleanup,
         custom_domains=app_services.custom_domains,
-        billing_daily=app_services.billing_daily,
-        billing_close=app_services.billing_close,
     )
     runtime.owned_services = app_services
     close_calls: list[SchedulerAppServices] = []

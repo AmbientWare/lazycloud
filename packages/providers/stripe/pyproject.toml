@@ -1,7 +1,7 @@
 [project]
 name = "provider-stripe"
 version = "0.1.0"
-description = "Stripe provider adapter for customer records and invoices."
+description = "Stripe provider adapter for the catalog, subscriptions, allowances and metered usage."
 requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",

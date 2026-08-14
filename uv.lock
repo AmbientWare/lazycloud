@@ -235,14 +235,12 @@ source = { editable = "packages/billing" }
 dependencies = [
     { name = "database" },
     { name = "lazycloud-shared" },
-    { name = "observability" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "database", editable = "packages/database" },
     { name = "lazycloud-shared", editable = "packages/shared" },
-    { name = "observability", editable = "packages/observability" },
 ]
 
 [[package]]
@@ -513,6 +511,7 @@ dependencies = [
     { name = "identity" },
     { name = "lazycloud" },
     { name = "lazycloud-shared" },
+    { name = "provider-stripe" },
     { name = "pydantic" },
     { name = "rich" },
     { name = "storage-client" },
@@ -528,6 +527,7 @@ requires-dist = [
     { name = "identity", editable = "packages/identity" },
     { name = "lazycloud", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "rich", specifier = ">=15,<16" },
     { name = "storage-client", editable = "packages/storage-client" },
@@ -2152,6 +2152,7 @@ source = { editable = "packages/storage" }
 dependencies = [
     { name = "database" },
     { name = "lazycloud-shared" },
+    { name = "observability" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "storage-client" },
@@ -2161,6 +2162,7 @@ dependencies = [
 requires-dist = [
     { name = "database", editable = "packages/database" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "observability", editable = "packages/observability" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "storage-client", editable = "packages/storage-client" },

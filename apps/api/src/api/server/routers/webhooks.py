@@ -35,7 +35,7 @@ async def receive_stripe_webhook(
     request: Request,
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    """Take a payment outcome from the provider.
+    """Take a delivery from the payment provider.
 
     Unauthenticated in the usual sense and signed instead: the caller is Stripe,
     which holds no token of ours, and the endpoint secret is what stands in for
@@ -52,7 +52,7 @@ async def receive_stripe_webhook(
     if not settings.webhooks_configured:
         # A public endpoint with no secret cannot tell Stripe from anyone else, so
         # it refuses everything rather than trusting anything. Loud, because the
-        # symptom otherwise is accounts that quietly never come out of arrears.
+        # symptom otherwise is a customer whose saved card is never charged.
         LOGGER.error("billing: a stripe delivery arrived but no endpoint secret is configured")
         raise InvalidInputError("payment webhooks are not configured")
 
@@ -76,7 +76,7 @@ async def receive_stripe_webhook(
     )
     event = parse_event(body)
 
-    # Off the event loop. Applying an outcome is a synchronous database
+    # Off the event loop. Applying a delivery is a synchronous database
     # transaction wrapped around a call to the provider that can take its whole
     # timeout, and holding the loop for that would stop this process serving
     # anything else — dashboard, gateway, and agent registration included.
@@ -88,6 +88,6 @@ def _apply(services: ApiServices, event: PaymentEvent) -> None:
     with services.context.database.session() as session:
         BillingWebhookService(session, services.payment_provider).apply(event=event)
         # One commit for the claim and its effect together. Committing the claim
-        # on its own would make the provider's retry a no-op and lose an outcome
+        # on its own would make the provider's retry a no-op and lose a change
         # this platform never applied.
         session.commit()

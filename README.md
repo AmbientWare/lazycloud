@@ -77,3 +77,10 @@ the CLI stores the token it mints in its profile. That token belongs to the
 approving account and reaches every workspace that account belongs to, so
 `--workspace` selects which one the profile acts in. Pass `--token` for
 non-interactive logins.
+
+Signing in needs both `LAZYCLOUD_GITHUB_*` and `LAZYCLOUD_STRIPE_API_KEY`, which
+the shipped defaults leave empty: a session is minted only once the account is
+registered with the payment provider, so the callback refuses and names whichever
+is missing. A local stack that has not set them is driven with `--token` and the
+bootstrap administrator credential instead, which is what every Compose step
+does.

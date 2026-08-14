@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
-from shared.billing import SellPriceConfig
 
-from observability.billing import UsagePriceCatalog, configured_usage_price_catalog
 from observability.telemetry import (
     DEFAULT_EXPORT_TIMEOUT_SECONDS,
     DEFAULT_METER_INTERVAL_SECONDS,
@@ -46,35 +44,6 @@ class TelemetrySettings(BaseSettings):
         )
 
 
-class UsagePricingSettings(BaseSettings):
-    billing_currency: str = "USD"
-    price_catalog: list[SellPriceConfig] | None = None
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_USAGE_",
-        extra="ignore",
-    )
-
-    @field_validator("billing_currency")
-    @classmethod
-    def normalize_currency(cls, value: str) -> str:
-        currency = value.strip().upper()
-        if len(currency) != 3 or not currency.isalpha():
-            raise ValueError("usage billing currency must be a three-letter code")
-        return currency
-
-    @model_validator(mode="after")
-    def validate_price_catalog(self) -> UsagePricingSettings:
-        self.to_price_catalog()
-        return self
-
-    def to_price_catalog(self) -> UsagePriceCatalog:
-        return configured_usage_price_catalog(
-            currency=self.billing_currency,
-            prices=self.price_catalog,
-        )
-
-
 class VolumeMeteringSettings(BaseSettings):
     interval_seconds: float = Field(default=60.0, gt=0)
 
@@ -95,7 +64,6 @@ class WorkspaceChangeStreamSettings(BaseSettings):
 
 __all__ = [
     "TelemetrySettings",
-    "UsagePricingSettings",
     "VolumeMeteringSettings",
     "WorkspaceChangeStreamSettings",
 ]

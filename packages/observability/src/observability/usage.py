@@ -3,21 +3,18 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from database.repositories.apps import AppRepository, StubRepository
 from database.repositories.observability import (
     UsageRecordCursor,
     UsageRepository,
     WorkerEventRepository,
 )
-from database.repositories.usage_billing import UsageBillingRepository
 from pydantic import JsonValue
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
-from shared.http.usage import UsageBillingPeriod
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import utc_now
 from shared.usage import (
@@ -31,21 +28,11 @@ from shared.usage import (
 from shared.usage_query import UsageQuery
 from shared.worker_events import WorkerEventFilter, WorkerEventRecord
 
-from observability.billing import (
-    UsageBillingOverview,
-    UsageBillingReport,
-    UsageBillingWorkloads,
-    UsagePriceCatalog,
-    build_usage_billing_overview,
-    build_usage_billing_report,
-    build_usage_billing_workloads,
-    default_usage_price_catalog,
-)
 from observability.context import ObservabilityContext
+from observability.usage_pricing import MeteredUsagePricer
 from observability.workspace_changes import WorkspaceChangePublisher
 
 WORKER_EVENT_RETENTION = timedelta(days=30)
-MAX_BILLING_WINDOW = timedelta(days=90)
 USAGE_CHANGE_BOUNDARY_METRICS = frozenset(
     {
         UsageMetric.TaskCount,
@@ -90,7 +77,6 @@ class WorkerEventService:
 @dataclass(slots=True)
 class UsageService:
     context: ObservabilityContext
-    price_catalog: UsagePriceCatalog = field(default_factory=default_usage_price_catalog)
     workspace_changes: WorkspaceChangePublisher | None = None
 
     def record(
@@ -118,12 +104,14 @@ class UsageService:
                 labels=labels,
                 metadata=dict(metadata) if metadata is not None else None,
             )
+            MeteredUsagePricer(session).price(record)
         self._publish_change(record)
         return record
 
     def append(self, record: UsageRecord) -> UsageRecord:
         with self.context.database.session() as session:
             saved = UsageRepository(session).append(record)
+            MeteredUsagePricer(session).price(saved)
         self._publish_change(saved)
         return saved
 
@@ -173,96 +161,6 @@ class UsageService:
     ) -> list[UsageAggregation]:
         with self.context.database.session() as session:
             return UsageRepository(session).aggregate(query=query, metric=metric, group_by=group_by)
-
-    def billing_report(
-        self,
-        *,
-        workspace_id: str,
-        start: datetime,
-        end: datetime,
-        bucket_seconds: int,
-    ) -> UsageBillingReport:
-        start, end = _validated_billing_window(start, end, bucket_seconds)
-        with self.context.database.session() as session:
-            records = UsageBillingRepository(session).evidence(
-                workspace_id=workspace_id,
-                start=start,
-                end=end,
-            )
-            return build_usage_billing_report(
-                workspace_id=workspace_id,
-                records=records,
-                apps=AppRepository(session).list(workspace_id=workspace_id),
-                stubs=StubRepository(session).list(workspace_id=workspace_id),
-                start=start,
-                end=end,
-                bucket_seconds=bucket_seconds,
-                price_catalog=self.price_catalog,
-            )
-
-    def billing_overview(
-        self,
-        *,
-        workspace_id: str,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        period: UsageBillingPeriod | None = None,
-        bucket_seconds: int,
-    ) -> UsageBillingOverview:
-        start, end = _resolved_billing_window(
-            start=start,
-            end=end,
-            period=period,
-            bucket_seconds=bucket_seconds,
-        )
-        with self.context.database.session() as session:
-            return build_usage_billing_overview(
-                workspace_id=workspace_id,
-                records=UsageBillingRepository(session).aggregates(
-                    workspace_id=workspace_id,
-                    start=start,
-                    end=end,
-                    bucket_seconds=bucket_seconds,
-                    group_by_workload=False,
-                ),
-                apps=AppRepository(session).list(workspace_id=workspace_id),
-                start=start,
-                end=end,
-                bucket_seconds=bucket_seconds,
-                price_catalog=self.price_catalog,
-            )
-
-    def billing_workloads(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str,
-        start: datetime,
-        end: datetime,
-        bucket_seconds: int,
-    ) -> UsageBillingWorkloads:
-        start, end = _validated_billing_window(start, end, bucket_seconds)
-        with self.context.database.session() as session:
-            return build_usage_billing_workloads(
-                workspace_id=workspace_id,
-                app_id=app_id,
-                records=UsageBillingRepository(session).aggregates(
-                    workspace_id=workspace_id,
-                    start=start,
-                    end=end,
-                    bucket_seconds=None,
-                    group_by_workload=True,
-                    app_id=app_id,
-                ),
-                apps=AppRepository(session).list(workspace_id=workspace_id),
-                stubs=StubRepository(session).list_for_app(
-                    workspace_id=workspace_id,
-                    app_id=app_id,
-                ),
-                start=start,
-                end=end,
-                price_catalog=self.price_catalog,
-            )
 
     def record_task_count(
         self,
@@ -343,53 +241,3 @@ def _decode_usage_record_cursor(value: str | None) -> UsageRecordCursor | None:
         )
     except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
         raise InvalidInputError("invalid usage record cursor") from exc
-
-
-def _utc_billing_window(start: datetime, end: datetime) -> tuple[datetime, datetime]:
-    if start.tzinfo is None or start.utcoffset() is None:
-        raise InvalidInputError("usage billing start must include a timezone")
-    if end.tzinfo is None or end.utcoffset() is None:
-        raise InvalidInputError("usage billing end must include a timezone")
-    return start.astimezone(UTC), end.astimezone(UTC)
-
-
-def _resolved_billing_window(
-    *,
-    start: datetime | None,
-    end: datetime | None,
-    period: UsageBillingPeriod | None,
-    bucket_seconds: int,
-) -> tuple[datetime, datetime]:
-    if period is not None:
-        if start is not None or end is not None:
-            raise InvalidInputError(
-                "usage billing period cannot be combined with explicit start or end"
-            )
-        resolved_end = utc_now().astimezone(UTC)
-        resolved_start = resolved_end.replace(
-            day=1,
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        return _validated_billing_window(resolved_start, resolved_end, bucket_seconds)
-
-    if start is None or end is None:
-        raise InvalidInputError("usage billing requires either a period or explicit start and end")
-    return _validated_billing_window(start, end, bucket_seconds)
-
-
-def _validated_billing_window(
-    start: datetime,
-    end: datetime,
-    bucket_seconds: int,
-) -> tuple[datetime, datetime]:
-    start, end = _utc_billing_window(start, end)
-    if end <= start:
-        raise InvalidInputError("usage billing end must be after start")
-    if end - start > MAX_BILLING_WINDOW:
-        raise InvalidInputError("usage billing window cannot exceed 90 days")
-    if bucket_seconds < 300 or bucket_seconds > 86_400:
-        raise InvalidInputError("usage billing bucket must be between 5 minutes and 1 day")
-    return start, end

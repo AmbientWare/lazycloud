@@ -82,6 +82,7 @@ from scheduler.state import (
     reserve_concurrency,
 )
 from scheduler.workers import SchedulerWorkerAdminService
+from shared.billing_quotes import ContainerShape
 from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
@@ -99,6 +100,7 @@ from shared.realtime.contracts import (
 )
 from shared.scheduling import WorkerUnavailableReason
 from shared.tasks import RetryPolicy, Task, TaskStatus
+from shared.usage import UsageBillingOwner
 from tests.redis_fakes import FakeRedis
 
 _EVENT_DATA_ADAPTER = TypeAdapter(dict[str, JsonValue | datetime])
@@ -190,6 +192,7 @@ class _RecordingLifecycleEvents:
 class _RuntimeAssignmentRecorder:
     def __init__(self) -> None:
         self.assignments: list[tuple[str, str, str, str, str | None, str | None]] = []
+        self.shapes: list[ContainerShape | None] = []
         self.cleared: list[tuple[str, str]] = []
 
     def assign_runtime(
@@ -201,6 +204,7 @@ class _RuntimeAssignmentRecorder:
         runtime_machine_id: str,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
+        shape: ContainerShape | None = None,
     ) -> None:
         self.assignments.append(
             (
@@ -212,6 +216,7 @@ class _RuntimeAssignmentRecorder:
                 compute_machine_id,
             )
         )
+        self.shapes.append(shape)
 
     def clear_runtime_assignment(
         self,
@@ -1615,7 +1620,7 @@ def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate(
     assert workers.wait_for_next_container_request("worker-1", timeout_seconds=0.001) is None
 
 
-def test_scheduler_dispatch_skips_durable_assignment_for_ephemeral_request(
+def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced_from(
     real_redis_actors: _RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -1636,6 +1641,7 @@ def test_scheduler_dispatch_skips_durable_assignment_for_ephemeral_request(
             machine_id="machine-1",
             pool=MachinePool("default"),
             status=SchedulerWorkerStatus.Available,
+            billing_owner=UsageBillingOwner.PlatformFleet,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
             total_cpu_millicores=1000,
@@ -1645,8 +1651,7 @@ def test_scheduler_dispatch_skips_durable_assignment_for_ephemeral_request(
     request = SchedulerWorkerRequest(
         workspace_id="ws-1",
         stub_id="image-build",
-        container_id="build-container-1",
-        record_runtime_assignment=False,
+        container_id="22222222-2222-4222-8222-222222222222",
         cpu_millicores=100,
         memory_mib=128,
         timestamp=now,
@@ -1659,8 +1664,20 @@ def test_scheduler_dispatch_skips_durable_assignment_for_ephemeral_request(
     queued = workers.get_next_container_request("worker-1")
     assert queued is not None
     assert queued.container_id == request.container_id
-    assert not queued.record_runtime_assignment
-    assert assignments.assignments == []
+    assert assignments.assignments == [
+        (request.container_id, "ws-1", "worker-1", "machine-1", None, None)
+    ]
+    assert assignments.shapes == [
+        ContainerShape(
+            billing_owner=UsageBillingOwner.PlatformFleet,
+            gpu_type="",
+            cpu_millicores=100,
+            # The reservation, not the request: capacity is held with the
+            # headroom the scheduler adds, and that is what is paid for.
+            memory_mib=160,
+            gpu_count=0,
+        )
+    ]
     assert assignments.cleared == []
 
 
@@ -2393,7 +2410,7 @@ def test_scheduler_container_request_service_bounds_no_capacity_retries(
     assert failed_reason.startswith(SchedulerRetryReason.RetryLimit.value)
 
 
-def test_scheduler_image_build_failure_persists_coordination_evidence_without_execution_callback(
+def test_scheduler_image_build_failure_persists_coordination_evidence_and_fails_the_container(
     real_redis_actors: _RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -2410,8 +2427,7 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_without_ex
     request = SchedulerWorkerRequest(
         workspace_id="ws-1",
         stub_id="image-build",
-        container_id="build-container-1",
-        record_runtime_assignment=False,
+        container_id="33333333-3333-4333-8333-333333333333",
         cpu_millicores=500,
         memory_mib=100,
         timestamp=now,
@@ -2440,7 +2456,9 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_without_ex
     assert state.image_id == "image-1"
     assert state.image_build_upload_capability == "a" * 32
     assert state.failure_reason.startswith(SchedulerRetryReason.RetryLimit.value)
-    assert failure_handler.calls == []
+    [(failed_container_id, failed_reason)] = failure_handler.calls
+    assert failed_container_id == request.container_id
+    assert failed_reason.startswith(SchedulerRetryReason.RetryLimit.value)
 
 
 def test_scheduler_container_request_service_waits_for_pending_worker_without_retry_count(

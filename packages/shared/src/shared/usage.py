@@ -23,9 +23,6 @@ UsageRecordIdentityPart: TypeAlias = str | int
 class UsageMetric(StringEnum):
     SchedulerContainerRequested = "container_requested_count"
     SchedulerContainerScheduled = "container_scheduled_count"
-    CpuSeconds = "cpu_seconds"
-    MemoryGibSeconds = "memory_gib_seconds"
-    GpuSeconds = "gpu_seconds"
     TaskCount = "task_count"
     PersistentVolumeByteSeconds = "persistent_volume_byte_seconds"
     ContainerDurationMilliseconds = "container_duration_milliseconds"
@@ -47,7 +44,6 @@ class UsageUnit(StringEnum):
     Seconds = "seconds"
     Count = "count"
     Bytes = "bytes"
-    GibSeconds = "gib_seconds"
     Milliseconds = "milliseconds"
     ByteSeconds = "byte_seconds"
 
@@ -88,6 +84,17 @@ class UsageRecord(ContractModel):
     resource_id: str
     metric: UsageMetric
     quantity: float
+    """How much of the metric the window measured.
+
+    A double, so a figure past 2^53 keeps sixteen significant digits rather than
+    all of them. Volume byte-seconds is the one metric that reaches there — bytes
+    times seconds, for a multi-tebibyte volume over a long window — and the
+    difference is a relative 1e-16 against a rate quoted in billionths of a
+    dollar, which cannot move the whole nanodollar the ledger charges. A metric
+    whose last digit did decide a charge would have to widen this field, the
+    column under it, and the schema the browser validates against, together.
+    """
+
     unit: UsageUnit
     labels: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)

@@ -26,7 +26,7 @@ def test_usage_contracts_preserve_recursive_json_metadata() -> None:
         workspace_id="workspace-1",
         resource_type="container",
         resource_id="container-1",
-        metric=UsageMetric.CpuSeconds,
+        metric=UsageMetric.CpuUsedCoreSeconds,
         quantity=2.5,
         unit=UsageUnit.Seconds,
         metadata=metadata,
@@ -62,5 +62,5 @@ def test_usage_identity_is_deterministic() -> None:
 
     assert identity == usage_record_id("task_count", "workspace-1", 123)
     assert identity != usage_record_id("task_count", "workspace-2", 123)
-    assert identity != usage_record_id("cpu_seconds", "workspace-1", 123)
+    assert identity != usage_record_id("cpu_used_core_seconds", "workspace-1", 123)
     assert identity != usage_record_id("task_count", "workspace-1", 124)

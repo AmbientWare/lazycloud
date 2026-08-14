@@ -76,6 +76,14 @@ useless. Both the state and the exchange code are stored under a hash of
 themselves, consumed with GETDEL before anything is validated, so a malformed
 payload burns the credential rather than leaving it replayable.
 
+Sign-in completes only when every piece of provisioning it was handed succeeds.
+Each one is a collaborator composition injects and is idempotent, so a failure is
+repaired at the next attempt — and until it is, the exchange code is never
+minted, so no session exists and the half-provisioned account cannot run
+anything. What that provisioning is, and what it holds while it runs, belongs to
+whoever composes it rather than here; this package states the shape it calls and
+the ordering it guarantees, and nothing about the other side of the call.
+
 The provider access token is used once to read the profile and then discarded. It
 never crosses the `ExternalIdentityProvider` boundary, which is what keeps every
 caller above it from becoming somewhere it could be logged or stored.
