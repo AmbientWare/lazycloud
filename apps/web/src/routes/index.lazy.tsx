@@ -157,10 +157,10 @@ const platformStories: PlatformStory[] = [
     key: "endpoints",
     label: "Applications + APIs",
     title: "Ship an API the minute it is written.",
-    body: "Run application APIs and model endpoints with explicit resources, autoscaling, and scale-to-zero — no load balancer to stand up, no image to push.",
+    body: "APIs and model endpoints with explicit resources, autoscaling, and scale-to-zero. No load balancer, no image to push.",
     notes: [
-      "Autoscales up and down, all the way to zero when idle.",
-      "Keep-warm holds capacity whenever you want it ready.",
+      "Scales to zero when idle.",
+      "Keep-warm holds capacity when you want it ready.",
     ],
     visual: "application",
   },
@@ -168,10 +168,10 @@ const platformStories: PlatformStory[] = [
     key: "graphs",
     label: "Jobs + pipelines",
     title: "Outgrow one machine without rewriting anything.",
-    body: "Tests, evaluations, data processing, and GPU jobs run as dependency-aware tasks with durable results and logs — the same functions you were calling locally an hour ago.",
+    body: "Tests, evals, data processing, and GPU jobs as dependency-aware tasks with durable results and logs. The same functions you called locally an hour ago.",
     notes: [
-      "Size CPU, GPU, and memory per Task, so each stage gets only what it needs.",
-      "Mount shared volumes across stages, so downstream Tasks read upstream data directly.",
+      "Size CPU, GPU, and memory per Task.",
+      "Mount shared volumes so later stages read earlier output.",
     ],
     visual: "jobs",
   },
@@ -179,11 +179,11 @@ const platformStories: PlatformStory[] = [
     key: "background",
     label: "Background work",
     title: "Keep the work running after the session ends.",
-    body: "Queue and schedule work with retries, cancellation, durable results, and live logs, so nothing depends on a terminal staying open.",
+    body: "Queue and schedule work with retries, cancellation, and live logs. Nothing depends on a terminal staying open.",
     notes: [
-      "Workers scale with queue depth, from zero to your max.",
-      "Failed runs retry automatically with your policy.",
-      "Every Task is a handle you can wait on, subscribe to, or cancel.",
+      "Workers scale with queue depth, from zero.",
+      "Failed runs retry on your policy.",
+      "Every Task is a handle: wait, subscribe, cancel.",
     ],
     visual: "background",
   },
@@ -191,11 +191,11 @@ const platformStories: PlatformStory[] = [
     key: "sandboxes",
     label: "Agent sandboxes",
     title: "Give agents compute with boundaries.",
-    body: "Create isolated workspaces with files, processes, ports, Docker, snapshots, and explicit network policy.",
+    body: "Isolated workspaces with files, processes, ports, Docker, snapshots, and explicit network policy.",
     notes: [
-      "Run any process and stream its output through the SDK.",
-      "Block all egress, or pin a CIDR allow-list.",
-      "Snapshot filesystem or memory and restore new sandboxes from it.",
+      "Run any process, stream its output.",
+      "Block all egress, or pin an allow-list.",
+      "Snapshot filesystem or memory, restore from it.",
     ],
     visual: "sandbox",
   },
@@ -210,13 +210,13 @@ const parityCalls = [
     key: "local",
     where: "On your laptop",
     call: "embed.local(rows)",
-    body: "Runs in-process, in your debugger, against your breakpoints. No container, no deploy, no waiting.",
+    body: "Your debugger, your breakpoints. No container, no deploy.",
   },
   {
     key: "remote",
     where: "On an A100",
     call: "embed.remote(rows)",
-    body: "Same arguments, same return type. The card is held while it runs and released the moment it returns.",
+    body: "Same arguments, same return type. Metered by the second, released when it returns.",
   },
 ];
 
@@ -236,7 +236,7 @@ function ParitySection() {
               One function. <em>Both places.</em>
             </>
           }
-          body="The decorator does not take your code away from you. Call it in-process while you are building it, call it on a GPU when you need one — the signature never changes, so there is nothing to port and nothing for an agent to guess."
+          body="Call it in-process while you build. Call it on a GPU when you need one. The signature never changes — nothing to port, nothing for an agent to guess."
         />
 
         <div className="mx-auto max-w-[760px]">
@@ -293,10 +293,9 @@ function MarketingHome() {
                 Your agent wrote it in a minute. <em>Ship it in one.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Working code now arrives in seconds. Then it waits — on a Dockerfile, a registry, a
-                queue, a load balancer, an IAM policy. LazyCloud takes that wait out of every phase:
-                one decorator turns a Python function into a deployed API, job, queue, or GPU
-                workload, and the same function still runs on your laptop.
+                Code arrives in seconds, then waits on Dockerfiles, registries, load balancers,
+                IAM. One decorator makes a Python function a deployed API, job, queue, or GPU
+                workload. It still runs on your laptop.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
@@ -423,7 +422,7 @@ function MarketingHome() {
               Your cloud should <em>accelerate you</em>, not be the bottleneck.
             </>
           }
-          body="Write the function, call it locally, then run it on the fleet when it needs a GPU. Applications, jobs, queues, schedules, and sandboxes — one platform, on our compute or yours."
+          body="Write the function. Call it locally. Run it on a GPU when it needs one. Apps, jobs, queues, schedules, sandboxes — our compute or yours."
         />
       </main>
     </MarketingLayout>
@@ -556,7 +555,7 @@ function PlatformStoryRail() {
                 Every phase. <em>One control plane.</em>
               </>
             }
-            body="Building, testing, deploying, scaling, operating — each of those is usually a different tool and a different afternoon. Here they are one SDK, one machine-readable CLI, and typed clients, so a developer and an agent reach for the same thing at every step."
+            body="Build, test, deploy, scale, operate — usually five tools and five afternoons. Here it is one SDK, one JSON CLI, and typed clients. Developers and agents reach for the same thing."
           />
           <nav aria-label="Platform use cases" className="border-t border-border">
             <ol className="m-0 list-none p-0">
@@ -642,19 +641,19 @@ const computePaths = [
   {
     icon: "◎",
     title: "Managed serverless",
-    body: "Start on managed CPU capacity with no infrastructure setup. Workloads scale down when idle.",
+    body: "Managed CPU capacity, no setup. Scales down when idle.",
     command: null,
   },
   {
     icon: "⇄",
     title: "Connected AWS",
-    body: "Connect an AWS account and place CPU or GPU workloads into workspace-managed capacity.",
+    body: "Connect an AWS account. Place CPU or GPU workloads in it.",
     command: "lazycloud cloud connect aws",
   },
   {
     icon: ">_",
     title: "Any machine",
-    body: "Join a Linux VM, bare-metal server, or on-prem GPU box as capacity without changing workload definitions.",
+    body: "Join a Linux VM, bare-metal box, or on-prem GPU. No definition changes.",
     command: "lazycloud machine join",
   },
 ];
@@ -669,7 +668,7 @@ function ComputeSection() {
               One workload model. <em>Managed compute or yours.</em>
             </>
           }
-          body="Where a workload runs is a setting, not a rewrite. The same definitions run on managed capacity, in your own AWS account, or on a machine under your desk — and moving between them changes no code."
+          body="Where it runs is a setting, not a rewrite. Managed capacity, your own AWS account, or a machine under your desk — same definitions, no code changes."
         />
         <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
           <div className="flex flex-col gap-4">
