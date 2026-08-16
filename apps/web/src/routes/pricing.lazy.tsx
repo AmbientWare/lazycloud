@@ -155,7 +155,7 @@ const platformGroups: readonly RateGroup[] = [
         /* The compute rates, not every rate above it: volumes and egress are this
            platform's own infrastructure and are charged whole wherever a container
            ran. Saying "the rates above" would quietly include them. */
-        label: "Management fee on the compute rates above; your provider bills you for the machine",
+        label: "Management fee on the compute rates above. Your provider bills the machine.",
         figure: `${CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT}%`,
         unit: "",
       },
@@ -170,7 +170,7 @@ const plans: readonly (PublishedPlan & { id: PlanId })[] = planIds.map((id) => (
 
 /* The one account-wide fact a reader needs before choosing a plan: what they get
    before they have paid for anything. The rest is disclosure, not pricing. */
-const accountTerm = `Until a card is on file, any plan runs on ${exactDollars(NO_CARD_INCLUDED_NANOS)} of usage and ${NO_CARD_MAX_CONTAINERS} containers. Once that is spent, containers stop and no new volume can be made; the volumes you already have stay readable and keep being charged for.`;
+const accountTerm = `Without a card, any plan runs on ${exactDollars(NO_CARD_INCLUDED_NANOS)} of usage and ${NO_CARD_MAX_CONTAINERS} containers. When that is spent, containers stop and new volumes are refused. Volumes you already have stay readable, and keep billing.`;
 
 const sectionTitle =
   "font-serif text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.05] font-normal tracking-[-0.005em] text-balance [&_em]:text-brand [&_em]:italic";
