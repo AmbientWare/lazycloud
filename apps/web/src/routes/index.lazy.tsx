@@ -205,42 +205,76 @@ const parityDefinition = `@app.function(gpu="A100-40", memory="16Gi")
 def embed(batch: list[str]) -> list[list[float]]:
     return model.encode(batch)`;
 
-const parityCalls = [
+const parityModes = [
   {
     key: "local",
-    where: "On your laptop",
+    figure: "local" as const,
+    title: "Local",
     call: "embed.local(rows)",
-    shellPrompt: false,
-    body: "In-process. Your debugger works.",
+    body: "Runs in-process. Your debugger, your breakpoints.",
   },
   {
-    key: "remote",
-    where: "On an A100",
+    key: "gpu",
+    figure: "gpu" as const,
+    title: "On a GPU",
     call: "embed.remote(rows)",
-    shellPrompt: false,
-    body: "Platform capacity. Nothing deployed.",
+    body: "Same call, our capacity. Nothing deployed.",
   },
   {
-    key: "deployed",
-    where: "In production",
-    call: "lazycloud deploy application.py:app",
-    shellPrompt: true,
-    body: "Autoscales, then back to zero.",
+    key: "production",
+    figure: "production" as const,
+    title: "In production",
+    call: "lazycloud deploy app.py:app",
+    body: "A live service that scales out, then back to zero.",
   },
 ];
 
-/* The signature moment of the page: one definition, with the three ways it runs
-   drawn as branches off it. The schematic is the argument — there is no second
-   implementation to keep in step, which is also why an agent can write this
-   without being told how the cloud is wired. The three stations share one panel
-   rather than sitting in separate cards, because they are one workload at three
-   scales, not three products. */
+/* One unit, the same unit with a card beside it, then many of it. The figures
+   are the escalation the cards describe — same glyph throughout, because the
+   whole claim is that it is the same function. Ink panels with the light brand,
+   which is the pairing the dark theme already uses. */
+function ParityFigure({ figure }: { figure: (typeof parityModes)[number]["figure"] }) {
+  const unit = "size-12 rounded-md bg-[var(--lazycloud)]";
+  const ghost = "size-12 rounded-md border-2 border-dashed border-[var(--lazycloud)]/30";
+  return (
+    <div
+      aria-hidden="true"
+      className="flex h-[184px] items-end justify-center gap-2.5 rounded-xl bg-[var(--foreground)] px-6 pt-6 pb-8"
+    >
+      {figure === "local" ? <span className={unit} /> : null}
+      {figure === "gpu" ? (
+        <>
+          <span className={unit} />
+          {/* Slotted, so it reads as a card rather than a second container. */}
+          <span className="flex h-20 w-12 flex-col justify-center gap-1.5 rounded-md bg-[var(--lazycloud)]/20 p-2">
+            <i className="h-1 rounded-full bg-[var(--lazycloud)]/80" />
+            <i className="h-1 rounded-full bg-[var(--lazycloud)]/80" />
+            <i className="h-1 rounded-full bg-[var(--lazycloud)]/80" />
+          </span>
+        </>
+      ) : null}
+      {figure === "production" ? (
+        <>
+          <span className={unit} />
+          <span className={unit} />
+          <span className={unit} />
+          <span className={ghost} />
+          <span className={ghost} />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/* Placed after the control-plane rail: the rail establishes that one platform
+   covers every phase, and this is the sharpest instance of it — the same
+   function, unchanged, across all three. Ahead of the typed-client story, which
+   is a narrower point. */
 function ParitySection() {
   return (
     <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
-          centered
           label="Local · GPU · production"
           title={
             <>
@@ -250,58 +284,25 @@ function ParitySection() {
           body="The same function in-process, on a GPU, and deployed. Nothing to port, which is why an agent can write it without knowing how your cloud is wired."
         />
 
-        <div className="mx-auto max-w-[760px]">
+        <div className="max-w-[820px]">
           <CodeBlock
             className="shadow-[8px_8px_0_0_var(--secondary)]"
             tone="paper"
-            bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-6 sm:text-[12.5px]"
+            bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-5 sm:text-[12.5px]"
           >
             {parityDefinition}
           </CodeBlock>
         </div>
 
-        {/* One trunk to a bus, then a drop into each station. The bus spans wider
-            than the definition above it, so the fan-out reads as the widening
-            it describes. Below `sm` the stations stack and the trunk alone
-            carries the connection. */}
-        <div aria-hidden="true" className="mx-auto max-w-[880px]">
-          <div className="mx-auto h-6 w-px bg-brand/50 sm:h-7" />
-          <div className="hidden grid-cols-3 sm:grid">
-            {parityCalls.map((call, index) => (
-              <div className="relative h-6" key={call.key}>
-                <span
-                  className={cn(
-                    "absolute top-0 h-px bg-brand/50",
-                    index === 0 && "right-0 left-1/2",
-                    index === 1 && "inset-x-0",
-                    index === 2 && "right-1/2 left-0",
-                  )}
-                />
-                <span className="absolute inset-y-0 left-1/2 w-px bg-brand/50" />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="mx-auto max-w-[880px] divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card sm:grid sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-          {parityCalls.map((call) => (
-            <article className="flex flex-col p-5 sm:p-6" key={call.key}>
-              <p className="font-mono text-[10.5px] tracking-[0.1em] text-brand uppercase">
-                {call.where}
-              </p>
-              <code className="mt-2.5 block font-mono text-[13px] leading-[1.5] text-foreground [overflow-wrap:anywhere]">
-                {call.shellPrompt ? (
-                  <span className="mr-1.5 text-brand">
-                    <Glyph>$</Glyph>
-                  </span>
-                ) : null}
-                {call.call}
+        <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
+          {parityModes.map((mode) => (
+            <article key={mode.key}>
+              <ParityFigure figure={mode.figure} />
+              <h3 className="mt-5 text-[19px] leading-tight font-medium">{mode.title}</h3>
+              <code className="mt-2 block font-mono text-[12px] break-all text-brand">
+                {mode.call}
               </code>
-              {/* The deploy command wraps where the two calls do not, so the
-                  summaries sit on the cell floor and stay on one baseline. */}
-              <p className="mt-auto pt-3 text-[13px] leading-relaxed text-muted-foreground">
-                {call.body}
-              </p>
+              <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{mode.body}</p>
             </article>
           ))}
         </div>
@@ -404,9 +405,9 @@ function MarketingHome() {
           </div>
         </section>
 
-        <ParitySection />
-
         <PlatformStoryRail />
+
+        <ParitySection />
 
         <StubsSection />
 
