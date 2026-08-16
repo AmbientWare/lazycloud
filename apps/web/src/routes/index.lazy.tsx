@@ -1,8 +1,10 @@
 import { createLazyFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./-marketing/MarketingLayout";
@@ -10,9 +12,7 @@ import { StubsSection } from "./-marketing/StubsSection";
 import {
   FinalCta,
   Glyph,
-  PendingLink,
-  PendingMarketingButton,
-  PendingTextLink,
+  GetStartedButton,
   Pill,
   SectionHeading,
   StatusDot,
@@ -210,33 +210,44 @@ const parityCalls = [
     key: "local",
     where: "On your laptop",
     call: "embed.local(rows)",
-    body: "Your debugger, your breakpoints. No container, no deploy.",
+    shellPrompt: false,
+    body: "In-process. Your debugger works.",
   },
   {
     key: "remote",
     where: "On an A100",
     call: "embed.remote(rows)",
-    body: "Same arguments, same return type. Metered by the second, released when it returns.",
+    shellPrompt: false,
+    body: "Platform capacity. Nothing deployed.",
+  },
+  {
+    key: "deployed",
+    where: "In production",
+    call: "lazycloud deploy application.py:app",
+    shellPrompt: true,
+    body: "Autoscales, then back to zero.",
   },
 ];
 
-/* The signature moment of the page: one definition, two call sites pointing back
-   up at it. It is the whole argument in one screen — there is no second
+/* The signature moment of the page: one definition, with the three ways it runs
+   drawn as branches off it. The schematic is the argument — there is no second
    implementation to keep in step, which is also why an agent can write this
-   without being told how the cloud is wired. */
+   without being told how the cloud is wired. The three stations share one panel
+   rather than sitting in separate cards, because they are one workload at three
+   scales, not three products. */
 function ParitySection() {
   return (
     <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
           centered
-          label="Local and remote"
+          label="Local · GPU · production"
           title={
             <>
-              One function. <em>Both places.</em>
+              One function. <em>Three places.</em>
             </>
           }
-          body="Call it in-process while you build. Call it on a GPU when you need one. The signature never changes — nothing to port, nothing for an agent to guess."
+          body="The same function in-process, on a GPU, and deployed. Nothing to port, which is why an agent can write it without knowing how your cloud is wired."
         />
 
         <div className="mx-auto max-w-[760px]">
@@ -249,24 +260,48 @@ function ParitySection() {
           </CodeBlock>
         </div>
 
-        <div
-          aria-hidden="true"
-          className="mx-auto flex max-w-[760px] justify-around px-[12%] pt-3 text-brand"
-        >
-          <Glyph>↑</Glyph>
-          <Glyph>↑</Glyph>
+        {/* One trunk to a bus, then a drop into each station. The bus spans wider
+            than the definition above it, so the fan-out reads as the widening
+            it describes. Below `sm` the stations stack and the trunk alone
+            carries the connection. */}
+        <div aria-hidden="true" className="mx-auto max-w-[880px]">
+          <div className="mx-auto h-6 w-px bg-brand/50 sm:h-7" />
+          <div className="hidden grid-cols-3 sm:grid">
+            {parityCalls.map((call, index) => (
+              <div className="relative h-6" key={call.key}>
+                <span
+                  className={cn(
+                    "absolute top-0 h-px bg-brand/50",
+                    index === 0 && "right-0 left-1/2",
+                    index === 1 && "inset-x-0",
+                    index === 2 && "right-1/2 left-0",
+                  )}
+                />
+                <span className="absolute inset-y-0 left-1/2 w-px bg-brand/50" />
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="mx-auto mt-3 grid max-w-[760px] gap-4 sm:grid-cols-2">
+        <div className="mx-auto max-w-[880px] divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card sm:grid sm:grid-cols-3 sm:divide-x sm:divide-y-0">
           {parityCalls.map((call) => (
-            <article className="rounded-2xl border border-border bg-card p-5" key={call.key}>
-              <p className="font-mono text-[10.5px] tracking-[0.1em] text-muted-foreground uppercase">
+            <article className="flex flex-col p-5 sm:p-6" key={call.key}>
+              <p className="font-mono text-[10.5px] tracking-[0.1em] text-brand uppercase">
                 {call.where}
               </p>
-              <code className="mt-2.5 block font-mono text-[13px] break-all text-foreground">
+              <code className="mt-2.5 block font-mono text-[13px] leading-[1.5] text-foreground [overflow-wrap:anywhere]">
+                {call.shellPrompt ? (
+                  <span className="mr-1.5 text-brand">
+                    <Glyph>$</Glyph>
+                  </span>
+                ) : null}
                 {call.call}
               </code>
-              <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">{call.body}</p>
+              {/* The deploy command wraps where the two calls do not, so the
+                  summaries sit on the cell floor and stay on one baseline. */}
+              <p className="mt-auto pt-3 text-[13px] leading-relaxed text-muted-foreground">
+                {call.body}
+              </p>
             </article>
           ))}
         </div>
@@ -298,12 +333,20 @@ function MarketingHome() {
                 workload. It still runs on your laptop.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
-                  Private beta
-                </PendingMarketingButton>
-                <PendingMarketingButton className="marketing-action-secondary stamp-quiet border-input">
-                  Explore examples
-                </PendingMarketingButton>
+                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+                {EXAMPLES_URL ? (
+                  <Button
+                    asChild
+                    size="lg"
+                    variant="outline"
+                    className="marketing-button-link marketing-action-secondary stamp-quiet justify-between border-input text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
+                  >
+                    <a href={EXAMPLES_URL}>
+                      <span>Explore examples</span>
+                      <Glyph>↗</Glyph>
+                    </a>
+                  </Button>
+                ) : null}
               </div>
             </div>
 
@@ -373,9 +416,17 @@ function MarketingHome() {
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
               <SectionHeading title="What will you build?" />
-              <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
-                <PendingTextLink>Explore examples</PendingTextLink>
-              </div>
+              {EXAMPLES_URL ? (
+                <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
+                  <a
+                    className="inline-flex min-h-11 items-center gap-2.5 text-[13px] font-semibold text-foreground"
+                    href={EXAMPLES_URL}
+                  >
+                    Explore examples
+                    <Glyph>→</Glyph>
+                  </a>
+                </div>
+              ) : null}
             </div>
             <div
               className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
@@ -384,10 +435,11 @@ function MarketingHome() {
               aria-label="Runnable examples"
             >
               {marketingUseCases.map((useCase) => (
-                <PendingLink
-                  className="relative block aspect-[3/4] w-full overflow-hidden rounded-xl border border-border bg-card text-left text-foreground sm:last:col-span-2 xl:last:col-span-1"
-                  key={useCase.id}
-                >
+                /* A card is a link only when there is a gallery to open. Without
+                   one it still says what you can build, but it stops offering a
+                   press that goes nowhere — and the arrow goes with it, since the
+                   arrow is the promise. */
+                <UseCaseCard key={useCase.id}>
                   <MarketingExampleImage
                     className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%] saturate-[0.8] contrast-[0.92] brightness-[1.04] blur-[0.2px]"
                     src={useCase.imageSrc}
@@ -406,11 +458,13 @@ function MarketingHome() {
                     <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-muted-foreground">
                       {useCase.cardSummary}
                     </p>
-                    <span className="mt-auto inline-flex text-muted-foreground/55">
-                      <Glyph>↗</Glyph>
-                    </span>
+                    {EXAMPLES_URL ? (
+                      <span className="mt-auto inline-flex text-muted-foreground/55">
+                        <Glyph>↗</Glyph>
+                      </span>
+                    ) : null}
                   </div>
-                </PendingLink>
+                </UseCaseCard>
               ))}
             </div>
           </div>
@@ -426,6 +480,20 @@ function MarketingHome() {
         />
       </main>
     </MarketingLayout>
+  );
+}
+
+const useCaseCard =
+  "relative block aspect-[3/4] w-full overflow-hidden rounded-xl border border-border bg-card text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
+
+function UseCaseCard({ children }: { children: ReactNode }) {
+  if (!EXAMPLES_URL) {
+    return <div className={useCaseCard}>{children}</div>;
+  }
+  return (
+    <a className={useCaseCard} href={EXAMPLES_URL}>
+      {children}
+    </a>
   );
 }
 

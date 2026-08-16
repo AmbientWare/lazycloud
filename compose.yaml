@@ -135,6 +135,11 @@ x-database-bootstrap-env: &database-bootstrap-env
 
 x-lazycloud-build-args: &lazycloud-build-args
   TAILSCALE_IMAGE: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
+  # Where the examples and the docs live, baked into the web bundle at build
+  # time. Empty by default, and empty means the marketing pages render no entry
+  # point for them rather than one that goes nowhere.
+  VITE_LAZYCLOUD_EXAMPLES_URL: "${LAZYCLOUD_EXAMPLES_URL:-}"
+  VITE_LAZYCLOUD_DOCS_URL: "${LAZYCLOUD_DOCS_URL:-}"
 
 x-container-worker-settings: &container-worker-settings
   restart: unless-stopped

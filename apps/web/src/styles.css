@@ -104,8 +104,12 @@
   --popover: #f7f4ec;
   --popover-foreground: #191811;
   /* Brand cyan ink: the #66cbff hue deepened so links, active markers, and
-     filled brand surfaces hold WCAG AA contrast on light canvases. */
-  --brand: oklch(0.5 0.11 237);
+     filled brand surfaces hold WCAG AA contrast on light canvases.
+     The binding canvas is `--muted`, not paper — brand text sits on it in the
+     marketing rails, and it is the darkest of the three light surfaces. At
+     lightness 0.5 this measured 4.498 against it and failed AA by two
+     thousandths; 0.48 measures 4.891 there and 5.82 on `--card`. */
+  --brand: oklch(0.48 0.11 237);
   --brand-foreground: oklch(0.985 0 0);
   --primary: #191811;
   --primary-foreground: #f2eee3;
