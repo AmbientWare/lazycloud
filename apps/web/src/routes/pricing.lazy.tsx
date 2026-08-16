@@ -9,7 +9,7 @@ import {
   FinalCta,
   Glyph,
   MarketingButton,
-  PendingMarketingButton,
+  GetStartedButton,
   SectionLabel,
   shell,
 } from "./-marketing/MarketingPrimitives";
@@ -200,9 +200,7 @@ function MarketingPricing() {
                 for the compute you use.
               </p>
               <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
-                  Private beta
-                </PendingMarketingButton>
+                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
                 <MarketingButton
                   className="marketing-action-secondary stamp-quiet border-input"
                   endGlyph="↓"
@@ -289,9 +287,7 @@ function MarketingPricing() {
                       </li>
                     ))}
                   </ul>
-                  <PendingMarketingButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input">
-                    Private beta
-                  </PendingMarketingButton>
+                  <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
                 </article>
               ))}
             </div>

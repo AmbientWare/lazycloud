@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Menu, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { githubSignInHref } from "@/lib/queries/auth";
+import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import {
   Glyph,
+  GetStartedButton,
   PendingLink,
   shell,
   type MarketingRoute,
@@ -15,11 +15,13 @@ import {
 
 import "./marketing.css";
 
-/* A destination without a page stays visible but inert until one exists. */
-const navigation: readonly { label: string; to?: MarketingRoute }[] = [
-  { label: "Examples" },
+/* Only what this build can actually reach. Examples and docs live outside this
+   app and are absent from some deployments, so each is configured or left out —
+   a menu entry that goes nowhere is worse than a shorter menu. */
+const navigation: readonly { label: string; to?: MarketingRoute; href?: string }[] = [
+  ...(EXAMPLES_URL ? [{ label: "Examples", href: EXAMPLES_URL }] : []),
   { label: "Pricing", to: "/pricing" },
-  { label: "Docs" },
+  ...(DOCS_URL ? [{ label: "Docs", href: DOCS_URL }] : []),
 ];
 
 const navLink =
@@ -92,13 +94,13 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
                     {entry.label}
                   </Link>
                 ) : (
-                  <PendingLink className={navLink} key={entry.label}>
+                  <a className={navLink} href={entry.href} key={entry.label}>
                     {entry.label}
-                  </PendingLink>
+                  </a>
                 ),
               )}
             </nav>
-            <SignInAction className="max-[479px]:hidden" />
+            <GetStartedButton className="marketing-action-primary stamp border-brand/45 max-[479px]:hidden" label="Sign in" />
             <MobileNavigation />
           </div>
         </div>
@@ -131,14 +133,22 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
             aria-label="Footer navigation"
           >
             <FooterColumn title="Product">
-              <PendingLink className={footerLink}>Examples</PendingLink>
+              {EXAMPLES_URL ? (
+                <a className={footerLink} href={EXAMPLES_URL}>
+                  Examples
+                </a>
+              ) : null}
               <Link className={footerLink} to="/pricing">
                 Pricing
               </Link>
             </FooterColumn>
-            <FooterColumn title="Developers">
-              <PendingLink className={footerLink}>Docs</PendingLink>
-            </FooterColumn>
+            {DOCS_URL ? (
+              <FooterColumn title="Developers">
+                <a className={footerLink} href={DOCS_URL}>
+                  Docs
+                </a>
+              </FooterColumn>
+            ) : null}
             <FooterColumn title="Workloads">
               <PendingLink className={footerLink}>Applications + APIs</PendingLink>
               <PendingLink className={footerLink}>Background work</PendingLink>
@@ -238,41 +248,22 @@ function MobileNavigation() {
                   <Glyph>↗</Glyph>
                 </Link>
               ) : (
-                <PendingLink
+                <a
                   className="flex min-h-11 w-full items-center justify-between border-b border-border px-0.5 py-2.5"
+                  href={entry.href}
                   key={entry.label}
+                  onClick={() => setOpen(false)}
                 >
                   <span>{entry.label}</span>
                   <Glyph>↗</Glyph>
-                </PendingLink>
+                </a>
               ),
             )}
-            <SignInAction className="mt-3" />
+            <GetStartedButton className="marketing-action-primary stamp mt-3 border-brand/45" label="Sign in" />
           </div>
         </nav>
       ) : null}
     </div>
-  );
-}
-
-/* `outline` and an explicit foreground, matching the other marketing actions.
-   `marketing-action-primary` paints a light brand wash, so the default variant's
-   light-on-primary text lands at 1.22:1 against it. */
-function SignInAction({ className }: { className?: string }) {
-  return (
-    <Button
-      asChild
-      variant="outline"
-      className={cn(
-        "marketing-button-link marketing-action-primary stamp justify-between border-brand/45 text-foreground [@media(pointer:coarse)]:min-h-11",
-        className,
-      )}
-    >
-      <a href={githubSignInHref("/dashboard")}>
-        <span>Sign in</span>
-        <Glyph>↗</Glyph>
-      </a>
-    </Button>
   );
 }
 

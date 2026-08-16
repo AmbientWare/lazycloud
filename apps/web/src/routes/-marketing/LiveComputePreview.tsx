@@ -284,9 +284,12 @@ export function LiveComputePreview() {
               const assignment = active[laneIndex][slotIndex];
               if (assignment === undefined) {
                 return (
+                  /* Dimmed at the frame, not with `opacity`. Fading the whole
+                     slot took its two labels down to 3.65:1 — an idle slot is
+                     quieter, not less readable. */
                   <div
                     key={slot.key}
-                    className="compute-slot flex min-h-[34px] flex-col justify-between rounded-md border border-dashed border-[var(--border)] px-2 py-1.5 opacity-70"
+                    className="compute-slot flex min-h-[34px] flex-col justify-between rounded-md border border-dashed border-[var(--border)]/60 px-2 py-1.5"
                   >
                     <span className="truncate font-mono text-[8px] text-[var(--muted-foreground)]">
                       {slot.machine ?? "capacity"}

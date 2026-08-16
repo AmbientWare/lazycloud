@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
+import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
 
 export type MarketingRoute = "/" | "/pricing" | "/dashboard";
@@ -83,6 +84,39 @@ export function MarketingButton({
         <span>{children}</span>
         {endGlyph === null ? null : <Glyph>{endGlyph}</Glyph>}
       </Link>
+    </Button>
+  );
+}
+
+/**
+ * The way in, wherever a marketing page asks for one.
+ *
+ * A real anchor rather than a scripted click: leaving for GitHub is a document
+ * navigation, so middle-click and right-click behave the way they look. `outline`
+ * with an explicit foreground because `marketing-action-primary` paints a light
+ * brand wash — the default variant's light-on-primary text fails contrast on it.
+ */
+export function GetStartedButton({
+  className,
+  label = "Get started",
+}: {
+  className?: string;
+  label?: string;
+}) {
+  return (
+    <Button
+      asChild
+      size="lg"
+      variant="outline"
+      className={cn(
+        "marketing-button-link justify-between text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
+        className,
+      )}
+    >
+      <a href={githubSignInHref("/dashboard")}>
+        <span>{label}</span>
+        <Glyph>↗</Glyph>
+      </a>
     </Button>
   );
 }
@@ -234,9 +268,7 @@ export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
           {body}
         </p>
         <div className="mt-8 flex w-full max-w-[22rem] justify-center sm:w-auto sm:max-w-none">
-          <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
-            Private beta
-          </PendingMarketingButton>
+          <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
         </div>
       </div>
     </section>
