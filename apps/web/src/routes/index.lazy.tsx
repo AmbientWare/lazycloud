@@ -25,6 +25,7 @@ import {
 } from "./-marketing/ProductPreviews";
 import { MarketingExampleImage } from "./-marketing/MarketingExampleImage";
 import { marketingUseCases } from "./-marketing/marketingUseCases";
+import { GpuPlate, LocalPlate, ProductionPlate } from "./-marketing/ParityFigures";
 
 export const Route = createLazyFileRoute("/")({
   component: MarketingHome,
@@ -208,63 +209,26 @@ def embed(batch: list[str]) -> list[list[float]]:
 const parityModes = [
   {
     key: "local",
-    figure: "local" as const,
+    Plate: LocalPlate,
     title: "Local",
     call: "embed.local(rows)",
     body: "Runs in-process. Your debugger, your breakpoints.",
   },
   {
     key: "gpu",
-    figure: "gpu" as const,
+    Plate: GpuPlate,
     title: "On a GPU",
     call: "embed.remote(rows)",
     body: "Same call, our capacity. Nothing deployed.",
   },
   {
     key: "production",
-    figure: "production" as const,
+    Plate: ProductionPlate,
     title: "In production",
     call: "lazycloud deploy app.py:app",
     body: "A live service that scales out, then back to zero.",
   },
 ];
-
-/* One unit, the same unit with a card beside it, then many of it. The figures
-   are the escalation the cards describe — same glyph throughout, because the
-   whole claim is that it is the same function. Ink panels with the light brand,
-   which is the pairing the dark theme already uses. */
-function ParityFigure({ figure }: { figure: (typeof parityModes)[number]["figure"] }) {
-  const unit = "size-12 rounded-md bg-[var(--lazycloud)]";
-  const ghost = "size-12 rounded-md border-2 border-dashed border-[var(--lazycloud)]/30";
-  return (
-    <div
-      aria-hidden="true"
-      className="flex h-[184px] items-end justify-center gap-2.5 rounded-xl bg-[var(--foreground)] px-6 pt-6 pb-8"
-    >
-      {figure === "local" ? <span className={unit} /> : null}
-      {figure === "gpu" ? (
-        <>
-          <span className={unit} />
-          {/* Slotted, so it reads as a card rather than a second container. */}
-          <span className="flex h-20 w-12 flex-col justify-center gap-1.5 rounded-md bg-[var(--lazycloud)]/20 p-2">
-            <i className="h-1 rounded-full bg-[var(--lazycloud)]/80" />
-            <i className="h-1 rounded-full bg-[var(--lazycloud)]/80" />
-            <i className="h-1 rounded-full bg-[var(--lazycloud)]/80" />
-          </span>
-        </>
-      ) : null}
-      {figure === "production" ? (
-        <>
-          <span className={unit} />
-          <span className={unit} />
-          <span className={unit} />
-          <span className={ghost} />
-          <span className={ghost} />
-        </>
-      ) : null}
-    </div>
-  );
-}
 
 /* Placed after the control-plane rail: the rail establishes that one platform
    covers every phase, and this is the sharpest instance of it — the same
@@ -297,7 +261,7 @@ function ParitySection() {
         <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
           {parityModes.map((mode) => (
             <article key={mode.key}>
-              <ParityFigure figure={mode.figure} />
+              <mode.Plate />
               <h3 className="mt-5 text-[19px] leading-tight font-medium">{mode.title}</h3>
               <code className="mt-2 block font-mono text-[12px] break-all text-brand">
                 {mode.call}
