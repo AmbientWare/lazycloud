@@ -156,8 +156,8 @@ const platformStories: PlatformStory[] = [
   {
     key: "endpoints",
     label: "Applications + APIs",
-    title: "Deploy what developers and agents build.",
-    body: "Run application APIs and model endpoints with explicit resources, autoscaling, and scale-to-zero.",
+    title: "Ship an API the minute it is written.",
+    body: "Run application APIs and model endpoints with explicit resources, autoscaling, and scale-to-zero — no load balancer to stand up, no image to push.",
     notes: [
       "Autoscales up and down, all the way to zero when idle.",
       "Keep-warm holds capacity whenever you want it ready.",
@@ -167,8 +167,8 @@ const platformStories: PlatformStory[] = [
   {
     key: "graphs",
     label: "Jobs + pipelines",
-    title: "Run work beyond a single machine or agent session.",
-    body: "Execute tests, evaluations, data processing, and GPU jobs as dependency-aware tasks with durable results and logs.",
+    title: "Outgrow one machine without rewriting anything.",
+    body: "Tests, evaluations, data processing, and GPU jobs run as dependency-aware tasks with durable results and logs — the same functions you were calling locally an hour ago.",
     notes: [
       "Size CPU, GPU, and memory per Task, so each stage gets only what it needs.",
       "Mount shared volumes across stages, so downstream Tasks read upstream data directly.",
@@ -178,8 +178,8 @@ const platformStories: PlatformStory[] = [
   {
     key: "background",
     label: "Background work",
-    title: "Keep automation running after the agent stops.",
-    body: "Queue and schedule work with retries, cancellation, durable results, and live logs.",
+    title: "Keep the work running after the session ends.",
+    body: "Queue and schedule work with retries, cancellation, durable results, and live logs, so nothing depends on a terminal staying open.",
     notes: [
       "Workers scale with queue depth, from zero to your max.",
       "Failed runs retry automatically with your policy.",
@@ -201,6 +201,80 @@ const platformStories: PlatformStory[] = [
   },
 ];
 
+const parityDefinition = `@app.function(gpu="A100-40", memory="16Gi")
+def embed(batch: list[str]) -> list[list[float]]:
+    return model.encode(batch)`;
+
+const parityCalls = [
+  {
+    key: "local",
+    where: "On your laptop",
+    call: "embed.local(rows)",
+    body: "Runs in-process, in your debugger, against your breakpoints. No container, no deploy, no waiting.",
+  },
+  {
+    key: "remote",
+    where: "On an A100",
+    call: "embed.remote(rows)",
+    body: "Same arguments, same return type. The card is held while it runs and released the moment it returns.",
+  },
+];
+
+/* The signature moment of the page: one definition, two call sites pointing back
+   up at it. It is the whole argument in one screen — there is no second
+   implementation to keep in step, which is also why an agent can write this
+   without being told how the cloud is wired. */
+function ParitySection() {
+  return (
+    <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
+      <div className={shell}>
+        <SectionHeading
+          centered
+          label="Local and remote"
+          title={
+            <>
+              One function. <em>Both places.</em>
+            </>
+          }
+          body="The decorator does not take your code away from you. Call it in-process while you are building it, call it on a GPU when you need one — the signature never changes, so there is nothing to port and nothing for an agent to guess."
+        />
+
+        <div className="mx-auto max-w-[760px]">
+          <CodeBlock
+            className="shadow-[8px_8px_0_0_var(--secondary)]"
+            tone="paper"
+            bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-6 sm:text-[12.5px]"
+          >
+            {parityDefinition}
+          </CodeBlock>
+        </div>
+
+        <div
+          aria-hidden="true"
+          className="mx-auto flex max-w-[760px] justify-around px-[12%] pt-3 text-brand"
+        >
+          <Glyph>↑</Glyph>
+          <Glyph>↑</Glyph>
+        </div>
+
+        <div className="mx-auto mt-3 grid max-w-[760px] gap-4 sm:grid-cols-2">
+          {parityCalls.map((call) => (
+            <article className="rounded-2xl border border-border bg-card p-5" key={call.key}>
+              <p className="font-mono text-[10.5px] tracking-[0.1em] text-muted-foreground uppercase">
+                {call.where}
+              </p>
+              <code className="mt-2.5 block font-mono text-[13px] break-all text-foreground">
+                {call.call}
+              </code>
+              <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">{call.body}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MarketingHome() {
   return (
     <MarketingLayout>
@@ -214,14 +288,15 @@ function MarketingHome() {
             )}
           >
             <div className="marketing-rise">
-              <Pill>One platform. Every workload.</Pill>
+              <Pill>Code got fast. Infrastructure didn&apos;t.</Pill>
               <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] sm:mt-3 lg:mt-6 lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
-                The cloud platform for <em>AI-speed development.</em>
+                Your agent wrote it in a minute. <em>Ship it in one.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Developers and agents deploy applications, run durable work, create isolated
-                environments, and operate every workload through one programmable control
-                plane—without stitching together cloud infrastructure.
+                Working code now arrives in seconds. Then it waits — on a Dockerfile, a registry, a
+                queue, a load balancer, an IAM policy. LazyCloud takes that wait out of every phase:
+                one decorator turns a Python function into a deployed API, job, queue, or GPU
+                workload, and the same function still runs on your laptop.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
@@ -287,6 +362,8 @@ function MarketingHome() {
           </div>
         </section>
 
+        <ParitySection />
+
         <PlatformStoryRail />
 
         <StubsSection />
@@ -346,7 +423,7 @@ function MarketingHome() {
               Your cloud should <em>accelerate you</em>, not be the bottleneck.
             </>
           }
-          body="Deploy applications, jobs, GPU workloads, and sandboxes from one platform on managed compute or infrastructure you control."
+          body="Write the function, call it locally, then run it on the fleet when it needs a GPU. Applications, jobs, queues, schedules, and sandboxes — one platform, on our compute or yours."
         />
       </main>
     </MarketingLayout>
@@ -476,10 +553,10 @@ function PlatformStoryRail() {
             label="SDK · CLI --json · typed clients"
             title={
               <>
-                One control plane. <em>Every workload.</em>
+                Every phase. <em>One control plane.</em>
               </>
             }
-            body="Developers and agents use the same SDK, machine-readable CLI, and typed clients to deploy, call, and operate every workload through one control plane."
+            body="Building, testing, deploying, scaling, operating — each of those is usually a different tool and a different afternoon. Here they are one SDK, one machine-readable CLI, and typed clients, so a developer and an agent reach for the same thing at every step."
           />
           <nav aria-label="Platform use cases" className="border-t border-border">
             <ol className="m-0 list-none p-0">
@@ -592,7 +669,7 @@ function ComputeSection() {
               One workload model. <em>Managed compute or yours.</em>
             </>
           }
-          body="Use the same workload definitions on managed CPU capacity, connected AWS, or any Linux machine you join to the workspace."
+          body="Where a workload runs is a setting, not a rewrite. The same definitions run on managed capacity, in your own AWS account, or on a machine under your desk — and moving between them changes no code."
         />
         <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
           <div className="flex flex-col gap-4">
