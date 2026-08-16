@@ -65,7 +65,21 @@ export function MarketingButton({
         className,
       )}
     >
-      <Link to={to} hash={hash} onClick={onClick}>
+      <Link
+        to={to}
+        hash={hash}
+        onClick={() => {
+          onClick?.();
+          // The layout scrolls when the hash changes, which is what a deep link
+          // needs. Pressing this while that hash is already current changes no
+          // location, so nothing fires and the button looks dead — so the click
+          // scrolls for itself when the section is already on screen, and leaves
+          // the arriving-from-elsewhere case to the layout.
+          if (hash) {
+            document.getElementById(hash)?.scrollIntoView({ block: "start" });
+          }
+        }}
+      >
         <span>{children}</span>
         {endGlyph === null ? null : <Glyph>{endGlyph}</Glyph>}
       </Link>

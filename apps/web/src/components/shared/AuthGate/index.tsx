@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { ApiError, clearAuthToken } from "@/lib/api/client";
@@ -24,6 +24,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
 function AuthenticatedSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [token, setToken] = useState<string | null>(() => getStoredAuthToken());
   // One request answers both questions the shell needs: who is signed in, and which
   // workspaces they reach. Resolving them separately would let the two disagree.
@@ -40,7 +41,11 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
     clearAuthToken();
     setToken(null);
     queryClient.clear();
-  }, [queryClient]);
+    // Out to the public landing page rather than the sign-in screen. Signing out
+    // is leaving, and being handed the way back in is the one thing somebody who
+    // just left did not ask for; it also reads as though the sign-out failed.
+    void navigate({ to: "/" });
+  }, [navigate, queryClient]);
 
   const contextValue = useMemo<SessionContextValue | null>(
     () =>
