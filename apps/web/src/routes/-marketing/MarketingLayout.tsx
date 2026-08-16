@@ -255,9 +255,19 @@ function MobileNavigation() {
   );
 }
 
+/* `outline` and an explicit foreground, matching the other marketing actions.
+   `marketing-action-primary` paints a light brand wash, so the default variant's
+   light-on-primary text lands at 1.22:1 against it. */
 function SignInAction({ className }: { className?: string }) {
   return (
-    <Button asChild className={cn("marketing-action-primary stamp border-brand/45", className)}>
+    <Button
+      asChild
+      variant="outline"
+      className={cn(
+        "marketing-button-link marketing-action-primary stamp justify-between border-brand/45 text-foreground [@media(pointer:coarse)]:min-h-11",
+        className,
+      )}
+    >
       <a href={githubSignInHref("/dashboard")}>
         <span>Sign in</span>
         <Glyph>↗</Glyph>
