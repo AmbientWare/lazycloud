@@ -9,28 +9,26 @@ import { BillingSettings } from "./BillingSettings";
 import { ComputeSettings } from "./ComputeSettings";
 import { DomainSettings } from "./DomainSettings";
 import { settingsView, type SettingsView } from "./view";
-import { WorkspaceAccordion } from "./WorkspaceAccordion";
 
 /**
  * Settings, as a near-full-screen layer over whatever you were looking at.
  *
  * Nothing in here is addressed by the workspace in the URL — the connected clouds,
- * the machines, the domains, and the access tokens belong to the account, and the
- * workspaces appear as a list rather than as whichever one the sidebar selected. A
- * page under `/w/<workspace>/` would have claimed otherwise in its address.
+ * the machines, the domains, and the access tokens belong to the account. A page
+ * under `/w/<workspace>/` would have claimed otherwise in its address. Renaming
+ * and deleting a workspace live in the workspace menu instead, next to the act of
+ * choosing one.
  */
 export function SettingsDialog({
   view,
-  activeWorkspaceName,
   onViewChange,
   onClose,
 }: {
   view: SettingsView;
-  activeWorkspaceName: string;
   onViewChange: (view: SettingsView) => void;
   onClose: () => void;
 }) {
-  const { user, workspaces } = useSession();
+  const { user } = useSession();
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
@@ -62,16 +60,6 @@ export function SettingsDialog({
             <div className="space-y-5">
               <AccountSettings />
               <BillingSettings />
-              <section>
-                <h2 className="mb-1 text-sm font-medium">Workspaces</h2>
-                <p className="mb-2 text-xs text-muted-foreground">
-                  Every workspace you belong to. Compute and domains above apply to all of them.
-                </p>
-                <WorkspaceAccordion
-                  workspaces={workspaces}
-                  activeWorkspaceName={activeWorkspaceName}
-                />
-              </section>
             </div>
           </TabsContent>
 
