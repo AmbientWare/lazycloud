@@ -2,12 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Menu, X } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
 
 import {
   Glyph,
   PendingLink,
-  PendingMarketingButton,
   shell,
   type MarketingRoute,
 } from "./MarketingPrimitives";
@@ -71,11 +72,11 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
         <div
           className={cn(
             shell,
-            "relative grid h-14 grid-cols-[1fr_auto_1fr] items-center rounded-2xl border border-border/80 bg-card px-3 shadow-[0_12px_32px_color-mix(in_oklab,var(--foreground)_10%,transparent)] sm:px-4",
+            "relative flex h-14 items-center justify-between gap-3 rounded-2xl border border-border/80 bg-card px-3 shadow-[0_12px_32px_color-mix(in_oklab,var(--foreground)_10%,transparent)] sm:px-4",
           )}
         >
           <Link
-            className="inline-flex min-h-11 w-max items-center gap-2 justify-self-start text-[17px] font-semibold tracking-[-0.025em]"
+            className="inline-flex min-h-11 w-max shrink-0 items-center gap-2 text-[17px] font-semibold tracking-[-0.025em]"
             to="/"
             aria-label="LazyCloud home"
           >
@@ -83,24 +84,21 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
             <span>LazyCloud</span>
           </Link>
 
-          <nav className="flex items-center gap-1 max-md:hidden" aria-label="Primary navigation">
-            {navigation.map((entry) =>
-              entry.to ? (
-                <Link className={cn(navLink, navLinkActive)} key={entry.label} to={entry.to}>
-                  {entry.label}
-                </Link>
-              ) : (
-                <PendingLink className={navLink} key={entry.label}>
-                  {entry.label}
-                </PendingLink>
-              ),
-            )}
-          </nav>
-
-          <div className="flex items-center gap-2 justify-self-end">
-            <PendingMarketingButton className="marketing-action-primary stamp border-brand/45 max-[479px]:hidden">
-              Private beta
-            </PendingMarketingButton>
+          <div className="flex items-center gap-2">
+            <nav className="flex items-center gap-1 max-md:hidden" aria-label="Primary navigation">
+              {navigation.map((entry) =>
+                entry.to ? (
+                  <Link className={cn(navLink, navLinkActive)} key={entry.label} to={entry.to}>
+                    {entry.label}
+                  </Link>
+                ) : (
+                  <PendingLink className={navLink} key={entry.label}>
+                    {entry.label}
+                  </PendingLink>
+                ),
+              )}
+            </nav>
+            <SignInAction className="max-[479px]:hidden" />
             <MobileNavigation />
           </div>
         </div>
@@ -249,13 +247,22 @@ function MobileNavigation() {
                 </PendingLink>
               ),
             )}
-            <PendingMarketingButton className="marketing-action-primary stamp mt-3 border-brand/45">
-              Private beta
-            </PendingMarketingButton>
+            <SignInAction className="mt-3" />
           </div>
         </nav>
       ) : null}
     </div>
+  );
+}
+
+function SignInAction({ className }: { className?: string }) {
+  return (
+    <Button asChild className={cn("marketing-action-primary stamp border-brand/45", className)}>
+      <a href={githubSignInHref("/dashboard")}>
+        <span>Sign in</span>
+        <Glyph>↗</Glyph>
+      </a>
+    </Button>
   );
 }
 
