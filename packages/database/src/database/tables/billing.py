@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import (
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     String,
@@ -90,3 +93,17 @@ class BillingAccountTable(IdTable, DatabaseBase):
     rather than a read of the provider because the dashboard and an upgrade both
     need it without a round trip, and it is cleared with the subscription so the
     two never disagree about what the account is on."""
+    payment_method_attached_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    """When this account's card was put on file, null while it holds none.
+
+    Nullable rather than defaulted to an instant, because every other column here
+    says "not yet" with an empty string and no timestamp means the same. The
+    distinction is load-bearing: it decides what the account may spend before
+    anything can be charged, and a zero-ish default would read as a card attached
+    at the epoch.
+
+    Cleared when the last card is removed. Left set, an account could attach a
+    card, spend against the larger allowance that buys, detach, and keep it."""

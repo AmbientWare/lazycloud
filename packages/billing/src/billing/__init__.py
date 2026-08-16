@@ -6,6 +6,11 @@ from billing.costs import (
     UsageCostPage,
     UsageCostService,
 )
+from billing.enforcement import (
+    UNFUNDED_COMPUTE_STOPPED_ACTION,
+    BillingEnforcementResult,
+    BillingEnforcementService,
+)
 from billing.meter_outbox import (
     AbandonedMeterEvents,
     BillingMeterOutboxService,
@@ -21,9 +26,12 @@ from billing.sweeps import BillingEventSink
 from billing.webhooks import BillingWebhookService
 
 __all__ = [
+    "UNFUNDED_COMPUTE_STOPPED_ACTION",
     "AbandonedMeterEvents",
     "BillingAccountService",
     "BillingDivergence",
+    "BillingEnforcementResult",
+    "BillingEnforcementService",
     "BillingEventSink",
     "BillingMeterOutboxService",
     "BillingPlanChangeService",

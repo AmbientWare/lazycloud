@@ -28,6 +28,7 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
 from tests.service_fixtures import unbilled_account, workspace_owner_user_id
 
@@ -50,6 +51,9 @@ class _Provider:
     invoices: tuple[ProviderInvoice, ...] = ()
     metered: Mapping[str, int] = field(default_factory=lambda: dict[str, int]())
     invoice_reads: list[str] = field(default_factory=list)
+
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
 
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
         return ProviderSubscription(
@@ -86,6 +90,9 @@ class _Provider:
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         raise AssertionError("reconciling must not read cards")
 
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
+
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
     ) -> None:
@@ -109,7 +116,11 @@ class _Provider:
         raise AssertionError("reconciling must not subscribe anyone")
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         raise AssertionError("reconciling must not change anyone's plan")
 
@@ -348,6 +359,7 @@ def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> No
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
             allowance_nanos=published_plan(plan).included_nanos,
+            funded=True,
         )
 
 

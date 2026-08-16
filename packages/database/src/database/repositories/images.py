@@ -200,13 +200,18 @@ class ImageArchiveRepository:
             sha256=sha256,
             payload={},
         )
-        self.session.add(row)
         try:
-            self.session.flush()
+            with self.session.begin_nested():
+                self.session.add(row)
+                self.session.flush()
         except IntegrityError:
             # Another build inserted the same image id between the read and the
             # flush; its bytes are as good as ours.
-            self.session.rollback()
+            #
+            # Rolled back to a savepoint rather than outright: a plain rollback
+            # discards the caller's whole transaction, and the caller here has an
+            # image build in flight that would be silently thrown away while this
+            # returned as though it had succeeded.
             conflicting = self.get(image_id)
             if conflicting is None:
                 raise

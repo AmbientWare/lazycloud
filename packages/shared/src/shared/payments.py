@@ -9,6 +9,7 @@ from pydantic import Field
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BilledDimension
 from shared.contracts import ContractModel
+from shared.enums import StringEnum
 
 BILLING_CURRENCY = "USD"
 """The currency this platform bills in.
@@ -31,6 +32,26 @@ agree on these names, and an environment variable is how three processes come to
 disagree. One meter per dimension so the invoice breaks down, which is also what
 makes a line priced at zero visible as metered-and-free rather than absent.
 """
+
+
+class SubscriptionProration(StringEnum):
+    """What a plan change does about the stretch of cycle already invoiced.
+
+    Stated by the caller because it is a money decision and only the caller knows
+    which direction the change goes in. Moving onto dearer terms takes the
+    difference at once, which is what makes "the subscription carries the plan"
+    and "the money was taken" one fact. Moving onto cheaper ones takes nothing
+    and gives nothing back: the cycle was invoiced when it opened, the allowance
+    it opened with is the allowance it keeps, and the smaller price is what the
+    next invoice asks for.
+
+    Protocol-neutral by name: a provider maps these onto whatever it calls
+    proration, and no caller has to hold that vocabulary to change somebody's
+    plan.
+    """
+
+    ChargeDifferenceNow = "charge_difference_now"
+    KeepWhatWasPaidFor = "keep_what_was_paid_for"
 
 
 class PaymentCustomer(ContractModel):
@@ -218,6 +239,20 @@ class PaymentProvider(Protocol):
         """
         ...
 
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        """Whether this customer has any instrument that could be charged.
+
+        Asked of the provider rather than kept in step from notifications,
+        because removing a card is the one direction those cannot report: the
+        instrument is already detached by the time the notification describes it,
+        so it names no customer and there is nothing to resolve it back to.
+
+        Asked at a cycle boundary and nowhere near a container start. What it
+        decides is how much an account is given for the cycle about to open, so
+        once per cycle is exactly as often as the answer is used.
+        """
+        ...
+
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
     ) -> None:
@@ -276,13 +311,25 @@ class PaymentProvider(Protocol):
         ...
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         """Move an existing subscription onto another plan's price.
 
         The subscription, its identifier and its cycle survive: only the licensed
         price changes, so the metered prices keep the usage already recorded
-        against them and the customer's billing anniversary does not move.
+        against them and the customer's billing anniversary does not move. That
+        is what a plan change is here, and it is never a subscription ended and
+        another created — ending one takes the metered prices with it and leaves
+        the account's usage reaching no invoice at all.
+
+        The swap refuses rather than completing unpaid, so where `proration`
+        charges the difference the plan is carried only if the money was taken.
+        Where it does not, there is nothing to collect and nothing that could
+        have failed to.
 
         Idempotent — a subscription already on the plan is returned unchanged —
         because the caller is a transaction that can die between changing this
@@ -380,4 +427,5 @@ __all__ = [
     "ProviderCreditGrant",
     "ProviderInvoice",
     "ProviderSubscription",
+    "SubscriptionProration",
 ]

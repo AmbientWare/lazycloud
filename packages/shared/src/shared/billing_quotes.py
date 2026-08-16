@@ -22,7 +22,8 @@ _MICROSECONDS_PER_SECOND = Decimal(1_000_000)
 _WHOLE_NANO = Decimal(1)
 _MILLICORES_PER_CORE = Decimal(1_000)
 _MIB_PER_GIB = Decimal(1_024)
-_BYTES_PER_GIB = Decimal(1_073_741_824)
+BYTES_PER_GIB = Decimal(1_073_741_824)
+"""Bytes in a gibibyte, which is the unit every byte-denominated price is quoted in."""
 
 
 class BilledDimension(StringEnum):
@@ -235,7 +236,7 @@ def measured_quantity(component: LedgerComponent, quantity: Decimal) -> Decimal:
     """
 
     if component is LedgerComponent.Memory:
-        return quantity / _BYTES_PER_GIB
+        return quantity / BYTES_PER_GIB
     if component in (
         LedgerComponent.Cpu,
         LedgerComponent.Egress,
@@ -446,6 +447,7 @@ def _quote_at(quotes: Sequence[Quote], at: datetime) -> Quote | None:
 
 __all__ = [
     "BILLED_METRICS",
+    "BYTES_PER_GIB",
     "NANOS_PER_USD",
     "BilledDimension",
     "BilledUsage",

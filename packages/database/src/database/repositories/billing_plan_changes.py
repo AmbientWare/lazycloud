@@ -13,6 +13,14 @@ from sqlalchemy.orm import Session
 
 _ERROR_LIMIT = 512
 
+_OPEN_STATUSES = ("pending", "settling")
+"""An intent nobody has recorded an outcome for, waiting or in flight.
+
+The same set answers the operator's count and the customer's own question, and
+one of them reading a status the other did not would be a change visible to
+exactly one of them.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class ClaimedPlanChange:
@@ -224,10 +232,31 @@ class BillingPlanChangeIntentRepository:
         return int(
             self.session.scalar(
                 select(func.count(BillingPlanChangeIntentTable.id)).where(
-                    BillingPlanChangeIntentTable.status.in_(("pending", "settling"))
+                    BillingPlanChangeIntentTable.status.in_(_OPEN_STATUSES)
                 )
             )
             or 0
+        )
+
+    def has_open(self, *, user_id: str) -> bool:
+        """Whether a change for this account is still waiting on an outcome.
+
+        What a customer is shown while their own change is being settled. The
+        partial unique index means there is at most one, and a retry schedule
+        spanning hours means the wait is long enough to need saying: an account
+        that is offered the same button meanwhile is offered a conflict.
+        """
+
+        return (
+            self.session.scalars(
+                select(BillingPlanChangeIntentTable.id)
+                .where(
+                    BillingPlanChangeIntentTable.user_id == user_id,
+                    BillingPlanChangeIntentTable.status.in_(_OPEN_STATUSES),
+                )
+                .limit(1)
+            ).first()
+            is not None
         )
 
     def _settle(

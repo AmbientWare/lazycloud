@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { createLazyFileRoute } from "@tanstack/react-router";
 
 import { exactDollars } from "@/lib/money";
@@ -6,166 +6,202 @@ import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./-marketing/MarketingLayout";
 import {
-  Faq,
   FinalCta,
   Glyph,
   MarketingButton,
   PendingMarketingButton,
-  Pill,
-  SectionHeading,
+  SectionLabel,
   shell,
 } from "./-marketing/MarketingPrimitives";
 import {
-  BILLING_CURRENCY,
   EGRESS_NANOS_PER_GIB,
-  RATES_EFFECTIVE_ON,
   VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
+  SELF_HOSTED_NANOS_PER_HOUR,
   planIds,
   publishedGpuRates,
+  NO_CARD_INCLUDED_NANOS,
+  NO_CARD_MAX_CONTAINERS,
   publishedPlans,
   publishedShapeRates,
+  type BillingOwner,
+  type PublishedGpuRate,
   type PlanId,
+  type PublishedPlan,
 } from "./-marketing/pricingCatalog";
 
 export const Route = createLazyFileRoute("/pricing")({
   component: MarketingPricing,
 });
 
-const fleet = publishedShapeRates.platform_fleet;
-const connected = publishedShapeRates.connected_cloud;
+const SECONDS_PER_HOUR = 3600;
 
-/* What each plan is called and what it promises. The two figures beside them are
-   the rate card's, so a plan the card publishes with nothing written for it here
-   does not compile. */
-const planCopy: Record<PlanId, { name: string; summary: string; terms: readonly string[] }> = {
-  free: {
-    name: "Free",
-    summary: "What an account costs before it has agreed to anything.",
-    terms: [
-      "Every workload the platform runs: applications, APIs, functions, jobs, queues, schedules, and sandboxes.",
-      "No payment method needed to start. Usage past the included compute is billed at the rates below on the same invoice.",
-      "Work is refused only when a payment cannot be collected. Nothing is stopped mid-flight over a bill.",
-    ],
-  },
-  team: {
-    name: "Team",
-    summary: "A monthly subscription that comes with compute included.",
-    terms: [
-      "The same workloads and the same rates. A plan changes what you pay, not what you can run.",
-      "Usage past the included compute is billed at the rates below on the same invoice, automatically.",
-      "The included compute is issued each period as credit and is spent against usage, not banked.",
-    ],
-  },
+/** Which unit every figure on the page is currently read in. */
+type Meter = "hour" | "second";
+
+/* Every figure the card publishes divides into a whole nanodollar a second, and
+   that divisibility is a term of the card rather than a coincidence of these
+   numbers. A figure that broke it has no exact per-second price to publish, so
+   the page stops instead of quoting a rounded one. */
+function perSecond(nanosPerHour: number): number {
+  if (nanosPerHour % SECONDS_PER_HOUR !== 0) {
+    throw new Error(`${nanosPerHour} nanodollars an hour has no exact per-second price`);
+  }
+  return nanosPerHour / SECONDS_PER_HOUR;
+}
+
+function metered(nanosPerHour: number, meter: Meter): number {
+  return meter === "second" ? perSecond(nanosPerHour) : nanosPerHour;
+}
+
+const meters = [
+  { value: "hour", label: "Per hour" },
+  { value: "second", label: "Per second" },
+] as const satisfies readonly { value: Meter; label: string }[];
+
+/** One priced line: what it is, what it costs, and the unit that price is in. */
+type RateLine = {
+  label: string;
+  nanos: number;
+  unit: string;
 };
 
-const plans = planIds.map((id) => ({ id, ...publishedPlans[id], ...planCopy[id] }));
+type RateGroup = {
+  heading: string;
+  lines: readonly RateLine[];
+};
 
-/* Everything a container is charged for, both columns, in one list. The GPU rows
-   come from the catalog; these are the parts every container pays. */
-const shapeRows = [
-  {
-    id: "container",
-    resource: "Container",
-    unitNoun: "container",
-    fleet: fleet.nanosPerContainerHour,
-    connected: connected.nanosPerContainerHour,
-  },
-  {
-    id: "cpu",
-    resource: "Processor",
-    unitNoun: "CPU",
-    fleet: fleet.nanosPerCpuCoreHour,
-    connected: connected.nanosPerCpuCoreHour,
-  },
-  {
-    id: "memory",
-    resource: "Memory",
-    unitNoun: "GiB",
-    fleet: fleet.nanosPerMemoryGibHour,
-    connected: connected.nanosPerMemoryGibHour,
-  },
-] as const;
+function perLabel(meter: Meter): string {
+  return meter === "second" ? "sec" : "hr";
+}
 
-const platformRows = [
-  {
-    id: "egress",
-    resource: "Network egress",
-    unitNoun: "GiB",
-    nanos: EGRESS_NANOS_PER_GIB,
-    note: "Traffic leaving the platform. Metered on every container and included.",
-  },
-  {
-    id: "volume-storage",
-    resource: "Volume storage",
-    unitNoun: "GiB-month",
-    nanos: VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
-    note: "Persistent volumes, measured continuously while they exist. Included.",
-  },
-] as const;
+/* Every card ranked for the capacity it is being read on. The published order is
+   the fleet's and the capacities rank differently, so a list that showed one
+   order everywhere would be a descending column that is not descending. Ties keep
+   the card's order.
 
-const placements = [
+   Ranked once here rather than per render: nothing in it reads the meter, so the
+   toggle cannot change an answer fixed when the catalog was generated. */
+/** A capacity whose cards this page lists one by one. */
+type RankedOwner = Exclude<BillingOwner, "self_hosted">;
+
+function rankedFor(owner: RankedOwner): readonly PublishedGpuRate[] {
+  return [...publishedGpuRates].sort(
+    (left, right) => right.nanosPerCardHour[owner] - left.nanosPerCardHour[owner],
+  );
+}
+
+/* Only the capacities whose cards this page lists one by one. Self-hosted reaches
+   the reader through `selfHostedGroup`'s single uniform figure, so ranking it here
+   would sort eight models nothing renders. */
+const gpuRatesByOwner = {
+  platform_fleet: rankedFor("platform_fleet"),
+  connected_cloud: rankedFor("connected_cloud"),
+} satisfies Record<RankedOwner, readonly PublishedGpuRate[]>;
+
+/* What a container costs on one kind of capacity: the figures that change with
+   where it runs, in the order somebody sizing one asks in. */
+function computeGroups(owner: RankedOwner, meter: Meter): readonly RateGroup[] {
+  const shape = publishedShapeRates[owner];
+  const per = perLabel(meter);
+  return [
+    {
+      heading: "GPU",
+      lines: gpuRatesByOwner[owner].map((rate) => ({
+        label: rate.gpuType,
+        nanos: metered(rate.nanosPerCardHour[owner], meter),
+        unit: `/ card / ${per}`,
+      })),
+    },
+    {
+      heading: "CPU",
+      lines: [
+        {
+          label: "Every core a container holds",
+          nanos: metered(shape.nanosPerCpuCoreHour, meter),
+          unit: `/ core / ${per}`,
+        },
+      ],
+    },
+    {
+      heading: "Memory",
+      lines: [
+        {
+          label: "Reserved and resident alike",
+          nanos: metered(shape.nanosPerMemoryGibHour, meter),
+          unit: `/ GiB / ${per}`,
+        },
+      ],
+    },
+  ];
+}
+
+/* What a container moves and keeps, which the card prices once for the platform
+   rather than per capacity. Egress is published at a stated zero rather than
+   left off, so a reader can tell the traffic is measured and free rather than
+   unmeasured. */
+const platformGroups: readonly RateGroup[] = [
   {
-    title: "LazyCloud compute",
-    body: "Capacity we buy and run. The rate is the whole cost of the machine and the platform on it.",
+    heading: "Volumes",
+    lines: [
+      {
+        label: "Kept between runs",
+        nanos: VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
+        /* Thirty days, said rather than implied. Storage meters by the second,
+           so a calendar month is charged for the days it actually has — and a
+           reader who took "mo" for January would find 31 days on the invoice
+           against a figure that quoted 30. */
+        unit: "/ GiB / 30 days",
+      },
+    ],
   },
   {
-    title: "Your connected cloud",
-    body: "Capacity we provision into your own AWS account. Your provider bills you for the machine; this is the management fee on what we placed there.",
-  },
-  {
-    title: "Machines you join",
-    body: "Hardware you already own, joined to a workspace as capacity. We neither buy it nor manage it, so every rate on it is published at zero.",
+    heading: "Egress",
+    lines: [
+      {
+        label: "Traffic leaving the platform",
+        nanos: EGRESS_NANOS_PER_GIB,
+        unit: "/ GiB",
+      },
+    ],
   },
 ];
 
-const meterRules = [
-  {
-    title: "Held or used, whichever is greater",
-    body: "Each resource is charged for the greater of what a container asked for and what it actually used. Capacity you hold is capacity nobody else can be given, so it is paid for whether or not it is busy — and a container that bursts past its request pays for the burst at the same rate. A GPU is held whole and charged whole.",
-  },
-  {
-    title: "One balance, in dollars",
-    body: "Included compute is money, not hours. The same balance covers processors, memory, and any GPU, so nothing is stranded in a bucket you have no way to spend.",
-  },
-  {
-    title: "Priced when it ran",
-    body: "A container's rate is fixed at the instant it ran and frozen onto the record of the charge. A price change moves what tomorrow costs, never what yesterday did, and a run spanning one is split at the moment it changed.",
-  },
-  {
-    title: "Zero is a price",
-    body: "Egress, volume storage and joined machines are all metered and all published at zero. They appear on your usage and on your invoice reading $0.00, which is how you can tell they are measured rather than ignored.",
-  },
-];
+/* Hardware the platform neither buys nor manages is published at one figure
+   across every resource, which is what lets it be a line rather than a table of
+   its own. That the card still publishes only one is held by `tests/contracts`,
+   where a card the page cannot state fails before it is charged. */
+function selfHostedGroup(meter: Meter): RateGroup {
+  return {
+    heading: "Machines you host",
+    lines: [
+      {
+        label: "Every core, gibibyte, card, and container",
+        nanos: metered(SELF_HOSTED_NANOS_PER_HOUR, meter),
+        unit: `/ ${perLabel(meter)}`,
+      },
+    ],
+  };
+}
 
-const faqItems = [
-  {
-    question: "What does a container actually cost?",
-    answer:
-      "At least the rates for what you asked for: the processors, the memory, and any GPU, for as long as you hold them. A one-processor, two-gibibyte container with no GPU on LazyCloud compute costs the processor rate plus twice the memory rate for every hour it runs. If it uses more than one processor — the request is a floor, not a cap — the processor rate applies to what it actually used instead.",
-  },
-  {
-    question: "What happens when the included compute is spent?",
-    answer:
-      "On both plans, usage past the included amount is billed at the rates below on the same invoice, automatically. Work already running keeps running and keeps being metered, and new work is refused only when a payment cannot be collected — so keeping a working card on file is what keeps an account running.",
-  },
-  {
-    question: "Is egress or storage going to start costing money?",
-    answer:
-      "Not without this page changing first. Both are metered today and priced at zero, and the figure on this page is read from the same rate card the platform bills from — so the day either becomes non-zero is the day it is published here.",
-  },
-  {
-    question: "Is there an enterprise plan?",
-    answer:
-      "No. There are two plans and one rate card. What a plan changes is the subscription and how much compute comes with it, not which workloads, regions, or hardware you can reach.",
-  },
-  {
-    question: "Which currency are rates in?",
-    answer:
-      "US dollars. Rates are stored in nanodollars — billionths of a dollar — so a second of even the cheapest resource carries an exact price rather than a rounded one, and the hourly figures here are those exact rates converted without rounding.",
-  },
-];
+const plans: readonly (PublishedPlan & { id: PlanId })[] = planIds.map((id) => ({
+  id,
+  ...publishedPlans[id],
+}));
 
+/* The one account-wide fact a reader needs before choosing a plan: what they get
+   before they have paid for anything. The rest is disclosure, not pricing. */
+const accountTerm = `Until a card is on file, any plan runs on ${exactDollars(NO_CARD_INCLUDED_NANOS)} of usage and ${NO_CARD_MAX_CONTAINERS} containers. Once that is spent, containers stop and no new volume can be made; the volumes you already have stay readable and keep being charged for.`;
+
+const sectionTitle =
+  "font-serif text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.05] font-normal tracking-[-0.005em] text-balance [&_em]:text-brand [&_em]:italic";
+
+/* Both rate lists share one meter, so the two columns are the same column read
+   twice rather than two units a reader has to hold at once. */
 function MarketingPricing() {
+  const [meter, setMeter] = useState<Meter>("hour");
+  const fleetRatesId = useId();
+  const connectedRatesId = useId();
+
   return (
     <MarketingLayout>
       <main id="marketing-main">
@@ -174,70 +210,130 @@ function MarketingPricing() {
           <div
             className={cn(
               shell,
-              "relative z-[2] grid grid-cols-[0.92fr_1.08fr] items-center gap-10 pt-12 pb-16 sm:gap-12 sm:pt-16 sm:pb-20 lg:gap-16 lg:pt-22 lg:pb-24 max-lg:grid-cols-1",
+              "relative z-[2] grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
             )}
           >
-            <div>
-              <Pill>Metered by the resource · billed in dollars</Pill>
-              <h1 className="mt-4 max-w-[560px] font-serif text-[clamp(40px,7.5vw,76px)] leading-[0.98] font-normal tracking-[-0.005em] text-balance sm:mt-5 [&_em]:text-brand [&_em]:italic">
-                Two plans. <em>One meter.</em>
+            <div className="flex min-w-0 flex-col">
+              <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
+                The meter starts and stops with your <em>code</em>.
               </h1>
-              <p className="mt-5 max-w-[520px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Each plan comes with an amount of compute in dollars rather than hours. Spend it on
-                anything the platform runs—processors, memory, or any GPU—and pay the published rate
-                for whatever you use beyond it.
+              <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
+                A container meters from the second it starts and stops the second it does. You pay
+                the published rate for the cores, the memory, and the cards it held — and nothing
+                for the rest of an hour it never used.
               </p>
-              <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
+              <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
                   Private beta
                 </PendingMarketingButton>
                 <MarketingButton
                   className="marketing-action-secondary stamp-quiet border-input"
                   endGlyph="↓"
-                  hash="rates"
+                  hash="plans"
                   to="/pricing"
                 >
-                  Read the rate card
+                  See the plans
                 </MarketingButton>
               </div>
             </div>
 
-            <ContainerQuote />
+            <div className="min-w-0">
+              {/* The caption sits under the row rather than beside the heading, so
+                  the toggle keeps one position however the line above rewraps. */}
+              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+                <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
+                  Resource costs
+                </h2>
+                <MeterToggle
+                  controls={`${fleetRatesId} ${connectedRatesId}`}
+                  meter={meter}
+                  onChange={setMeter}
+                />
+              </div>
+              <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
+                On LazyCloud capacity — machines we buy, run, and price whole.
+              </p>
+
+              <RateList
+                groups={[...computeGroups("platform_fleet", meter), ...platformGroups]}
+                id={fleetRatesId}
+              />
+            </div>
           </div>
         </section>
 
-        <section className="border-b border-border bg-muted py-16 sm:py-20 lg:py-24">
+        <section className="border-b border-border bg-background py-14 sm:py-16 lg:py-20">
+          <div
+            className={cn(
+              shell,
+              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-8 lg:gap-x-20 max-lg:grid-cols-1",
+            )}
+          >
+            <div className="min-w-0">
+              <SectionLabel>Bring your own cloud</SectionLabel>
+              <h2 className={sectionTitle}>
+                Run it in your account. <em>Pay us for the running.</em>
+              </h2>
+              <p className="mt-4 max-w-[30rem] text-[15px] leading-relaxed text-muted-foreground">
+                Connect a cloud account and LazyCloud schedules into it. Your provider bills you for
+                the machine it placed the container on; the figures here are what this platform
+                charges on top of that, in the unit chosen above.
+              </p>
+            </div>
+
+            <div className="min-w-0">
+              <RateList
+                groups={[...computeGroups("connected_cloud", meter), selfHostedGroup(meter)]}
+                id={connectedRatesId}
+              />
+              <p className="mt-4 text-[12px] leading-relaxed text-muted-foreground">
+                Volumes and egress are priced for the platform rather than for the capacity, so the
+                figures under Resource costs hold wherever a container runs.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-b border-border bg-muted py-14 sm:py-16 lg:py-20" id="plans">
           <div className={shell}>
-            <SectionHeading
-              label="Plans"
-              title={
-                <>
-                  Pay nothing, or pay <em>for the month.</em>
-                </>
-              }
-              body="Both plans meter the same way at the same rates. What a plan buys is a larger balance to spend before anything is billed."
-            />
-            <div className="grid grid-cols-2 gap-5 max-md:grid-cols-1">
+            <div className="mb-6 max-w-[44rem]">
+              <SectionLabel>Plans</SectionLabel>
+              <h2 className={sectionTitle}>
+                The rates above are the whole price. <em>A plan only changes the balance.</em>
+              </h2>
+            </div>
+            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
               {plans.map((plan) => (
                 <article
-                  className="flex flex-col rounded-2xl border border-border bg-card p-6 sm:p-8"
+                  className="flex flex-col rounded-2xl border border-border bg-card p-5 sm:p-6"
                   key={plan.id}
                 >
-                  <h3 className="font-serif text-[30px] leading-none font-normal">{plan.name}</h3>
-                  <p className="mt-5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-                    <span className="font-mono text-[clamp(2.25rem,6vw,3rem)] leading-none tracking-[-0.03em]">
-                      {exactDollars(plan.monthlyNanos)}
-                    </span>
-                    <span className="text-[13px] text-muted-foreground">per month</span>
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <h3 className="font-serif text-[24px] leading-none font-normal">{plan.name}</h3>
+                    <p className="flex items-baseline gap-2">
+                      <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
+                        {exactDollars(plan.monthlyNanos)}
+                      </span>
+                      <span className="text-[12px] text-muted-foreground">per month</span>
+                    </p>
+                  </div>
+                  <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                    {plan.summary}
                   </p>
-                  <p className="mt-5 rounded-xl border border-brand/25 bg-brand/8 px-4 py-3.5 text-[13px] leading-relaxed">
-                    <strong className="font-mono font-semibold text-brand">
-                      {exactDollars(plan.includedNanos)}
-                    </strong>{" "}
-                    of compute included every month, across every metric.
-                  </p>
-                  <p className="mt-5 text-[13px] text-muted-foreground">{plan.summary}</p>
-                  <ul className="mt-4 mb-7 grid list-none gap-2.5 p-0">
+                  <dl className="mt-4 border-t border-border text-[13px]">
+                    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                      <dt className="text-muted-foreground">Usage included</dt>
+                      <dd className="font-mono font-medium text-brand">
+                        {exactDollars(plan.includedNanos)}{" "}
+                        <span className="text-muted-foreground">/ month</span>
+                      </dd>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                      <dt className="text-muted-foreground">Containers at once</dt>
+                      <dd className="font-mono font-medium">{plan.maxConcurrentContainers}</dd>
+                    </div>
+                  </dl>
+                  <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
                     {plan.terms.map((term) => (
                       <li
                         className="flex items-start gap-2.5 text-[13px] leading-relaxed"
@@ -256,148 +352,15 @@ function MarketingPricing() {
                 </article>
               ))}
             </div>
+
+            <p className="mt-4 flex max-w-[58rem] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
+              <span className="mt-0.5 shrink-0 text-brand">
+                <Glyph>↳</Glyph>
+              </span>
+              <span>{accountTerm}</span>
+            </p>
           </div>
         </section>
-
-        <section
-          className="border-b border-border bg-background py-16 sm:py-20 lg:py-24"
-          id="rates"
-        >
-          <div className={shell}>
-            <SectionHeading
-              label="Rates"
-              title={
-                <>
-                  The whole rate card, <em>in one page.</em>
-                </>
-              }
-              body="Each rate below buys one resource for one hour. A container is charged for every resource it holds, for as long as it holds it, and for whatever it uses above that — with no minimum charge and nothing rounded up to a whole hour."
-            />
-            <div className="mb-5">
-              <Pill>
-                Effective {RATES_EFFECTIVE_ON} · {BILLING_CURRENCY} · dollars per hour
-              </Pill>
-            </div>
-            {/* The notes sit beside the columns they name, which also keeps the
-                figures within a short scan of the resource they price. */}
-            <div className="grid grid-cols-[1.6fr_1fr] items-start gap-5 max-lg:grid-cols-1">
-              <div className="overflow-x-auto rounded-2xl border border-border bg-card">
-                <table className="w-full border-collapse text-left">
-                  <caption className="sr-only">
-                    Compute rates in US dollars per hour, on LazyCloud capacity and on a connected
-                    cloud account
-                  </caption>
-                  <thead>
-                    <tr className="border-b border-border bg-muted/50">
-                      <th
-                        className="px-2.5 py-3 text-[11px] font-medium text-muted-foreground sm:px-5"
-                        scope="col"
-                      >
-                        Resource
-                      </th>
-                      <th
-                        className="px-2.5 py-3 text-right text-[11px] font-medium text-muted-foreground sm:px-5"
-                        scope="col"
-                      >
-                        LazyCloud compute
-                      </th>
-                      <th
-                        className="px-2.5 py-3 text-right text-[11px] font-medium text-muted-foreground sm:px-5"
-                        scope="col"
-                      >
-                        Your connected cloud
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shapeRows.map((row) => (
-                      <RateRow
-                        key={row.id}
-                        resource={row.resource}
-                        unitNoun={row.unitNoun}
-                        fleet={row.fleet}
-                        connected={row.connected}
-                      />
-                    ))}
-                    {publishedGpuRates.map((rate) => (
-                      <RateRow
-                        key={rate.gpuType}
-                        resource={rate.gpuType}
-                        unitNoun="GPU"
-                        fleet={rate.platformFleetNanosPerCardHour}
-                        connected={rate.connectedCloudNanosPerCardHour}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="grid gap-4 max-lg:grid-cols-3 max-md:grid-cols-1">
-                {placements.map((placement) => (
-                  <article
-                    className="rounded-xl border border-border bg-card p-5"
-                    key={placement.title}
-                  >
-                    <h3 className="text-[15px] font-medium tracking-[-0.01em]">
-                      {placement.title}
-                    </h3>
-                    <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                      {placement.body}
-                    </p>
-                  </article>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-5 grid grid-cols-2 gap-4 max-md:grid-cols-1">
-              {platformRows.map((row) => (
-                <article
-                  className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 rounded-xl border border-border bg-card p-5"
-                  key={row.id}
-                >
-                  <div className="min-w-0">
-                    <h3 className="text-[15px] font-medium tracking-[-0.01em]">{row.resource}</h3>
-                    <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                      {row.note}
-                    </p>
-                  </div>
-                  <p className="font-mono text-[22px] leading-none tracking-[-0.02em] text-brand">
-                    {exactDollars(row.nanos)}
-                    <span className="ml-1.5 font-sans text-[11px] text-muted-foreground">
-                      per {row.unitNoun}
-                    </span>
-                  </p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="border-b border-border bg-muted py-16 sm:py-20 lg:py-24">
-          <div className={shell}>
-            <SectionHeading
-              label="How the meter reads"
-              title={
-                <>
-                  What you are charged, <em>and when.</em>
-                </>
-              }
-            />
-            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border bg-border max-md:grid-cols-1">
-              {meterRules.map((rule) => (
-                <article className="bg-card p-6 sm:p-7" key={rule.title}>
-                  <h3 className="font-mono text-[12px] tracking-[0.04em] text-brand uppercase">
-                    {rule.title}
-                  </h3>
-                  <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground sm:text-sm">
-                    {rule.body}
-                  </p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <Faq items={faqItems} />
 
         <FinalCta
           title={
@@ -412,133 +375,90 @@ function MarketingPricing() {
   );
 }
 
-function RateRow({
-  resource,
-  unitNoun,
-  fleet,
-  connected,
+/* A group's heading sits in its own column beside the first price rather than
+   above the block, so the eye runs down one column of resources and one of
+   money. */
+function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) {
+  return (
+    <dl className="mt-6" id={id}>
+      {groups.map((group) => (
+        <div
+          className="grid grid-cols-[8.5rem_minmax(0,1fr)] gap-x-6 border-t border-border py-5 max-sm:grid-cols-1 max-sm:gap-y-2.5"
+          key={group.heading}
+        >
+          <dt className="text-[13px] font-medium">{group.heading}</dt>
+          <dd className="min-w-0">
+            {group.lines.map((line) => (
+              <p
+                className="flex items-baseline justify-between gap-5 py-1.5 first:pt-0"
+                key={line.label}
+              >
+                <span className="min-w-0 text-[13px] leading-snug text-muted-foreground">
+                  {line.label}
+                </span>
+                <span className="shrink-0 font-mono text-[13px] whitespace-nowrap">
+                  <Rate nanos={line.nanos} />{" "}
+                  <span className="text-muted-foreground">{line.unit}</span>
+                </span>
+              </p>
+            ))}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/* Native radios rather than a scripted segment: arrow keys move and choose, the
+   legend names the group, and each option announces that it is the selected one
+   without any of that being reimplemented. */
+function MeterToggle({
+  meter,
+  onChange,
+  controls,
 }: {
-  resource: string;
-  unitNoun: string;
-  fleet: number;
-  connected: number;
+  meter: Meter;
+  onChange: (next: Meter) => void;
+  controls: string;
 }) {
   return (
-    <tr className="border-b border-border last:border-b-0">
-      <th className="px-2.5 py-3 font-medium sm:px-5" scope="row">
-        <span className="text-[13px]">{resource}</span>
-        <span className="block font-mono text-[10px] font-normal text-muted-foreground">
-          per {unitNoun}-hour
-        </span>
-      </th>
-      <td className="px-2.5 py-3 text-right font-mono text-[11.5px] sm:px-5 sm:text-[13px]">
-        {exactDollars(fleet)}
-      </td>
-      <td className="px-2.5 py-3 text-right font-mono text-[11.5px] text-muted-foreground sm:px-5 sm:text-[13px]">
-        {exactDollars(connected)}
-      </td>
-    </tr>
+    <fieldset className="shrink-0">
+      <legend className="sr-only">Read every rate per hour or per second</legend>
+      <div className="flex rounded-full border border-border bg-card p-1">
+        {meters.map((option) => (
+          <label className="cursor-pointer" key={option.value}>
+            <input
+              aria-controls={controls}
+              checked={option.value === meter}
+              className="peer sr-only"
+              name="rate-meter"
+              onChange={() => onChange(option.value)}
+              type="radio"
+              value={option.value}
+            />
+            <span className="inline-flex min-h-8 items-center rounded-full px-3.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground peer-checked:bg-brand peer-checked:font-semibold peer-checked:text-brand-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand [@media(pointer:coarse)]:min-h-11">
+              {option.label}
+            </span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
-/* A rate card is a list of parts, and the question people actually have is what
-   one container costs. Choosing a shape adds its parts up on the page, which is
-   the floor the pricer charges for holding that shape — stated as a floor,
-   because the same widget saying "this is what it costs" would be quoting a
-   figure a busy container goes past. */
-function ContainerQuote() {
-  const [gpuType, setGpuType] = useState<string>("");
-  const [cores, setCores] = useState(1);
-  const gpu = publishedGpuRates.find((rate) => rate.gpuType === gpuType);
-  const memoryGib = gpu ? cores * 4 : cores * 2;
-  const nanosPerHour =
-    fleet.nanosPerContainerHour +
-    fleet.nanosPerCpuCoreHour * cores +
-    fleet.nanosPerMemoryGibHour * memoryGib +
-    (gpu?.platformFleetNanosPerCardHour ?? 0);
-
+/* A per-second rate is mostly leading zeros, and the length of that run is the
+   part of it the eye compares two rows by. Dimming the run leaves the exact
+   published figure on the page while the significant digits carry the scan. */
+function Rate({ nanos }: { nanos: number }) {
+  const figure = exactDollars(nanos);
+  const significant = figure.search(/[1-9]/);
+  if (significant <= 0) {
+    return figure;
+  }
   return (
-    <div className="min-w-0 rounded-2xl border border-input bg-card shadow-[8px_8px_0_0_var(--secondary)]">
-      <div className="flex min-h-13 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-4 py-3 sm:px-5">
-        <strong className="text-[13px] font-semibold">What a container costs to hold</strong>
-        <span className="font-mono text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-          {BILLING_CURRENCY} · LazyCloud compute
-        </span>
-      </div>
-
-      <fieldset className="border-b border-border px-4 py-3.5 sm:px-5">
-        <legend className="sr-only">Choose a GPU, or none</legend>
-        <div className="flex flex-wrap gap-1.5">
-          {[
-            { gpuType: "", label: "CPU only" },
-            ...publishedGpuRates.map((rate) => ({ gpuType: rate.gpuType, label: rate.gpuType })),
-          ].map((option) => (
-            <label className="cursor-pointer" key={option.gpuType || "cpu"}>
-              <input
-                checked={option.gpuType === gpuType}
-                className="peer sr-only"
-                name="quote-gpu"
-                onChange={() => setGpuType(option.gpuType)}
-                type="radio"
-                value={option.gpuType}
-              />
-              <span className="inline-flex min-h-8 items-center rounded-md border border-border px-2.5 font-mono text-[11px] text-muted-foreground transition-colors hover:border-brand/40 hover:text-foreground peer-checked:border-brand peer-checked:bg-brand/10 peer-checked:font-medium peer-checked:text-brand peer-focus-visible:outline-2 peer-focus-visible:outline-offset-3 peer-focus-visible:outline-brand [@media(pointer:coarse)]:min-h-11">
-                {option.label}
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
-      <fieldset className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3.5 sm:px-5">
-        <legend className="sr-only">Choose how many processors</legend>
-        <label className="text-[12px] text-muted-foreground" htmlFor="quote-cores">
-          Processors
-        </label>
-        <input
-          className="h-8 w-20 rounded-md border border-border bg-background px-2 font-mono text-[12px]"
-          id="quote-cores"
-          max={64}
-          min={1}
-          onChange={(event) => setCores(Math.max(1, Math.min(64, Number(event.target.value) || 1)))}
-          type="number"
-          value={cores}
-        />
-        <span className="font-mono text-[12px] text-muted-foreground">
-          + {memoryGib} GiB memory
-        </span>
-      </fieldset>
-
-      <div className="px-4 py-5 sm:px-5">
-        <p className="font-mono text-[clamp(1.75rem,4.4vw,2.375rem)] leading-none tracking-[-0.03em]">
-          {exactDollars(nanosPerHour)}
-        </p>
-        <p className="mt-2.5 text-[12px] text-muted-foreground">
-          per hour it holds this shape. Use more than {cores}{" "}
-          {cores === 1 ? "processor" : "processors"} or {memoryGib} GiB and the excess is charged at
-          the same rates.
-        </p>
-      </div>
-
-      <p className="flex items-start gap-2 border-t border-border px-4 py-3.5 text-[11px] leading-relaxed text-muted-foreground sm:px-5">
-        <span className="mt-0.5 shrink-0 text-brand">
-          <Glyph>↳</Glyph>
-        </span>
-        <span>
-          {planCopy.free.name} includes {exactDollars(publishedPlans.free.includedNanos)} a month,
-          which is {allowanceHours(publishedPlans.free.includedNanos, nanosPerHour)} of this
-          container inside its request. Egress and volume storage are metered alongside it and cost
-          nothing.
-        </span>
-      </p>
-    </div>
+    <>
+      <span className="text-muted-foreground">{figure.slice(0, significant)}</span>
+      {figure.slice(significant)}
+    </>
   );
-}
-
-/** How far an allowance goes, floored so the figure is never flattering. */
-function allowanceHours(includedNanos: number, nanosPerHour: number): string {
-  if (nanosPerHour <= 0) return "unlimited hours";
-  const hours = includedNanos / nanosPerHour;
-  if (hours >= 1) return `${Math.floor(hours * 10) / 10} hours`;
-  return `${Math.floor(hours * 60)} minutes`;
 }

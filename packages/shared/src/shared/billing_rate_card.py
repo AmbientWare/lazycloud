@@ -2,27 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from shared.billing_plans import BillingPlanId
-from shared.billing_quotes import NANOS_PER_USD
+from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-08-13.a"
+PRICING_VERSION = "2026-08-17.a"
 """The label frozen onto every ledger segment these numbers price.
 
 Opaque and unparsed. It exists so "which numbers produced this charge" is
 answerable from one column, which means it moves whenever any figure below does.
-"""
-
-RATES_EFFECTIVE_ON = date(2026, 8, 13)
-"""The day this card takes effect, as the pricing page states it.
-
-The instant a rate row carries is supplied at publish time and must be in the
-future; this is the day the owner published it for, and the one figure the page
-and the card have to agree on beyond the money itself.
 """
 
 FREE_PLAN_MONTHLY_NANOS = 0
@@ -36,6 +27,40 @@ all would have nowhere for its usage to land.
 FREE_PLAN_INCLUDED_NANOS = 5 * NANOS_PER_USD
 """What the free plan comes with, issued as a credit grant each period."""
 
+FREE_PLAN_MAX_CONTAINERS = 200
+"""How much the free plan may run at once, across every workspace it owns.
+
+A term of the plan rather than a scheduler setting, because it is part of what an
+account is buying and the pricing page states it. Counted per account and not per
+workspace: making a workspace is self-serve, so a per-workspace ceiling is one
+anybody raises by clicking new workspace.
+"""
+
+TEAM_PLAN_MAX_CONTAINERS = 1_000
+
+NO_CARD_INCLUDED_NANOS = 1 * NANOS_PER_USD
+"""What an account with no card on file may spend before it is stopped.
+
+Enough to run something real and see it work, and small enough that losing all of
+it costs less than the sign-up did. Nothing here can be collected — there is no
+payment method to charge — so this figure is spending, not credit.
+
+It is not the free plan's allowance reduced. The free plan's $5 is what an
+account gets once somebody can be billed for what they do next; this is what the
+platform is willing to give away to find that out.
+"""
+
+NO_CARD_MAX_CONTAINERS = 10
+"""How much an account with no card may run at once.
+
+The real bound on what a cardless account can spend before anything stops it, and
+the reason it is far below the free plan's. Usage reaches the ledger on an
+interval, so an account is always some fraction of that interval past whatever it
+has been measured at; multiply that window by the burn rate of everything running
+and the product is what cannot be collected. This is the only term in it the
+platform sets directly.
+"""
+
 TEAM_PLAN_MONTHLY_NANOS = 200 * NANOS_PER_USD
 """The subscription, charged by the payment provider as a flat monthly price."""
 
@@ -46,9 +71,78 @@ Stated in nanodollars like every other figure here; the provider's grant is in
 cents, and 100 USD converts exactly.
 """
 
-_SECONDS_PER_HOUR = Decimal(3_600)
-_BYTES_PER_GIB = Decimal(1_073_741_824)
-_SECONDS_PER_30_DAY_MONTH = Decimal(2_592_000)
+_SECONDS_PER_HOUR = 3_600
+"""Whole, not a `Decimal`: it is a divisor and a modulus, never a price."""
+
+SECONDS_PER_30_DAY_MONTH = 2_592_000
+"""The month volume storage is quoted by, said in seconds because that is what a
+byte-second rate is derived against. Thirty days, which the page states outright
+rather than leaving a reader to assume their own calendar month."""
+
+STORED_RATE_STEP = Decimal("1E-12")
+"""The smallest step the rate columns keep, which every stored rate lands on.
+
+A hand-copy of their scale, because `shared` cannot import `database`. What holds
+the two together is `tests/contracts`, which reads the column and compares."""
+
+
+def _stored_rate(exact: Decimal) -> Decimal:
+    """A rate the column holds exactly, at or below the figure it came from.
+
+    A price per gibibyte-month has no exact rate per byte-second: the divisor
+    carries factors of three, so the quotient does not terminate and no amount of
+    column precision would make it. Compute never meets this because a per-hour
+    figure divides by 3600 into a whole nanodollar, which the card holds as a
+    term rather than a coincidence.
+
+    So the published figure is the one this card owns and the stored rate is
+    derived from it downwards. The direction is the whole of it. Rounding up
+    would charge fractionally more than the page states, which is a price the
+    platform never published; rounding down charges fractionally less, which is a
+    rounding artefact in the customer's favour and costs eighteen millionths of
+    the bill.
+
+    Down has a floor, and reaching it is refused rather than rounded to. A price
+    small enough to land under the column's last step would be stored as zero,
+    and a zero here is indistinguishable from the stated zero that means free —
+    so the page would publish a price and the platform would bill nothing at all,
+    which no comparison against the published figure can catch because charging
+    nothing is charging no more than it says.
+    """
+
+    stored = exact.quantize(STORED_RATE_STEP, rounding=ROUND_DOWN)
+    if stored == 0 and exact != 0:
+        raise ValueError(
+            f"{exact} is below the smallest rate {STORED_RATE_STEP} the rate column keeps; "
+            "publishing it would charge nothing for a dimension the page prices"
+        )
+    return stored
+
+
+def _exact_per_second(nanos_per_hour: int) -> Decimal:
+    """An hourly price as the per-second rate the ledger multiplies, or nothing.
+
+    Compute refuses where the platform rates round: an hourly figure is chosen by
+    whoever prices the card, so one that does not divide into a whole nanodollar
+    a second is a figure to correct rather than a quotient to truncate. Rounding
+    it down here would quietly sell a processor for less than the page says
+    forever, and letting it through unrounded hands the decision to the rate
+    column, which may round it up.
+
+    Whole nanodollars, not merely a figure the column can hold. Those are
+    different tests and the weaker one is not enough: 55_126_809 an hour is
+    15313.0025 a second, which `NUMERIC(30, 12)` stores exactly and the pricing
+    page still refuses, because per-second is a unit the page publishes rather
+    than only a number the database keeps.
+    """
+
+    if nanos_per_hour % _SECONDS_PER_HOUR != 0:
+        raise ValueError(
+            f"{nanos_per_hour} nanodollars an hour is not a whole number of nanodollars a "
+            f"second; every published figure divides by {_SECONDS_PER_HOUR}, and one "
+            "that does not has no per-second price to publish"
+        )
+    return Decimal(nanos_per_hour) / _SECONDS_PER_HOUR
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,10 +157,12 @@ class PublishedComputeRate:
 
     Every figure on this card divides by 3600 to a whole nanodollar, which is
     what lets a per-second rate reach `NUMERIC(30, 12)` unrounded. That
-    divisibility is load-bearing rather than incidental: a new price or a new GPU
-    model that does not have it would be stored rounded and billed at a rate the
-    page never stated, and `tests/contracts/test_published_prices_match_their_owners`
-    is what says so.
+    divisibility is load-bearing rather than incidental, and `_exact_per_second`
+    holds it here rather than leaving it to the contract test: a price that broke
+    it would otherwise reach the rate column as a 28-digit quotient and be
+    rounded by the database — in whichever direction the database chose, which
+    may be upward, and a rate above the published figure is a price the platform
+    never stated.
     """
 
     billing_owner: UsageBillingOwner
@@ -78,21 +174,37 @@ class PublishedComputeRate:
     nanos_per_memory_gib_hour: int
     nanos_per_gpu_card_hour: int
 
+    def __post_init__(self) -> None:
+        """Derive every figure once, so an unpublishable one raises on construction.
+
+        The properties below are lazy, and their only production reader is the
+        command that writes the rate rows. Left to them, a price nobody can
+        publish would be discovered by an operator mid-cutover rather than by the
+        import that builds this card — which is every consumer, and every test.
+        """
+
+        _ = (
+            self.nanos_per_container_second,
+            self.nanos_per_cpu_core_second,
+            self.nanos_per_memory_gib_second,
+            self.nanos_per_gpu_card_second,
+        )
+
     @property
     def nanos_per_container_second(self) -> Decimal:
-        return Decimal(self.nanos_per_container_hour) / _SECONDS_PER_HOUR
+        return _exact_per_second(self.nanos_per_container_hour)
 
     @property
     def nanos_per_cpu_core_second(self) -> Decimal:
-        return Decimal(self.nanos_per_cpu_core_hour) / _SECONDS_PER_HOUR
+        return _exact_per_second(self.nanos_per_cpu_core_hour)
 
     @property
     def nanos_per_memory_gib_second(self) -> Decimal:
-        return Decimal(self.nanos_per_memory_gib_hour) / _SECONDS_PER_HOUR
+        return _exact_per_second(self.nanos_per_memory_gib_hour)
 
     @property
     def nanos_per_gpu_card_second(self) -> Decimal:
-        return Decimal(self.nanos_per_gpu_card_hour) / _SECONDS_PER_HOUR
+        return _exact_per_second(self.nanos_per_gpu_card_hour)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,43 +256,111 @@ class PublishedGpuRate:
 class PublishedPlatformRate:
     """What the platform charges for what a container moves and keeps.
 
-    Both figures are a stated zero rather than an absent one. The metering runs,
-    the ledger records the segments, the meter events leave for the provider, and
-    the invoice carries a line reading $0.00 — so turning either on later is one
-    published rate row and no change to any of that.
+    Held in the whole units a customer compares — a gibibyte moved, a gibibyte
+    kept for a thirty-day month — and divided below into the per-byte and
+    per-byte-second rates the ledger prices against. That direction is the same
+    one the compute rates take, and for the same reason: the published figure is
+    what a person is quoted, so it is the figure this card states rather than one
+    reconstructed from a rate row.
 
-    Held per byte and per byte-second, which is what the ledger prices against,
-    and derived below into the whole units a customer compares — a gibibyte, a
-    gibibyte held for a month. Exact multiplication rather than a rounded
-    conversion, so the figure on the page and the figure in the rate row are the
-    same number said twice.
+    Egress is a stated zero rather than an absent one. The metering runs, the
+    ledger records the segments, the meter events leave for the provider, and the
+    invoice carries a line reading $0.00 — so turning it on later is one
+    published rate row and no change to any of that.
     """
 
-    nanos_per_egress_byte: Decimal
-    nanos_per_volume_byte_second: Decimal
+    nanos_per_egress_gib: int
+    nanos_per_volume_gib_month: int
+
+    def __post_init__(self) -> None:
+        """Derive both rates once, for the same reason the compute rates do."""
+
+        _ = (self.nanos_per_egress_byte, self.nanos_per_volume_byte_second)
 
     @property
-    def nanos_per_egress_gib(self) -> Decimal:
-        return self.nanos_per_egress_byte * _BYTES_PER_GIB
+    def nanos_per_egress_byte(self) -> Decimal:
+        return _stored_rate(Decimal(self.nanos_per_egress_gib) / BYTES_PER_GIB)
 
     @property
-    def nanos_per_volume_gib_month(self) -> Decimal:
+    def nanos_per_volume_byte_second(self) -> Decimal:
         """A month here is thirty days, which is the unit the page states it in."""
 
-        return self.nanos_per_volume_byte_second * _BYTES_PER_GIB * _SECONDS_PER_30_DAY_MONTH
+        return _stored_rate(
+            Decimal(self.nanos_per_volume_gib_month) / (BYTES_PER_GIB * SECONDS_PER_30_DAY_MONTH)
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class PublishedPlan:
-    """What one plan charges and what it comes with.
+    """Everything a surface offering this plan states about it.
 
-    The two figures only. What a plan is called and how it is described is the
-    pricing page's, and a plan is not a rate: `id` is what joins the two.
+    The figures and the words together, because a plan described in one place and
+    priced in another is a plan somebody ships half of. Adding one here is what
+    makes it appear on the pricing page and in the dashboard; neither has copy of
+    its own to keep in step.
     """
 
     id: BillingPlanId
+    name: str
+    """What this plan is called wherever a person is shown it."""
+
+    summary: str
+    """The one line under the name, saying what this plan is."""
+
     monthly_nanos: int
     included_nanos: int
+    max_concurrent_containers: int
+    terms: tuple[str, ...]
+    """What this plan promises beyond its figures, one clause each.
+
+    Carries no money and no count. The figures above are rendered by whichever
+    surface shows the plan, in that surface's own format, so a term can never
+    restate a number and then disagree with it. What is true on every plan —
+    what a card on file changes, how included compute is issued, how overage is
+    billed — is not here either: it belongs to the surface that says it once,
+    and repeating it per plan is how two plans start describing the platform
+    differently.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class AccountTerms:
+    """What one account may spend and run for a cycle.
+
+    A plan's figures are not an account's. Everything a plan comes with is
+    promised against being able to charge for what happens next, and an account
+    with no card on file has not made that possible — so the two figures move
+    together, from the same fact, and are resolved in one place rather than by
+    two callers each deciding what a missing card means.
+    """
+
+    included_nanos: int
+    max_concurrent_containers: int
+
+
+def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTerms:
+    """What this account gets, given its plan and whether anyone can charge it.
+
+    Having no card replaces the plan's terms rather than reducing them, and it
+    does so whatever the plan says. A subscription nobody can collect on is not a
+    cheaper subscription — the $200 plan's invoice fails exactly like the free
+    one's — so there is no plan for which "they have no card" should still mean
+    "give them the plan's allowance".
+
+    The plan still decides everything once a card exists, which is the only state
+    a paid plan is ever meant to be in.
+    """
+
+    if not has_payment_method:
+        return AccountTerms(
+            included_nanos=NO_CARD_INCLUDED_NANOS,
+            max_concurrent_containers=NO_CARD_MAX_CONTAINERS,
+        )
+    published = published_plan(plan)
+    return AccountTerms(
+        included_nanos=published.included_nanos,
+        max_concurrent_containers=published.max_concurrent_containers,
+    )
 
 
 PUBLISHED_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
@@ -212,20 +392,40 @@ is a quote nobody can take.
 """
 
 PUBLISHED_PLATFORM_RATE = PublishedPlatformRate(
-    nanos_per_egress_byte=Decimal(0),
-    nanos_per_volume_byte_second=Decimal(0),
+    nanos_per_egress_gib=0,
+    # Volumes are object storage, so this is priced against object storage rather
+    # than against a block device: roughly twice what the bucket behind it lists
+    # at, covering replication, the listing traffic the meter itself generates,
+    # and the metering.
+    nanos_per_volume_gib_month=50_000_000,
 )
 
 PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
     PublishedPlan(
         id=BillingPlanId.Free,
+        name="Free",
+        summary="What an account costs before it has agreed to anything.",
         monthly_nanos=FREE_PLAN_MONTHLY_NANOS,
         included_nanos=FREE_PLAN_INCLUDED_NANOS,
+        max_concurrent_containers=FREE_PLAN_MAX_CONTAINERS,
+        terms=(
+            "Every workload the platform runs: applications, APIs, functions, jobs, "
+            "queues, schedules, and sandboxes.",
+            "No subscription to cancel and no minimum term.",
+        ),
     ),
     PublishedPlan(
         id=BillingPlanId.Team,
+        name="Team",
+        summary="A monthly subscription that comes with compute included.",
         monthly_nanos=TEAM_PLAN_MONTHLY_NANOS,
         included_nanos=TEAM_PLAN_INCLUDED_NANOS,
+        max_concurrent_containers=TEAM_PLAN_MAX_CONTAINERS,
+        terms=(
+            "The same workloads at the same rates. A plan changes what you pay, not "
+            "what you can run.",
+            "Room for a team to run more at once on one account and one invoice.",
+        ),
     ),
 )
 """Every plan an account can be on, cheapest first."""
@@ -292,20 +492,27 @@ if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
 
 __all__ = [
     "FREE_PLAN_INCLUDED_NANOS",
+    "FREE_PLAN_MAX_CONTAINERS",
     "FREE_PLAN_MONTHLY_NANOS",
+    "NO_CARD_INCLUDED_NANOS",
+    "NO_CARD_MAX_CONTAINERS",
     "PRICING_VERSION",
     "PUBLISHED_COMPUTE_RATES",
     "PUBLISHED_GPU_RATES",
     "PUBLISHED_PLANS",
     "PUBLISHED_PLATFORM_RATE",
     "PUBLISHED_SHAPE_RATES",
-    "RATES_EFFECTIVE_ON",
+    "SECONDS_PER_30_DAY_MONTH",
+    "STORED_RATE_STEP",
     "TEAM_PLAN_INCLUDED_NANOS",
+    "TEAM_PLAN_MAX_CONTAINERS",
     "TEAM_PLAN_MONTHLY_NANOS",
+    "AccountTerms",
     "PublishedComputeRate",
     "PublishedGpuRate",
     "PublishedPlan",
     "PublishedPlatformRate",
     "PublishedShapeRate",
+    "account_terms",
     "published_plan",
 ]

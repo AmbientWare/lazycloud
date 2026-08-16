@@ -85,7 +85,6 @@ from worker.worker_lifecycle import (
     WorkerCleanupAction,
     WorkerLifecycleOrchestrator,
     WorkerLifecycleRepository,
-    WorkerSupervisionUsageEmitter,
 )
 
 
@@ -304,11 +303,6 @@ def assemble_worker_process_services(
         worker_id=identity.worker_id,
         repository=worker_repository,
         stopper=runtime_stopper,
-        usage_emitter=(
-            None
-            if dependencies.runtime_monitor is not None
-            else WorkerSupervisionUsageEmitter(usage_supervisor)
-        ),
         registration=registration,
         readiness_validator=readiness_validator,
         cleanup_actions=(

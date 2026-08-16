@@ -15,8 +15,11 @@ from database.repositories.billing_costs import (
     LedgerCostCursor,
     LedgerCostRow,
 )
+from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
+from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import account_terms
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
@@ -47,6 +50,34 @@ class BillingStanding:
     plan: BillingPlanId | None
     portal_available: bool
     allowance: SpentAllowancePeriod | None
+    payment_method_on_file: bool
+    """Whether anybody can be charged for what this account spends next.
+
+    Distinct from `portal_available`, which is true from the moment a customer
+    record exists and says only that the provider has a page to show. This is
+    what decides how much the account is given and whether running work is
+    stopped when that runs out, so the dashboard has to be able to tell a person
+    which of the two states they are in.
+    """
+
+    max_concurrent_containers: int
+    """How much this account may have running at once, on its current terms."""
+
+    live_container_count: int
+    """How much it has running or queued right now, across every workspace it
+    owns — the same figure the limit is compared against, so a customer reading
+    both sees why they were refused rather than a ceiling and no position."""
+
+    plan_change_pending: bool
+    """Whether a change of plan for this account is still being settled.
+
+    The plan beside it is what the account holds now, which is the answer to a
+    different question from the one somebody who has just pressed a button is
+    asking. A change whose outcome nobody could establish is retried for hours,
+    and without this the surface shows the old plan next to a live button that
+    answers a conflict — an invisible pending change, which is the state the
+    intent row exists to make visible rather than to hide.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +119,20 @@ class BillingStandingService:
                 plan=None,
                 portal_available=False,
                 allowance=None,
+                payment_method_on_file=False,
+                max_concurrent_containers=0,
+                live_container_count=0,
+                plan_change_pending=False,
             )
+        has_card = account.payment_method_attached_at is not None
+        # An account on no plan is shown no ceiling rather than a default one:
+        # it may run nothing at all until it is provisioned, and a number here
+        # would read as headroom it does not have.
+        terms = (
+            account_terms(account.plan, has_payment_method=has_card)
+            if account.plan is not None
+            else None
+        )
         return BillingStanding(
             status=account.status,
             plan=account.plan,
@@ -96,6 +140,14 @@ class BillingStandingService:
             allowance=BillingAllowanceRepository(self.session).current_period(
                 user_id=user_id,
                 at=at,
+            ),
+            payment_method_on_file=has_card,
+            max_concurrent_containers=terms.max_concurrent_containers if terms else 0,
+            live_container_count=ContainerRepository(self.session).count_live_for_owner(
+                owner_user_id=user_id
+            ),
+            plan_change_pending=BillingPlanChangeIntentRepository(self.session).has_open(
+                user_id=user_id
             ),
         )
 

@@ -31,6 +31,7 @@ from shared.env import (
     no_gateway_origin,
 )
 from shared.errors import (
+    CapacityLimitReachedError,
     DomainError,
     InvalidInputError,
     NotFoundError,
@@ -762,11 +763,12 @@ class EndpointControlService:
             return True
         try:
             warmup = self.start_endpoint_serve(StartEndpointServeRequest(stub_id=stub.id))
-        except PaymentRequiredError:
+        except (PaymentRequiredError, CapacityLimitReachedError):
             # Not converted. Every other reason capacity cannot be had is a
-            # transient shortage the caller retries into; this one is the
-            # platform declining, and telling them 503 sends them to look for an
-            # outage that is not there.
+            # transient shortage the caller retries into; these are the platform
+            # declining, and telling them 503 sends them to look for an outage
+            # that is not there. The limit refusal especially: it names a ceiling
+            # the account can act on, and 503 hides both the number and the fix.
             raise
         except DomainError as exc:
             self._emit_warmup_failure(stub, task, str(exc))

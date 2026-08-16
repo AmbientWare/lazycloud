@@ -23,6 +23,7 @@ from shared.container_requests import (
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.env import GATEWAY_HTTP_URL_ENV, no_gateway_origin
 from shared.errors import (
+    CapacityLimitReachedError,
     ConflictError,
     DomainError,
     InvalidInputError,
@@ -103,7 +104,9 @@ class FunctionControlService:
             # refusal taken later leaves a task queued forever for an account
             # nothing will schedule.
             with self.services.context.database.session() as session:
-                self.services.containers.assert_solvent(session, workspace_id=stub.workspace_id)
+                self.services.containers.assert_may_start_container(
+                    session, workspace_id=stub.workspace_id
+                )
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
             retry_policy = config.effective_retry_policy
             invoke_plan = plan_function_invoke(
@@ -172,11 +175,13 @@ class FunctionControlService:
                 workspace_id=stub.workspace_id,
             )
             return FunctionInvokeResponse.from_result(task_id=task.id)
-        except PaymentRequiredError:
+        except (PaymentRequiredError, CapacityLimitReachedError):
             # Told to the caller as a refusal rather than folded into a result.
             # Everything else here is something that went wrong while running
-            # their code, which a failed task describes; this is the platform
-            # declining to run it at all, and there is no task to describe it.
+            # their code, which a failed task describes; these are the platform
+            # declining to run it at all, and there is no task to describe them.
+            # Reported as a failed invocation, an account at its container limit
+            # reads as a bug in the code it never ran.
             raise
         except Exception as exc:
             return FunctionInvokeResponse.from_result(

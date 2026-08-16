@@ -34,6 +34,7 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -72,6 +73,9 @@ class _RegistrationCountingProvider:
     subscribes: list[str] = field(default_factory=list)
     grants: list[str] = field(default_factory=list)
 
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
+
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         del email, workspace_id
         self.registrations.append(account_id)
@@ -89,6 +93,9 @@ class _RegistrationCountingProvider:
 
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         raise AssertionError("registering must not read payment methods")
+
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
 
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
@@ -120,7 +127,11 @@ class _RegistrationCountingProvider:
         )
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         raise AssertionError("provisioning must not change anyone's plan")
 
@@ -222,6 +233,9 @@ class _UpgradeCountingProvider:
     """What the provider currently holds, which a settle and a reconciliation
     both read and neither is told."""
 
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
+
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         del email, workspace_id
         return PaymentCustomer(provider_customer_id=f"cus_{account_id}")
@@ -238,6 +252,9 @@ class _UpgradeCountingProvider:
 
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         raise AssertionError("upgrading must not read payment methods")
+
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
 
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
@@ -264,7 +281,11 @@ class _UpgradeCountingProvider:
         return _subscription(plan)
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         del provider_subscription_id
         self.plan_swaps.append(plan.value)
@@ -536,6 +557,12 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
             BillingAccountService(session).billing_account_for(
                 provider, user_id=user_id, workspace_id=workspace_id
             )
+            # Carded before the race: subscribing without one is refused before
+            # an intent is opened, so a cardless account would never reach the
+            # collision this test is about.
+            BillingAccountRepository(session).set_payment_method_present(
+                user_id=user_id, present=True, at=utc_now()
+            )
         service = BillingPlanChangeService(
             database=database,
             payments=lambda: provider,
@@ -543,7 +570,7 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
         )
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            first = executor.submit(service.subscribe, user_id=user_id)
+            first = executor.submit(service.change_plan, user_id=user_id, target=BillingPlanId.Team)
             # The first caller has committed its intent and is inside the
             # provider call. Held here rather than raced, because what the index
             # has to refuse is a second subscribe arriving while the first one's
@@ -552,7 +579,7 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
                 "the first upgrade never reached the provider"
             )
             with pytest.raises(ConflictError):
-                service.subscribe(user_id=user_id)
+                service.change_plan(user_id=user_id, target=BillingPlanId.Team)
             provider.swap_release.set()
             upgraded = first.result(timeout=10)
 

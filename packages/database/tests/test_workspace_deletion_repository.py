@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import AutoscalerStateRepository
-from database.repositories.storage import ObjectRepository
+from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.tables.identity import WorkspaceTable
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
@@ -318,3 +318,48 @@ def _autoscaler_state(workspace_id: str, target_id: str) -> AutoscalerStateRecor
         target_id=target_id,
         decision="hold",
     )
+
+
+def test_postgresql_contended_volume_name_settles_on_the_constraint() -> None:
+    """Two containers mounting one new volume name both get the volume.
+
+    The lookup a caller does before creating is not a lock — workspace scoping
+    takes `FOR KEY SHARE`, which does not serialize writers — so an autoscaler
+    ramp starting several replicas at once has both read absence and both insert.
+    Whichever loses violates `uq_volumes_workspace_name`, and before the savepoint
+    that failure surfaced as an unmapped `IntegrityError` on a container start.
+
+    Proven here rather than beside the volume service because it cannot be proven
+    there: the shared fixture runs SQLite in memory behind a process-wide lock, so
+    two writers never race and SAVEPOINT is not PostgreSQL's. Exactly one caller
+    must report creating the row, since that answer is what decides whether a
+    workspace change is announced and whether billing is asked for a new volume.
+    """
+
+    database = _postgres_database()
+    workspace_id = _create_workspace(database, "volume-race")
+    started = Event()
+
+    def create() -> tuple[str, bool]:
+        with database.session() as session:
+            started.wait(timeout=10)
+            record, created = VolumeRepository(session).create(
+                "contended",
+                workspace_id=workspace_id,
+            )
+        return record.id, created
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            writers = [pool.submit(create) for _ in range(2)]
+            started.set()
+            results = [writer.result(timeout=30) for writer in writers]
+
+        assert sorted(created for _, created in results) == [False, True]
+        assert len({volume_id for volume_id, _ in results}) == 1
+        with database.session() as session:
+            names = [row.name for row in VolumeRepository(session).list(workspace_id=workspace_id)]
+        assert names == ["contended"]
+    finally:
+        _remove_test_workspace(database, workspace_id)
+        database.dispose()

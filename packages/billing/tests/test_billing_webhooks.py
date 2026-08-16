@@ -10,7 +10,11 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS
+from shared.billing_rate_card import (
+    FREE_PLAN_INCLUDED_NANOS,
+    NO_CARD_INCLUDED_NANOS,
+    TEAM_PLAN_INCLUDED_NANOS,
+)
 from shared.errors import PaymentRequiredError
 from shared.payments import (
     HostedPaymentSession,
@@ -19,6 +23,7 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
 from tests.service_fixtures import workspace_owner_user_id
 
@@ -42,6 +47,9 @@ class _Provider:
     expired_grants: list[str] = field(default_factory=list)
     subscription_plan: BillingPlanId = BillingPlanId.Team
 
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
+
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         raise AssertionError("applying a delivery must not create customers")
 
@@ -57,6 +65,9 @@ class _Provider:
 
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         return self.payment_method_owners.get(provider_payment_method_id, "")
+
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
 
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
@@ -86,7 +97,11 @@ class _Provider:
         raise AssertionError("applying a delivery must not subscribe anyone")
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         raise AssertionError("applying a delivery must not change anyone's plan")
 
@@ -256,7 +271,7 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError),
     ):
-        DatabaseBillingAdmission().assert_solvent(session, workspace_id=workspace_id)
+        DatabaseBillingAdmission().assert_may_start_container(session, workspace_id=workspace_id)
 
 
 def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
@@ -277,6 +292,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
 
     provider = _Provider()
     provider.subscription_plan = BillingPlanId.Team
+    provider.cards_on_file.add("cus_webhook")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
@@ -289,12 +305,19 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             provider_credit_grant_id="credgr_free",
             plan=BillingPlanId.Free,
         )
+        # Carded: a plan's own terms are what an account gets once somebody can be
+        # charged past them, so without this the cycle would be re-termed onto the
+        # figure the platform gives away rather than onto Team's.
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=True, at=CYCLE_STARTED_AT
+        )
         # The cycle the account is part-way through, on the free plan's terms.
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
             allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
+            funded=True,
         )
         session.commit()
 
@@ -381,4 +404,79 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
-        DatabaseBillingAdmission().assert_solvent(session, workspace_id=workspace_id)
+        DatabaseBillingAdmission().assert_may_start_container(session, workspace_id=workspace_id)
+
+
+def test_a_first_card_widens_the_cycle_already_in_progress(
+    isolated_services: ApiServices,
+) -> None:
+    """Attaching a card buys the plan's allowance now, not next month.
+
+    An account with no card is given what the platform will spend to find out
+    whether it can bill anybody. The moment somebody types a card in, that
+    question is answered — and making them wait up to a month for the terms they
+    just qualified for is a customer stopped mid-work by a limit that no longer
+    applies to them.
+
+    The cycle is re-termed rather than replaced, so the spend already counted
+    against it survives: that usage lands on the same invoice this allowance is
+    credit against, and forgetting it would give the month's spending away twice.
+    """
+
+    provider = _Provider()
+    provider.subscription_plan = BillingPlanId.Free
+    provider.payment_method_owners = {"pm_first": "cus_webhook"}
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+
+    with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id="cus_webhook",
+            provider_subscription_id="sub_webhook",
+            provider_credit_grant_id="credgr_cardless",
+            plan=BillingPlanId.Free,
+        )
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=user_id,
+            period_started_at=CYCLE_STARTED_AT,
+            period_ended_at=CYCLE_ENDED_AT,
+            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            funded=True,
+        )
+        BillingAllowanceRepository(session).increment(
+            user_id=user_id, at=CYCLE_STARTED_AT, cost_nanos=400_000_000
+        )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        assert BillingWebhookService(session, lambda: provider).apply(
+            event=PaymentEvent(
+                id="evt_first_card",
+                type="payment_method.attached",
+                object_id="pm_first",
+                customer_id="cus_webhook",
+                payment_method_id="pm_first",
+            )
+        )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        allowance = BillingAllowanceRepository(session).current_period(
+            user_id=user_id, at=CYCLE_STARTED_AT
+        )
+
+    assert account is not None
+    assert account.payment_method_attached_at is not None
+    assert allowance is not None
+    assert allowance.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
+    assert allowance.spent_nanos == 400_000_000
+    # One grant covers the cycle: the cardless one is expired before the
+    # replacement is bought, or the customer holds two allowances for one period
+    # and nothing downstream can say which a charge was spent against.
+    assert provider.granted == [FREE_PLAN_INCLUDED_NANOS]
+    assert provider.expired_grants == ["credgr_cardless"]
+    assert account.provider_credit_grant_id == "credgr_free"

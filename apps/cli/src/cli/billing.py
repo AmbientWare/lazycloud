@@ -57,6 +57,12 @@ def publish_rates(
     ledger has already frozen, so the operator cannot reprice a figure a customer
     has been shown. Running twice with the same instant is refused rather than
     duplicated.
+
+    Without `--confirm` the write is still attempted and then rolled back, so a
+    dry run answers whether it would be accepted rather than only what it would
+    contain. There is no un-publish: a rate boundary is a figure customers are
+    charged either side of, so the run that predicts a refusal is the one worth
+    having.
     """
 
     moment = _instant(effective_at)
@@ -78,36 +84,54 @@ def publish_rates(
         "pricing_version": PRICING_VERSION,
         "effective_at": moment.isoformat(),
         "compute_rates": planned,
-        "nanos_per_egress_byte": str(PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte),
-        "nanos_per_volume_byte_second": str(PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second),
+        # Both units. The stored rate is what the ledger multiplies, and the
+        # whole-unit figure beside it is what the pricing page states — an
+        # operator checking a cutover against the page should not have to
+        # multiply by 2,783,138,807,808,000 to find a factor-of-ten error.
+        #
+        # Plain decimals, never exponents: `Decimal` renders a figure this small
+        # as `1.7965E-8`.
+        "nanos_per_egress_byte": format(PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte, "f"),
+        "nanos_per_egress_gib": PUBLISHED_PLATFORM_RATE.nanos_per_egress_gib,
+        "nanos_per_volume_byte_second": format(
+            PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second, "f"
+        ),
+        "nanos_per_volume_gib_month": PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month,
         "written": confirm,
     }
     try:
-        if confirm:
-            # One transaction: a rate card half written is a shape class priced
-            # against a version its neighbours do not share.
-            with client.session() as session:
-                compute = ComputeRateRepository(session)
-                for rate in PUBLISHED_COMPUTE_RATES:
-                    compute.publish(
-                        billing_owner=rate.billing_owner,
-                        gpu_type=rate.gpu_type,
-                        pricing_version=PRICING_VERSION,
-                        effective_at=moment,
-                        nanos_per_container_second=rate.nanos_per_container_second,
-                        nanos_per_cpu_core_second=rate.nanos_per_cpu_core_second,
-                        nanos_per_memory_gib_second=rate.nanos_per_memory_gib_second,
-                        nanos_per_gpu_card_second=rate.nanos_per_gpu_card_second,
-                    )
-                PlatformRateRepository(session).publish(
+        # One transaction: a rate card half written is a shape class priced
+        # against a version its neighbours do not share.
+        #
+        # Attempted either way, and kept only on `--confirm`. Everything that can
+        # refuse this — a boundary that would reach back over frozen usage, an
+        # instant already published for — refuses inside the write, so a dry run
+        # that skipped it would report a plan it could not carry out and exit
+        # zero doing so. The operator running this before a cutover is asking
+        # exactly that question.
+        with client.session() as session:
+            compute = ComputeRateRepository(session)
+            for rate in PUBLISHED_COMPUTE_RATES:
+                compute.publish(
+                    billing_owner=rate.billing_owner,
+                    gpu_type=rate.gpu_type,
                     pricing_version=PRICING_VERSION,
                     effective_at=moment,
-                    nanos_per_egress_byte=PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte,
-                    nanos_per_volume_byte_second=(
-                        PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second
-                    ),
+                    nanos_per_container_second=rate.nanos_per_container_second,
+                    nanos_per_cpu_core_second=rate.nanos_per_cpu_core_second,
+                    nanos_per_memory_gib_second=rate.nanos_per_memory_gib_second,
+                    nanos_per_gpu_card_second=rate.nanos_per_gpu_card_second,
                 )
+            PlatformRateRepository(session).publish(
+                pricing_version=PRICING_VERSION,
+                effective_at=moment,
+                nanos_per_egress_byte=PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte,
+                nanos_per_volume_byte_second=(PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second),
+            )
+            if confirm:
                 session.commit()
+            else:
+                session.rollback()
     finally:
         client.dispose()
     print_payload(ctx, payload)
@@ -149,7 +173,8 @@ def publish_catalog(
     """
 
     plan_prices = {plan.id: plan.monthly_nanos for plan in PUBLISHED_PLANS}
-    catalog = StripeSettings().catalog()
+    settings = StripeSettings()
+    catalog = settings.catalog()
     try:
         account_id = catalog.account_id()
         if account_id != confirm_account:
@@ -161,7 +186,14 @@ def publish_catalog(
         )
     finally:
         catalog.client.close()
-    print_payload(ctx, _catalog_payload(published, written=confirm))
+    payload = _catalog_payload(published, written=confirm)
+    # Which account is already confirmed above; which *kind* of account is not,
+    # and the two are different questions. A sandbox that is its own account has
+    # its own identifier and is caught by the confirmation; test data on the
+    # account being confirmed is not. The operator publishing a catalog is
+    # entitled to know which of those they are looking at.
+    payload["live_mode"] = settings.live_mode
+    print_payload(ctx, payload)
 
 
 def _catalog_payload(catalog: PublishedCatalog, *, written: bool) -> dict[str, object]:

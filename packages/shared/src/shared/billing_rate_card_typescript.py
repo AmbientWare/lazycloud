@@ -6,25 +6,30 @@ of a price is the one kind of drift a customer discovers by being charged
 something the published page did not say — so it is generated from the card
 instead, and the generated file is checked rather than trusted.
 
-Only what the card owns is rendered: the figures, the owners, the models, the
-effective date, and what each plan charges. Plan names and the prose beside them
-belong to the page, which joins them on `id`.
+Only what the card owns is rendered, and only what a page reads: the figures, the
+owners, the models, and every plan whole — name, summary, figures, and terms. The
+page joins nothing to it, which is what makes adding a plan one edit rather than
+two that drift.
+
+The rates the ledger prices against are not here. A browser has nothing to do
+with a figure per byte-second, and rendering one into the bundle is a second
+place a price could be read from — a place where it would be read rounded,
+because the published figure it derives from is the exact one.
 """
 
 from __future__ import annotations
 
-from datetime import date
-from decimal import Decimal
-
 from shared.billing_rate_card import (
+    NO_CARD_INCLUDED_NANOS,
+    NO_CARD_MAX_CONTAINERS,
     PUBLISHED_GPU_RATES,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
     PUBLISHED_SHAPE_RATES,
-    RATES_EFFECTIVE_ON,
     PublishedGpuRate,
+    PublishedPlan,
 )
-from shared.payments import BILLING_CURRENCY
+from shared.usage import UsageBillingOwner
 
 REGENERATE_COMMAND = (
     "uv run lazycloud-admin billing write-pricing-catalog "
@@ -37,41 +42,22 @@ because a generated artifact whose regeneration has to be looked up is one peopl
 edit by hand instead.
 """
 
-_MONTH_NAMES = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)
-"""Spelled out here rather than through `strftime`, whose month names follow the
-locale of whichever process happens to run the generator."""
-
 
 def render_pricing_catalog() -> str:
     """The whole generated module, ending in the newline a file ends with."""
 
     blocks = (
         _header(),
-        f"export const BILLING_CURRENCY = {_string(BILLING_CURRENCY)};",
-        f"export const RATES_EFFECTIVE_ON = {_string(_effective_on(RATES_EFFECTIVE_ON))};",
         _billing_owners(),
         _shape_rate_type(),
         _shape_rates(),
         _gpu_rate_type(),
         _gpu_rates(),
         _platform_rates(),
-        _derived_platform_rates(),
         _plan_ids(),
         _plan_type(),
         _plans(),
+        _no_card_terms(),
     )
     return "\n\n".join(blocks) + "\n"
 
@@ -90,9 +76,11 @@ def _header() -> str:
    here instead of there is lost at the next regeneration and would have quoted a
    price the platform never held.
 
-   Figures are nanodollars — billionths of a dollar — per hour of a whole unit: a
-   container, a core, a gibibyte, a card. They are exact, so the page renders a
-   published rate rather than a rounded one. */"""
+   Figures are nanodollars — billionths of a dollar — per whole unit of whatever
+   the line is sold by: an hour of a container, a core, a gibibyte of memory, a
+   card; a gibibyte moved; a gibibyte kept for a thirty-day month. Every one is a
+   whole number, so the page renders a published price rather than a rounded
+   one. */"""
 
 
 def _billing_owners() -> str:
@@ -104,9 +92,15 @@ def _billing_owners() -> str:
 
 
 def _shape_rate_type() -> str:
+    """What a container's resources cost, which is what the page has lines for.
+
+    The card also prices the container itself, before any of its resources. That
+    figure is not rendered: the page states resources, `tests/contracts` holds it
+    at zero, and emitting a column no line reads would be a price in the bundle
+    that nothing could show.
+    """
+
     return """export type PublishedShapeRate = {
-  /** What a container costs before any of its resources are counted. */
-  nanosPerContainerHour: number;
   nanosPerCpuCoreHour: number;
   nanosPerMemoryGibHour: number;
 };"""
@@ -115,7 +109,6 @@ def _shape_rate_type() -> str:
 def _shape_rates() -> str:
     entries = "".join(
         f"  {shape.billing_owner.value}: {{\n"
-        f"    nanosPerContainerHour: {_integer(shape.nanos_per_container_hour)},\n"
         f"    nanosPerCpuCoreHour: {_integer(shape.nanos_per_cpu_core_hour)},\n"
         f"    nanosPerMemoryGibHour: {_integer(shape.nanos_per_memory_gib_hour)},\n"
         "  },\n"
@@ -134,68 +127,98 @@ def _shape_rates() -> str:
 def _gpu_rate_type() -> str:
     return """export type PublishedGpuRate = {
   gpuType: string;
-  platformFleetNanosPerCardHour: number;
-  connectedCloudNanosPerCardHour: number;
+  /** What one card of this model costs an hour, on each kind of capacity. */
+  nanosPerCardHour: Record<BillingOwner, number>;
 };"""
 
 
 def _gpu_rates() -> str:
-    entries = "".join(
-        f"  {{\n"
-        f"    gpuType: {_string(rate.gpu_type.value)},\n"
-        f"    platformFleetNanosPerCardHour: {_integer(rate.platform_fleet_nanos_per_card_hour)},\n"
-        "    connectedCloudNanosPerCardHour: "
-        f"{_integer(rate.connected_cloud_nanos_per_card_hour)},\n"
-        "  },\n"
-        for rate in _by_fleet_price(PUBLISHED_GPU_RATES)
-    )
+    entries = "".join(_gpu_rate(rate) for rate in _most_expensive_first(PUBLISHED_GPU_RATES))
     return (
-        "/* Cheapest first on LazyCloud capacity. The two columns rank differently, so\n"
-        "   one order has to lead. */\n"
+        "/* Most expensive first on LazyCloud capacity. The capacities rank differently,\n"
+        "   so one published order has to lead. */\n"
         "export const publishedGpuRates = [\n"
         f"{entries}"
         "] as const satisfies readonly PublishedGpuRate[];"
     )
 
 
-def _by_fleet_price(rates: tuple[PublishedGpuRate, ...]) -> tuple[PublishedGpuRate, ...]:
-    """The card's own order is the schedulable list's; the page's is by price.
+def _gpu_rate(rate: PublishedGpuRate) -> str:
+    """One model, priced on every capacity the card publishes shape rates for.
 
-    The page is a table somebody reads top to bottom, and the card is held in
-    lockstep with `shared.gpu.SUPPORTED_GPU_TYPES`, so the ordering is applied
-    here rather than by reordering either of them.
+    Keyed by owner rather than by two named fields, so the page reads a card's
+    price the same way it reads a core's and a capacity added to the card is one
+    a consumer cannot leave unpriced.
     """
 
-    return tuple(sorted(rates, key=lambda rate: rate.platform_fleet_nanos_per_card_hour))
+    prices = "".join(
+        f"      {shape.billing_owner.value}: "
+        f"{_integer(rate.nanos_per_card_hour(shape.billing_owner))},\n"
+        for shape in PUBLISHED_SHAPE_RATES
+    )
+    return (
+        "  {\n"
+        f"    gpuType: {_string(rate.gpu_type.value)},\n"
+        f"    nanosPerCardHour: {{\n{prices}    }},\n"
+        "  },\n"
+    )
+
+
+def _most_expensive_first(rates: tuple[PublishedGpuRate, ...]) -> tuple[PublishedGpuRate, ...]:
+    """The card's own order is the schedulable list's; the published one is by price.
+
+    The card is held in lockstep with `shared.gpu.SUPPORTED_GPU_TYPES`, so a
+    published order that reads by price is produced here rather than by
+    reordering either of them. Only one capacity's ranking can lead, and it is
+    the fleet's.
+    """
+
+    return tuple(
+        sorted(rates, key=lambda rate: rate.platform_fleet_nanos_per_card_hour, reverse=True)
+    )
 
 
 def _platform_rates() -> str:
-    return (
-        "/* Published at a stated zero rather than left off the page. Both are metered,\n"
-        "   both reach the ledger and the invoice, and both read $0.00 — which is how a\n"
-        "   customer can tell the traffic and the storage are measured and free rather\n"
-        "   than unmeasured. */\n"
-        "export const publishedPlatformRates = {\n"
-        f"  nanosPerEgressByte: {_number(PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte)},\n"
-        "  nanosPerVolumeByteSecond: "
-        f"{_number(PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second)},\n"
-        "} as const;"
-    )
+    """What a container moves and keeps, priced for the platform not the capacity.
 
+    Whole nanodollars per whole unit, which is what the card holds and what the
+    page renders exactly. The rate each divides down into is the ledger's
+    business and is deliberately absent here.
+    """
 
-def _derived_platform_rates() -> str:
-    egress = _number(PUBLISHED_PLATFORM_RATE.nanos_per_egress_gib)
-    volume = _number(PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month)
+    egress = _integer(PUBLISHED_PLATFORM_RATE.nanos_per_egress_gib)
+    volume = _integer(PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month)
     return (
-        "/** What a gibibyte of egress costs, from the per-byte rate exactly. */\n"
+        "/**\n"
+        " * What a gibibyte of traffic leaving the platform costs.\n"
+        " *\n"
+        " * A stated zero rather than a figure left off the page: egress is metered, it\n"
+        " * reaches the ledger and the invoice, and it reads $0.00 — which is how a\n"
+        " * customer can tell the traffic is measured and free rather than unmeasured.\n"
+        " */\n"
         f"export const EGRESS_NANOS_PER_GIB = {egress};\n"
         "\n"
+        "/** What a gibibyte kept on a volume for a thirty-day month costs. */\n"
+        f"export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = {volume};\n"
+        "\n"
         "/**\n"
-        " * What a gibibyte kept for a thirty-day month costs, from the per-byte-second\n"
-        " * rate exactly.\n"
+        " * What every resource on hardware somebody else hosts costs an hour.\n"
+        " *\n"
+        " * One figure rather than a table, because the platform neither buys nor manages\n"
+        " * that hardware and charges the same for all of it. `tests/contracts` is what\n"
+        " * holds the card to publishing a single rate there.\n"
         " */\n"
-        f"export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = {volume};"
+        f"export const SELF_HOSTED_NANOS_PER_HOUR = {_integer(_self_hosted_rate())};"
     )
+
+
+def _self_hosted_rate() -> int:
+    """The one figure every self-hosted resource is published at."""
+
+    for shape in PUBLISHED_SHAPE_RATES:
+        if shape.billing_owner is UsageBillingOwner.SelfHosted:
+            return shape.nanos_per_cpu_core_hour
+    raise ValueError("the card publishes no rate for hardware somebody else hosts")
 
 
 def _plan_ids() -> str:
@@ -205,30 +228,59 @@ def _plan_ids() -> str:
     )
 
 
+def _no_card_terms() -> str:
+    """What an account gets before anybody can be charged for it.
+
+    Published beside the plans because it is what every account has on its first
+    day, and a pricing page that stated only the carded figures would be quoting
+    terms nobody starts on.
+    """
+
+    return (
+        "/* What an account gets before a card is on file. Not a plan — every plan\n"
+        "   falls back to these until somebody can be billed. */\n"
+        f"export const NO_CARD_INCLUDED_NANOS = {_integer(NO_CARD_INCLUDED_NANOS)};\n"
+        f"export const NO_CARD_MAX_CONTAINERS = {_integer(NO_CARD_MAX_CONTAINERS)};"
+    )
+
+
 def _plan_type() -> str:
     return """export type PublishedPlan = {
+  name: string;
+  summary: string;
   monthlyNanos: number;
   includedNanos: number;
+  maxConcurrentContainers: number;
+  /** What the plan promises beyond its figures; it never restates one of them. */
+  terms: readonly string[];
 };"""
 
 
 def _plans() -> str:
-    entries = "".join(
-        f"  {plan.id.value}: {{ monthlyNanos: {_integer(plan.monthly_nanos)}, "
-        f"includedNanos: {_integer(plan.included_nanos)} }},\n"
-        for plan in PUBLISHED_PLANS
-    )
+    entries = "".join(_plan(plan) for plan in PUBLISHED_PLANS)
     return (
-        "/* What a plan charges and what it comes with. What it is called and how it is\n"
-        "   described belongs to the page, which joins the two on the id. */\n"
+        "/* Every plan whole: what it is called, what it charges, what it comes with,\n"
+        "   and what it promises. A surface offering a plan renders these and keeps no\n"
+        "   copy of its own, so a plan added to the card is a plan the pricing page and\n"
+        "   the dashboard describe without being edited. */\n"
         "export const publishedPlans = {\n"
         f"{entries}"
         "} as const satisfies Record<PlanId, PublishedPlan>;"
     )
 
 
-def _effective_on(day: date) -> str:
-    return f"{day.day} {_MONTH_NAMES[day.month - 1]} {day.year}"
+def _plan(plan: PublishedPlan) -> str:
+    terms = "".join(f"      {_string(term)},\n" for term in plan.terms)
+    return (
+        f"  {plan.id.value}: {{\n"
+        f"    name: {_string(plan.name)},\n"
+        f"    summary: {_string(plan.summary)},\n"
+        f"    monthlyNanos: {_integer(plan.monthly_nanos)},\n"
+        f"    includedNanos: {_integer(plan.included_nanos)},\n"
+        f"    maxConcurrentContainers: {_integer(plan.max_concurrent_containers)},\n"
+        f"    terms: [\n{terms}    ],\n"
+        "  },\n"
+    )
 
 
 def _string(value: str) -> str:
@@ -245,18 +297,6 @@ def _string(value: str) -> str:
 
 def _integer(value: int) -> str:
     return _group(str(value))
-
-
-def _number(value: Decimal) -> str:
-    """A plain decimal literal, never an exponent.
-
-    `Decimal` renders small figures in scientific notation, which TypeScript
-    accepts but nobody comparing a page against a rate card can read.
-    """
-
-    whole, _, fraction = format(value, "f").partition(".")
-    fraction = fraction.rstrip("0")
-    return f"{_group(whole)}.{fraction}" if fraction else _group(whole)
 
 
 def _group(digits: str) -> str:

@@ -21,7 +21,6 @@ from worker.status import (
     WorkerSpindownPlan,
     plan_worker_spindown,
 )
-from worker.supervision import WorkerSupervisionService, WorkerUsageEmissionResult
 
 DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS = 60
 DEFAULT_WORKER_SHUTDOWN_DRAIN_SECONDS = 5.0
@@ -104,19 +103,6 @@ class WorkerLifecycleContainerStopper(Protocol):
     ) -> None: ...
 
 
-class WorkerLifecycleUsageEmitter(Protocol):
-    def emit_usage(
-        self,
-        request: ContainerRequestContext,
-        *,
-        duration_ms: int,
-        window_start_ms: int = 0,
-        window_end_ms: int | None = None,
-        metering_window_started_at: datetime,
-        metering_window_ended_at: datetime,
-    ) -> WorkerUsageEmissionResult | None: ...
-
-
 class WorkerLifecycleStepResult(ContractModel):
     action: WorkerLifecycleAction
     status: WorkerLifecycleStatus = WorkerLifecycleStatus.Ok
@@ -161,34 +147,9 @@ class WorkerCleanupAction:
 
 
 @dataclass(slots=True)
-class WorkerSupervisionUsageEmitter:
-    supervision: WorkerSupervisionService
-
-    def emit_usage(
-        self,
-        request: ContainerRequestContext,
-        *,
-        duration_ms: int,
-        window_start_ms: int = 0,
-        window_end_ms: int | None = None,
-        metering_window_started_at: datetime,
-        metering_window_ended_at: datetime,
-    ) -> WorkerUsageEmissionResult:
-        return self.supervision.record_usage_window(
-            request,
-            duration_ms=duration_ms,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
-            metering_window_started_at=metering_window_started_at,
-            metering_window_ended_at=metering_window_ended_at,
-        )
-
-
-@dataclass(slots=True)
 class WorkerActiveContainer:
     request: ContainerRequestContext
     started_at: datetime = field(default_factory=utc_now)
-    last_usage_emitted_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)
@@ -196,7 +157,6 @@ class WorkerLifecycleOrchestrator:
     worker_id: str
     repository: WorkerLifecycleRepository | None = None
     stopper: WorkerLifecycleContainerStopper | None = None
-    usage_emitter: WorkerLifecycleUsageEmitter | None = None
     registration: SchedulerWorkerRecord | None = None
     readiness_validator: Callable[[], None] | None = None
     cleanup_actions: list[WorkerCleanupAction] = field(default_factory=list)
@@ -402,7 +362,6 @@ class WorkerLifecycleOrchestrator:
             self._active[request.container_id] = WorkerActiveContainer(
                 request=request,
                 started_at=current_time,
-                last_usage_emitted_at=current_time,
             )
 
     def unregister_container(self, container_id: str) -> None:
@@ -412,54 +371,6 @@ class WorkerLifecycleOrchestrator:
     def active_container_ids(self) -> list[str]:
         with self._lock:
             return sorted(self._active)
-
-    def emit_periodic_usage(
-        self,
-        *,
-        now: datetime | None = None,
-        force: bool = False,
-    ) -> WorkerLifecycleStepResult:
-        if self.usage_emitter is None:
-            return WorkerLifecycleStepResult(
-                action=WorkerLifecycleAction.EmitUsage,
-                status=WorkerLifecycleStatus.Skipped,
-                error_message="usage emitter is not configured",
-            )
-        current_time = now or utc_now()
-        emitted: list[str] = []
-        with self._lock:
-            active = list(self._active.values())
-        for item in active:
-            elapsed = (current_time - item.last_usage_emitted_at).total_seconds()
-            if not force and elapsed < self.usage_interval_seconds:
-                continue
-            window_start_ms = max(
-                int((item.last_usage_emitted_at - item.started_at).total_seconds() * 1000),
-                0,
-            )
-            window_end_ms = max(
-                window_start_ms + 1,
-                int((current_time - item.started_at).total_seconds() * 1000),
-            )
-            duration_ms = window_end_ms - window_start_ms
-            self.usage_emitter.emit_usage(
-                item.request,
-                duration_ms=duration_ms,
-                window_start_ms=window_start_ms,
-                window_end_ms=window_end_ms,
-                metering_window_started_at=item.last_usage_emitted_at,
-                metering_window_ended_at=current_time,
-            )
-            emitted.append(item.request.container_id)
-            with self._lock:
-                if item.request.container_id in self._active:
-                    self._active[item.request.container_id].last_usage_emitted_at = current_time
-        return WorkerLifecycleStepResult(
-            action=WorkerLifecycleAction.EmitUsage,
-            status=WorkerLifecycleStatus.Ok if emitted else WorkerLifecycleStatus.Skipped,
-            container_ids=emitted,
-            error_message="" if emitted else "no active containers were due for usage emission",
-        )
 
     def spindown_plan(
         self,
@@ -530,9 +441,6 @@ class WorkerLifecycleOrchestrator:
                     timeout_seconds=max(force_stop_wait_seconds, 0.0),
                 )
             )
-        usage = self.emit_periodic_usage(force=True)
-        if usage.status is not WorkerLifecycleStatus.Skipped or usage.container_ids:
-            steps.append(usage)
         steps.extend(self._run_cleanup_actions())
         if remove_worker:
             steps.append(self._remove_worker())

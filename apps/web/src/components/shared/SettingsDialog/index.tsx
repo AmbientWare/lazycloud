@@ -5,6 +5,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 
 import { AccessTokens } from "./AccessTokens";
 import { AccountSettings } from "./AccountSettings";
+import { BillingSettings } from "./BillingSettings";
 import { ComputeSettings } from "./ComputeSettings";
 import { DomainSettings } from "./DomainSettings";
 import { settingsView, type SettingsView } from "./view";
@@ -60,6 +61,7 @@ export function SettingsDialog({
           <TabsContent value="general" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             <div className="space-y-5">
               <AccountSettings />
+              <BillingSettings />
               <section>
                 <h2 className="mb-1 text-sm font-medium">Workspaces</h2>
                 <p className="mb-2 text-xs text-muted-foreground">

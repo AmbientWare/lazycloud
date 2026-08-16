@@ -359,3 +359,46 @@ def test_ephemeral_disk_bills_what_was_used_not_the_oversubscribed_ceiling() -> 
         evidence=WorkerUsageEvidence(),
     )
     assert WorkerUsageMetricName.ContainerDisk not in {plan.name for plan in idle}
+
+
+def test_the_last_window_of_a_containers_life_survives_a_refusal() -> None:
+    """At exit there is no next tick, so the final drain has to retry itself.
+
+    The sample loop stops at the first refusal on purpose and lets the following
+    tick offer the window again. `stop()` is called once, after the thread has
+    ended, so the same rule there means a single unlucky write loses every second
+    since the previous success — and a container's last window is the one nothing
+    else will ever claim.
+
+    One refusal, then acceptance: the window must still reach the platform, with
+    the bounds it was claimed under.
+    """
+
+    usage = UsageRecorder(refusals_left=1)
+    monitor = WorkerContainerRuntimeMonitor(
+        usage_recorder=usage,
+        # Long enough that the sample loop never runs: the only drain is the one
+        # `stop()` performs, which is the path under test.
+        settings=ContainerRuntimeMonitorSettings(
+            sample_interval_seconds=30.0,
+            exit_flush_attempts=3,
+            exit_flush_retry_seconds=0.01,
+        ),
+    )
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="workspace-1",
+        cpu_millicores=1000,
+        memory_mib=128,
+    )
+
+    handle = monitor.start_monitoring(request, started_pid=123)
+    sleep(0.05)
+    handle.stop()
+
+    assert usage.windows, "the final window was lost when its first write was refused"
+    assert usage.windows[0][0] == 0
+    # Offered twice under one set of bounds: the retry re-offers what it claimed
+    # rather than widening to reach the present.
+    assert set(usage.offered) == {usage.offered[0]}
+    assert len(usage.offered) == 2

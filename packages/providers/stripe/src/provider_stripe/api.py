@@ -10,6 +10,27 @@ from shared.errors import InvalidInputError, UpstreamUnavailableError
 
 API_BASE_URL = "https://api.stripe.com/v1"
 
+API_VERSION = "2026-07-29.dahlia"
+"""The shape of Stripe's answers this package was written against.
+
+Sent on every request. Unpinned, the shapes below are whatever the account's
+dashboard default happens to be, which is a setting nobody here can see and which
+Stripe advances on their schedule — so a field this package reads could be
+renamed by an upgrade nobody in this repository made, and `extra="ignore"` would
+let the response validate right up until the field it needed was the one missing.
+
+This is the version the account already serves, so pinning it changes nothing
+today. What it changes is later: a Stripe release becomes a value edited here,
+with the live billing scenarios run against it, rather than a shape that moved
+underneath a running deployment.
+
+It has a floor as well as a ceiling. The models read a subscription's billing
+period from its *items* and an invoice line's price from `pricing.price_details`,
+both of which arrived in `2025-03-31.basil`, and `/invoices/create_preview`
+exists only from that release — the endpoint it replaced now answers 404. Pinning
+below basil would not hold this package still, it would break it.
+"""
+
 type FormFields = Sequence[tuple[str, str]]
 """Form pairs rather than a mapping.
 
@@ -45,6 +66,10 @@ def build_client(*, api_key: str, timeout_seconds: float = 30.0) -> httpx.Client
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/x-www-form-urlencoded",
+            # On the client rather than per call, so every request carries it —
+            # including the ones that add an idempotency key, and including the
+            # catalog publisher, which builds its client through here too.
+            "Stripe-Version": API_VERSION,
         },
         timeout=timeout_seconds,
     )

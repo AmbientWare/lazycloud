@@ -851,44 +851,44 @@ class _RecordingConnections:
     events: list[str] = field(default_factory=list)
     total: dict[str, int] = field(default_factory=dict)
 
-    def container_connections(self, workspace_name: str, stub_id: str, container_id: str) -> int:
-        _ = workspace_name, stub_id
+    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int:
+        _ = workspace_id, stub_id
         return self.active.get(container_id, 0)
 
     def increment_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
         keep_warm_seconds: int | None,
     ) -> int:
-        _ = workspace_name, stub_id, keep_warm_seconds
+        _ = workspace_id, stub_id, keep_warm_seconds
         self.events.append(f"container+:{container_id}")
         self.active[container_id] = self.active.get(container_id, 0) + 1
         return self.active[container_id]
 
     def decrement_container_connections(
         self,
-        workspace_name: str,
+        workspace_id: str,
         stub_id: str,
         container_id: str,
         *,
         keep_warm_seconds: int | None,
     ) -> int:
-        _ = workspace_name, stub_id, keep_warm_seconds
+        _ = workspace_id, stub_id, keep_warm_seconds
         self.events.append(f"container-:{container_id}")
         self.active[container_id] = max(self.active.get(container_id, 0) - 1, 0)
         return self.active[container_id]
 
-    def increment_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        _ = workspace_name
+    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        _ = workspace_id
         self.events.append(f"total+:{stub_id}")
         self.total[stub_id] = self.total.get(stub_id, 0) + 1
         return self.total[stub_id]
 
-    def decrement_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        _ = workspace_name
+    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        _ = workspace_id
         self.events.append(f"total-:{stub_id}")
         self.total[stub_id] = max(self.total.get(stub_id, 0) - 1, 0)
         return self.total[stub_id]
@@ -900,8 +900,8 @@ class _WakeOnDemandConnections(_RecordingConnections):
     container: ContainerRecord
     port: int
 
-    def increment_total_connections(self, workspace_name: str, stub_id: str) -> int:
-        count = _RecordingConnections.increment_total_connections(self, workspace_name, stub_id)
+    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        count = _RecordingConnections.increment_total_connections(self, workspace_id, stub_id)
         self.scheduler.states[self.container.id] = SchedulerContainerState(
             container_id=self.container.id,
             stub_id=stub_id,

@@ -16,6 +16,7 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
 from shared.timestamps import utc_now
 
@@ -80,6 +81,18 @@ passed is counted a second time. It is the ceiling every retry schedule that
 sends meter events has to fit under.
 """
 
+_PRORATION_BEHAVIORS: Mapping[SubscriptionProration, str] = {
+    SubscriptionProration.ChargeDifferenceNow: "always_invoice",
+    SubscriptionProration.KeepWhatWasPaidFor: "none",
+}
+"""Stripe's word for each of the two directions a plan change can go.
+
+Total over the enum, so a direction added to the protocol fails here by key
+rather than by silently taking whichever behaviour was written as a default —
+and a default in this particular dictionary is a customer charged or refunded
+without anybody choosing it.
+"""
+
 _CUSTOMER_REGISTRATION_KEY_PREFIX = "customer-registration-"
 _CREDIT_GRANT_KEY_PREFIX = "credit-grant-"
 """What each write's idempotency key is namespaced by.
@@ -111,6 +124,10 @@ class _HostedSession(StripeObject):
 
 class _PaymentMethod(StripeObject):
     customer: str | None = None
+
+
+class _PaymentMethodList(StripeObject):
+    data: list[_PaymentMethod] = Field(default_factory=list)
 
 
 class _Recurring(StripeObject):
@@ -289,6 +306,30 @@ class StripeBilling:
         )
         return method.customer or ""
 
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        """Whether Stripe holds anything chargeable for this customer.
+
+        One page of one is the whole question: the caller asks whether there is
+        any instrument, never which or how many, and Stripe orders the list
+        newest first so a customer with a hundred cards costs the same read as a
+        customer with one.
+
+        Deliberately not `invoice_settings.default_payment_method`. That names
+        the card charges are *taken from*, which is empty for a customer who
+        saved a card in the window before the delivery that promotes it lands —
+        and treating that customer as having none would take back an allowance
+        they had already been given.
+        """
+
+        methods = read(
+            _PaymentMethodList,
+            self.client,
+            "GET",
+            "/payment_methods",
+            params=[("customer", provider_customer_id), ("limit", "1")],
+        )
+        return bool(methods.data)
+
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
     ) -> None:
@@ -400,7 +441,11 @@ class StripeBilling:
         )
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         """Move an existing subscription onto another plan's price.
 
@@ -408,9 +453,14 @@ class StripeBilling:
         item's price lookup key — which is what makes a retry after a transaction
         that died converge rather than charge a second proration.
 
-        Prorated and invoiced immediately, refusing rather than leaving an
-        unpaid balance behind: a customer who cannot pay for the plan they asked
-        for must not end up on it.
+        Charging the difference raises the invoice inside this call and refuses
+        rather than leaving an unpaid balance behind: a customer who cannot pay
+        for the plan they asked for must not end up on it. Keeping what was paid
+        for asks Stripe for no proration at all — the cycle stays invoiced as it
+        was, nothing is credited back, and the new price is what the next invoice
+        carries. `error_if_incomplete` rides on both because it costs nothing
+        where there is no balance to settle and is the whole guarantee where
+        there is.
         """
 
         line = plan_line(plan)
@@ -435,7 +485,7 @@ class StripeBilling:
                 data=[
                     ("items[0][id]", licensed.id),
                     ("items[0][price]", price_id),
-                    ("proration_behavior", "always_invoice"),
+                    ("proration_behavior", _PRORATION_BEHAVIORS[proration]),
                     ("payment_behavior", "error_if_incomplete"),
                 ],
             )

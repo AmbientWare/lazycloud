@@ -89,6 +89,17 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "containers"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_containers_workspace_created", "workspace_id", "created_at"),
+        # Concurrency is counted on the path that starts every container, so the
+        # cost of asking has to be bounded by the answer rather than by how much
+        # the workspace has ever run. Partial, so the index holds only what is
+        # live: on the full workspace index the same count scans the workspace's
+        # entire history and gets slower every day it is used.
+        Index(
+            "ix_containers_workspace_live",
+            "workspace_id",
+            postgresql_where=text("status IN ('pending', 'running')"),
+            sqlite_where=text("status IN ('pending', 'running')"),
+        ),
         Index("ix_containers_status_created", "status", "created_at", "id"),
         Index("ix_containers_stub", "stub_id"),
         Index("ix_containers_worker_status", "worker_id", "status"),
@@ -102,7 +113,8 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             sqlite_where=text("termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"),
         ),
         CheckConstraint(
-            "termination_reason IN ('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNKNOWN')",
+            "termination_reason IN "
+            "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', 'UNKNOWN')",
             name="ck_containers_termination_reason",
         ),
     )

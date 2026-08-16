@@ -153,7 +153,10 @@ def configured_volume_mounts(
             mount_path,
             fallback_name=name,
         )
-        record = volume_service.get(name, workspace=workspace_id)
+        # `admit=None` deliberately: the container carrying this mount was judged
+        # against the same account moments ago, and refusing here would stop it
+        # half-way through its mounts for a reason its own admission had answered.
+        record = volume_service.get_or_create(name, workspace=workspace_id, admit=None)
         mount = _volume_request_mount(
             name=name,
             workspace_name=workspace_name,

@@ -95,6 +95,7 @@ from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 from billing import (
+    BillingEnforcementService,
     BillingMeterOutboxService,
     BillingPlanChangeService,
     BillingReconciliationService,
@@ -156,6 +157,7 @@ class SchedulerAppServices:
     meter_outbox: BillingMeterOutboxService
     plan_changes: BillingPlanChangeService
     billing_reconciliation: BillingReconciliationService
+    billing_enforcement: BillingEnforcementService
     retention: SchedulerRetention | None
     redis_client: RedisClient
 
@@ -315,6 +317,9 @@ class SchedulerAppServices:
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
         )
+        # After the container service, because stopping containers is the whole
+        # of what this sweep does.
+        billing_enforcement = _billing_enforcement(context, events, containers)
         container_shutdowns = ContainerShutdownService(
             container_repository,
             RedisEventBus(redis),
@@ -381,6 +386,7 @@ class SchedulerAppServices:
             meter_outbox=meter_outbox,
             plan_changes=plan_changes,
             billing_reconciliation=billing_reconciliation,
+            billing_enforcement=billing_enforcement,
             retention=retention,
             redis_client=redis,
         )
@@ -429,6 +435,26 @@ def _plan_changes(
     return BillingPlanChangeService(
         database=context.database,
         payments=settings.provider_factory(),
+        events=events,
+    )
+
+
+def _billing_enforcement(
+    context: ServiceContext,
+    events: EventService,
+    containers: ContainerService,
+) -> BillingEnforcementService:
+    """The pass that stops compute nobody can be billed for.
+
+    Composed unconditionally and with no credential of its own: everything it
+    decides is read from local rows, which is what lets it run every few seconds
+    without the payment provider's availability deciding whether unfunded compute
+    keeps running.
+    """
+
+    return BillingEnforcementService(
+        database=context.database,
+        containers=containers,
         events=events,
     )
 

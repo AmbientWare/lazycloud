@@ -80,6 +80,9 @@ class SchedulerProcessResult:
     billing_reconcile_checked_count: int = 0
     billing_reconcile_divergent_count: int = 0
     billing_reconcile_failure_count: int = 0
+    billing_enforcement_unfunded_count: int = 0
+    billing_enforcement_stopped_count: int = 0
+    billing_enforcement_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
     tailnet_cleanup_processed_count: int = 0
@@ -124,6 +127,9 @@ class SchedulerProcessResult:
             "billing_reconcile_checked_count": self.billing_reconcile_checked_count,
             "billing_reconcile_divergent_count": self.billing_reconcile_divergent_count,
             "billing_reconcile_failure_count": self.billing_reconcile_failure_count,
+            "billing_enforcement_unfunded_count": self.billing_enforcement_unfunded_count,
+            "billing_enforcement_stopped_count": self.billing_enforcement_stopped_count,
+            "billing_enforcement_failure_count": self.billing_enforcement_failure_count,
             "objects_removed": self.objects_removed,
             "retention_failure_count": self.retention_failure_count,
             "tailnet_cleanup_processed_count": self.tailnet_cleanup_processed_count,
@@ -228,6 +234,9 @@ def run_scheduler(
                 billing_reconcile_checked_count=result.billing_reconcile_checked_count,
                 billing_reconcile_divergent_count=result.billing_reconcile_divergent_count,
                 billing_reconcile_failure_count=result.billing_reconcile_failure_count,
+                billing_enforcement_unfunded_count=result.billing_enforcement_unfunded_count,
+                billing_enforcement_stopped_count=result.billing_enforcement_stopped_count,
+                billing_enforcement_failure_count=result.billing_enforcement_failure_count,
                 objects_removed=result.objects_removed,
                 retention_failure_count=result.retention_failure_count,
                 tailnet_cleanup_processed_count=result.tailnet_cleanup_processed_count,

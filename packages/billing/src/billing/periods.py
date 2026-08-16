@@ -5,7 +5,7 @@ from database.repositories.billing_allowance import (
     SubscriptionPeriodOutcome,
 )
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import published_plan
+from shared.billing_rate_card import account_terms
 from shared.payments import PaymentProvider, ProviderSubscription
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ def carry_plan_into_cycle(
     provider_credit_grant_id: str,
     subscription: ProviderSubscription,
     plan: BillingPlanId,
+    has_payment_method: bool,
 ) -> str:
     """Give this cycle the terms the plan comes with, and buy them once.
 
@@ -54,16 +55,38 @@ def carry_plan_into_cycle(
     reason the grant itself is: registration and a plan change and a renewal all
     reach here, and only the period knows which cycle it is funding.
 
+    What the cycle is worth comes from the plan and from whether anybody can be
+    charged for what is spent past it, because an allowance is credit against a
+    bill and an account with no card has no bill. It is a parameter rather than a
+    read taken here: every caller already holds the account row under lock, and a
+    second read inside would be a different answer from the one the caller is
+    acting on.
+
+    Terms move upwards inside a cycle and never downwards, which the period
+    itself enforces — so this offers the plan's figure and buys whatever the
+    period came back holding. A move onto cheaper terms part-way through leaves
+    the cycle on the allowance it opened with, changes nothing at the provider,
+    and takes effect when the next cycle opens on the smaller plan.
+
+    That is also what makes "a card removed falls back at the end of the period"
+    true without a rule saying so. Terms are only ever written when a cycle opens
+    or is re-termed, so a card detached mid-cycle changes nothing until the next
+    one — and a card *attached* mid-cycle is a re-term, which is the upgrade
+    taking effect at once.
+
     Every caller holds the account row lock before reaching here, which is what
     makes the read-then-write inside safe against a delivery arriving mid-change.
     """
 
-    included_nanos = published_plan(plan).included_nanos
     written = BillingAllowanceRepository(session).set_subscription_period(
         user_id=account_id,
         period_started_at=subscription.current_period_started_at,
         period_ended_at=subscription.current_period_ended_at,
-        allowance_nanos=included_nanos,
+        allowance_nanos=account_terms(plan, has_payment_method=has_payment_method).included_nanos,
+        # An account with no card did not pay for whatever this cycle is holding,
+        # so terms may narrow to what the platform gives away. With a card they
+        # did, and a plan moved down keeps what it opened with.
+        funded=has_payment_method,
     )
     if written.outcome is SubscriptionPeriodOutcome.Unchanged:
         return provider_credit_grant_id
@@ -72,7 +95,7 @@ def carry_plan_into_cycle(
     return payments.create_credit_grant(
         account_id=account_id,
         provider_customer_id=provider_customer_id,
-        amount_nanos=included_nanos,
+        amount_nanos=written.allowance_nanos,
         period_ended_at=subscription.current_period_ended_at,
         previous_period_ended_at=written.previous_period_ended_at,
     ).provider_credit_grant_id

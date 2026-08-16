@@ -10,6 +10,7 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import (
     AgentLeaseTable,
     AgentTable,
@@ -26,11 +27,11 @@ from shared.autoscaler_state import (
 )
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
-from shared.identity import WorkspaceStatus
+from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.routing import AgentBackendRoute
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -303,6 +304,72 @@ class ContainerRepository:
             stub_ids=stub_ids,
         )
 
+    def count_live_for_owner(self, *, owner_user_id: str) -> int:
+        """How many containers this account is holding capacity for, everywhere.
+
+        Counted across every workspace the account owns, because the limit is a
+        term of a plan and a plan belongs to a payer. Counted per workspace it
+        would be a limit anybody raises by making another workspace, which is
+        self-serve.
+
+        One statement rather than resolving the workspaces first: the set stays
+        inside the query where the index on the membership rows can serve it, and
+        the answer is one round trip on a path taken at every container start.
+
+        Deliberately approximate under concurrency. Two starts racing both read
+        the same count and both insert, so the ceiling can be overshot by roughly
+        the number of simultaneous starts. Closing that would mean locking the
+        account for the length of every container start — a per-account exclusive
+        lock in the path of every autoscaler ramp — to protect a guardrail whose
+        overshoot is a percent or two, self-corrects at the next start, and is
+        metered and invoiced like anything else. This bounds blast radius; it is
+        not a money invariant.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(ContainerTable.id))
+                .join(
+                    WorkspaceMemberTable,
+                    WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
+                )
+                .where(
+                    WorkspaceMemberTable.user_id == owner_user_id,
+                    WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                )
+            )
+            or 0
+        )
+
+    def live_container_ids_for_owner(self, *, owner_user_id: str, limit: int) -> list[str]:
+        """Which containers this account is holding capacity for, oldest first.
+
+        Ids rather than records: the caller stops them, and building a full
+        `ContainerRecord` for each would validate a payload nothing reads.
+
+        Oldest first so a bounded pass makes progress in the same order every
+        time. An account over the limit is stopped across as many passes as it
+        takes, and taking them newest-first would leave the longest-running — and
+        so the most expensive — container alive the longest.
+        """
+
+        rows = self.session.scalars(
+            select(ContainerTable.id)
+            .join(
+                WorkspaceMemberTable,
+                WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
+            )
+            .where(
+                WorkspaceMemberTable.user_id == owner_user_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+            )
+            .order_by(ContainerTable.created_at.asc())
+            .limit(limit)
+        ).all()
+        return [str(row) for row in rows]
+
     def list_active_shutdown_targets(
         self,
         *,
@@ -310,7 +377,7 @@ class ContainerRepository:
     ) -> list[ContainerShutdownTarget]:
         active = self.list(
             workspace_id=workspace_id,
-            statuses=(ContainerStatus.Pending.value, ContainerStatus.Running.value),
+            statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES),
         )
         return [
             ContainerShutdownTarget(

@@ -33,6 +33,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
+from tests.service_fixtures import unbilled_account
 
 # Rates only ever take effect in the future, so the usage they price is later
 # still. The offsets are the smallest that keep both facts true for a run.
@@ -400,6 +401,7 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
             period_started_at=now - timedelta(days=1),
             period_ended_at=now + timedelta(days=30),
             allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
+            funded=True,
         )
     started_at = now + _WINDOW_AT
     record = _usage(
@@ -643,9 +645,12 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
     """
 
     now = utc_now()
+    # An account provisioning has never reached, so nothing has opened a cycle
+    # over it. The default workspace's owner is provisioned by the fixture and
+    # holds a period covering now, which is exactly the state this is about the
+    # absence of.
+    owner_user_id, workspace_id = unbilled_account(isolated_services.context)
     with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-        owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
         PlatformRateRepository(session).publish(
             pricing_version="test.a",
             effective_at=now + _RATE_ONE_AT,
@@ -676,6 +681,7 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
             period_started_at=now,
             period_ended_at=now + timedelta(days=30),
             allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
+            funded=True,
         )
         session.commit()
 

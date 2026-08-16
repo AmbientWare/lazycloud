@@ -4,11 +4,13 @@ from urllib.parse import urlparse
 
 from billing.costs import BillingStanding, BillingStandingService
 from fastapi import APIRouter, Depends, status
+from shared.billing_rate_card import published_plan
 from shared.errors import InvalidInputError
 from shared.http.billing import (
     BillingAllowanceResponse,
     BillingHostedSessionRequest,
     BillingHostedSessionResponse,
+    BillingPlanChangeRequest,
     BillingPlanResponse,
     BillingSummaryResponse,
 )
@@ -47,24 +49,30 @@ def billing_summary(
 @router.post(
     "/subscription",
     response_model=BillingSummaryResponse,
-    operation_id="subscribe_billing_plan",
+    operation_id="change_billing_plan",
 )
-def subscribe_billing_plan(
+def change_billing_plan(
+    request: BillingPlanChangeRequest,
     user_id: write_user,
     services: ApiServices = Depends(current_services),
 ) -> BillingSummaryResponse:
-    """Move this account onto the Team plan, with the usage that plan includes.
+    """Move this account onto a published plan, with the usage that plan includes.
 
     A price changed on the subscription the account already holds rather than a
-    subscription created: the billing anniversary and the usage already metered
-    this cycle both survive it, and the provider charges the prorated difference
-    at once. `200` rather than `201` for that reason — every account already
-    holds the subscription this modifies, and nothing here has a new address for
-    a caller to follow.
+    subscription created — and, moving down, never a subscription cancelled: the
+    billing anniversary, the three metered items and the usage already metered
+    this cycle all survive it. `200` rather than `201` for that reason, and no
+    `DELETE` beside it — every account already holds the subscription this
+    modifies, nothing here has a new address for a caller to follow, and a verb
+    saying the subscription is deleted would be the contract stating the one
+    thing this design exists not to do.
 
-    Bodiless, because there is one plan to move to: a body naming which would be
-    a caller holding a catalog this platform publishes, and two callers naming it
-    differently would be two customers on different subscriptions for one plan.
+    The body names a plan id from the closed set the platform publishes and
+    never a price: the caller chose from the card the platform generated, and the
+    server resolves what that plan costs from the same card. Moving onto dearer
+    terms charges the prorated difference at once; moving onto cheaper ones
+    charges and refunds nothing, leaves the cycle on the allowance it opened
+    with, and applies from the next invoice.
 
     Answers with the standing the account now has rather than the provider's
     record of the subscription. What the caller does next is decided by what they
@@ -81,7 +89,7 @@ def subscribe_billing_plan(
         database=services.context.database,
         payments=services.payment_provider,
         events=services.events,
-    ).subscribe(user_id=user_id)
+    ).change_plan(user_id=user_id, target=request.plan)
     with services.context.database.session() as session:
         return _summary(BillingStandingService(session).standing(user_id=user_id, at=utc_now()))
 
@@ -172,6 +180,7 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
         plan=(
             BillingPlanResponse(
                 id=standing.plan,
+                name=published_plan(standing.plan).name,
                 allowance=(
                     BillingAllowanceResponse(
                         period_started_at=allowance.started_at,
@@ -188,6 +197,10 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
             else None
         ),
         portal_available=standing.portal_available,
+        payment_method_on_file=standing.payment_method_on_file,
+        max_concurrent_containers=standing.max_concurrent_containers,
+        live_container_count=standing.live_container_count,
+        plan_change_pending=standing.plan_change_pending,
     )
 
 

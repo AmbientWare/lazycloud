@@ -12,7 +12,7 @@ import { formatCostNanos } from "@/lib/money";
 import { calendarMonthWindow, usageCostsQueryOptions } from "@/lib/queries/usage";
 import { useWorkspace } from "@/lib/workspace-context";
 
-import { AccountStandingPanel } from "./-components/AccountStandingPanel";
+import { AccountCeilingLine } from "./-components/AccountCeilingLine";
 import { CostBreakdownTable } from "./-components/CostBreakdownTable";
 
 const LEVEL_TITLES: Record<UsageCostGroupKey, string> = {
@@ -53,7 +53,7 @@ function UsagePage() {
       description="What this workspace has run this month, and what it cost"
       contentClassName="flex flex-col gap-4 overflow-y-auto pb-1"
     >
-      <AccountStandingPanel />
+      <AccountCeilingLine />
       <Panel
         title="Cost this period"
         description="Read from the priced ledger, dearest first"
