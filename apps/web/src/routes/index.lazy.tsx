@@ -290,7 +290,7 @@ function MarketingHome() {
             <div className="marketing-rise">
               <Pill>Code got fast. Infrastructure didn&apos;t.</Pill>
               <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] sm:mt-3 lg:mt-6 lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
-                Your agent wrote it in a minute. <em>Ship it in one.</em>
+                Deploy as fast as you <em>develop.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
                 Code arrives in seconds, then waits on Dockerfiles, registries, load balancers,
