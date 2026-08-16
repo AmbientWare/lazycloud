@@ -34,8 +34,8 @@ export const publishedShapeRates = {
     nanosPerMemoryGibHour: 7_560_000,
   },
   connected_cloud: {
-    nanosPerCpuCoreHour: 2_854_800,
-    nanosPerMemoryGibHour: 273_600,
+    nanosPerCpuCoreHour: 4_410_000,
+    nanosPerMemoryGibHour: 604_800,
   },
   self_hosted: {
     nanosPerCpuCoreHour: 0,
@@ -56,7 +56,7 @@ export const publishedGpuRates = [
     gpuType: "H200",
     nanosPerCardHour: {
       platform_fleet: 3_918_236_400,
-      connected_cloud: 1_000_800_000,
+      connected_cloud: 313_455_600,
       self_hosted: 0,
     },
   },
@@ -64,7 +64,7 @@ export const publishedGpuRates = [
     gpuType: "H100",
     nanosPerCardHour: {
       platform_fleet: 3_372_120_000,
-      connected_cloud: 844_801_200,
+      connected_cloud: 269_769_600,
       self_hosted: 0,
     },
   },
@@ -72,7 +72,7 @@ export const publishedGpuRates = [
     gpuType: "A100-80",
     nanosPerCardHour: {
       platform_fleet: 2_925_626_400,
-      connected_cloud: 335_998_800,
+      connected_cloud: 234_046_800,
       self_hosted: 0,
     },
   },
@@ -80,7 +80,7 @@ export const publishedGpuRates = [
     gpuType: "L40S",
     nanosPerCardHour: {
       platform_fleet: 2_138_346_000,
-      connected_cloud: 128_703_600,
+      connected_cloud: 171_064_800,
       self_hosted: 0,
     },
   },
@@ -88,7 +88,7 @@ export const publishedGpuRates = [
     gpuType: "A100-40",
     nanosPerCardHour: {
       platform_fleet: 1_993_860_000,
-      connected_cloud: 254_001_600,
+      connected_cloud: 159_508_800,
       self_hosted: 0,
     },
   },
@@ -96,7 +96,7 @@ export const publishedGpuRates = [
     gpuType: "A10G",
     nanosPerCardHour: {
       platform_fleet: 1_201_201_200,
-      connected_cloud: 64_681_200,
+      connected_cloud: 96_094_800,
       self_hosted: 0,
     },
   },
@@ -104,7 +104,7 @@ export const publishedGpuRates = [
     gpuType: "L4",
     nanosPerCardHour: {
       platform_fleet: 899_398_800,
-      connected_cloud: 48_585_600,
+      connected_cloud: 71_949_600,
       self_hosted: 0,
     },
   },
@@ -112,7 +112,7 @@ export const publishedGpuRates = [
     gpuType: "T4",
     nanosPerCardHour: {
       platform_fleet: 560_880_000,
-      connected_cloud: 26_280_000,
+      connected_cloud: 44_870_400,
       self_hosted: 0,
     },
   },
@@ -126,6 +126,15 @@ export const publishedGpuRates = [
  * customer can tell the traffic is measured and free rather than unmeasured.
  */
 export const EGRESS_NANOS_PER_GIB = 0;
+
+/**
+ * What this platform charges to run a container on capacity somebody else pays for,
+ * as a percentage of the same container's price on our own fleet.
+ *
+ * Compute only. Volumes and egress are this platform's own infrastructure and are
+ * charged whole wherever the container ran.
+ */
+export const CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT = 8;
 
 /** What a gibibyte kept on a volume for a thirty-day month costs. */
 export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = 50_000_000;
