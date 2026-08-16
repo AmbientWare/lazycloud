@@ -139,15 +139,6 @@ export const CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT = 8;
 /** What a gibibyte kept on a volume for a thirty-day month costs. */
 export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = 50_000_000;
 
-/**
- * What every resource on hardware somebody else hosts costs an hour.
- *
- * One figure rather than a table, because the platform neither buys nor manages
- * that hardware and charges the same for all of it. `tests/contracts` is what
- * holds the card to publishing a single rate there.
- */
-export const SELF_HOSTED_NANOS_PER_HOUR = 0;
-
 export const planIds = ["free", "team"] as const;
 export type PlanId = (typeof planIds)[number];
 

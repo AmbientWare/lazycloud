@@ -16,7 +16,6 @@ import {
 import {
   EGRESS_NANOS_PER_GIB,
   VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
-  SELF_HOSTED_NANOS_PER_HOUR,
   CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT,
   planIds,
   publishedGpuRates,
@@ -24,7 +23,6 @@ import {
   NO_CARD_MAX_CONTAINERS,
   publishedPlans,
   publishedShapeRates,
-  type BillingOwner,
   type PublishedGpuRate,
   type PlanId,
   type PublishedPlan,
@@ -62,7 +60,8 @@ const meters = [
 /** One priced line: what it is, what it costs, and the unit that price is in. */
 type RateLine = {
   label: string;
-  nanos: number;
+  /** A published rate in nanodollars, or a figure that is not money — a share of one. */
+  figure: number | string;
   unit: string;
 };
 
@@ -75,42 +74,26 @@ function perLabel(meter: Meter): string {
   return meter === "second" ? "sec" : "hr";
 }
 
-/* Every card ranked for the capacity it is being read on. The published order is
-   the fleet's and the capacities rank differently, so a list that showed one
-   order everywhere would be a descending column that is not descending. Ties keep
-   the card's order.
-
-   Ranked once here rather than per render: nothing in it reads the meter, so the
-   toggle cannot change an answer fixed when the catalog was generated. */
-/** A capacity whose cards this page lists one by one. */
-type RankedOwner = Exclude<BillingOwner, "self_hosted">;
-
-function rankedFor(owner: RankedOwner): readonly PublishedGpuRate[] {
-  return [...publishedGpuRates].sort(
-    (left, right) => right.nanosPerCardHour[owner] - left.nanosPerCardHour[owner],
-  );
-}
-
-/* Only the capacities whose cards this page lists one by one. Self-hosted reaches
-   the reader through `selfHostedGroup`'s single uniform figure, so ranking it here
-   would sort eight models nothing renders. */
-const gpuRatesByOwner = {
-  platform_fleet: rankedFor("platform_fleet"),
-  connected_cloud: rankedFor("connected_cloud"),
-} satisfies Record<RankedOwner, readonly PublishedGpuRate[]>;
+/* Dearest first, ranked once. The page lists cards for one capacity now — what a
+   container costs elsewhere is a percentage of these, stated as one line — and
+   nothing in the ranking reads the meter, so the toggle cannot change an answer
+   fixed when the catalog was generated. */
+const fleetGpuRates: readonly PublishedGpuRate[] = [...publishedGpuRates].sort(
+  (left, right) => right.nanosPerCardHour.platform_fleet - left.nanosPerCardHour.platform_fleet,
+);
 
 /* What a container costs on one kind of capacity: the figures that change with
    where it runs, in the order somebody sizing one asks in. */
-function computeGroups(owner: RankedOwner, meter: Meter): readonly RateGroup[] {
-  const shape = publishedShapeRates[owner];
+function computeGroups(meter: Meter): readonly RateGroup[] {
+  const shape = publishedShapeRates.platform_fleet;
   const per = perLabel(meter);
   return [
     {
       heading: "GPU",
-      lines: gpuRatesByOwner[owner].map((rate) => ({
+      lines: fleetGpuRates.map((rate) => ({
         label: rate.gpuType,
-        nanos: metered(rate.nanosPerCardHour[owner], meter),
-        unit: `/ card / ${per}`,
+        figure: metered(rate.nanosPerCardHour.platform_fleet, meter),
+        unit: `/ ${per}`,
       })),
     },
     {
@@ -118,7 +101,7 @@ function computeGroups(owner: RankedOwner, meter: Meter): readonly RateGroup[] {
       lines: [
         {
           label: "Every core a container holds",
-          nanos: metered(shape.nanosPerCpuCoreHour, meter),
+          figure: metered(shape.nanosPerCpuCoreHour, meter),
           unit: `/ core / ${per}`,
         },
       ],
@@ -128,7 +111,7 @@ function computeGroups(owner: RankedOwner, meter: Meter): readonly RateGroup[] {
       lines: [
         {
           label: "Reserved and resident alike",
-          nanos: metered(shape.nanosPerMemoryGibHour, meter),
+          figure: metered(shape.nanosPerMemoryGibHour, meter),
           unit: `/ GiB / ${per}`,
         },
       ],
@@ -146,7 +129,7 @@ const platformGroups: readonly RateGroup[] = [
     lines: [
       {
         label: "Kept between runs",
-        nanos: VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
+        figure: VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
         /* Thirty days, said rather than implied. Storage meters by the second,
            so a calendar month is charged for the days it actually has — and a
            reader who took "mo" for January would find 31 days on the invoice
@@ -160,29 +143,25 @@ const platformGroups: readonly RateGroup[] = [
     lines: [
       {
         label: "Traffic leaving the platform",
-        nanos: EGRESS_NANOS_PER_GIB,
+        figure: EGRESS_NANOS_PER_GIB,
         unit: "/ GiB",
       },
     ],
   },
-];
-
-/* Hardware the platform neither buys nor manages is published at one figure
-   across every resource, which is what lets it be a line rather than a table of
-   its own. That the card still publishes only one is held by `tests/contracts`,
-   where a card the page cannot state fails before it is charged. */
-function selfHostedGroup(meter: Meter): RateGroup {
-  return {
-    heading: "Machines you host",
+  {
+    heading: "Bring your own cloud",
     lines: [
       {
-        label: "Every core, gibibyte, card, and container",
-        nanos: metered(SELF_HOSTED_NANOS_PER_HOUR, meter),
-        unit: `/ ${perLabel(meter)}`,
+        /* The compute rates, not every rate above it: volumes and egress are this
+           platform's own infrastructure and are charged whole wherever a container
+           ran. Saying "the rates above" would quietly include them. */
+        label: "Management fee on the compute rates above; your provider bills you for the machine",
+        figure: `${CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT}%`,
+        unit: "",
       },
     ],
-  };
-}
+  },
+];
 
 const plans: readonly (PublishedPlan & { id: PlanId })[] = planIds.map((id) => ({
   id,
@@ -201,17 +180,15 @@ const sectionTitle =
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
   const fleetRatesId = useId();
-  const connectedRatesId = useId();
 
   return (
     <MarketingLayout>
       <main id="marketing-main">
-        <section className="relative overflow-hidden border-b border-border bg-background">
-          <div className="marketing-grid-field" aria-hidden="true" />
+        <section className="border-b border-border bg-background">
           <div
             className={cn(
               shell,
-              "relative z-[2] grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
+              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
             )}
           >
             <div className="flex min-w-0 flex-col">
@@ -220,8 +197,7 @@ function MarketingPricing() {
               </h1>
               <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
                 A container meters from the second it starts and stops the second it does. You pay
-                the published rate for the cores, the memory, and the cards it held — and nothing
-                for the rest of an hour it never used.
+                for the compute you use.
               </p>
               <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <PendingMarketingButton className="marketing-action-primary stamp border-brand/45">
@@ -246,7 +222,7 @@ function MarketingPricing() {
                   Resource costs
                 </h2>
                 <MeterToggle
-                  controls={`${fleetRatesId} ${connectedRatesId}`}
+                  controls={fleetRatesId}
                   meter={meter}
                   onChange={setMeter}
                 />
@@ -256,42 +232,9 @@ function MarketingPricing() {
               </p>
 
               <RateList
-                groups={[...computeGroups("platform_fleet", meter), ...platformGroups]}
+                groups={[...computeGroups(meter), ...platformGroups]}
                 id={fleetRatesId}
               />
-            </div>
-          </div>
-        </section>
-
-        <section className="border-b border-border bg-background py-14 sm:py-16 lg:py-20">
-          <div
-            className={cn(
-              shell,
-              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-8 lg:gap-x-20 max-lg:grid-cols-1",
-            )}
-          >
-            <div className="min-w-0">
-              <SectionLabel>Bring your own cloud</SectionLabel>
-              <h2 className={sectionTitle}>
-                Run it in your account. <em>Pay us for the running.</em>
-              </h2>
-              <p className="mt-4 max-w-[30rem] text-[15px] leading-relaxed text-muted-foreground">
-                Connect a cloud account and LazyCloud schedules into it. Your provider bills you for
-                the machine; we charge a management fee of {CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT}%
-                of what the same container costs on our fleet, for placing, running, supervising and
-                metering it. The figures here are that fee, in the unit chosen above.
-              </p>
-            </div>
-
-            <div className="min-w-0">
-              <RateList
-                groups={[...computeGroups("connected_cloud", meter), selfHostedGroup(meter)]}
-                id={connectedRatesId}
-              />
-              <p className="mt-4 text-[12px] leading-relaxed text-muted-foreground">
-                Volumes and egress are priced for the platform rather than for the capacity, so the
-                figures under Resource costs hold wherever a container runs.
-              </p>
             </div>
           </div>
         </section>
@@ -300,9 +243,7 @@ function MarketingPricing() {
           <div className={shell}>
             <div className="mb-6 max-w-[44rem]">
               <SectionLabel>Plans</SectionLabel>
-              <h2 className={sectionTitle}>
-                The rates above are the whole price. <em>A plan only changes the balance.</em>
-              </h2>
+              <h2 className={sectionTitle}>Pricing plans</h2>
             </div>
             <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
               {plans.map((plan) => (
@@ -399,7 +340,7 @@ function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) 
                   {line.label}
                 </span>
                 <span className="shrink-0 font-mono text-[13px] whitespace-nowrap">
-                  <Rate nanos={line.nanos} />{" "}
+                  {typeof line.figure === "number" ? <Rate nanos={line.figure} /> : line.figure}{" "}
                   <span className="text-muted-foreground">{line.unit}</span>
                 </span>
               </p>

@@ -48,11 +48,12 @@ def test_the_page_is_published_from_the_card_the_platform_bills() -> None:
 def test_the_page_states_every_figure_the_platform_charges() -> None:
     """Nothing on the card is billed without a line on the page saying so.
 
-    The page lists what a container's *resources* cost — cores, memory, cards —
-    and has no line for the container itself, and it states capacity somebody
-    else hosts as one figure rather than a table. Both are shapes of the page
-    rather than facts about the card, so a card that outgrew either would be
-    billed at a figure no reader was shown.
+    The page lists what a container's *resources* cost on the fleet — cores,
+    memory, cards — and has no line for the container itself, nor any price for
+    hardware somebody else hosts. Both are shapes of the page rather than facts
+    about the card, so a card that outgrew either would be billed at a figure no
+    reader was shown. What a container costs in a customer's own account is the
+    one figure the page does state as a share, so it needs no assertion here.
 
     Asserted against the card rather than inside the generator: the generator
     runs only when somebody regenerates the catalog, while `publish-rates` writes
@@ -71,9 +72,9 @@ def test_the_page_states_every_figure_the_platform_charges() -> None:
     for shape in PUBLISHED_SHAPE_RATES:
         if shape.billing_owner is UsageBillingOwner.SelfHosted:
             self_hosted |= {shape.nanos_per_cpu_core_hour, shape.nanos_per_memory_gib_hour}
-    assert len(self_hosted) == 1, (
-        "machines somebody else hosts no longer publish one rate across every resource, "
-        "so the page cannot state them as a single line"
+    assert self_hosted == {0}, (
+        "hardware somebody else hosts is no longer free, and the pricing page states "
+        "no figure for it at all"
     )
 
 

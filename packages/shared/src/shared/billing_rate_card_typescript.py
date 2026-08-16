@@ -30,7 +30,6 @@ from shared.billing_rate_card import (
     PublishedGpuRate,
     PublishedPlan,
 )
-from shared.usage import UsageBillingOwner
 
 REGENERATE_COMMAND = (
     "uv run lazycloud-admin billing write-pricing-catalog "
@@ -209,16 +208,7 @@ def _platform_rates() -> str:
         f"export const CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT = {_fee_percent()};\n"
         "\n"
         "/** What a gibibyte kept on a volume for a thirty-day month costs. */\n"
-        f"export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = {volume};\n"
-        "\n"
-        "/**\n"
-        " * What every resource on hardware somebody else hosts costs an hour.\n"
-        " *\n"
-        " * One figure rather than a table, because the platform neither buys nor manages\n"
-        " * that hardware and charges the same for all of it. `tests/contracts` is what\n"
-        " * holds the card to publishing a single rate there.\n"
-        " */\n"
-        f"export const SELF_HOSTED_NANOS_PER_HOUR = {_integer(_self_hosted_rate())};"
+        f"export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = {volume};"
     )
 
 
@@ -229,15 +219,6 @@ def _fee_percent() -> str:
     if percent != percent.to_integral_value():
         raise ValueError(f"{percent} is not a whole percentage the page can state")
     return str(int(percent))
-
-
-def _self_hosted_rate() -> int:
-    """The one figure every self-hosted resource is published at."""
-
-    for shape in PUBLISHED_SHAPE_RATES:
-        if shape.billing_owner is UsageBillingOwner.SelfHosted:
-            return shape.nanos_per_cpu_core_hour
-    raise ValueError("the card publishes no rate for hardware somebody else hosts")
 
 
 def _plan_ids() -> str:
