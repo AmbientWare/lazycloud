@@ -17,6 +17,7 @@ import {
   EGRESS_NANOS_PER_GIB,
   VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
   SELF_HOSTED_NANOS_PER_HOUR,
+  CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT,
   planIds,
   publishedGpuRates,
   NO_CARD_INCLUDED_NANOS,
@@ -276,8 +277,9 @@ function MarketingPricing() {
               </h2>
               <p className="mt-4 max-w-[30rem] text-[15px] leading-relaxed text-muted-foreground">
                 Connect a cloud account and LazyCloud schedules into it. Your provider bills you for
-                the machine it placed the container on; the figures here are what this platform
-                charges on top of that, in the unit chosen above.
+                the machine; we charge a management fee of {CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT}%
+                of what the same container costs on our fleet, for placing, running, supervising and
+                metering it. The figures here are that fee, in the unit chosen above.
               </p>
             </div>
 

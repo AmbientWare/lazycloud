@@ -20,6 +20,7 @@ because the published figure it derives from is the exact one.
 from __future__ import annotations
 
 from shared.billing_rate_card import (
+    CONNECTED_CLOUD_MANAGEMENT_FEE,
     NO_CARD_INCLUDED_NANOS,
     NO_CARD_MAX_CONTAINERS,
     PUBLISHED_GPU_RATES,
@@ -198,6 +199,15 @@ def _platform_rates() -> str:
         " */\n"
         f"export const EGRESS_NANOS_PER_GIB = {egress};\n"
         "\n"
+        "/**\n"
+        " * What this platform charges to run a container on capacity somebody else pays for,\n"
+        " * as a percentage of the same container's price on our own fleet.\n"
+        " *\n"
+        " * Compute only. Volumes and egress are this platform's own infrastructure and are\n"
+        " * charged whole wherever the container ran.\n"
+        " */\n"
+        f"export const CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT = {_fee_percent()};\n"
+        "\n"
         "/** What a gibibyte kept on a volume for a thirty-day month costs. */\n"
         f"export const VOLUME_STORAGE_NANOS_PER_GIB_MONTH = {volume};\n"
         "\n"
@@ -210,6 +220,15 @@ def _platform_rates() -> str:
         " */\n"
         f"export const SELF_HOSTED_NANOS_PER_HOUR = {_integer(_self_hosted_rate())};"
     )
+
+
+def _fee_percent() -> str:
+    """The management fee as the whole percentage the page states it in."""
+
+    percent = CONNECTED_CLOUD_MANAGEMENT_FEE * 100
+    if percent != percent.to_integral_value():
+        raise ValueError(f"{percent} is not a whole percentage the page can state")
+    return str(int(percent))
 
 
 def _self_hosted_rate() -> int:

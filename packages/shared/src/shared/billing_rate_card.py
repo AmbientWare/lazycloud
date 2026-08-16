@@ -9,7 +9,7 @@ from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-08-17.a"
+PRICING_VERSION = "2026-08-18.a"
 """The label frozen onto every ledger segment these numbers price.
 
 Opaque and unparsed. It exists so "which numbers produced this charge" is
@@ -79,6 +79,20 @@ SECONDS_PER_30_DAY_MONTH = 2_592_000
 byte-second rate is derived against. Thirty days, which the page states outright
 rather than leaving a reader to assume their own calendar month."""
 
+CONNECTED_CLOUD_MANAGEMENT_FEE = Decimal("0.08")
+"""What this platform charges to run a container on capacity somebody else pays for.
+
+A share of what the same container would cost on the fleet, rather than a price
+of its own. Their cloud bills them for the machine; this is the fee for placing,
+scheduling, supervising and metering what runs on it, so it is the one figure
+that decides every connected-cloud compute rate and there is no second table to
+keep in step with the first.
+
+Compute only. Volumes live in this platform's own object store and egress is
+measured here, so both are charged whole wherever the container ran — a share of
+a bill this platform is paying itself would be selling storage below cost.
+"""
+
 STORED_RATE_STEP = Decimal("1E-12")
 """The smallest step the rate columns keep, which every stored rate lands on.
 
@@ -117,6 +131,21 @@ def _stored_rate(exact: Decimal) -> Decimal:
             "publishing it would charge nothing for a dimension the page prices"
         )
     return stored
+
+
+def _management_fee(fleet_nanos_per_hour: int) -> int:
+    """The fleet's hourly price as the fee for running the same thing elsewhere.
+
+    Snapped down to a whole nanodollar a second, because a share of a price is
+    not generally divisible by 3600 and the card refuses a figure that is not.
+    Down rather than nearest, for the reason `_stored_rate` rounds down: the
+    published figure is what a customer is quoted, and landing under it is a
+    rounding artefact where landing over it is a price nobody published. The
+    snap costs at most two thousandths of a percent.
+    """
+
+    fee = int(Decimal(fleet_nanos_per_hour) * CONNECTED_CLOUD_MANAGEMENT_FEE)
+    return fee // _SECONDS_PER_HOUR * _SECONDS_PER_HOUR
 
 
 def _exact_per_second(nanos_per_hour: int) -> Decimal:
@@ -225,11 +254,15 @@ class PublishedShapeRate:
 
 @dataclass(frozen=True, slots=True)
 class PublishedGpuRate:
-    """What one GPU model costs an hour, on each kind of capacity."""
+    """What one GPU model costs an hour, on each kind of capacity.
+
+    One figure, because only the fleet's is a price this platform sets. What a
+    card costs in a customer's own account is that figure times the management
+    fee, and hardware they host themselves is free.
+    """
 
     gpu_type: GpuType
     platform_fleet_nanos_per_card_hour: int
-    connected_cloud_nanos_per_card_hour: int
 
     def nanos_per_card_hour(self, billing_owner: UsageBillingOwner) -> int:
         """What one card of this model costs an hour on that kind of capacity.
@@ -243,7 +276,7 @@ class PublishedGpuRate:
         if billing_owner is UsageBillingOwner.PlatformFleet:
             return self.platform_fleet_nanos_per_card_hour
         if billing_owner is UsageBillingOwner.ConnectedCloud:
-            return self.connected_cloud_nanos_per_card_hour
+            return _management_fee(self.platform_fleet_nanos_per_card_hour)
         if billing_owner is UsageBillingOwner.SelfHosted:
             # Hardware somebody brought, which this platform neither buys nor
             # manages: free by a published zero, the same way the shape rates
@@ -363,11 +396,25 @@ def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTe
     )
 
 
+_PLATFORM_FLEET_SHAPE = PublishedShapeRate(
+    UsageBillingOwner.PlatformFleet,
+    0,
+    55_126_800,
+    7_560_000,
+)
+"""The one compute price this platform sets. Every other capacity derives from it."""
+
 PUBLISHED_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
-    PublishedShapeRate(UsageBillingOwner.PlatformFleet, 0, 55_126_800, 7_560_000),
+    _PLATFORM_FLEET_SHAPE,
     # Capacity in a customer's own cloud account: their provider bills them for
-    # the machine, so this is the fee on what was placed there.
-    PublishedShapeRate(UsageBillingOwner.ConnectedCloud, 0, 2_854_800, 273_600),
+    # the machine, so what this platform charges is the fee for managing what
+    # was placed there — the fleet's own price, shared.
+    PublishedShapeRate(
+        UsageBillingOwner.ConnectedCloud,
+        _management_fee(_PLATFORM_FLEET_SHAPE.nanos_per_container_hour),
+        _management_fee(_PLATFORM_FLEET_SHAPE.nanos_per_cpu_core_hour),
+        _management_fee(_PLATFORM_FLEET_SHAPE.nanos_per_memory_gib_hour),
+    ),
     # Hardware somebody brought. Free by a published zero rather than by nothing
     # being written, so a self-hosted container still prices, still lands in the
     # ledger, and still shows up on the dashboard at $0.00.
@@ -375,14 +422,14 @@ PUBLISHED_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
 )
 
 PUBLISHED_GPU_RATES: tuple[PublishedGpuRate, ...] = (
-    PublishedGpuRate(GpuType.T4, 560_880_000, 26_280_000),
-    PublishedGpuRate(GpuType.A10G, 1_201_201_200, 64_681_200),
-    PublishedGpuRate(GpuType.L4, 899_398_800, 48_585_600),
-    PublishedGpuRate(GpuType.L40S, 2_138_346_000, 128_703_600),
-    PublishedGpuRate(GpuType.A100_40, 1_993_860_000, 254_001_600),
-    PublishedGpuRate(GpuType.A100_80, 2_925_626_400, 335_998_800),
-    PublishedGpuRate(GpuType.H100, 3_372_120_000, 844_801_200),
-    PublishedGpuRate(GpuType.H200, 3_918_236_400, 1_000_800_000),
+    PublishedGpuRate(GpuType.T4, 560_880_000),
+    PublishedGpuRate(GpuType.A10G, 1_201_201_200),
+    PublishedGpuRate(GpuType.L4, 899_398_800),
+    PublishedGpuRate(GpuType.L40S, 2_138_346_000),
+    PublishedGpuRate(GpuType.A100_40, 1_993_860_000),
+    PublishedGpuRate(GpuType.A100_80, 2_925_626_400),
+    PublishedGpuRate(GpuType.H100, 3_372_120_000),
+    PublishedGpuRate(GpuType.H200, 3_918_236_400),
 )
 """Every GPU model the platform schedules, at the price it is rented for.
 
@@ -491,6 +538,7 @@ if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
 
 
 __all__ = [
+    "CONNECTED_CLOUD_MANAGEMENT_FEE",
     "FREE_PLAN_INCLUDED_NANOS",
     "FREE_PLAN_MAX_CONTAINERS",
     "FREE_PLAN_MONTHLY_NANOS",
