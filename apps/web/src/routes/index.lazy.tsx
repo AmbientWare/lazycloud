@@ -343,7 +343,7 @@ function MarketingHome() {
         <FinalCta
           title={
             <>
-              The cloud should keep up with <em>how fast you build.</em>
+              Your cloud should <em>accelerate you</em>, not be the bottleneck.
             </>
           }
           body="Deploy applications, jobs, GPU workloads, and sandboxes from one platform on managed compute or infrastructure you control."
