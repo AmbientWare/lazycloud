@@ -7,7 +7,7 @@ import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { updateWorkspace } from "@/lib/queries/workspace";
 
-import { useWorkspaceIdentityController } from "./controller";
+import { useWorkspaceRenameController } from "./controller";
 
 vi.mock("@/lib/queries/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/queries/workspace")>();
@@ -128,7 +128,7 @@ describe("workspace identity controller", () => {
     const onRenamed = vi.fn();
     const { result, rerender } = renderHook(
       ({ workspaceValue }: { workspaceValue: Workspace }) =>
-        useWorkspaceIdentityController({
+        useWorkspaceRenameController({
           workspace: workspaceValue,
           onRenamed,
         }),
@@ -161,7 +161,7 @@ function renderController({
   onRenamed: (name: string) => void;
 }) {
   return renderHook(
-    () => useWorkspaceIdentityController({ workspace: workspaceValue, onRenamed }),
+    () => useWorkspaceRenameController({ workspace: workspaceValue, onRenamed }),
     { wrapper: controllerWrapper(queryClient) },
   );
 }

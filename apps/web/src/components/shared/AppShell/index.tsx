@@ -165,7 +165,6 @@ export function AppShell() {
       {openSettingsView ? (
         <SettingsDialog
           view={openSettingsView}
-          activeWorkspaceName={workspace.name}
           onViewChange={setSettings}
           onClose={() => setSettings(undefined)}
         />

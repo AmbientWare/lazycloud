@@ -6,13 +6,13 @@ import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { updateWorkspace } from "@/lib/queries/workspace";
 
-export type WorkspaceIdentityMode = "idle" | "editing" | "saving" | "saved" | "error";
+export type WorkspaceRenameMode = "idle" | "editing" | "saving" | "saved" | "error";
 
-type WorkspaceIdentityState = {
+type WorkspaceRenameState = {
   workspaceId: string;
   sourceName: string;
   draftName: string;
-  mode: WorkspaceIdentityMode;
+  mode: WorkspaceRenameMode;
   error: Error | null;
 };
 
@@ -21,8 +21,8 @@ type RenameCommand = {
   name: string;
 };
 
-export type WorkspaceIdentityController = {
-  mode: WorkspaceIdentityMode;
+export type WorkspaceRenameController = {
+  mode: WorkspaceRenameMode;
   draftName: string;
   error: Error | null;
   isEditing: boolean;
@@ -34,15 +34,15 @@ export type WorkspaceIdentityController = {
   save: () => void;
 };
 
-export function useWorkspaceIdentityController({
+export function useWorkspaceRenameController({
   workspace,
   onRenamed,
 }: {
   workspace: Workspace;
   onRenamed: (name: string) => void;
-}): WorkspaceIdentityController {
+}): WorkspaceRenameController {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<WorkspaceIdentityState>(() => idleState(workspace));
+  const [state, setState] = useState<WorkspaceRenameState>(() => idleState(workspace));
   const activeSaves = useRef(new Set<string>());
 
   const workspaceChanged =
@@ -114,7 +114,7 @@ export function useWorkspaceIdentityController({
     canSave,
     beginEditing: () => {
       if (activeSaves.current.has(workspace.id)) return;
-      const editingState: WorkspaceIdentityState = {
+      const editingState: WorkspaceRenameState = {
         workspaceId: workspace.id,
         sourceName: workspace.name,
         draftName: workspace.name,
@@ -150,7 +150,7 @@ export function useWorkspaceIdentityController({
         return;
       }
       activeSaves.current.add(workspace.id);
-      const savingState: WorkspaceIdentityState = {
+      const savingState: WorkspaceRenameState = {
         ...current,
         draftName: name,
         mode: "saving",
@@ -162,7 +162,7 @@ export function useWorkspaceIdentityController({
   };
 }
 
-function idleState(workspace: Workspace): WorkspaceIdentityState {
+function idleState(workspace: Workspace): WorkspaceRenameState {
   return {
     workspaceId: workspace.id,
     sourceName: workspace.name,
@@ -172,7 +172,7 @@ function idleState(workspace: Workspace): WorkspaceIdentityState {
   };
 }
 
-function isEditorMode(mode: WorkspaceIdentityMode): boolean {
+function isEditorMode(mode: WorkspaceRenameMode): boolean {
   return mode === "editing" || mode === "saving" || mode === "error";
 }
 
