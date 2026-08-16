@@ -468,7 +468,9 @@ def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
     """
 
     channel = run.account.channel(gate)
-    summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
+    summary = BillingSummaryResponse.model_validate(
+        channel.post(SUBSCRIBE_ROUTE, {"plan": BillingPlanId.Team.value})
+    )
     if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
         raise RuntimeError(
             f"the subscription route answered with plan {summary.plan.id if summary.plan else None}"

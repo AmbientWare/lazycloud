@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import uuid4
 
 from database.tables.billing import BillingAccountTable
@@ -162,6 +163,14 @@ class BillingAccountRepository:
         everything downstream. `plan` is `None` for an account on no plan, which
         is what an account holds before it is provisioned and again once its
         subscription ends.
+
+        `payment_method_attached_at` is deliberately not among them, and
+        `set_payment_method_attached_at` writes it instead. The columns here move
+        together as one settlement of what the provider says an account is
+        subscribed to; the card arrives on an unrelated delivery, and no caller
+        of this method reads it or has any business restating it. One that had to
+        would be threading a fact it does not own through every call, and the
+        first to get it wrong would erase a customer's card.
         """
 
         row = self.session.scalars(
@@ -184,6 +193,37 @@ class BillingAccountRepository:
             raise ConflictError(f"billing account already exists for user: {user_id}") from exc
         return _account(row)
 
+    def set_payment_method_present(self, *, user_id: str, present: bool, at: datetime) -> bool:
+        """Record whether this account holds a card, reporting whether that moved.
+
+        Its own write rather than part of `upsert` for the reason stated there:
+        the card is settled by a delivery that knows nothing about the
+        subscription, and the two must not overwrite each other.
+
+        Takes whether there is a card, not the instant to store, because both
+        callers ask the same question and neither should have to know that an
+        account which already had one keeps the date it got it. Every cycle
+        boundary re-asserts this, so an instant taken from the caller would walk
+        forward a month at a time and the column would end up meaning "when this
+        was last checked".
+
+        `at` is used only where there was no card before. The boolean reports a
+        real change — not a re-assertion — which is what makes this safe to call
+        on every cycle and still worth logging when it comes back true.
+        """
+
+        row = self.session.scalars(
+            select(BillingAccountTable).where(BillingAccountTable.user_id == user_id)
+        ).first()
+        if row is None:
+            return False
+        current = row.payment_method_attached_at
+        if present == (current is not None):
+            return False
+        row.payment_method_attached_at = at if present else None
+        self.session.flush()
+        return True
+
 
 def _account(row: BillingAccountTable) -> BillingAccount:
     return BillingAccount(
@@ -194,6 +234,9 @@ def _account(row: BillingAccountTable) -> BillingAccount:
         provider_subscription_id=row.provider_subscription_id,
         provider_credit_grant_id=row.provider_credit_grant_id,
         plan=BillingPlanId(row.plan) if row.plan else None,
+        payment_method_attached_at=(
+            to_utc(row.payment_method_attached_at) if row.payment_method_attached_at else None
+        ),
         # The columns come back without a zone on backends that do not keep one,
         # and a naive timestamp on a payment record is a period boundary nobody
         # can place.

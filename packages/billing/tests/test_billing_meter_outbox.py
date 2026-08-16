@@ -17,6 +17,7 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
@@ -32,6 +33,9 @@ class _Provider:
     """A payment provider that answers differently per event, as one does."""
 
     accepted: list[str] = field(default_factory=list)
+
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
 
     def record_meter_event(
         self,
@@ -70,6 +74,9 @@ class _Provider:
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         raise AssertionError("draining the outbox must not read cards")
 
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
+
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
     ) -> None:
@@ -81,7 +88,11 @@ class _Provider:
         raise AssertionError("draining the outbox must not subscribe anyone")
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         raise AssertionError("draining the outbox must not change anyone's plan")
 

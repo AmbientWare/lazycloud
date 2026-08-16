@@ -60,7 +60,7 @@ def function_invoke_stream(
     # cannot be a 402 and reaches the caller as a stream that simply ends,
     # which reads as the platform losing the request rather than declining it.
     with services.context.database.session() as session:
-        services.containers.assert_solvent(session, workspace_id=workspace_id)
+        services.containers.assert_may_start_container(session, workspace_id=workspace_id)
     return StreamingResponse(
         _function_ndjson(service.function_invoke_stream(request)),
         media_type="application/x-ndjson",

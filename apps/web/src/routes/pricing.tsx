@@ -6,8 +6,11 @@ export const Route = createFileRoute("/pricing")({
       { title: "LazyCloud — Pricing" },
       {
         name: "description",
+        /* No figure and no plan name here: the rate card owns both, and a
+           description carrying a copy of them is the one place on the page
+           nobody notices has gone stale. */
         content:
-          "Every resource is charged for the greater of what a container held and what it used, in dollars. Free comes with $5.00 of compute a month, Team is $200 a month with $100.00 included, and every processor, memory, GPU, egress and storage rate is published here.",
+          "The published rate for every GPU, core, gibibyte, volume, and gibibyte of egress, on our fleet or on capacity you bring. Compute meters per second and is charged on the greater of what a container held and what it used; storage is charged for what it keeps.",
       },
     ],
   }),

@@ -44,6 +44,7 @@ from shared.scheduling import (
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
 
+from execution.admission import PaymentAdmission
 from execution.containers.planning import (
     DEFAULT_CONTAINER_DISK_MIB,
     ContainerSchedulingOptions,
@@ -78,18 +79,6 @@ class SchedulerContainerCancellation(Protocol):
 
 class ContainerEventBus(Protocol):
     def send(self, event: EventBusEvent) -> EventBusSendResult: ...
-
-
-class PaymentAdmission(Protocol):
-    """Whether this workspace's account may start more work.
-
-    Beside `AppExecutionAdmission` and asked in the same breath, because the two
-    are the same kind of question: a reason unrelated to capacity why this
-    container must not come into existence. Both are answered inside the
-    transaction that would create it, so a refusal leaves nothing to undo.
-    """
-
-    def assert_solvent(self, session: DatabaseSession, *, workspace_id: str) -> None: ...
 
 
 class AppExecutionAdmission(Protocol):
@@ -145,7 +134,7 @@ class ContainerService:
     workspace_changes: WorkspaceChangePublisher
     runtime_state: ContainerRuntimeStateRepository | None = None
 
-    def assert_solvent(self, session: DatabaseSession, *, workspace_id: str) -> None:
+    def assert_may_start_container(self, session: DatabaseSession, *, workspace_id: str) -> None:
         """Refuse a workspace whose account owes money, before anything exists.
 
         Exposed here rather than left to callers to find, because the two that
@@ -154,7 +143,7 @@ class ContainerService:
         answer in one place.
         """
 
-        self.payment_admission.assert_solvent(session, workspace_id=workspace_id)
+        self.payment_admission.assert_may_start_container(session, workspace_id=workspace_id)
 
     def reserve_pending(
         self,
@@ -164,7 +153,9 @@ class ContainerService:
         # Before the row. Asked ahead of the app check because it is the broader
         # refusal — owing money stops work whether or not an app owns it, and a
         # reservation without an app id skips the check below entirely.
-        self.payment_admission.assert_solvent(session, workspace_id=reservation.workspace_id)
+        self.payment_admission.assert_may_start_container(
+            session, workspace_id=reservation.workspace_id
+        )
         app_id = optional_uuid(reservation.app_id, field="app_id")
         if app_id is not None:
             self.app_admission.assert_active(

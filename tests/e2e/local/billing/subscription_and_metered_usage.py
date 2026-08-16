@@ -180,7 +180,9 @@ def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
     run.provider_credit_grant_id = free.provider_credit_grant_id
     card = attach_default_card(gate, free.provider_customer_id)
 
-    summary = BillingSummaryResponse.model_validate(channel.post(SUBSCRIBE_ROUTE))
+    summary = BillingSummaryResponse.model_validate(
+        channel.post(SUBSCRIBE_ROUTE, {"plan": BillingPlanId.Team.value})
+    )
     if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
         raise RuntimeError(
             f"the subscription route answered with plan {summary.plan.id if summary.plan else None}"

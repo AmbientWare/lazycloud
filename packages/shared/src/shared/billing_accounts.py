@@ -68,6 +68,29 @@ class BillingAccount(ContractModel):
     this is a fast local read for the dashboard and for an upgrade, and never the
     only place a plan is recorded.
     """
+    payment_method_attached_at: datetime | None = None
+    """When this account's card was put on file, `None` while it holds none.
+
+    What an account may spend before anyone can be charged is decided from this,
+    so it has to be answerable without asking the provider: admission runs on the
+    path that starts every container, and a network call there would let the
+    provider's availability decide whether work runs.
+
+    Set when a card is saved and cleared when the last one is removed, so it
+    answers "is there a card now" rather than "was there ever one" — an account
+    that attaches a card, spends against the larger allowance it buys and then
+    detaches would otherwise keep that allowance for good.
+
+    An instant rather than a flag because the sizing decision is made at a cycle
+    boundary and a reader needs to know whether the card predates the cycle it is
+    asking about. What it must not be read as is permission to spend *now*:
+    allowance is a term of a period, and a card removed mid-cycle does not shrink
+    the period already funded.
+
+    `None` is not a judgement about whether the account can pay. An account that
+    holds a card and cannot pay is `PastDue`, a different fact recorded beside
+    this one.
+    """
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

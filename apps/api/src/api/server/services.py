@@ -511,6 +511,7 @@ class ApiServiceCore:
     autoscaler_states: AutoscalerStateService
     volume_metering: PersistentVolumeMeteringService
     volume_filesystem: VolumeFilesystem
+    payment_admission: DatabaseBillingAdmission
     redis_client: RedisClient
     binary_redis_client: RedisClient
     aws_connections: AwsAccountConnectionService | None
@@ -875,12 +876,13 @@ class ApiServices(ApiServiceCore):
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
         )
+        payment_admission = DatabaseBillingAdmission()
         containers = ContainerService(
             context,
             events,
             tasks,
             DatabaseAppExecutionAdmission(),
-            DatabaseBillingAdmission(),
+            payment_admission,
             scheduler=container_scheduler,
             scheduler_cancellation=container_scheduler,
             event_bus=RedisEventBus(redis),
@@ -1042,6 +1044,7 @@ class ApiServices(ApiServiceCore):
             checkpoints=checkpoints,
             autoscaler_states=autoscaler_states,
             volume_metering=volume_metering_service,
+            payment_admission=payment_admission,
             volume_filesystem=resolved_volume_filesystem,
             aws_connections=aws_composition.service if aws_composition is not None else None,
             redis_client=redis,
@@ -1363,6 +1366,7 @@ def _compose_api_services(
         checkpoints=core.checkpoints,
         autoscaler_states=core.autoscaler_states,
         volume_metering=core.volume_metering,
+        payment_admission=core.payment_admission,
         volume_filesystem=core.volume_filesystem,
         redis_client=core.redis_client,
         binary_redis_client=core.binary_redis_client,

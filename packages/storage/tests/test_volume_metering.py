@@ -8,6 +8,7 @@ from api.server.services import ApiServices
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.observability import UsageRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.storage import VolumeTable
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.timestamps import utc_now
@@ -39,7 +40,7 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     observed_at = started_at + _LARGE_WINDOW
     finished_at = observed_at + timedelta(seconds=5)
-    record = isolated_services.volumes.create("metered-data")
+    record = isolated_services.volumes.get_or_create("metered-data", admit=None)
     workspace_id = _set_checkpoint(
         isolated_services,
         volume_name=record.name,
@@ -95,8 +96,8 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
 def test_volume_metering_scans_only_the_stable_volume_namespace(
     isolated_services: ApiServices,
 ) -> None:
-    first = isolated_services.volumes.create("first")
-    second = isolated_services.volumes.create("second")
+    first = isolated_services.volumes.get_or_create("first", admit=None)
+    second = isolated_services.volumes.get_or_create("second", admit=None)
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     workspace_id = _set_checkpoint(
         isolated_services,
@@ -131,7 +132,7 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    record = isolated_services.volumes.create("degraded-final")
+    record = isolated_services.volumes.get_or_create("degraded-final", admit=None)
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     observed_at = started_at + timedelta(seconds=5)
     workspace_id = _set_checkpoint(
@@ -169,27 +170,32 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
     assert checkpoint.metered_at.replace(tzinfo=UTC) == observed_at
 
 
-def test_a_metered_volume_window_is_priced_in_the_transaction_that_records_it(
+def test_a_metered_volume_window_is_priced_and_owed_to_the_provider(
     isolated_services: ApiServices,
 ) -> None:
-    """Volume storage is a billed dimension, so metering it owes a cost.
+    """Volume storage is a billed dimension, so metering it owes a cost and a charge.
 
-    A window recorded without one is money this platform measured and can no
+    A window recorded without a cost is money this platform measured and can no
     longer charge for, and the usage row alone cannot say afterwards whether the
-    cost was skipped or was never owed. Priced at the published zero here, which
-    is the case that would be easiest to leave unwired and hardest to notice: the
-    ledger row and the invoice line still have to exist to say the storage is
-    measured and free.
+    cost was skipped or was never owed. A cost recorded with no meter event owed
+    against it is money the ledger holds that no invoice ever asks for.
+
+    Priced at a real rate rather than at a zero, which is the arithmetic this
+    dimension actually runs: a rate of about 1.8e-8 against a quantity of about
+    4e12, inverting compute's magnitudes by ten orders of magnitude in both
+    directions. A gibibyte held for an hour is 3,865,470,566,400 byte-seconds,
+    which at this rate is 69,443.178725376 nanodollars and freezes at 69,443.
     """
 
+    rate = Decimal("0.000000017965")
     now = utc_now()
     started_at = now + timedelta(minutes=2)
-    observed_at = started_at + timedelta(seconds=10)
-    record = isolated_services.volumes.create("priced-data")
+    observed_at = started_at + timedelta(hours=1)
+    record = isolated_services.volumes.get_or_create("priced-data", admit=None)
     workspace_id = _set_checkpoint(
         isolated_services,
         volume_name=record.name,
-        size_bytes=2_048,
+        size_bytes=2**30,
         metered_at=started_at,
     )
     with isolated_services.context.database.session() as session:
@@ -197,7 +203,7 @@ def test_a_metered_volume_window_is_priced_in_the_transaction_that_records_it(
             pricing_version="test.a",
             effective_at=now + timedelta(minutes=1),
             nanos_per_egress_byte=Decimal(0),
-            nanos_per_volume_byte_second=Decimal(0),
+            nanos_per_volume_byte_second=rate,
         )
 
     result = PersistentVolumeMeteringService(
@@ -214,12 +220,21 @@ def test_a_metered_volume_window_is_priced_in_the_transaction_that_records_it(
                 )
             )
         )
+        owed = list(
+            session.scalars(
+                select(BillingMeterOutboxTable).where(
+                    BillingMeterOutboxTable.identifier == result.usage_record.id
+                )
+            )
+        )
     assert len(segments) == 1
     assert segments[0].dimension == BilledDimension.VolumeStorage.value
-    assert segments[0].rate_nanos_per_unit == Decimal(0)
-    assert segments[0].cost_nanos == 0
+    assert segments[0].rate_nanos_per_unit == rate
+    assert segments[0].cost_nanos == 69_443
     assert segments[0].component == LedgerComponent.VolumeStorage.value
     assert segments[0].quantity == Decimal(result.byte_seconds)
+    assert len(owed) == 1
+    assert owed[0].value_nanos == 69_443
 
 
 class _FailingOccupancyFilesystem(LocalVolumeFilesystem):

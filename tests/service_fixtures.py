@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.identity import (
     UserRepository,
     WorkspaceMemberRepository,
@@ -27,6 +29,7 @@ from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import NO_CARD_INCLUDED_NANOS
 from shared.identity import (
     AuthTokenRecord,
     PlatformRole,
@@ -34,6 +37,7 @@ from shared.identity import (
     WorkspaceRecord,
     WorkspaceStorageConfig,
 )
+from shared.timestamps import utc_now
 from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
 
@@ -66,6 +70,24 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             provider_subscription_id=f"sub_fixture_{user_id}",
             provider_credit_grant_id=f"credgr_fixture_{user_id}",
             plan=BillingPlanId.Free,
+        )
+        # The cycle provisioning opens alongside the subscription. Both or
+        # neither: an account holding a subscription with no allowance period is
+        # a shape production never writes, and admission reads it as an account
+        # with nothing left to spend — so every test that starts a container
+        # would be refused for a state the fixture invented.
+        #
+        # Opened far enough back that a test writing its own cycle over this one
+        # is unambiguously the later of the two. Where periods overlap the most
+        # recently begun takes the answer, and a fixture cycle starting near now
+        # would win against a test's by a margin measured in whichever ran first.
+        now = utc_now()
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=user_id,
+            period_started_at=now - timedelta(days=365),
+            period_ended_at=now + timedelta(days=30),
+            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            funded=False,
         )
         return user_id
 
@@ -197,6 +219,29 @@ def unbilled_account(context: ServiceContext) -> tuple[str, str]:
         user_id = UserRepository(session).create(display_name="unprovisioned").id
         workspace_id = WorkspaceRepository(session).create(name=f"unbilled-{uuid4()}").id
         WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace_id, user_id=user_id)
+    return user_id, workspace_id
+
+
+def carded_account(context: ServiceContext) -> tuple[str, str]:
+    """An unprovisioned workspace and owner whose account already holds a card.
+
+    What a plan's own terms can only be observed against. An account with no card
+    is given what the platform will spend to find out whether it can bill anybody,
+    whatever plan it is on — so a test that put an account on Team and read back
+    the plan's allowance would be reading the cardless figure and calling it a
+    plan.
+
+    The row is written before provisioning rather than after, because
+    provisioning is what buys the first grant and a card attached afterwards
+    would be a cycle already funded at the wrong figure.
+    """
+
+    user_id, workspace_id = unbilled_account(context)
+    with context.database.session() as session:
+        accounts = BillingAccountRepository(session)
+        accounts.lock_for_registration(user_id)
+        accounts.set_payment_method_present(user_id=user_id, present=True, at=utc_now())
+        session.commit()
     return user_id, workspace_id
 
 

@@ -136,7 +136,9 @@ def test_hot_updates_do_not_publish_workspace_change_noise(
 
     task = isolated_services.tasks.create("noisy-save", workspace_id=workspace.id)
     worker = isolated_services.compute.register_worker()
-    volume = isolated_services.volumes.create("metered-volume", workspace=workspace.id)
+    volume = isolated_services.volumes.get_or_create(
+        "metered-volume", workspace=workspace.id, admit=None
+    )
     cursor = repository.current_entry_id(workspace.id)
 
     isolated_services.tasks.save(task)

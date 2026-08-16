@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
@@ -11,11 +12,19 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.identity import (
     WorkspaceMemberRepository,
+    WorkspaceRepository,
 )
+from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS
-from shared.errors import PaymentRequiredError
+from shared.billing_rate_card import (
+    FREE_PLAN_INCLUDED_NANOS,
+    NO_CARD_INCLUDED_NANOS,
+    NO_CARD_MAX_CONTAINERS,
+    TEAM_PLAN_INCLUDED_NANOS,
+)
+from shared.containers import ContainerRecord, ContainerStatus
+from shared.errors import CapacityLimitReachedError, PaymentRequiredError
 from shared.identity import WorkspaceRole
 from shared.payments import (
     HostedPaymentSession,
@@ -23,8 +32,15 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
-from tests.service_fixtures import owned_workspace, unbilled_account, workspace_owner_user_id
+from shared.timestamps import utc_now
+from tests.service_fixtures import (
+    carded_account,
+    owned_workspace,
+    unbilled_account,
+    workspace_owner_user_id,
+)
 
 from billing import BillingAccountService, BillingPlanChangeService, DatabaseBillingAdmission
 
@@ -56,6 +72,9 @@ class _Provider:
     Movable, because a renewal moves it and a plan change does not, and telling
     those two apart is what decides whether an outgoing grant is expired."""
 
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
+
     @property
     def live_grants(self) -> list[str]:
         """Every grant issued that has not since been expired."""
@@ -83,6 +102,9 @@ class _Provider:
 
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         raise AssertionError("subscribing must not read cards")
+
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
 
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
@@ -116,7 +138,11 @@ class _Provider:
         )
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         if plan is not self.plan:
             self.plan_changes.append(plan)
@@ -214,8 +240,8 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
     admission = DatabaseBillingAdmission()
     with isolated_services.context.database.session() as session:
         with pytest.raises(PaymentRequiredError):
-            admission.assert_solvent(session, workspace_id=paying_workspace_id)
-        admission.assert_solvent(session, workspace_id=stranger.id)
+            admission.assert_may_start_container(session, workspace_id=paying_workspace_id)
+        admission.assert_may_start_container(session, workspace_id=stranger.id)
 
 
 def test_provisioning_an_account_twice_leaves_one_customer_and_one_subscription(
@@ -252,7 +278,10 @@ def test_provisioning_an_account_twice_leaves_one_customer_and_one_subscription(
     assert first.provider_subscription_id == again.provider_subscription_id == "sub_1"
     assert provider.customers == [workspace_id]
     assert provider.subscriptions == [BillingPlanId.Free]
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS]
+    # The cardless figure, not the free plan's: signing in provisions a
+    # subscription before anybody has said how they will pay, and what a plan
+    # includes is credit against a bill nobody can raise yet.
+    assert provider.grants == [NO_CARD_INCLUDED_NANOS]
 
 
 def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
@@ -272,7 +301,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     """
 
     provider = _Provider()
-    user_id, workspace_id = unbilled_account(isolated_services.context)
+    user_id, workspace_id = carded_account(isolated_services.context)
 
     with isolated_services.context.database.session() as session:
         BillingAccountService(session).billing_account_for(
@@ -295,7 +324,9 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
         )
         session.commit()
 
-    upgraded = _plan_changes(isolated_services, provider).subscribe(user_id=user_id)
+    upgraded = _plan_changes(isolated_services, provider).change_plan(
+        user_id=user_id, target=BillingPlanId.Team
+    )
 
     with isolated_services.context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
@@ -321,7 +352,9 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     # paid for would include nothing until three days after they bought it.
     assert provider.grant_predecessors == [None, None]
 
-    again = _plan_changes(isolated_services, provider).subscribe(user_id=user_id)
+    again = _plan_changes(isolated_services, provider).change_plan(
+        user_id=user_id, target=BillingPlanId.Team
+    )
 
     assert again.provider_subscription_id == "sub_1"
     assert provider.subscriptions == [BillingPlanId.Free]
@@ -348,7 +381,7 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     """
 
     provider = _Provider()
-    user_id, workspace_id = unbilled_account(isolated_services.context)
+    user_id, workspace_id = carded_account(isolated_services.context)
 
     with isolated_services.context.database.session() as session:
         BillingAccountService(session).billing_account_for(
@@ -359,7 +392,9 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     provider.cycle_started_at = CYCLE_ENDED_AT
     provider.cycle_ended_at = CYCLE_ENDED_AT + (CYCLE_ENDED_AT - CYCLE_STARTED_AT)
 
-    _plan_changes(isolated_services, provider).subscribe(user_id=user_id)
+    _plan_changes(isolated_services, provider).change_plan(
+        user_id=user_id, target=BillingPlanId.Team
+    )
 
     with isolated_services.context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
@@ -410,7 +445,7 @@ def test_an_account_with_no_subscription_cannot_start_work(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
-        admission.assert_solvent(session, workspace_id=workspace_id)
+        admission.assert_may_start_container(session, workspace_id=workspace_id)
 
     # A registration that stopped after the customer is the same answer: half of
     # what provisioning writes is not somewhere work may start from.
@@ -429,4 +464,128 @@ def test_an_account_with_no_subscription_cannot_start_work(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
-        admission.assert_solvent(session, workspace_id=workspace_id)
+        admission.assert_may_start_container(session, workspace_id=workspace_id)
+
+
+def test_an_account_with_a_card_is_admitted_past_its_allowance(
+    isolated_services: ApiServices,
+) -> None:
+    """Spending past what a plan includes is billed, never refused.
+
+    The card gate must not become a spend cap on customers who can be charged.
+    Overage is metered, invoiced and chased through the card on file — refusing
+    it would stop paying customers at a ceiling nobody agreed to, which is the
+    opposite of what a platform selling scalable compute is for.
+
+    The same account with no card is refused on the identical numbers, so what
+    separates the two is only whether anybody can be billed.
+    """
+
+    carded_user_id, carded_workspace_id = carded_account(isolated_services.context)
+    cardless_user_id, cardless_workspace_id = unbilled_account(isolated_services.context)
+    with isolated_services.context.database.session() as session:
+        BillingAccountService(session).billing_account_for(
+            _Provider(), user_id=carded_user_id, workspace_id=carded_workspace_id
+        )
+        # Written rather than provisioned: the fake names one customer for every
+        # account it registers, and two of those collide on the index that keeps
+        # a provider customer belonging to exactly one account.
+        BillingAccountRepository(session).upsert(
+            user_id=cardless_user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{cardless_user_id}",
+            provider_subscription_id=f"sub_{cardless_user_id}",
+            provider_credit_grant_id=f"credgr_{cardless_user_id}",
+            plan=BillingPlanId.Free,
+        )
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=cardless_user_id,
+            period_started_at=CYCLE_STARTED_AT,
+            period_ended_at=CYCLE_ENDED_AT,
+            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            funded=True,
+        )
+        session.commit()
+
+    # Both spend every nanodollar their cycle came with, and then some.
+    now = utc_now()
+    for user_id in (carded_user_id, cardless_user_id):
+        with isolated_services.context.database.session() as session:
+            period = BillingAllowanceRepository(session).current_period(user_id=user_id, at=now)
+            assert period is not None
+            BillingAllowanceRepository(session).increment(
+                user_id=user_id,
+                at=now,
+                cost_nanos=period.allowance_nanos + 1,
+            )
+            session.commit()
+
+    admission = DatabaseBillingAdmission()
+    with isolated_services.context.database.session() as session:
+        admission.assert_may_start_container(session, workspace_id=carded_workspace_id)
+        with pytest.raises(PaymentRequiredError):
+            admission.assert_may_start_container(session, workspace_id=cardless_workspace_id)
+
+
+def test_the_container_limit_counts_every_workspace_the_account_owns(
+    isolated_services: ApiServices,
+) -> None:
+    """The ceiling is a term of a plan, so it is the payer's, not a workspace's.
+
+    Counted per workspace it would not be a ceiling at all: making another
+    workspace is self-serve, so an account wanting twice the limit would click
+    twice. Both workspaces below belong to one owner, and the containers in them
+    add up against the one figure that owner's terms allow.
+
+    Refused as a capacity conflict rather than a payment problem. This account
+    owes nothing — paying would not raise the limit, and telling somebody their
+    card is the issue sends them to fix something that is not broken.
+    """
+
+    user_id, first_workspace_id = unbilled_account(isolated_services.context)
+    with isolated_services.context.database.session() as session:
+        second_workspace_id = WorkspaceRepository(session).create(name=f"second-{uuid4()}").id
+        WorkspaceMemberRepository(session).ensure_owner(
+            workspace_id=second_workspace_id, user_id=user_id
+        )
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{user_id}",
+            provider_subscription_id=f"sub_{user_id}",
+            provider_credit_grant_id=f"credgr_{user_id}",
+            plan=BillingPlanId.Free,
+        )
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=user_id,
+            period_started_at=CYCLE_STARTED_AT,
+            period_ended_at=CYCLE_ENDED_AT,
+            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            funded=True,
+        )
+        session.commit()
+
+    admission = DatabaseBillingAdmission()
+    with isolated_services.context.database.session() as session:
+        admission.assert_may_start_container(session, workspace_id=first_workspace_id)
+
+    # Split across both workspaces, and one of them is only queued: a container
+    # waiting for a worker has already been promised the capacity it asked for.
+    with isolated_services.context.database.session() as session:
+        for index in range(NO_CARD_MAX_CONTAINERS):
+            ContainerRepository(session).upsert(
+                ContainerRecord(
+                    id=str(uuid4()),
+                    name=f"held-{index}",
+                    image="",
+                    command=[],
+                    workspace_id=(first_workspace_id if index % 2 == 0 else second_workspace_id),
+                    status=(ContainerStatus.Pending if index == 0 else ContainerStatus.Running),
+                )
+            )
+        session.commit()
+
+    with isolated_services.context.database.session() as session:
+        for workspace_id in (first_workspace_id, second_workspace_id):
+            with pytest.raises(CapacityLimitReachedError):
+                admission.assert_may_start_container(session, workspace_id=workspace_id)

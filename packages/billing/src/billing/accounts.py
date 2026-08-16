@@ -130,6 +130,7 @@ class BillingAccountService:
                 provider_credit_grant_id=existing.provider_credit_grant_id,
                 subscription=subscription,
                 plan=plan,
+                has_payment_method=existing.payment_method_attached_at is not None,
             ),
             plan=plan,
         )

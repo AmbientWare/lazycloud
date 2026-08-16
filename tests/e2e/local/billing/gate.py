@@ -25,6 +25,7 @@ from lazycloud.config import get_profile
 from provider_stripe import StripeBilling, StripeCatalog, StripeSettings
 from provider_stripe.api import StripeObject, read
 from shared.billing_accounts import BillingAccount
+from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import ContainerShape, LedgerComponent
 from shared.billing_rate_card import PUBLISHED_PLANS
 from shared.http.billing import BillingAllowanceResponse, BillingSummaryResponse
@@ -123,7 +124,20 @@ def billing_gate(*, live: bool, confirm_account: str) -> BillingGate:
     for name in (STRIPE_API_KEY_ENV, DATABASE_URL_ENV):
         if not os.getenv(name, "").strip():
             raise LivePrerequisiteError(f"{name} is required to reach the account under test")
-    provider = StripeSettings().provider()
+    settings = StripeSettings()
+    # Before anything is read, let alone written. These scenarios attach the
+    # provider's documented test cards, subscribe accounts and drive charges
+    # through to settlement; against a live credential that is real customers
+    # and real money, and every other guard here is about *which account* rather
+    # than which kind. The credential is read from the same variable the control
+    # plane uses, so an operator shell that happens to hold the live one is not
+    # an exotic mistake — it is the ordinary way this would go wrong.
+    if settings.live_mode:
+        raise LivePrerequisiteError(
+            f"{STRIPE_API_KEY_ENV} holds a live credential; these scenarios attach test "
+            "cards and charge real customers with one. Point it at test data first"
+        )
+    provider = settings.provider()
     catalog = StripeCatalog(client=provider.client)
     account_id = catalog.account_id()
     if not confirm_account:
@@ -341,10 +355,19 @@ def _require_code_under_test(endpoint: str) -> None:
     subscription route is the newest thing these runs depend on, and an
     unauthenticated call to it is refused for want of a credential where it
     exists and not found where it does not. Nothing is created either way.
+
+    Carries the body the route actually takes, so what this establishes is the
+    route these scenarios post to rather than one that happens to share its
+    address — and so a body the running image would reject can never turn into a
+    refusal this reads as an absence.
     """
 
     try:
-        response = httpx.post(f"{endpoint}{SUBSCRIBE_ROUTE}", timeout=15)
+        response = httpx.post(
+            f"{endpoint}{SUBSCRIBE_ROUTE}",
+            json={"plan": BillingPlanId.Team.value},
+            timeout=15,
+        )
     except httpx.HTTPError as exc:
         raise LivePrerequisiteError(f"the control plane is unavailable: {endpoint}") from exc
     if response.status_code == httpx.codes.NOT_FOUND:

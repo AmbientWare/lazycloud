@@ -26,6 +26,12 @@ export type BillingPlanId = (typeof billingPlanIds)[number];
  * somebody is part-way through. `remaining_nanos` is signed and goes negative
  * once the allowance is overspent — clamping it would hide how far past the line
  * an account actually is, which is the one figure worth reading once it is.
+ *
+ * All three describe usage against this period's terms. None of them is the
+ * amount the payment provider will collect, which includes things this platform
+ * does not model — a balance carried from a period that fell under the
+ * provider's minimum charge, a proration, tax — so nothing rendered from these
+ * should be worded as what the invoice will say.
  */
 export const billingAllowanceSchema = z.object({
   period_started_at: z.string(),
@@ -45,6 +51,9 @@ export type BillingAllowance = z.infer<typeof billingAllowanceSchema>;
  */
 export const billingPlanSchema = z.object({
   id: z.enum(billingPlanIds),
+  // Sent by the server from the same rate card the pricing page compiles in,
+  // so the dashboard and the marketing page cannot disagree about a name.
+  name: z.string(),
   allowance: billingAllowanceSchema.nullable(),
 });
 export type BillingPlan = z.infer<typeof billingPlanSchema>;
@@ -63,5 +72,20 @@ export const billingSummarySchema = z.object({
   // dashboard on a token an administrator minted for it has no customer record,
   // and the management page would have nobody to show.
   portal_available: z.boolean(),
+  // A different question from the one above, which is true from the moment a
+  // customer record exists and so cannot tell an account that has saved a card
+  // from one that has not. How much the account is given, and whether its
+  // running work is stopped when that is spent, both turn on this one.
+  payment_method_on_file: z.boolean(),
+  // What the account may have running at once, and what it has running now.
+  // Both are the account's rather than this workspace's: the containers using
+  // up the ceiling may be in a workspace the person is not currently looking at.
+  max_concurrent_containers: z.number().int().nonnegative(),
+  live_container_count: z.number().int().nonnegative(),
+  // Whether a change of plan is still waiting on an outcome. `plan` above says
+  // what the account holds, which is not what somebody who has just pressed a
+  // button is asking; a change nobody could settle is retried for hours, and
+  // without this the surface offers a button that answers 409.
+  plan_change_pending: z.boolean(),
 });
 export type BillingSummary = z.infer<typeof billingSummarySchema>;

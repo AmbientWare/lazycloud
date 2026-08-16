@@ -130,6 +130,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         meter_outbox=app_services.meter_outbox,
         plan_changes=app_services.plan_changes,
         billing_reconciliation=app_services.billing_reconciliation,
+        billing_enforcement=app_services.billing_enforcement,
         retention=app_services.retention,
         tailnet_cleanup=app_services.tailnet_cleanup,
         custom_domains=app_services.custom_domains,

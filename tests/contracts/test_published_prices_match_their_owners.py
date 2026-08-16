@@ -8,9 +8,14 @@ catches, and why it is a byte comparison rather than a reading of TypeScript.
 
 The stakes are the same in both directions. A rate on the page the platform does
 not hold is a quote nobody honours; a rate the platform holds that the page omits
-is a charge that arrives unannounced. Egress and volume storage are in scope for
-exactly that reason: they are published at a stated zero, and a zero that quietly
-became a number would be the worst version of this failure.
+is a charge that arrives unannounced. The second is the harder one to see, so the
+figures the page has no line for are asserted here rather than left to whoever
+next reads the card beside the page.
+
+What the card can enforce about itself is not here. A figure that does not divide
+into a whole nanodollar a second, or one too small for the rate column to hold,
+raises from `shared.billing_rate_card` at import — for every consumer, including
+`publish-rates`, which writes the money rates and never renders this page.
 """
 
 from __future__ import annotations
@@ -18,18 +23,20 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
-from shared.billing_rate_card import PUBLISHED_COMPUTE_RATES
+from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
+from shared.billing_quotes import BYTES_PER_GIB
+from shared.billing_rate_card import (
+    PUBLISHED_GPU_RATES,
+    PUBLISHED_PLATFORM_RATE,
+    PUBLISHED_SHAPE_RATES,
+    SECONDS_PER_30_DAY_MONTH,
+    STORED_RATE_STEP,
+)
 from shared.billing_rate_card_typescript import REGENERATE_COMMAND, render_pricing_catalog
+from shared.usage import UsageBillingOwner
+from sqlalchemy import Numeric
 
 _CATALOG = Path(__file__).resolve().parents[2] / "apps/web/src/routes/-marketing/pricingCatalog.ts"
-
-_STORED_STEP = Decimal("1E-12")
-"""The smallest step `NUMERIC(30, 12)` keeps.
-
-A published figure whose per-second rate falls between two of these is rounded
-on the way into the rate row, and the platform then bills a rate the page never
-stated.
-"""
 
 
 def test_the_page_is_published_from_the_card_the_platform_bills() -> None:
@@ -38,20 +45,81 @@ def test_the_page_is_published_from_the_card_the_platform_bills() -> None:
     )
 
 
-def test_every_published_rate_survives_the_column_that_stores_it() -> None:
-    """A figure the rate column cannot hold is a price nobody published.
+def test_the_page_states_every_figure_the_platform_charges() -> None:
+    """Nothing on the card is billed without a line on the page saying so.
 
-    The per-hour figures on the page divide down to the per-second rates the
-    ledger multiplies; one needing more than twelve decimal places would be
-    rounded on the way into `NUMERIC(30, 12)`, and the platform would bill a rate
-    the page never stated.
+    The page lists what a container's *resources* cost — cores, memory, cards —
+    and has no line for the container itself, and it states capacity somebody
+    else hosts as one figure rather than a table. Both are shapes of the page
+    rather than facts about the card, so a card that outgrew either would be
+    billed at a figure no reader was shown.
+
+    Asserted against the card rather than inside the generator: the generator
+    runs only when somebody regenerates the catalog, while `publish-rates` writes
+    these figures into the rate tables without it.
     """
 
-    for rate in PUBLISHED_COMPUTE_RATES:
-        for figure in (
-            rate.nanos_per_container_second,
-            rate.nanos_per_cpu_core_second,
-            rate.nanos_per_memory_gib_second,
-            rate.nanos_per_gpu_card_second,
-        ):
-            assert figure.quantize(_STORED_STEP) == figure, rate
+    for shape in PUBLISHED_SHAPE_RATES:
+        assert shape.nanos_per_container_hour == 0, (
+            f"{shape.billing_owner.value} prices a container before its resources, "
+            "which the pricing page has no line for"
+        )
+
+    self_hosted = {
+        rate.nanos_per_card_hour(UsageBillingOwner.SelfHosted) for rate in PUBLISHED_GPU_RATES
+    }
+    for shape in PUBLISHED_SHAPE_RATES:
+        if shape.billing_owner is UsageBillingOwner.SelfHosted:
+            self_hosted |= {shape.nanos_per_cpu_core_hour, shape.nanos_per_memory_gib_hour}
+    assert len(self_hosted) == 1, (
+        "machines somebody else hosts no longer publish one rate across every resource, "
+        "so the page cannot state them as a single line"
+    )
+
+
+def test_platform_rates_never_charge_more_than_the_figure_they_publish() -> None:
+    """The direction the platform rates round in, which is the whole of their design.
+
+    A price per gibibyte-month has no exact rate per byte-second — the divisor
+    carries factors of three — so unlike compute these cannot be published and
+    stored as one number. The published figure is what a customer is quoted, so
+    the stored rate is derived downwards from it and the platform charges
+    fractionally less than the page says.
+
+    Rounding to the nearest representable rate instead reads like an improvement
+    and is the failure: it would charge fractionally more than the published
+    figure, which is a price the platform never stated. Only the volume rate is
+    asserted, because egress is published at zero and a zero rounds to itself in
+    either direction.
+    """
+
+    charged_per_gib_month = (
+        PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second
+        * BYTES_PER_GIB
+        * SECONDS_PER_30_DAY_MONTH
+    )
+    assert charged_per_gib_month <= PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month
+
+
+def test_the_rounding_step_is_the_precision_the_rate_columns_keep() -> None:
+    """The card rounds to a step it names, and the database keeps another.
+
+    `shared` cannot import `database`, so the figure `_stored_rate` quantizes to
+    is a hand-copy of the rate columns' scale. Narrow those columns and the
+    database re-rounds a rate the card had already settled — in whichever
+    direction it chooses, which may be upward, and a rate above the published
+    figure is the one thing the rounding design exists to prevent. Widen them and
+    every rate is truncated further than it needs to be.
+    """
+
+    columns = (
+        PlatformRateTable.__table__.c.nanos_per_egress_byte,
+        PlatformRateTable.__table__.c.nanos_per_volume_byte_second,
+        ComputeRateTable.__table__.c.nanos_per_cpu_core_second,
+        ComputeRateTable.__table__.c.nanos_per_gpu_card_second,
+    )
+    for column in columns:
+        stored = column.type
+        assert isinstance(stored, Numeric), column.name
+        assert stored.scale is not None, column.name
+        assert Decimal(1).scaleb(-stored.scale) == STORED_RATE_STEP, column.name

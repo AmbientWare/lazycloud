@@ -998,6 +998,7 @@ class ControlPlaneService:
         target_workspace: WorkspaceRecord,
     ) -> dict[str, JsonValue]:
         cloned = deepcopy(config)
+        created_volume_names: list[str] = []
         with self.context.database.session() as session:
             secret_repository = SecretRepository(session)
             volume_repository = VolumeRepository(session)
@@ -1023,10 +1024,19 @@ class ControlPlaneService:
                         continue
                     volume = volume_repository.get(volume_name, workspace_id=target_workspace.id)
                     if volume is None:
-                        volume = volume_repository.create(
+                        # Unlike the volumes route, this asks billing nothing. A
+                        # volume is priced on byte-seconds, so the row a clone
+                        # makes is free until something writes to it, and what
+                        # writes to it is a container that was admitted itself.
+                        # Dropping the volume instead — as the secrets branch
+                        # above drops a secret the target lacks — would let the
+                        # clone run and silently keep nothing.
+                        volume, volume_created = volume_repository.create(
                             volume_name,
                             workspace_id=target_workspace.id,
                         )
+                        if volume_created:
+                            created_volume_names.append(volume.name)
                     remapped: dict[str, JsonValue] = {
                         **item,
                         "name": volume.name,
@@ -1035,7 +1045,22 @@ class ControlPlaneService:
                     remapped.pop("path", None)
                     remapped_volumes.append(remapped)
                 cloned["volumes"] = remapped_volumes
+        # After the session, like every other publish here. A volume a clone
+        # brought into existence is one the dashboard has to hear about; without
+        # this it appears only when something else refreshes the list.
+        for created_name in created_volume_names:
+            self._publish_volume_change(target_workspace.id, created_name)
         return cloned
+
+    def _publish_volume_change(self, workspace_id: str, name: str) -> None:
+        if self.workspace_changes is None:
+            return
+        self.workspace_changes.emit_change(
+            workspace_id=workspace_id,
+            topic=WorkspaceChangeTopic.StorageVolumes,
+            change=WorkspaceChangeType.Created,
+            resource_id=name,
+        )
 
     def stub_url(
         self,

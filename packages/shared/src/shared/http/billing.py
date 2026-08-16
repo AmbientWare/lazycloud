@@ -37,6 +37,22 @@ class BillingHostedSessionResponse(HttpModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class BillingPlanChangeRequest(HttpModel):
+    """Which published plan this account is asking to be put on.
+
+    A plan id from the closed set the platform publishes, never a price: the
+    caller names what they chose from the card they were shown, and the server
+    resolves what it costs from that same card. A body carrying money would be a
+    browser quoting a figure back at the platform that published it.
+
+    One field rather than a direction, because a direction is derived from what
+    the account is on and what the target costs — and a caller that could state
+    it separately could state one that disagrees.
+    """
+
+    plan: BillingPlanId
+
+
 class BillingAllowanceResponse(HttpModel):
     """What this account may spend before this period costs it anything.
 
@@ -58,7 +74,16 @@ class BillingAllowanceResponse(HttpModel):
     """Signed, and negative once the allowance is overspent.
 
     Clamping it at zero would erase how far past the line an account is, which is
-    the figure that says what this period's invoice will ask for beyond the plan.
+    what a customer watching their usage most wants to know once they are.
+
+    It is not what the invoice will ask for, and nothing here should present it
+    that way. This is usage against the terms this period opened on, measured
+    from the priced ledger. What is actually collected is the payment provider's
+    answer and includes things this platform never models — a balance carried
+    from a period whose invoice fell under their minimum charge, a proration from
+    a plan change, tax. Those are small and bounded, which is why they are not
+    mirrored here; the reason not to restate them is that a second computation of
+    somebody else's total is one that disagrees with it eventually.
     """
 
 
@@ -71,6 +96,13 @@ class BillingPlanResponse(HttpModel):
     """
 
     id: BillingPlanId
+    name: str
+    """What to call this plan on screen, from the same card the pricing page uses.
+
+    Sent rather than mapped in the browser, because the browser already renders
+    this name on the marketing page from the compiled-in card — a second map kept
+    by hand in the dashboard is the copy that goes stale."""
+
     allowance: BillingAllowanceResponse | None = None
     """`None` between a cycle ending and the renewal that opens the next one.
 
@@ -109,11 +141,47 @@ class BillingSummaryResponse(HttpModel):
     those, so the dashboard offers card setup instead of a dead link.
     """
 
+    payment_method_on_file: bool
+    """Whether a card is saved, which is a different question from the one above.
+
+    `portal_available` is true from the moment a customer record exists, so it
+    cannot tell an account that has saved a card from one that has not. This can,
+    and has to: how much an account is given, and whether its running work is
+    stopped when that is spent, both turn on it — so a customer needs to see
+    which state they are in and what changes if they attach one.
+    """
+
+    max_concurrent_containers: int = Field(ge=0)
+    """How much this account may have running at once on its current terms.
+
+    Zero for an account on no plan, which may run nothing until it is
+    provisioned. A default here would read as headroom that does not exist.
+    """
+
+    live_container_count: int = Field(ge=0)
+    """How much it has running or queued now, across every workspace it owns.
+
+    Reported beside the ceiling because the ceiling is the account's, not the
+    workspace's: someone looking at one workspace cannot otherwise tell why they
+    were refused, since the containers using up the limit may be in another.
+    """
+
+    plan_change_pending: bool
+    """Whether a change of plan is still waiting on an outcome.
+
+    `plan` above says what the account holds, which is not what somebody who has
+    just asked to move is looking for. A change nobody could settle is retried
+    for hours, and a surface without this shows the old plan beside a live button
+    that answers `409` — a pending change the customer cannot see is the one
+    thing this field exists to prevent.
+    """
+
 
 __all__ = [
     "BillingAllowanceResponse",
     "BillingHostedSessionRequest",
     "BillingHostedSessionResponse",
+    "BillingPlanChangeRequest",
     "BillingPlanResponse",
     "BillingSummaryResponse",
 ]

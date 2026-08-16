@@ -17,6 +17,32 @@ Build **every** source-bearing image in one command. Building a subset produces
 a package-digest mismatch that the managed runtime rejects at container start,
 and the error names the digest rather than the stale image.
 
+### Billing, before the first sign-in
+
+An installation that will charge anybody needs both of these before its first
+customer arrives. Signing in provisions a subscription and fails closed if it
+cannot, and a subscription resolves its prices by lookup key — so an account
+whose catalog is unpublished refuses **every** sign-in it receives, not only the
+ones that would have been billed.
+
+```bash
+# Which account, and which kind of account. Dry run first: without --confirm
+# this only reads, and reports `live_mode` alongside what is missing.
+uv run lazycloud-admin billing publish-catalog --confirm-account acct_...
+uv run lazycloud-admin billing publish-catalog --confirm-account acct_... --confirm
+
+# Rates, at or before the first billable second. The dry run attempts the write
+# and rolls it back, so it answers whether the boundary would be accepted.
+uv run lazycloud-admin billing publish-rates --effective-at 2026-01-01T00:00:00Z
+uv run lazycloud-admin billing publish-rates --effective-at 2026-01-01T00:00:00Z --confirm
+```
+
+Both are additive and idempotent, and both refuse rather than edit when what is
+already published disagrees. There is no un-publish for either: a rate boundary
+is a figure customers are charged either side of. `LAZYCLOUD_STRIPE_WEBHOOK_SECRET`
+must be set before the first card is saved — the endpoint refuses every delivery
+without it, and Stripe disables endpoints that keep failing.
+
 ## Publishing a release
 
 Do not perform the sequence by hand. It was written down here first and was

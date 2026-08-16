@@ -5,7 +5,7 @@ import queue
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from time import monotonic
+from time import monotonic, sleep
 from typing import Protocol
 
 from pydantic import field_validator
@@ -80,12 +80,34 @@ class _UsageWindow:
 class ContainerRuntimeMonitorSettings(ContractModel):
     sample_interval_seconds: float = 5.0
     join_timeout_seconds: float = 2.0
+    exit_flush_attempts: int = 3
+    """How many times the last drain of a container's life is attempted.
 
-    @field_validator("sample_interval_seconds", "join_timeout_seconds")
+    The sample loop stops at the first refusal and lets the next tick carry the
+    window, which is right while there is a next tick. At exit there is not one:
+    whatever is still held when this returns is never offered again, so a single
+    unlucky write would lose every second since the previous success.
+
+    Bounded rather than persistent because this runs on the teardown path a
+    customer is waiting on, and because a control plane that has refused three
+    times in a row is not about to answer the fourth.
+    """
+
+    exit_flush_retry_seconds: float = 0.5
+
+    @field_validator("sample_interval_seconds", "join_timeout_seconds", "exit_flush_retry_seconds")
     @classmethod
     def positive_seconds(cls, value: float) -> float:
         if value <= 0:
             msg = "monitor timing values must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("exit_flush_attempts")
+    @classmethod
+    def at_least_one_attempt(cls, value: int) -> int:
+        if value < 1:
+            msg = "the last drain of a container's life must be attempted at least once"
             raise ValueError(msg)
         return value
 
@@ -228,7 +250,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
         if self.metrics is not None:
             self._publish_once(recorded_at=current)
         duration_ms = max(1, int((current - self._started_at) * 1000))
-        usage = self._record_usage_until(recorded_at=current)
+        usage = self._flush_usage(recorded_at=current)
         return ContainerRuntimeMonitoringResult(
             container_id=self.request.container_id,
             started_pid=self.started_pid,
@@ -243,7 +265,65 @@ class _ThreadedContainerRuntimeMonitorHandle:
         while not self._stop.wait(self.settings.sample_interval_seconds):
             current = monotonic()
             self._publish_once(recorded_at=current)
-            self._record_usage_until(recorded_at=current)
+            try:
+                self._record_usage_until(recorded_at=current)
+            except Exception:  # pragma: no cover - defensive worker boundary
+                # This thread is the only thing metering this container between
+                # start and exit. Letting an exception out of it ends metering
+                # silently for the rest of the container's life, and the daemon
+                # thread dying is not something anything downstream observes —
+                # the next signal would be a bill that is short.
+                LOGGER.warning(
+                    "container usage claim failed",
+                    exc_info=True,
+                    extra={"container_id": self.request.container_id},
+                )
+
+    def _flush_usage(self, *, recorded_at: float) -> WorkerUsageEmissionResult | None:
+        """Drain what the container owes for the last time, retrying if refused.
+
+        The sample loop stops at the first refusal on purpose, because the next
+        tick offers the window again. This is the tick after which there is no
+        next one: the thread has stopped, `stop()` is called once, and anything
+        still held when this returns is ground the platform is never told about.
+
+        Retried rather than persisted, and a handful of times rather than
+        forever, because a customer is waiting on this teardown. What exhaustion
+        leaves is a log line naming the container and the windows — the only
+        record available when the thing that would have stored one is the thing
+        refusing.
+        """
+
+        emitted: WorkerUsageEmissionResult | None = None
+        outstanding: list[_UsageWindow] = []
+        for attempt in range(1, self.settings.exit_flush_attempts + 1):
+            try:
+                drained = self._record_usage_until(recorded_at=recorded_at)
+            except Exception:  # pragma: no cover - defensive worker boundary
+                LOGGER.warning(
+                    "container usage claim failed during the final drain",
+                    exc_info=True,
+                    extra={"container_id": self.request.container_id},
+                )
+                drained = None
+            if drained is not None:
+                emitted = drained
+            with self._lock:
+                outstanding = [window for window, _ in self._held]
+            if not outstanding:
+                return emitted
+            if attempt < self.settings.exit_flush_attempts:
+                sleep(self.settings.exit_flush_retry_seconds)
+        LOGGER.error(
+            "container usage was lost: %d window(s) never reached the platform",
+            len(outstanding),
+            extra={
+                "container_id": self.request.container_id,
+                "workspace_id": self.request.workspace_id,
+                "windows": [f"{window.start_ms}-{window.end_ms}ms" for window in outstanding],
+            },
+        )
+        return emitted
 
     def _publish_once(self, *, recorded_at: float) -> None:
         if self.metrics is None:

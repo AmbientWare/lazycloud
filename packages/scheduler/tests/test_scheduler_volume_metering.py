@@ -20,7 +20,7 @@ def test_scheduler_meters_volumes_even_when_workload_loops_are_disabled(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     metered_at = now - timedelta(seconds=120)
     payload = b"persistent-volume-payload"
-    record = isolated_services.volumes.create("metered-while-idle")
+    record = isolated_services.volumes.get_or_create("metered-while-idle", admit=None)
     with isolated_services.context.database.session() as session:
         row = session.scalars(select(VolumeTable).where(VolumeTable.name == record.name)).one()
         row.size_bytes = len(payload)

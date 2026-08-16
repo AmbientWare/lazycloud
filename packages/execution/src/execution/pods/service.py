@@ -254,7 +254,9 @@ class PodControlService:
         )
 
         with self.services.context.database.session() as session:
-            self.services.containers.assert_solvent(session, workspace_id=container.workspace_id)
+            self.services.containers.assert_may_start_container(
+                session, workspace_id=container.workspace_id
+            )
             ContainerRepository(session).records.upsert(
                 container,
                 key=container.id,

@@ -51,6 +51,15 @@ class StopContainerReason(StringEnum):
     Scheduler = "SCHEDULER"
     Preempted = "PREEMPTED"
     Admin = "ADMIN"
+    Unfunded = "UNFUNDED"
+    """The account has no card on file and has spent what it was given.
+
+    Its own reason rather than `Admin` or `Scheduler`, because this is the one a
+    customer is owed an explanation for: nothing went wrong, nobody intervened,
+    and the work stopped because there is no way to bill for more of it. Recorded
+    as `User` it would look like they stopped it themselves.
+    """
+
     Unknown = "UNKNOWN"
 
 

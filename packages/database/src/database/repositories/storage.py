@@ -876,14 +876,26 @@ class VolumeRepository:
             name=record.name,
         )
 
-    def create(self, name: str, *, workspace_id: str) -> VolumeRecord:
-        existing = self.get(name, workspace_id=workspace_id)
-        if existing is not None:
-            return existing
-        return self.records.create(
+    def create(self, name: str, *, workspace_id: str) -> tuple[VolumeRecord, bool]:
+        """Insert this volume, or return the one that beat us to the name.
+
+        Returns whether this call is the one that created it, because the caller
+        publishes a change and admits a new billed thing off that answer — doing
+        either for a volume somebody else created would announce a creation twice.
+
+        The lookup callers do before this one is not a lock. Workspace scoping
+        takes `FOR KEY SHARE`, which does not serialize writers, so two containers
+        mounting the same new volume name during an autoscaler ramp both read
+        absence and both insert. `uq_volumes_workspace_name` is what makes that
+        safe, and catching it here is what turns the loser's container start from
+        an unmapped `IntegrityError` into the volume it was asking for.
+        """
+
+        return self.records.create_or_existing(
             {"name": name},
             workspace_id=workspace_id,
             name=name,
+            existing=lambda: self.get(name, workspace_id=workspace_id),
         )
 
     def get(self, name: str, *, workspace_id: str) -> VolumeRecord | None:

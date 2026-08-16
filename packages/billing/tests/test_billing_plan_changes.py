@@ -13,7 +13,7 @@ from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS
-from shared.errors import UpstreamUnavailableError
+from shared.errors import PaymentRequiredError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.payments import (
     HostedPaymentSession,
@@ -21,10 +21,11 @@ from shared.payments import (
     ProviderCreditGrant,
     ProviderInvoice,
     ProviderSubscription,
+    SubscriptionProration,
 )
 from shared.timestamps import utc_now
 from sqlalchemy import select
-from tests.service_fixtures import unbilled_account
+from tests.service_fixtures import carded_account, unbilled_account
 
 from billing import BillingAccountService, BillingPlanChangeService
 
@@ -44,12 +45,16 @@ class _Provider:
     grants: list[int] = field(default_factory=list)
     expired_grants: list[str] = field(default_factory=list)
     plan_changes: list[BillingPlanId] = field(default_factory=list)
+    prorations: list[SubscriptionProration] = field(default_factory=list)
     subscription_reads: int = 0
     plan: BillingPlanId = BillingPlanId.Free
     status: str = "active"
     swap_error: Exception | None = None
     read_error: Exception | None = None
     grant_error: Exception | None = None
+
+    cards_on_file: set[str] = field(default_factory=set)
+    """Customers the provider says hold something chargeable."""
 
     @property
     def live_grants(self) -> list[str]:
@@ -76,6 +81,9 @@ class _Provider:
     def payment_method_owner(self, *, provider_payment_method_id: str) -> str:
         raise AssertionError("settling a plan change must not read cards")
 
+    def has_payment_method(self, *, provider_customer_id: str) -> bool:
+        return provider_customer_id in self.cards_on_file
+
     def set_default_payment_method(
         self, *, provider_customer_id: str, provider_payment_method_id: str
     ) -> None:
@@ -101,13 +109,18 @@ class _Provider:
         return self._subscription()
 
     def set_subscription_plan(
-        self, *, provider_subscription_id: str, plan: BillingPlanId
+        self,
+        *,
+        provider_subscription_id: str,
+        plan: BillingPlanId,
+        proration: SubscriptionProration,
     ) -> ProviderSubscription:
         del provider_subscription_id
         if self.swap_error is not None:
             raise self.swap_error
         if plan is not self.plan:
             self.plan_changes.append(plan)
+            self.prorations.append(proration)
             self.plan = plan
         return self._subscription()
 
@@ -184,7 +197,7 @@ def test_a_plan_change_the_provider_took_is_finished_by_the_sweep(
 
     provider.grant_error = UpstreamUnavailableError("the provider stopped answering")
     with pytest.raises(UpstreamUnavailableError):
-        service.subscribe(user_id=user_id)
+        service.change_plan(user_id=user_id, target=BillingPlanId.Team)
 
     # The state the defect leaves behind, asserted rather than assumed: charged
     # at the provider, free on the row, and an intent that says so.
@@ -241,7 +254,7 @@ def test_a_plan_change_the_provider_never_took_writes_nothing(
     provider.swap_error = UpstreamUnavailableError("the provider stopped answering")
     provider.read_error = UpstreamUnavailableError("and would not say what it holds")
     with pytest.raises(UpstreamUnavailableError):
-        service.subscribe(user_id=user_id)
+        service.change_plan(user_id=user_id, target=BillingPlanId.Team)
     # Paced back into the queue rather than closed on a read that answered
     # nothing: the intent is the only record that a change was attempted, and a
     # swap that lands after it was thrown away is a charge nobody can find.
@@ -286,7 +299,7 @@ def test_a_plan_change_whose_subscription_ended_is_never_written_back(
     service = _plan_changes(isolated_services, provider)
     provider.grant_error = UpstreamUnavailableError("the provider stopped answering")
     with pytest.raises(UpstreamUnavailableError):
-        service.subscribe(user_id=user_id)
+        service.change_plan(user_id=user_id, target=BillingPlanId.Team)
 
     # The subscription the proration was collected on is cancelled before
     # anything settles the change, and no delivery has arrived to say so.
@@ -311,6 +324,55 @@ def test_a_plan_change_whose_subscription_ended_is_never_written_back(
     assert [event.level for event in reported] == [EventLevel.Error]
 
 
+def test_moving_to_a_cheaper_plan_keeps_the_allowance_this_cycle_opened_with(
+    isolated_services: ApiServices,
+) -> None:
+    """What was bought for this cycle stays bought, and nothing is taken back.
+
+    The period was stamped with Team's allowance and the customer spent against
+    it while it held. Re-terming it down to Free part-way through would leave a
+    smaller figure standing in front of usage that was included when it ran: the
+    provider applies credit at finalization, so the invoice would ask for the
+    difference and bill somebody for compute their plan had already covered.
+
+    So the cycle keeps its allowance and its spend, the grant funding it is
+    neither expired nor replaced — expiring is irreversible and the replacement
+    would be smaller than what has already been spent — and Free applies from the
+    next cycle. The provider is asked for no proration in this direction either:
+    the month was invoiced when it opened, and a customer who paid for it keeps
+    it rather than being refunded part of a plan they used.
+    """
+
+    provider, user_id = _provisioned_account(isolated_services)
+    service = _plan_changes(isolated_services, provider)
+
+    service.change_plan(user_id=user_id, target=BillingPlanId.Team)
+    _spend(isolated_services, user_id, 40_000_000_000)
+    account = service.change_plan(user_id=user_id, target=BillingPlanId.Free)
+
+    with isolated_services.context.database.session() as session:
+        period = BillingAllowanceRepository(session).current_period(
+            user_id=user_id, at=CYCLE_STARTED_AT
+        )
+
+    assert account.plan is BillingPlanId.Free
+    assert period is not None
+    assert (period.allowance_nanos, period.spent_nanos) == (
+        TEAM_PLAN_INCLUDED_NANOS,
+        40_000_000_000,
+    )
+    # The upgrade bought the second grant; the move back bought nothing and ended
+    # nothing, so the customer still holds what this cycle was funded with.
+    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS]
+    assert provider.expired_grants == ["credgr_1"]
+    assert account.provider_credit_grant_id == "credgr_2"
+    assert provider.plan_changes == [BillingPlanId.Team, BillingPlanId.Free]
+    assert provider.prorations == [
+        SubscriptionProration.ChargeDifferenceNow,
+        SubscriptionProration.KeepWhatWasPaidFor,
+    ]
+
+
 def _plan_changes(services: ApiServices, provider: _Provider) -> BillingPlanChangeService:
     return BillingPlanChangeService(
         database=services.context.database,
@@ -320,9 +382,15 @@ def _plan_changes(services: ApiServices, provider: _Provider) -> BillingPlanChan
 
 
 def _provisioned_account(services: ApiServices) -> tuple[_Provider, str]:
-    """An account on the free plan, provisioned the way signing in provisions one."""
+    """An account on the free plan with a card, provisioned as signing in does.
 
-    user_id, workspace_id = unbilled_account(services.context)
+    Carded, because every test below changes its plan, and a plan's own terms are
+    only what an account gets once somebody can be charged for what it spends
+    past them. Cardless, each of these would read back the figure the platform
+    gives away rather than the one the plan includes.
+    """
+
+    user_id, workspace_id = carded_account(services.context)
     provider = _Provider()
     with services.context.database.session() as session:
         BillingAccountService(session).billing_account_for(
@@ -348,3 +416,84 @@ def _account(services: ApiServices, user_id: str) -> BillingAccount:
 def _intent(services: ApiServices) -> BillingPlanChangeIntentTable:
     with services.context.database.session() as session:
         return session.scalars(select(BillingPlanChangeIntentTable)).one()
+
+
+def test_subscribing_without_a_card_is_refused_before_an_intent_exists(
+    isolated_services: ApiServices,
+) -> None:
+    """A plan nobody can be charged for costs no intent and reaches no provider.
+
+    The provider would refuse this too — the swap is sent `error_if_incomplete`
+    — but only after the intent has been committed, and that is the expensive
+    half. An intent holds the account's one open-change slot until its claim
+    expires, is retried on a schedule that spends a provider read each time, and
+    ends in an error-level abandonment asking an operator to account for money
+    that never moved. All of that for a click that was never going to work.
+
+    So the row is what this asserts, not just the error: refusing after writing
+    it would look identical to the caller and cost everything above.
+    """
+
+    user_id, workspace_id = unbilled_account(isolated_services.context)
+    provider = _Provider()
+    with isolated_services.context.database.session() as session:
+        BillingAccountService(session).billing_account_for(
+            provider, user_id=user_id, workspace_id=workspace_id
+        )
+        session.commit()
+
+    service = _plan_changes(isolated_services, provider)
+    with pytest.raises(PaymentRequiredError, match="without a card"):
+        service.change_plan(user_id=user_id, target=BillingPlanId.Team)
+
+    with isolated_services.context.database.session() as session:
+        intents = session.scalars(select(BillingPlanChangeIntentTable)).all()
+        account = BillingAccountRepository(session).get_by_user(user_id)
+    assert intents == [], "a refused subscribe left an intent holding the account's slot"
+    assert account is not None
+    assert account.plan is BillingPlanId.Free
+    assert provider.plan_changes == [], "the provider was asked to swap a plan nobody can pay for"
+
+
+def test_returning_to_a_plan_inside_one_cycle_is_not_charged_twice(
+    isolated_services: ApiServices,
+) -> None:
+    """These days were already paid for at Team's price. They are not sold again.
+
+    Moving down takes nothing back — the month was invoiced when the cycle
+    opened, and the period keeps the allowance it was stamped with. So moving
+    back up inside the same cycle is a reversal, not a purchase: there is no
+    credit sitting against the subscription to offset a second proration, and the
+    period already holds Team's terms, so a second charge would buy an allowance
+    nobody would even receive.
+
+    Read from what the cycle was stamped at rather than from which plan the
+    account is on, because the account is on Free at that moment and Free's price
+    is what makes the move look like an upgrade.
+    """
+
+    provider, user_id = _provisioned_account(isolated_services)
+    service = _plan_changes(isolated_services, provider)
+
+    service.change_plan(user_id=user_id, target=BillingPlanId.Team)
+    service.change_plan(user_id=user_id, target=BillingPlanId.Free)
+    service.change_plan(user_id=user_id, target=BillingPlanId.Team)
+
+    assert provider.plan_changes == [
+        BillingPlanId.Team,
+        BillingPlanId.Free,
+        BillingPlanId.Team,
+    ]
+    # The first move up buys the month. Neither move after it takes money.
+    assert provider.prorations == [
+        SubscriptionProration.ChargeDifferenceNow,
+        SubscriptionProration.KeepWhatWasPaidFor,
+        SubscriptionProration.KeepWhatWasPaidFor,
+    ]
+
+    with isolated_services.context.database.session() as session:
+        period = BillingAllowanceRepository(session).current_period(
+            user_id=user_id, at=CYCLE_STARTED_AT
+        )
+    assert period is not None
+    assert period.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS

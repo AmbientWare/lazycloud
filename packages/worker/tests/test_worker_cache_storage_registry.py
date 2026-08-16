@@ -18,10 +18,9 @@ from worker.worker_lifecycle import (
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
 
 
-def test_worker_lifecycle_orchestrates_keepalive_shutdown_usage_and_cleanup() -> None:
+def test_worker_lifecycle_orchestrates_keepalive_shutdown_and_cleanup() -> None:
     repo = _FakeLifecycleRepo()
     stopper = _FakeStopper()
-    usage = _FakeUsageEmitter()
     cleanup_attempts = {"count": 0}
 
     def flaky_cleanup() -> None:
@@ -33,11 +32,9 @@ def test_worker_lifecycle_orchestrates_keepalive_shutdown_usage_and_cleanup() ->
         worker_id="worker-1",
         repository=repo,
         stopper=stopper,
-        usage_emitter=usage,
         startup_concurrency_limit=1,
         cleanup_retries=2,
         cleanup_actions=[WorkerCleanupAction(name="container", action=flaky_cleanup)],
-        usage_interval_seconds=1,
     )
     first_slot = lifecycle.acquire_start_slot()
     second_slot = lifecycle.acquire_start_slot()
@@ -47,7 +44,6 @@ def test_worker_lifecycle_orchestrates_keepalive_shutdown_usage_and_cleanup() ->
 
     available = lifecycle.mark_available()
     keepalive = lifecycle.keepalive()
-    usage_step = lifecycle.emit_periodic_usage(now=utc_now(), force=True)
     shutdown = lifecycle.shutdown(drain_timeout_seconds=0, stop_grace_seconds=0)
 
     assert first_slot.acquired
@@ -55,35 +51,6 @@ def test_worker_lifecycle_orchestrates_keepalive_shutdown_usage_and_cleanup() ->
     assert released.active_starts == 0
     assert available.status is WorkerLifecycleStatus.Ok
     assert keepalive.status is WorkerLifecycleStatus.Ok
-    assert usage_step.container_ids == ["ctr-1"]
-    assert len(usage.calls) == 2
-    (
-        container_id,
-        duration_ms,
-        window_start_ms,
-        window_end_ms,
-        metering_started_at,
-        metering_ended_at,
-    ) = usage.calls[0]
-    assert container_id == "ctr-1"
-    assert duration_ms == window_end_ms - window_start_ms
-    assert window_start_ms == 0
-    assert window_end_ms >= 5000
-    assert metering_started_at < metering_ended_at
-    (
-        next_container_id,
-        next_duration_ms,
-        next_start_ms,
-        next_end_ms,
-        next_metering_started_at,
-        next_metering_ended_at,
-    ) = usage.calls[1]
-    assert next_container_id == "ctr-1"
-    assert next_duration_ms == next_end_ms - next_start_ms
-    assert next_start_ms == window_end_ms
-    assert next_end_ms > next_start_ms
-    assert next_metering_started_at == metering_ended_at
-    assert next_metering_ended_at > next_metering_started_at
     assert repo.actions[:3] == ["available", "keepalive", "disabled"]
     assert ("ctr-1", False) in stopper.calls
     assert ("ctr-1", True) in stopper.calls
@@ -193,30 +160,3 @@ class _FakeStopper:
     ) -> None:
         del reason
         self.calls.append((container_id, force))
-
-
-@dataclass(slots=True)
-class _FakeUsageEmitter:
-    calls: list[tuple[str, int, int, int, datetime, datetime]] = field(default_factory=list)
-
-    def emit_usage(
-        self,
-        request: ContainerRequestContext,
-        *,
-        duration_ms: int,
-        window_start_ms: int = 0,
-        window_end_ms: int | None = None,
-        metering_window_started_at: datetime,
-        metering_window_ended_at: datetime,
-    ) -> None:
-        end_ms = window_start_ms + duration_ms if window_end_ms is None else window_end_ms
-        self.calls.append(
-            (
-                request.container_id,
-                duration_ms,
-                window_start_ms,
-                end_ms,
-                metering_window_started_at,
-                metering_window_ended_at,
-            )
-        )

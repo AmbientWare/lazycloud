@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar
@@ -12,6 +12,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.errors import NotFoundError
 from shared.identity import UserStatus, WorkspaceStatus
 from sqlalchemy import DateTime, Select, Uuid, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, class_mapper
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.base import ReadOnlyColumnCollection
@@ -300,6 +301,48 @@ class WorkspaceTableRepository[TModel: BaseModel](_TableRecordStore[TModel]):
     ) -> TModel:
         _lock_active_workspace(self.session, workspace_id)
         return self._create(payload, scope_id=workspace_id, name=name, status=status)
+
+    def create_or_existing(
+        self,
+        payload: Mapping[str, PayloadValue],
+        *,
+        workspace_id: str,
+        existing: Callable[[], TModel | None],
+        name: str | None = None,
+        status: str | None = None,
+    ) -> tuple[TModel, bool]:
+        """Insert this row, or hand back the one that won the name.
+
+        For a table whose uniqueness a caller checked with a read. That read is
+        not a lock — workspace scoping takes `FOR KEY SHARE`, which does not
+        serialize writers — so two requests naming the same new resource both see
+        absence and both insert. The constraint is what keeps that safe, and this
+        is what turns the loser's request from an unmapped `IntegrityError` into
+        the row it was asking for.
+
+        A savepoint, never a plain rollback: every caller here has work in flight,
+        and rolling the whole transaction back to absorb one duplicate discards
+        it. Whether this call is the one that inserted comes back with the row,
+        because a caller that publishes a change or admits a new billed thing
+        must not do either for a row somebody else created.
+
+        `existing` is a callback rather than a name, since which columns identify
+        a row is the owning repository's business and not every one is `name`.
+        """
+
+        try:
+            # The context-manager form, so anything else raised in here unwinds
+            # the savepoint too. `create` locks the workspace and validates the
+            # payload, and either can raise; leaving the savepoint open would
+            # hand the caller back a session it cannot use.
+            with self.session.begin_nested():
+                created = self.create(payload, workspace_id=workspace_id, name=name, status=status)
+        except IntegrityError:
+            conflicting = existing()
+            if conflicting is None:
+                raise
+            return conflicting, False
+        return created, True
 
     def create_across_workspaces(
         self,

@@ -49,7 +49,7 @@ test("canonical marketing routes are public, responsive, and accessible", async 
   expect(await marketingSurface.locator('a[href="/pricing"]').count()).toBeGreaterThan(0);
 
   await page.goto("/pricing");
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("One meter");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("The meter starts and stops");
   const pricingOverflow = await marketingSurface.evaluate(
     (element) => element.scrollWidth - element.clientWidth,
   );

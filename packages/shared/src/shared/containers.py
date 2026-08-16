@@ -18,6 +18,23 @@ class ContainerStatus(StringEnum):
     Stopped = "stopped"
 
 
+LIVE_CONTAINER_STATUSES: tuple[ContainerStatus, ...] = (
+    ContainerStatus.Pending,
+    ContainerStatus.Running,
+)
+"""The statuses in which a container is holding capacity.
+
+`Pending` counts. A container waiting for a worker has already been promised the
+capacity it asked for, and leaving it out would let an account queue past a
+concurrency limit and take every slot the moment hardware frees up — a limit
+enforced only against work that already started is not one.
+
+Named once because two places read it and they must not drift: what a limit
+counts and what a shutdown sweep stops have to be the same set, or an account is
+refused for holding containers nothing will ever stop.
+"""
+
+
 class ContainerRecord(ContractModel):
     id: str
     name: str
@@ -48,4 +65,4 @@ class ContainerRecord(ContractModel):
     preemption_settled_at: datetime | None = None
 
 
-__all__ = ["ContainerRecord", "ContainerStatus"]
+__all__ = ["LIVE_CONTAINER_STATUSES", "ContainerRecord", "ContainerStatus"]

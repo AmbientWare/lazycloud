@@ -38,6 +38,25 @@ class StripeSettings(BaseSettings):
         return bool(self.api_key.get_secret_value())
 
     @property
+    def live_mode(self) -> bool:
+        """Whether this credential moves real money.
+
+        Read off the key's own prefix, which is the only thing that says so
+        without a round trip. Stripe issues secret and restricted keys as
+        `sk_live_`/`rk_live_` against a live account and `sk_test_`/`rk_test_`
+        against test data, and nothing else about a key distinguishes the two.
+
+        Not a switch anything branches production behaviour on — there is one
+        code path and it is the same either way. It exists so a command about to
+        write into an account can say which kind it is writing into, and so a
+        scenario that attaches test cards can refuse to run against real
+        customers. An unrecognised prefix reads as live: the failure that costs
+        something is treating a live key as a test one.
+        """
+
+        return not self.api_key.get_secret_value().startswith(("sk_test_", "rk_test_"))
+
+    @property
     def webhooks_configured(self) -> bool:
         """Separate from `configured` because the two arrive separately.
 

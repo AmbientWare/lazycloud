@@ -78,6 +78,9 @@ CRON_JOB_LOCK_TTL_SECONDS = 10
 # Short enough that a scheduler dying mid-sweep does not hold expiry shut for
 # long, and long enough that one sweep finishes inside it.
 POD_EXPIRY_LOCK_TTL_SECONDS = 30
+BILLING_ENFORCEMENT_LOCK_TTL_SECONDS = 30
+"""Long enough for one bounded pass, short enough that a scheduler killed
+mid-sweep does not leave unfunded compute running for a minute."""
 CRON_JOB_DEPLOYMENT_KINDS = {DeploymentKind.Function, DeploymentKind.CronJob}
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
@@ -206,6 +209,26 @@ class SchedulerBillingReconciliationService(Protocol):
     def reconcile(self, *, now: datetime | None = None) -> SchedulerBillingReconciliationBatch: ...
 
 
+class SchedulerBillingEnforcementBatch(Protocol):
+    @property
+    def accounts_checked(self) -> int: ...
+
+    @property
+    def unfunded_count(self) -> int: ...
+
+    @property
+    def stopped_count(self) -> int: ...
+
+    @property
+    def failed_count(self) -> int: ...
+
+
+class SchedulerBillingEnforcementService(Protocol):
+    """The pass that stops compute nobody can be billed for."""
+
+    def enforce(self, *, now: datetime | None = None) -> SchedulerBillingEnforcementBatch: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _MeterEventSweep:
     """What one tick of the outbox did, and what it left behind.
@@ -239,9 +262,18 @@ class _NoBillingReconciliation:
     unreachable_count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _NoBillingEnforcement:
+    accounts_checked: int = 0
+    unfunded_count: int = 0
+    stopped_count: int = 0
+    failed_count: int = 0
+
+
 _NO_METER_EVENT_SWEEP = _MeterEventSweep()
 _NO_PLAN_CHANGES = _NoPlanChanges()
 _NO_BILLING_RECONCILIATION = _NoBillingReconciliation()
+_NO_BILLING_ENFORCEMENT = _NoBillingEnforcement()
 
 
 class SchedulerRetentionBatch(Protocol):
@@ -381,6 +413,7 @@ class SchedulerMaintenanceControls:
     meter_outbox: SchedulerMeterOutboxService | None = None
     plan_changes: SchedulerPlanChangeService | None = None
     billing_reconciliation: SchedulerBillingReconciliationService | None = None
+    billing_enforcement: SchedulerBillingEnforcementService | None = None
     retention: SchedulerRetentionService | None = None
     tailnet_cleanup: SchedulerTailnetCleanupService | None = None
     custom_domains: SchedulerCustomDomainService | None = None
@@ -426,6 +459,16 @@ class Scheduler:
 
     billing_reconcile_interval_seconds: float = 3600.0
     last_billing_reconcile_at: datetime | None = field(default=None, init=False)
+    billing_enforcement_interval_seconds: float = 5.0
+    """How often compute nobody can be billed for is stopped.
+
+    Seconds, not the hour reconciliation runs on, because this interval is money:
+    every second between an account running out and its containers stopping is
+    spend that will not be collected. Five rather than every tick because the
+    lag it adds is small beside the interval usage takes to reach the ledger at
+    all, and a page query per second per replica buys nothing against that."""
+
+    last_billing_enforcement_at: datetime | None = field(default=None, init=False)
     worker_pool_drain_event_signatures: dict[str, tuple[str, ...]] = field(
         default_factory=dict,
         init=False,
@@ -660,6 +703,7 @@ class Scheduler:
         meter_events = self._drain_meter_events(now=now)
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
+        billing_enforcement = self._best_effort_enforce_billing(now=now)
         meter_events_pruned = self._best_effort_prune_meter_events(now=now)
         expired_pods = self._best_effort_expire_pods(now=now) if include_containers else []
         worker_cleanups = self._best_effort_cleanup_workers(now=now) if include_containers else []
@@ -762,6 +806,9 @@ class Scheduler:
             billing_reconcile_checked_count=billing_reconciliation.accounts_checked,
             billing_reconcile_divergent_count=billing_reconciliation.divergent_count,
             billing_reconcile_failure_count=billing_reconciliation.unreachable_count,
+            billing_enforcement_unfunded_count=billing_enforcement.unfunded_count,
+            billing_enforcement_stopped_count=billing_enforcement.stopped_count,
+            billing_enforcement_failure_count=billing_enforcement.failed_count,
             objects_removed=objects_removed,
             retention_failure_count=retention_failure_count,
         )
@@ -918,6 +965,55 @@ class Scheduler:
             self.last_billing_reconcile_at = current
             return _NO_BILLING_RECONCILIATION
         self.last_billing_reconcile_at = current
+        return result
+
+    def _best_effort_enforce_billing(
+        self, *, now: datetime | None = None
+    ) -> SchedulerBillingEnforcementBatch:
+        """Stop compute for accounts nobody can be billed for, on a fast interval.
+
+        Locked, unlike reconciliation beside it, because this one writes: two
+        schedulers sweeping together would each stop the same containers and
+        publish the same lifecycle change twice. Stopping is idempotent for a
+        container already terminal, so the lock is about the wasted pass and the
+        duplicate announcement rather than about correctness.
+
+        The stamp is written on both branches so a failing sweep waits its
+        interval rather than retrying every tick — which for a database that is
+        down would be the loop hammering it.
+        """
+
+        enforcement = self.maintenance.billing_enforcement
+        if enforcement is None:
+            return _NO_BILLING_ENFORCEMENT
+        current = now or utc_now()
+        if (
+            self.last_billing_enforcement_at is not None
+            and (current - self.last_billing_enforcement_at).total_seconds()
+            < self.billing_enforcement_interval_seconds
+        ):
+            return _NO_BILLING_ENFORCEMENT
+        cron_job_locks = self.states.cron_job_locks
+        if cron_job_locks is None:
+            return _NO_BILLING_ENFORCEMENT
+        lock_key = cron_job_locks.key("scheduler", "leases", "billing-enforcement")
+        token = uuid4().hex
+        if not try_acquire_token_lock(
+            cron_job_locks,
+            lock_key,
+            token,
+            ttl_seconds=BILLING_ENFORCEMENT_LOCK_TTL_SECONDS,
+        ):
+            return _NO_BILLING_ENFORCEMENT
+        try:
+            result = enforcement.enforce(now=current)
+        except Exception:
+            LOGGER.exception("scheduler billing enforcement failed")
+            self.last_billing_enforcement_at = current
+            return _NO_BILLING_ENFORCEMENT
+        finally:
+            release_token_lock(cron_job_locks, lock_key, token)
+        self.last_billing_enforcement_at = current
         return result
 
     def _best_effort_prune_meter_events(self, *, now: datetime | None = None) -> int:
@@ -1570,6 +1666,9 @@ class SchedulerRunResult(ContractModel):
     billing_reconcile_checked_count: int = 0
     billing_reconcile_divergent_count: int = 0
     billing_reconcile_failure_count: int = 0
+    billing_enforcement_unfunded_count: int = 0
+    billing_enforcement_stopped_count: int = 0
+    billing_enforcement_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
 

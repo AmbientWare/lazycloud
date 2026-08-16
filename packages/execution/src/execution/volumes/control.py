@@ -46,6 +46,7 @@ from storage.volume_filesystem import (
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 
+from execution.admission import PaymentAdmission
 from execution.context import ExecutionContext
 from execution.volumes.planning import (
     VOLUME_PRESIGNED_URL_MAX_EXPIRES_SECONDS,
@@ -66,6 +67,9 @@ class VolumeControlDependencies(Protocol):
 
     @property
     def volume_metering(self) -> PersistentVolumeMeteringService: ...
+
+    @property
+    def payment_admission(self) -> PaymentAdmission: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +98,15 @@ class VolumeControlService:
         workspace_id: str = "default",
     ) -> GetOrCreateVolumeResponse:
         workspace = self.control_plane.get_workspace(workspace_id)
-        record = self.services.volumes.get(request.name, workspace=workspace.id)
+        # Admitted only where a volume would be created. Resolving one that
+        # already exists is how a container mounts it and how its owner reads
+        # their own files back, and refusing that would be a data-loss incident
+        # wearing a billing control's clothes.
+        record = self.services.volumes.get_or_create(
+            request.name,
+            workspace=workspace.id,
+            admit=self.services.payment_admission,
+        )
         namespace = VolumeNamespace(workspace_id=workspace.id, volume_id=record.id)
         self.filesystem.ensure_volume(namespace)
         return GetOrCreateVolumeResponse(volume=self._volume_instance(record, workspace))

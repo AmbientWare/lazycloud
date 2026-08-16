@@ -22,6 +22,11 @@ class SubscriptionPeriodOutcome(StringEnum):
     invoice finalizing at that moment. A cycle re-termed in place is one plan
     swapped for another inside it, and its outgoing grant has to go or the
     customer holds two allowances for one cycle.
+
+    `Unchanged` is a write that left the row as it stood, which covers a repeat
+    of terms already written and a smaller allowance the period declines to take
+    — both leave the grant that funds the cycle exactly where it is, so they are
+    one answer to the only question the caller asks.
     """
 
     Unchanged = "unchanged"
@@ -33,8 +38,9 @@ class SubscriptionPeriodOutcome(StringEnum):
 class WrittenSubscriptionPeriod:
     """What writing a subscription's cycle did, and what cycle it followed.
 
-    Both answers decide what happens to the grant that funds the cycle, and both
-    are read at the moment the cycle is written, under the lock its caller holds.
+    All three answers decide what happens to the grant that funds the cycle, and
+    all three are read at the moment the cycle is written, under the lock its
+    caller holds.
     """
 
     outcome: SubscriptionPeriodOutcome
@@ -45,6 +51,14 @@ class WrittenSubscriptionPeriod:
     after it ends, and how long that is belongs to the provider whose invoice is
     doing the claiming. An account's first cycle has nothing behind it, which is
     what makes its allowance spendable the moment it is bought.
+    """
+
+    allowance_nanos: int
+    """What the period holds now, which is not always what was asked for.
+
+    The figure a grant has to be bought at, because the period row is what the
+    customer is shown and a grant sized to anything else would fund a different
+    allowance from the one they are reading.
     """
 
 
@@ -90,6 +104,7 @@ class BillingAllowanceRepository:
         period_started_at: datetime,
         period_ended_at: datetime,
         allowance_nanos: int,
+        funded: bool,
     ) -> WrittenSubscriptionPeriod:
         """Make this cycle's terms be these, reporting what that did to them.
 
@@ -101,6 +116,29 @@ class BillingAllowanceRepository:
         A cycle already on these terms is left alone, and one whose terms differ
         — a plan changed part-way through — is re-termed in place so the spend
         already counted against it survives.
+
+        An allowance a customer paid for is never reduced inside the period it
+        was stamped on. What they were given when the cycle opened is what they
+        spent against while it ran, and re-terming it downwards mid-cycle would
+        put the smaller figure in front of usage that was included when it
+        happened: the credit the provider applies at finalization would fall
+        short of the spend the plan had already covered, and the difference would
+        be invoiced. So a smaller figure is declined and the larger one kept,
+        which is the same rule `BillingAllowanceResponse` states to a customer —
+        the allowance is what the period opened on, not what the plan currently
+        includes. The end of the cycle is the provider's own and always takes the
+        new value.
+
+        `funded` is what separates that from the other reason terms shrink. An
+        account nobody can be charged for did not pay for the larger figure: it
+        was given on the expectation that somebody could be billed for whatever
+        was spent past it, and once that stops being true the platform is not
+        holding to it. Attaching a card and removing it again would otherwise
+        keep the larger allowance for the rest of the cycle — and every cycle
+        after, since each renewal re-terms from a period that still holds it —
+        which is the cardless bound removed by the one action a customer can take
+        freely. So an unfunded cycle takes the figure it is given, downwards
+        included, and a funded one keeps what it opened with.
 
         The outcome is what the caller pairs with a grant at the provider. One
         delivered renewal arrives as more than one delivery, so the period is
@@ -162,22 +200,25 @@ class BillingAllowanceRepository:
             return WrittenSubscriptionPeriod(
                 outcome=SubscriptionPeriodOutcome.Opened,
                 previous_period_ended_at=previous_period_ended_at,
+                allowance_nanos=allowance_nanos,
             )
         period_id, existing_ended_at, existing_allowance_nanos = existing
+        held_nanos = max(existing_allowance_nanos, allowance_nanos) if funded else allowance_nanos
         if (
             to_utc(existing_ended_at) == to_utc(period_ended_at)
-            and existing_allowance_nanos == allowance_nanos
+            and held_nanos == existing_allowance_nanos
         ):
             return WrittenSubscriptionPeriod(
                 outcome=SubscriptionPeriodOutcome.Unchanged,
                 previous_period_ended_at=previous_period_ended_at,
+                allowance_nanos=existing_allowance_nanos,
             )
         self.session.execute(
             update(BillingAllowancePeriodTable)
             .where(BillingAllowancePeriodTable.id == period_id)
             .values(
                 period_ended_at=period_ended_at,
-                allowance_nanos=allowance_nanos,
+                allowance_nanos=held_nanos,
                 updated_at=utc_now(),
             )
         )
@@ -185,6 +226,7 @@ class BillingAllowanceRepository:
         return WrittenSubscriptionPeriod(
             outcome=SubscriptionPeriodOutcome.ReTermed,
             previous_period_ended_at=previous_period_ended_at,
+            allowance_nanos=held_nanos,
         )
 
     def increment(self, *, user_id: str, at: datetime, cost_nanos: int) -> None:
