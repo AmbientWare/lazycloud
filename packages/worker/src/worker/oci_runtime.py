@@ -1340,7 +1340,15 @@ class OciRuntimeCommandController:
         if (
             runtime_config.runtime is OciRuntimeName.Runsc
             and operation is RuntimeOperation.State
-            and "loading container: file does not exist" in detail
+            and (
+                "loading container: file does not exist" in detail
+                # The same absence, reported by the OS rather than by runsc: the
+                # state file it wants to open is not there. Recognised because a
+                # container that has already exited is exactly what a stop asks
+                # about, and reading this as a runtime fault fails the shutdown
+                # acknowledgement a delete waits on.
+                or ("loading container: open" in detail and "no such file" in detail)
+            )
         ):
             return True
         return any(

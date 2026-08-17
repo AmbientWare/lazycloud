@@ -59,6 +59,7 @@ def function_invoke_stream(
     # sends its status before the generator runs: a refusal raised inside it
     # cannot be a 402 and reaches the caller as a stream that simply ends,
     # which reads as the platform losing the request rather than declining it.
+    service.assert_may_accept_invocation(request.stub_id)
     with services.context.database.session() as session:
         services.containers.assert_may_start_container(session, workspace_id=workspace_id)
     return StreamingResponse(

@@ -574,9 +574,14 @@ class WorkerRuntimeContainerStopper:
         if self.instances is not None:
             instance = self.instances.get_container_instance(container_id)
             if instance is None:
-                raise RuntimeError(
-                    f"durable container assignment is unavailable for {container_id}"
-                )
+                # Nothing is assigned here, so this container is already not
+                # running and the stop is satisfied. Raising instead would fail
+                # the acknowledgement the control plane waits on, and a delete
+                # that got exactly what it asked for would report that workers
+                # never confirmed it. Pooled containers reach this constantly:
+                # they exit on their own keep-warm window, so a stop routinely
+                # arrives just after the container it names has gone.
+                return
             if self.worker_id and instance.worker_id != self.worker_id:
                 raise RuntimeError(
                     f"container {container_id} is assigned to worker {instance.worker_id!r}, "

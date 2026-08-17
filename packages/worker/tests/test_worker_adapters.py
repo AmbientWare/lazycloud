@@ -85,12 +85,20 @@ def test_worker_runtime_container_stopper_does_not_force_exited_container() -> N
     assert runtime.kill_calls == [("ctr-1", 15, False)]
 
 
-def test_worker_runtime_container_stopper_rejects_missing_durable_assignment() -> None:
+def test_worker_runtime_container_stopper_treats_missing_assignment_as_already_stopped() -> None:
+    """A container this worker holds no assignment for is already not running here.
+
+    Nothing is killed — that is the safety property, and blindly killing an id
+    this worker cannot vouch for is what it prevents. But it is reported as done
+    rather than refused: the control plane waits on this acknowledgement to
+    confirm a shutdown, and a delete that got exactly what it asked for would
+    otherwise time out reporting that no worker ever confirmed it.
+    """
+
     runtime = _RuntimeController(status_value=RuntimeContainerStatus.Running.value)
     stopper = WorkerRuntimeContainerStopper(runtime, instances=_DeleteStore())
 
-    with pytest.raises(RuntimeError, match="durable container assignment is unavailable"):
-        stopper.stop_container("ctr-missing", force=True)
+    stopper.stop_container("ctr-missing", force=True)
 
     assert runtime.kill_calls == []
 

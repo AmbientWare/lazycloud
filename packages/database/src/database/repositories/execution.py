@@ -283,6 +283,26 @@ class TaskRepository:
             or 0
         )
 
+    def count_inflight_for_stub(self, stub_id: str) -> int:
+        """Everything for this stub that has not finished, claimed or not.
+
+        The population a backpressure limit is about: work the caller is still
+        owed an answer for. Counted rather than derived from the claimed and
+        unclaimed counts separately, so a task moving between those two states
+        while both were read cannot be missed by one and double-counted by the
+        other.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(TaskTable.id)).where(
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.status.in_([status.value for status in IN_FLIGHT_TASK_STATUSES]),
+                )
+            )
+            or 0
+        )
+
     def count_claimed_inflight_for_stub(self, stub_id: str) -> int:
         """Work for this stub a container has taken and not yet finished."""
 
