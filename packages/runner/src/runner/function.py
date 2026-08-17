@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import contextlib
 import os
+import signal
 import socket
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
+from multiprocessing import Process
+from types import FrameType
 from typing import Any, Protocol, TextIO
 
 import cloudpickle
@@ -17,6 +21,7 @@ from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
     CONTAINER_ID_ENV,
+    FUNCTION_CONCURRENCY_ENV,
     GATEWAY_HTTP_URL_ENV,
     GATEWAY_TOKEN_ENV,
     KEEP_WARM_SECONDS_ENV,
@@ -682,8 +687,104 @@ def _keep_warm_seconds(value: str | None) -> int:
         return 0
 
 
+@dataclass(slots=True)
+class FunctionProcessManager:
+    """Serve several invocations at once, one process each.
+
+    A process per invocation rather than threads, because everything a second
+    concurrent call would collide on in this runner is process-global: the
+    stdout redirection that attributes logs to a task, and the task id the SDK
+    reads from the environment. One task per process keeps both correct without
+    having to make either of them concurrent.
+
+    Where it differs from a task queue's manager: a worker exiting is the
+    ordinary end of a keep-warm window, not a fault. Only a worker that exits
+    non-zero brings the container down, and the container stops once they have
+    all finished rather than when the first one does.
+    """
+
+    config: FunctionRunnerConfig
+    workers: int
+    poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
+    shutdown: threading.Event = field(default_factory=threading.Event)
+    processes: list[Process] = field(default_factory=list, init=False)
+
+    def run(self) -> int:
+        previous_handlers = {
+            handled_signal: signal.signal(handled_signal, self._request_shutdown)
+            for handled_signal in (signal.SIGINT, signal.SIGTERM)
+        }
+        try:
+            for index in range(self.workers):
+                self.processes.append(self._start_worker(index))
+            while not self.shutdown.wait(self.poll_interval_seconds):
+                codes = [process.exitcode for process in self.processes]
+                failed = next((code for code in codes if code not in (None, 0)), None)
+                if failed is not None:
+                    print(
+                        f"function worker process exited with {failed}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 1
+                if all(code is not None for code in codes):
+                    return 0
+        finally:
+            self.stop()
+            for handled_signal, previous_handler in previous_handlers.items():
+                signal.signal(handled_signal, previous_handler)
+        return 0
+
+    def stop(self) -> None:
+        self.shutdown.set()
+        for process in self.processes:
+            if process.is_alive():
+                process.terminate()
+        deadline = time.monotonic() + 5.0
+        for process in self.processes:
+            process.join(timeout=max(deadline - time.monotonic(), 0.0))
+        for process in self.processes:
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1)
+
+    def _start_worker(self, index: int) -> Process:
+        process = Process(
+            target=_run_function_worker,
+            args=(self.config,),
+            name=f"function-worker-{index}",
+        )
+        process.start()
+        return process
+
+    def _request_shutdown(self, signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        self.shutdown.set()
+
+
+def _run_function_worker(config: FunctionRunnerConfig) -> None:
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise SystemExit(FunctionRunner(config).run())
+
+
 def main() -> int:
-    return FunctionRunner(config_from_env()).run()
+    config = config_from_env()
+    concurrency = _concurrency(os.environ.get(FUNCTION_CONCURRENCY_ENV))
+    if concurrency <= 1:
+        # Served in this process. A manager here would fork one child to do the
+        # same work and add a process to supervise for nothing.
+        return FunctionRunner(config).run()
+    return FunctionProcessManager(config=config, workers=concurrency).run()
+
+
+def _concurrency(value: str | None) -> int:
+    if not value:
+        return 1
+    try:
+        return max(int(value), 1)
+    except ValueError:
+        return 1
 
 
 def _serialize_function_result(

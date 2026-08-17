@@ -9,6 +9,7 @@ from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
     CONTAINER_ID_ENV,
+    FUNCTION_CONCURRENCY_ENV,
     GATEWAY_TOKEN_ENV,
     KEEP_WARM_SECONDS_ENV,
     LIFECYCLE_HOOKS_ENV,
@@ -49,6 +50,7 @@ class FunctionInvokePlan(ContractModel):
 
 
 class FunctionContainerEnvVar(StrEnum):
+    Concurrency = FUNCTION_CONCURRENCY_ENV
     KeepWarmSeconds = KEEP_WARM_SECONDS_ENV
     Handler = "HANDLER"
     GatewayToken = GATEWAY_TOKEN_ENV
@@ -67,6 +69,7 @@ class FunctionContainerStartRequest(ContractModel):
     stub_id: str
     handler: str
     keep_warm_seconds: int = 0
+    concurrency: int = Field(default=1, gt=0)
     gateway_token: str = ""
     container_id: str
     python_executable: ManagedPythonExecutable = FUNCTION_DEFAULT_PYTHON_EXECUTABLE
@@ -233,6 +236,7 @@ def plan_function_container_start(
             # invocation it is running when it claims one, so a task named here
             # would be a guess that the claim then contradicts.
             f"{FunctionContainerEnvVar.KeepWarmSeconds.value}={request.keep_warm_seconds}",
+            f"{FunctionContainerEnvVar.Concurrency.value}={request.concurrency}",
             f"{FunctionContainerEnvVar.Handler.value}={request.handler}",
             f"{FunctionContainerEnvVar.GatewayToken.value}={request.gateway_token}",
             f"{FunctionContainerEnvVar.StubId.value}={request.stub_id}",
