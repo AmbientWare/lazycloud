@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+from shared.deployment_records import DEFAULT_FUNCTION_KEEP_WARM_SECONDS
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy
 
@@ -30,6 +31,9 @@ class FunctionRuntimeConfig(ContainerResourceConfig):
     requires_gpu: bool = False
     task_ttl_seconds: int = Field(default=0, ge=0)
     retries: int = Field(default=0, ge=0)
+    # Idle seconds a container stays available for the next call. `-1` never
+    # scales to zero; `0` is the old behaviour, one container per invocation.
+    keep_warm: int = Field(default=DEFAULT_FUNCTION_KEEP_WARM_SECONDS, ge=-1)
 
     @property
     def gpu_required(self) -> bool:

@@ -175,6 +175,8 @@ from shared.http.endpoints import (
     StartEndpointServeResponse,
 )
 from shared.http.functions import (
+    FunctionClaimRequest,
+    FunctionClaimResponse,
     FunctionCronRequest,
     FunctionCronResponse,
     FunctionGetArgsRequest,
@@ -308,6 +310,8 @@ class FunctionApiService(Protocol):
         poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
     ) -> Iterable[FunctionInvokeResponse]: ...
+
+    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
 
     def function_get_args(self, request: FunctionGetArgsRequest) -> FunctionGetArgsResponse: ...
 

@@ -79,6 +79,48 @@ class FunctionGetArgsResponse(HttpModel):
         return self
 
 
+class FunctionClaimRequest(HttpModel):
+    """A container asking its stub for one invocation to run.
+
+    Names the stub rather than a task, because a pooled container is started for
+    the function and not for any particular call — which call it serves is
+    decided here, by whichever claim wins the row.
+    """
+
+    stub_id: str
+    container_id: str
+
+
+class FunctionClaimedTask(HttpModel):
+    """One invocation, and everything needed to run it.
+
+    Arguments travel with the claim rather than in a second call for them. A
+    warm container claims once per invocation, so a round trip that could be
+    saved is one paid on every call the pooling was built to make cheap.
+    """
+
+    task_id: str
+    root_task_id: str = ""
+    attempt_number: int = 0
+    max_attempts: int = 1
+    invocation: FunctionInvocationPayload
+    dependencies: list[FunctionDependencyBinding] = Field(
+        default_factory=list,
+        max_length=FUNCTION_DEPENDENCY_MAX_COUNT,
+    )
+
+    @model_validator(mode="after")
+    def validate_bindings(self) -> FunctionClaimedTask:
+        validate_function_dependency_bindings(self.dependencies)
+        return self
+
+
+class FunctionClaimResponse(HttpModel):
+    """What the claim found. `None` means nothing was runnable, not an error."""
+
+    task: FunctionClaimedTask | None = None
+
+
 class FunctionSetResultBody(HttpModel):
     task_id: str
     container_id: str
@@ -140,6 +182,9 @@ __all__ = [
     "FunctionCallDependency",
     "FunctionCallGraphNode",
     "FunctionCallGraphResponse",
+    "FunctionClaimRequest",
+    "FunctionClaimResponse",
+    "FunctionClaimedTask",
     "FunctionCronRequest",
     "FunctionCronResponse",
     "FunctionGetArgsRequest",

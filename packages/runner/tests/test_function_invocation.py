@@ -11,7 +11,7 @@ from shared.function_payloads import (
     FunctionDependencyBinding,
     FunctionJsonResult,
 )
-from shared.http.functions import FUNCTION_CALL_REF_MARKER, FunctionGetArgsResponse
+from shared.http.functions import FUNCTION_CALL_REF_MARKER, FunctionClaimedTask
 
 
 def test_runner_substitutes_only_declared_exact_dependency_markers() -> None:
@@ -80,8 +80,9 @@ def _response(
     payload: dict[str, Any],
     *,
     bindings: list[FunctionDependencyBinding] | None = None,
-) -> FunctionGetArgsResponse:
-    return FunctionGetArgsResponse(
+) -> FunctionClaimedTask:
+    return FunctionClaimedTask(
+        task_id="task-1",
         invocation=FunctionCloudpickleInvocation.from_bytes(cloudpickle_bytes(payload)),
         dependencies=bindings or [],
     )

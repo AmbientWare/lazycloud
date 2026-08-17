@@ -342,6 +342,25 @@ class ContainerRepository:
             or 0
         )
 
+    def count_live_for_stub(self, stub_id: str) -> int:
+        """How many containers are already serving this stub, or about to.
+
+        `Pending` counts for the same reason it does per account: a container
+        that has been asked for will answer claims shortly, and starting another
+        because it has not started yet is how a burst turns into a container per
+        call — the arrangement pooling replaced.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(ContainerTable.id)).where(
+                    ContainerTable.stub_id == stub_id,
+                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                )
+            )
+            or 0
+        )
+
     def live_container_ids_for_owner(self, *, owner_user_id: str, limit: int) -> list[str]:
         """Which containers this account is holding capacity for, oldest first.
 

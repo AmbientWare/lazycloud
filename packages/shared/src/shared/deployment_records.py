@@ -24,6 +24,7 @@ DEFAULT_FUNCTION_AUTHORIZED = True
 DEFAULT_FUNCTION_MAX_PENDING_TASKS = 100
 DEFAULT_FUNCTION_MEMORY = "128Mi"
 DEFAULT_FUNCTION_RETRIES = 3
+DEFAULT_FUNCTION_KEEP_WARM_SECONDS = 10
 DEFAULT_FUNCTION_TIMEOUT_SECONDS = 3600
 DEFAULT_HTTP_CPU = 1.0
 DEFAULT_HTTP_KEEP_WARM_SECONDS = 180
@@ -98,9 +99,13 @@ class Resources(ContractModel):
 def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
     """Idle seconds a workload's container survives for, by kind.
 
-    Functions and cron jobs fall through to zero: each invocation is scheduled as
-    an independent task against a container addressed by that task's id, so there
-    is no warm container a later invocation could reach.
+    A function's container outlives the invocation that started it, so a second
+    call arriving inside this window reaches an interpreter that has already
+    imported the handler and already run `on_start`. Short, because the window is
+    also what an idle caller pays for.
+
+    Cron jobs keep zero. Their next run is scheduled rather than arriving, and it
+    is almost never within any window worth holding a container open for.
     """
     deployment_kind = _deployment_kind(kind)
     if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
@@ -109,6 +114,8 @@ def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
         return DEFAULT_POD_KEEP_WARM_SECONDS
     if deployment_kind is DeploymentKind.TaskQueue:
         return DEFAULT_TASK_QUEUE_KEEP_WARM_SECONDS
+    if deployment_kind is DeploymentKind.Function:
+        return DEFAULT_FUNCTION_KEEP_WARM_SECONDS
     return 0
 
 
@@ -319,6 +326,7 @@ __all__ = [
     "DEFAULT_DISK",
     "DEFAULT_FUNCTION_AUTHORIZED",
     "DEFAULT_FUNCTION_CPU",
+    "DEFAULT_FUNCTION_KEEP_WARM_SECONDS",
     "DEFAULT_FUNCTION_MAX_PENDING_TASKS",
     "DEFAULT_FUNCTION_MEMORY",
     "DEFAULT_FUNCTION_RETRIES",
