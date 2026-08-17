@@ -52,7 +52,6 @@ def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
 
     function = app.function(lambda: "function", name="function")
     endpoint = app.endpoint(name="endpoint")(lambda: "endpoint")
-    task_queue = app.task_queue(name="queue")(lambda: "queue")
     pod = app.pod(name="pod")
 
     async def asgi_handler(
@@ -66,7 +65,6 @@ def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
 
     function.deployment_client = deployments
     endpoint.deployment_client = deployments
-    task_queue.deployment_client = deployments
     pod.deployment_client = deployments
     asgi.deployment_client = deployments
 
@@ -75,11 +73,10 @@ def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
         pool="aws",
     )
 
-    assert len(result.resources) == 5
+    assert len(result.resources) == 4
     assert {request.name for request in deployments.stub_requests} == {
         "function",
         "endpoint",
-        "queue",
         "pod",
         "asgi",
     }

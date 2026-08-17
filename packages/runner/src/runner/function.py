@@ -697,10 +697,10 @@ class FunctionProcessManager:
     reads from the environment. One task per process keeps both correct without
     having to make either of them concurrent.
 
-    Where it differs from a task queue's manager: a worker exiting is the
-    ordinary end of a keep-warm window, not a fault. Only a worker that exits
-    non-zero brings the container down, and the container stops once they have
-    all finished rather than when the first one does.
+    A worker exiting is the ordinary end of a keep-warm window rather than a
+    fault, so only a worker that exits non-zero brings the container down, and
+    the container stops once they have all finished rather than when the first
+    one does.
     """
 
     config: FunctionRunnerConfig

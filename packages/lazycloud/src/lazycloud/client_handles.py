@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import urllib.parse
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from shared.deployments import DeploymentKind
 from shared.http.errors import http_api_error_from_body
 from shared.http.functions import FunctionInvokeResponse
-from shared.http.taskqueues import TaskQueuePutResponse
 from shared.serialization import to_json_value
 from typing_extensions import Self
 
@@ -22,7 +21,7 @@ from lazycloud.json_contracts import (
     JsonValue,
     parse_json_object,
 )
-from lazycloud.session.task import Task, TaskBatch, TaskClient
+from lazycloud.session.task import Task, TaskClient
 
 
 class ClientHandleError(RuntimeError):
@@ -233,47 +232,6 @@ class ASGIHandle(ResourceHandle):
         )
 
 
-class TaskQueueHandle(ResourceHandle):
-    def put(self, *args: Any, **kwargs: Any) -> Task | bool:
-        try:
-            response = TaskQueuePutResponse.model_validate(
-                _json_request(
-                    self.invoke_url,
-                    method="POST",
-                    json_body=_call_payload(args, kwargs),
-                    token=self._token(),
-                    timeout_seconds=self.timeout_seconds,
-                )
-            )
-        except ValidationError as exc:
-            raise ClientHandleError("task queue returned an invalid response") from exc
-        if not response.task_id:
-            return False
-        return Task(
-            task_id=response.task_id,
-            client=TaskClient(
-                endpoint=_origin(self.invoke_url),
-                token=self._token(),
-                timeout_seconds=self.timeout_seconds,
-            ),
-        )
-
-    def put_many(self, items: Iterable[Any], **shared_kwargs: Any) -> TaskBatch:
-        submitted: list[Task] = []
-        for index, item in enumerate(items):
-            task = self.put(item, **shared_kwargs)
-            if not isinstance(task, Task):
-                raise ClientHandleError(f"failed to enqueue task queue item {index}")
-            submitted.append(task)
-        return TaskBatch(tuple(submitted))
-
-    async def async_put(self, *args: Any, **kwargs: Any) -> Task | bool:
-        return await asyncio.to_thread(self.put, *args, **kwargs)
-
-    async def async_put_many(self, items: Iterable[Any], **shared_kwargs: Any) -> TaskBatch:
-        return await asyncio.to_thread(self.put_many, items, **shared_kwargs)
-
-
 def handle_from_manifest(
     manifest: ResourceManifest | Mapping[str, JsonValue],
 ) -> ResourceHandle:
@@ -286,8 +244,6 @@ def handle_from_manifest(
         return EndpointHandle(selected)
     if selected.kind is DeploymentKind.Asgi:
         return ASGIHandle(selected)
-    if selected.kind is DeploymentKind.TaskQueue:
-        return TaskQueueHandle(selected)
     return ResourceHandle(selected)
 
 
@@ -417,6 +373,5 @@ __all__ = [
     "FunctionHandle",
     "ResourceHandle",
     "ResourceManifest",
-    "TaskQueueHandle",
     "handle_from_manifest",
 ]

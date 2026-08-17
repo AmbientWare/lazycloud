@@ -17,8 +17,6 @@ from shared.deployment_records import (
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
-    DEFAULT_TASK_QUEUE_CPU,
-    DEFAULT_TASK_QUEUE_MEMORY,
     DeploymentSpec,
     VolumeMount,
 )
@@ -48,8 +46,6 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.pod import Pod, PodOptions
 from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
-from lazycloud.abstractions.taskqueue import TaskQueueFunction, TaskQueueOptions
-from lazycloud.abstractions.taskqueue import _task_queue as task_queue_decorator
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 
 
@@ -762,216 +758,6 @@ class App:
 
         return decorate
 
-    @overload
-    def task_queue(
-        self,
-        func: Callable[P, R],
-        *,
-        image: Image | None = None,
-        name: str | None = None,
-        cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
-        memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
-        disk: str | None = None,
-        gpu: str | None = None,
-        gpu_count: int = 0,
-        timeout: int | None = 3600,
-        retries: int = 3,
-        retry_for: Iterable[type[BaseException]] | None = None,
-        retry_delay_seconds: float = 0.0,
-        retry_policy: RetryPolicyInput = None,
-        workers: int = 1,
-        keep_warm_seconds: int = 10,
-        max_pending_tasks: int = 100,
-        callback_url: str = "",
-        authorized: bool = True,
-        env: dict[str, str] | None = None,
-        secrets: list[str] | None = None,
-        volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-        on_start: LifecycleHookInput = None,
-        on_running: LifecycleHookInput = None,
-        on_success: LifecycleHookInput = None,
-        on_error: LifecycleHookInput = None,
-        on_retry: LifecycleHookInput = None,
-        on_failure: LifecycleHookInput = None,
-        on_cancelled: LifecycleHookInput = None,
-        on_timeout: LifecycleHookInput = None,
-        on_finish: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
-        task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-        checkpoint_enabled: bool = False,
-        inputs: SchemaInput = None,
-        outputs: SchemaInput = None,
-        docker_enabled: bool = False,
-        preemptible: bool = False,
-        pool: PoolInput = None,
-        provider: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> TaskQueueFunction[P, R]: ...
-
-    @overload
-    def task_queue(
-        self,
-        func: None = None,
-        *,
-        image: Image | None = None,
-        name: str | None = None,
-        cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
-        memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
-        disk: str | None = None,
-        gpu: str | None = None,
-        gpu_count: int = 0,
-        timeout: int | None = 3600,
-        retries: int = 3,
-        retry_for: Iterable[type[BaseException]] | None = None,
-        retry_delay_seconds: float = 0.0,
-        retry_policy: RetryPolicyInput = None,
-        workers: int = 1,
-        keep_warm_seconds: int = 10,
-        max_pending_tasks: int = 100,
-        callback_url: str = "",
-        authorized: bool = True,
-        env: dict[str, str] | None = None,
-        secrets: list[str] | None = None,
-        volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-        on_start: LifecycleHookInput = None,
-        on_running: LifecycleHookInput = None,
-        on_success: LifecycleHookInput = None,
-        on_error: LifecycleHookInput = None,
-        on_retry: LifecycleHookInput = None,
-        on_failure: LifecycleHookInput = None,
-        on_cancelled: LifecycleHookInput = None,
-        on_timeout: LifecycleHookInput = None,
-        on_finish: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
-        task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-        checkpoint_enabled: bool = False,
-        inputs: SchemaInput = None,
-        outputs: SchemaInput = None,
-        docker_enabled: bool = False,
-        preemptible: bool = False,
-        pool: PoolInput = None,
-        provider: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Callable[[Callable[P, R]], TaskQueueFunction[P, R]]: ...
-
-    def task_queue(
-        self,
-        func: Callable[P, R] | None = None,
-        *,
-        image: Image | None = None,
-        name: str | None = None,
-        cpu: float | None = DEFAULT_TASK_QUEUE_CPU,
-        memory: str | None = DEFAULT_TASK_QUEUE_MEMORY,
-        disk: str | None = None,
-        gpu: str | None = None,
-        gpu_count: int = 0,
-        timeout: int | None = 3600,
-        retries: int = 3,
-        retry_for: Iterable[type[BaseException]] | None = None,
-        retry_delay_seconds: float = 0.0,
-        retry_policy: RetryPolicyInput = None,
-        workers: int = 1,
-        keep_warm_seconds: int = 10,
-        max_pending_tasks: int = 100,
-        callback_url: str = "",
-        authorized: bool = True,
-        env: dict[str, str] | None = None,
-        secrets: list[str] | None = None,
-        volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-        on_start: LifecycleHookInput = None,
-        on_running: LifecycleHookInput = None,
-        on_success: LifecycleHookInput = None,
-        on_error: LifecycleHookInput = None,
-        on_retry: LifecycleHookInput = None,
-        on_failure: LifecycleHookInput = None,
-        on_cancelled: LifecycleHookInput = None,
-        on_timeout: LifecycleHookInput = None,
-        on_finish: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
-        task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-        checkpoint_enabled: bool = False,
-        inputs: SchemaInput = None,
-        outputs: SchemaInput = None,
-        docker_enabled: bool = False,
-        preemptible: bool = False,
-        pool: PoolInput = None,
-        provider: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> TaskQueueFunction[P, R] | Callable[[Callable[P, R]], TaskQueueFunction[P, R]]:
-        """Register a background task queue function owned by this app.
-
-        Use `@app.task_queue` for async background work submitted with
-        `.put(...)` or `.put_many(...)`. The callable keeps its typed Python
-        signature for local execution while deployed calls are routed through
-        the queue service.
-
-        Args:
-            func: Callable to register when using `app.task_queue(fn)` directly.
-            image: Image definition used to build or select the runtime image.
-            name: Deployment resource name. Defaults to the callable name.
-            cpu, memory, gpu, gpu_count: Compute resources requested per worker.
-            timeout: Maximum runtime for one queued task.
-            retries: Number of retry attempts for failed tasks.
-            retry_for: Exception types that should trigger task retries.
-            retry_delay_seconds: Delay before retrying a failed task.
-            workers: Initial worker count for the queue.
-            keep_warm_seconds: Seconds to keep idle workers available.
-            max_pending_tasks: Queue backpressure limit for pending tasks.
-            callback_url: Optional webhook called for task events.
-            authorized: Whether queue submissions require authentication.
-            env, secrets, volumes: Runtime configuration injected into workers.
-            on_start and task lifecycle hooks: Hooks invoked by the workload runner.
-            autoscaler, task_policy: Scheduling policies.
-            inputs, outputs: Optional schema metadata for clients and validation.
-            docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, provider, metadata: Scheduling group and custom metadata.
-        """
-        kwargs = _task_queue_options(
-            image=image,
-            name=name,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout=timeout,
-            retries=retries,
-            retry_for=retry_for,
-            retry_delay_seconds=retry_delay_seconds,
-            retry_policy=retry_policy,
-            workers=workers,
-            keep_warm_seconds=keep_warm_seconds,
-            max_pending_tasks=max_pending_tasks,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env,
-            secrets=secrets,
-            volumes=volumes,
-            on_start=on_start,
-            on_running=on_running,
-            on_success=on_success,
-            on_error=on_error,
-            on_retry=on_retry,
-            on_failure=on_failure,
-            on_cancelled=on_cancelled,
-            on_timeout=on_timeout,
-            on_finish=on_finish,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            pool=pool,
-            provider=provider,
-            metadata=metadata,
-        )
-
-        def decorate(target: Callable[P, R]) -> TaskQueueFunction[P, R]:
-            return self._register(task_queue_decorator(target, _app_slug=self.slug, **kwargs))
-
-        return decorate if func is None else decorate(func)
 
     def pod(
         self,
@@ -1204,10 +990,10 @@ class App:
         resource: str | None = None,
         timeout: int = 0,
     ) -> object:
-        """Serve one endpoint, ASGI app, or task queue resource for preview.
+        """Serve one endpoint or ASGI app resource for preview.
 
         Use `resource` when an app contains more than one serveable resource.
-        Select by name or by `"kind:name"`, such as `"task-queue:summarize"`.
+        Select by name or by `"kind:name"`, such as `"endpoint:summarize"`.
 
         Args:
             resource: Optional resource selector for the preview target.
@@ -1395,36 +1181,6 @@ def _configure_deployable_resource(
         if pool is not None:
             resource.pool = pool
         return
-    if isinstance(resource, TaskQueueFunction):
-        unsupported = _unsupported_override_names(
-            ports=ports,
-            tcp=tcp,
-            entrypoint=entrypoint,
-        )
-        if unsupported:
-            spec = resource.spec()
-            _raise_unsupported_overrides(spec, unsupported)
-        if image is not None:
-            resource.image = image
-        if cpu is not None:
-            resource.cpu = cpu
-        if memory is not None:
-            resource.memory = memory
-        if gpu is not None:
-            resource.gpu = gpu
-        if gpu_count is not None:
-            resource.gpu_count = gpu_count
-        if env:
-            resource.env.update(env)
-        if secrets:
-            resource.secrets.extend(secret for secret in secrets if secret not in resource.secrets)
-        if keep_warm is not None:
-            resource.keep_warm_seconds = keep_warm
-        if pool is not None:
-            resource.pool = pool
-        if preemptible is not None:
-            resource.preemptible = preemptible
-        return
     if isinstance(resource, Pod):
         resource.configure(
             image=image,
@@ -1477,7 +1233,6 @@ def _is_serveable(resource: AppResource) -> bool:
     return resource.spec().kind in {
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
-        DeploymentKind.TaskQueue,
     }
 
 
@@ -1718,90 +1473,6 @@ def _asgi_options(
         "provider": provider,
     }
 
-
-def _task_queue_options(
-    *,
-    image: Image | None,
-    name: str | None,
-    cpu: float | None,
-    memory: str | None,
-    disk: str | None,
-    gpu: str | None,
-    gpu_count: int,
-    timeout: int | None,
-    retries: int,
-    retry_for: Iterable[type[BaseException]] | None,
-    retry_delay_seconds: float,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None,
-    workers: int,
-    keep_warm_seconds: int,
-    max_pending_tasks: int,
-    callback_url: str,
-    authorized: bool,
-    env: dict[str, str] | None,
-    secrets: list[str] | None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None,
-    on_start: LifecycleHookInput,
-    on_running: LifecycleHookInput,
-    on_success: LifecycleHookInput,
-    on_error: LifecycleHookInput,
-    on_retry: LifecycleHookInput,
-    on_failure: LifecycleHookInput,
-    on_cancelled: LifecycleHookInput,
-    on_timeout: LifecycleHookInput,
-    on_finish: LifecycleHookInput,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None,
-    checkpoint_enabled: bool,
-    inputs: SchemaInput,
-    outputs: SchemaInput,
-    docker_enabled: bool,
-    preemptible: bool,
-    pool: PoolInput,
-    provider: str | None,
-    metadata: dict[str, Any] | None,
-) -> TaskQueueOptions:
-    return {
-        "image": image,
-        "name": name,
-        "cpu": cpu,
-        "memory": memory,
-        "disk": disk,
-        "gpu": gpu,
-        "gpu_count": gpu_count,
-        "timeout": timeout,
-        "retries": retries,
-        "retry_for": retry_for,
-        "retry_delay_seconds": retry_delay_seconds,
-        "retry_policy": retry_policy,
-        "workers": workers,
-        "keep_warm_seconds": keep_warm_seconds,
-        "max_pending_tasks": max_pending_tasks,
-        "callback_url": callback_url,
-        "authorized": authorized,
-        "env": env,
-        "secrets": secrets,
-        "volumes": volumes,
-        "on_start": on_start,
-        "on_running": on_running,
-        "on_success": on_success,
-        "on_error": on_error,
-        "on_retry": on_retry,
-        "on_failure": on_failure,
-        "on_cancelled": on_cancelled,
-        "on_timeout": on_timeout,
-        "on_finish": on_finish,
-        "autoscaler": autoscaler,
-        "task_policy": task_policy,
-        "checkpoint_enabled": checkpoint_enabled,
-        "inputs": inputs,
-        "outputs": outputs,
-        "docker_enabled": docker_enabled,
-        "preemptible": preemptible,
-        "pool": pool,
-        "provider": provider,
-        "metadata": metadata,
-    }
 
 
 def _pod_options(

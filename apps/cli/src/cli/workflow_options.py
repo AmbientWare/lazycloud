@@ -12,7 +12,6 @@ from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.sandbox import Sandbox
 from lazycloud.abstractions.shell import ShellSession
-from lazycloud.abstractions.taskqueue import TaskQueueFunction
 from lazycloud.cli.components.output import ModelDumpable
 from lazycloud.cli.handler_workflows import (
     apply_handler_reference,
@@ -21,34 +20,13 @@ from lazycloud.cli.handler_workflows import (
 from lazycloud.cli.workflow_options import DeploymentOverrides, WorkflowValue
 from lazycloud.json_contracts import JsonValue, validate_json_object
 
-Workload = (
-    Function[..., JsonValue]
-    | Endpoint[..., JsonValue]
-    | ASGI
-    | TaskQueueFunction[..., JsonValue]
-    | Pod
-    | Sandbox
-)
-MetadataWorkload = (
-    Function[..., JsonValue]
-    | Endpoint[..., JsonValue]
-    | TaskQueueFunction[..., JsonValue]
-    | Pod
-    | Sandbox
-)
+Workload = Function[..., JsonValue] | Endpoint[..., JsonValue] | ASGI | Pod | Sandbox
+MetadataWorkload = Function[..., JsonValue] | Endpoint[..., JsonValue] | Pod | Sandbox
 UserDeployable = App | Workload
-DeployableWorkload = (
-    Function[..., JsonValue]
-    | Endpoint[..., JsonValue]
-    | ASGI
-    | TaskQueueFunction[..., JsonValue]
-    | Pod
-)
+DeployableWorkload = Function[..., JsonValue] | Endpoint[..., JsonValue] | ASGI | Pod
 ShellWorkload = Function[..., JsonValue] | Endpoint[..., JsonValue] | ASGI | Pod
-ServeWorkload = Endpoint[..., JsonValue] | ASGI | TaskQueueFunction[..., JsonValue]
-ProgressWorkload = (
-    Function[..., JsonValue] | Endpoint[..., JsonValue] | ASGI | TaskQueueFunction[..., JsonValue]
-)
+ServeWorkload = Endpoint[..., JsonValue] | ASGI
+ProgressWorkload = Function[..., JsonValue] | Endpoint[..., JsonValue] | ASGI
 
 
 @runtime_checkable
@@ -93,11 +71,11 @@ HandlerTarget = UserDeployable | JsonCallable | CustomWorkflow | GenericHandlerR
 
 
 def is_user_deployable(value: object) -> TypeGuard[UserDeployable]:
-    return isinstance(value, (App, Function, Endpoint, ASGI, TaskQueueFunction, Pod, Sandbox))
+    return isinstance(value, (App, Function, Endpoint, ASGI, Pod, Sandbox))
 
 
 def is_deployable_workload(value: HandlerTarget) -> TypeGuard[DeployableWorkload]:
-    return isinstance(value, (Function, Endpoint, ASGI, TaskQueueFunction, Pod))
+    return isinstance(value, (Function, Endpoint, ASGI, Pod))
 
 
 def is_function_workload(value: HandlerTarget) -> TypeGuard[Function[..., JsonValue]]:
@@ -113,11 +91,11 @@ def is_shell_workload(value: HandlerTarget) -> TypeGuard[ShellWorkload]:
 
 
 def is_serve_workload(value: HandlerTarget) -> TypeGuard[ServeWorkload]:
-    return isinstance(value, (Endpoint, ASGI, TaskQueueFunction))
+    return isinstance(value, (Endpoint, ASGI))
 
 
 def is_progress_workload(value: HandlerTarget) -> TypeGuard[ProgressWorkload]:
-    return isinstance(value, (Function, Endpoint, ASGI, TaskQueueFunction))
+    return isinstance(value, (Function, Endpoint, ASGI))
 
 
 def is_json_callable(value: HandlerTarget) -> TypeGuard[JsonCallable]:
@@ -181,7 +159,7 @@ def apply_deployment_overrides[DeployableT: UserDeployable](
     for target in _workload_targets(user_object):
         _apply_common_overrides(target, overrides)
         _apply_kind_overrides(target, overrides)
-        if isinstance(target, (Function, Endpoint, TaskQueueFunction, Pod, Sandbox)):
+        if isinstance(target, (Function, Endpoint, Pod, Sandbox)):
             _apply_resource_metadata(target, overrides)
     return user_object
 
@@ -191,7 +169,7 @@ def _workload_targets(user_object: UserDeployable) -> list[Workload]:
     return [
         candidate
         for candidate in candidates
-        if isinstance(candidate, (Function, Endpoint, ASGI, TaskQueueFunction, Pod, Sandbox))
+        if isinstance(candidate, (Function, Endpoint, ASGI, Pod, Sandbox))
     ]
 
 
@@ -223,7 +201,7 @@ def _apply_kind_overrides(target: Workload, overrides: DeploymentOverrides) -> N
     if overrides.keep_warm is not None:
         if isinstance(target, (Endpoint, Pod)):
             target.keep_warm = overrides.keep_warm
-        elif isinstance(target, (ASGI, TaskQueueFunction, Sandbox)):
+        elif isinstance(target, (ASGI, Sandbox)):
             target.keep_warm_seconds = overrides.keep_warm
     if isinstance(target, Pod):
         if overrides.tcp is not None:
@@ -237,7 +215,7 @@ def _apply_kind_overrides(target: Workload, overrides: DeploymentOverrides) -> N
             target.ports = [*target.ports, *overrides.ports.values()]
         if overrides.entrypoint:
             target.command = list(overrides.entrypoint)
-    if isinstance(target, (Endpoint, ASGI, TaskQueueFunction)) and overrides.sync_dir:
+    if isinstance(target, (Endpoint, ASGI)) and overrides.sync_dir:
         target.sync_local_dir = str(Path(overrides.sync_dir))
 
 
