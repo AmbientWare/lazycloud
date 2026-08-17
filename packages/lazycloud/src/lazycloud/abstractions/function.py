@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import update_wrapper
@@ -30,7 +29,6 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DeploymentKind
-from shared.env import ROOT_TASK_ID_ENV, TASK_ID_ENV
 from shared.function_payloads import (
     FunctionCloudpickleInvocation,
     FunctionInvocationArguments,
@@ -43,6 +41,7 @@ from shared.http.functions import (
     FunctionInvokeResponse,
 )
 from shared.http.gateway import DeployStubResponse
+from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryPolicy, TaskPolicy
 
 from lazycloud.abstractions.image import Image
@@ -123,6 +122,7 @@ class FunctionOptions(TypedDict, total=False):
     gpu_count: int
     timeout_seconds: int | None
     concurrency: int
+    in_process: bool
     max_pending_tasks: int | None
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
     retries: int
@@ -165,6 +165,7 @@ class Function(Generic[P, R]):
     gpu_count: int = 0
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
     concurrency: int = 1
+    in_process: bool = False
     max_pending_tasks: int | None = None
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
     retries: int = DEFAULT_FUNCTION_RETRIES
@@ -313,6 +314,7 @@ class Function(Generic[P, R]):
                 retries=self.retries,
                 callback_url=self.callback_url,
                 authorized=self.authorized,
+                in_process=self.in_process,
                 task_policy=self.task_policy,
                 inputs=(
                     self.inputs
@@ -713,9 +715,8 @@ def _function_call_ref_tuple(
 
 
 def _current_task_context() -> tuple[str, str]:
-    parent_task_id = os.getenv(TASK_ID_ENV, "").strip()
-    root_task_id = os.getenv(ROOT_TASK_ID_ENV, "").strip() or parent_task_id
-    return parent_task_id, root_task_id
+    parent_task_id = current_task_id()
+    return parent_task_id, current_root_task_id()
 
 
 @overload
@@ -732,6 +733,7 @@ def _function(
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
+    in_process: bool = False,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -776,6 +778,7 @@ def _function(
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
+    in_process: bool = False,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -819,6 +822,7 @@ def _function(
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
+    in_process: bool = False,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -860,6 +864,7 @@ def _function(
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
+            in_process=in_process,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,
@@ -946,6 +951,7 @@ def _cron(
     gpu_count: int = 0,
     timeout_seconds: int | None = None,
     concurrency: int = 1,
+    in_process: bool = False,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = 0,
@@ -994,6 +1000,7 @@ def _cron(
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
+            in_process=in_process,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,

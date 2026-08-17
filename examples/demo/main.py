@@ -24,6 +24,7 @@ from lazycloud import (
     Queue,
     Secret,
     Volume,
+    current_task_id,
     experimental,
     schema,
 )
@@ -159,7 +160,7 @@ def resource_smoke(value: int = 8) -> dict[str, JsonValue]:
 
     return {
         **payload,
-        "task_id": os.environ.get("TASK_ID", ""),
+        "task_id": current_task_id(),
         "volume_path": str(volume_path),
         "volume_written": volume_path.exists(),
         "artifact_id": saved_artifact.artifact_id,

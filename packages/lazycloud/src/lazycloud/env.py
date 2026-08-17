@@ -13,6 +13,7 @@ from shared.env import (
     IMPORTING_USER_CODE_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
+    importing_user_code_now,
     truthy_env_value,
 )
 
@@ -32,7 +33,7 @@ class SdkEnvVar(StringEnum):
 
 
 def called_on_import(env: Mapping[str, str] | None = None) -> bool:
-    return truthy_env_value(_environment(env).get(SdkEnvVar.ImportingUserCode.value))
+    return importing_user_code_now(env)
 
 
 def is_local(env: Mapping[str, str] | None = None) -> bool:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import mimetypes
-import os
 import shutil
 import tempfile
 import zipfile
@@ -22,6 +21,7 @@ from shared.http.artifacts import (
     ArtifactStatResponse,
 )
 from shared.http.errors import HttpApiError
+from shared.task_context import current_task_id
 from typing_extensions import Self
 
 from lazycloud.clients.artifact.control import ArtifactControlClient
@@ -144,7 +144,7 @@ class Artifact:
         self.value: Any = str(self.path)
         self.content_type = content_type
         self._client: ArtifactRemoteClient | None = None
-        self.task_id = task_id if task_id is not None else os.getenv("TASK_ID", "")
+        self.task_id = task_id if task_id is not None else current_task_id()
         self.workspace = workspace
         self.endpoint: str | None = None
         self.token: str | None = None

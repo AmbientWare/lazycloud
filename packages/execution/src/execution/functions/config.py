@@ -38,8 +38,13 @@ class FunctionRuntimeConfig(ContainerResourceConfig):
     # Idle seconds a container stays available for the next call. `-1` never
     # scales to zero; `0` is the old behaviour, one container per invocation.
     keep_warm: int = Field(default=DEFAULT_FUNCTION_KEEP_WARM_SECONDS, ge=-1)
-    # How many invocations one container serves at once, each in its own process.
+    # How many invocations one container serves at once.
     concurrency: int = Field(default=1, gt=0)
+    # Whether those invocations share one interpreter. Threads rather than
+    # processes, so a model loaded once is served by all of them; the cost is
+    # that CPU-bound handlers contend for the GIL instead of running in
+    # parallel.
+    in_process: bool = False
 
     @property
     def gpu_required(self) -> bool:

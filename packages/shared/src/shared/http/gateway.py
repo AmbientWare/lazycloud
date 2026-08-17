@@ -193,6 +193,7 @@ class GetOrCreateStubRequest(HttpModel):
     autoscaler: Autoscaler = Field(default_factory=Autoscaler)
     task_policy: GatewayTaskPolicy = Field(default_factory=GatewayTaskPolicy)
     concurrent_requests: int = Field(default=1, gt=0)
+    in_process: bool = False
     extra: str = ""
     checkpoint_enabled: bool = False
     gpu_count: int = 0

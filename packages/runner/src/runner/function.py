@@ -22,12 +22,11 @@ from shared.env import (
     CHECKPOINT_ENABLED_ENV,
     CONTAINER_ID_ENV,
     FUNCTION_CONCURRENCY_ENV,
+    FUNCTION_IN_PROCESS_ENV,
     GATEWAY_HTTP_URL_ENV,
     GATEWAY_TOKEN_ENV,
     KEEP_WARM_SECONDS_ENV,
     LIFECYCLE_HOOKS_ENV,
-    ROOT_TASK_ID_ENV,
-    TASK_ID_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
     truthy_env_value,
@@ -67,6 +66,7 @@ from shared.lifecycle import (
     LifecycleTaskContext,
 )
 from shared.serialization import to_json_value
+from shared.task_context import task_context
 from shared.tasks import TaskStatus
 
 from runner.checkpoints import wait_for_checkpoint
@@ -76,7 +76,9 @@ from runner.runtime import (
     DEFAULT_GATEWAY_ENDPOINT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
     RunnerTaskLogStream,
+    install_context_routed_output,
     required_env,
+    routed_output,
 )
 
 # How often an idle container asks for work. Short enough that a call arriving
@@ -108,6 +110,7 @@ class FunctionRunnerConfig:
     keep_warm_seconds: int = 0
     poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
     checkpoint_enabled: bool = False
+    in_process: bool = False
     workers: int = 1
 
 
@@ -153,6 +156,7 @@ class FunctionRunner:
     # reports itself as afterwards has to be the one it actually is.
     container_id: str = field(default="", init=False)
     container_hostname: str = field(default="", init=False)
+    _container_streams: tuple[TextIO, TextIO] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.container_id = self.config.container_id
@@ -177,13 +181,45 @@ class FunctionRunner:
         stops rather than answering claims it will fail.
         """
 
+        self.install_output_routing()
         try:
             self.run_startup_hooks_once()
         except BaseException:
             print(traceback.format_exc(), file=sys.stderr)
             return 1
+        return self.serve()
+
+    def install_output_routing(self) -> None:
+        """Take over this process's streams once, before anything writes.
+
+        The real streams are kept because a task's log sink writes through to
+        them; wrapping whatever `sys.stdout` happens to be at the time would
+        wrap the router and recurse.
+        """
+
+        if self._container_streams is None:
+            self._container_streams = install_context_routed_output()
+
+    @property
+    def container_streams(self) -> tuple[TextIO, TextIO]:
+        if self._container_streams is None:
+            self.install_output_routing()
+        if self._container_streams is None:
+            raise RuntimeError("container output routing was not installed")
+        return self._container_streams
+
+    def serve(self, shutdown: threading.Event | None = None) -> int:
+        """Claim and run invocations until the keep-warm window passes.
+
+        One of these per concurrent slot. Everything it touches on the runner is
+        either read-only after startup — the handler, the hooks, the container
+        identity — or per-invocation, so several may run at once against one
+        loaded copy of the user's code. That sharing is the point: a model in
+        VRAM is loaded by `on_start` and served by all of them.
+        """
+
         idle_since = time.monotonic()
-        while True:
+        while shutdown is None or not shutdown.is_set():
             task = self.claim()
             if task is None:
                 if self.keep_warm_expired(idle_since):
@@ -192,6 +228,7 @@ class FunctionRunner:
                 continue
             self.run_task(task)
             idle_since = time.monotonic()
+        return 0
 
     def keep_warm_expired(self, idle_since: float) -> bool:
         if self.config.keep_warm_seconds < 0:
@@ -227,13 +264,11 @@ class FunctionRunner:
         )
 
     def run_task(self, task: ClaimedTask) -> None:
+        with task_context(task.task_id, task.root_task_id):
+            self._run_claimed_task(task)
+
+    def _run_claimed_task(self, task: ClaimedTask) -> None:
         started = time.perf_counter()
-        # The SDK reads its own task identity from the environment, so a pooled
-        # container has to restate it per call rather than inherit it at start.
-        # One task runs at a time in this process, which is what makes a process
-        # global safe to use here.
-        os.environ[TASK_ID_ENV] = task.task_id
-        os.environ[ROOT_TASK_ID_ENV] = task.root_task_id
         try:
             self.start_task(task)
             self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
@@ -270,9 +305,10 @@ class FunctionRunner:
         return self._handler
 
     def execute_with_log_capture(self, task: ClaimedTask) -> Any:
-        stdout = TaskLogStream(self, task.task_id, "stdout", sys.stdout)
-        stderr = TaskLogStream(self, task.task_id, "stderr", sys.stderr)
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        container_stdout, container_stderr = self.container_streams
+        stdout = TaskLogStream(self, task.task_id, "stdout", container_stdout)
+        stderr = TaskLogStream(self, task.task_id, "stderr", container_stderr)
+        with routed_output(stdout, stderr):
             try:
                 return invoke_handler(
                     self.handler(),
@@ -675,6 +711,7 @@ def config_from_env(env: dict[str, str] | None = None) -> FunctionRunnerConfig:
         keep_warm_seconds=_keep_warm_seconds(source.get(KEEP_WARM_SECONDS_ENV)),
         poll_interval_seconds=DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS,
         checkpoint_enabled=truthy_env_value(source.get(CHECKPOINT_ENABLED_ENV)),
+        in_process=truthy_env_value(source.get(FUNCTION_IN_PROCESS_ENV)),
     )
 
 
@@ -768,13 +805,83 @@ def _run_function_worker(config: FunctionRunnerConfig) -> None:
     raise SystemExit(FunctionRunner(config).run())
 
 
+@dataclass(slots=True)
+class FunctionThreadManager:
+    """Serve several invocations at once inside one interpreter.
+
+    The reason to prefer this over a process each is memory that cannot be
+    duplicated: a model loaded into VRAM by `on_start` is loaded once and served
+    by every slot, where four processes would load four copies and a second one
+    would not fit. The cost is the interpreter's own limits — one slot's CPU
+    work holds the GIL against the others, so this is for handlers that spend
+    their time in a library that releases it or waiting on something.
+
+    Everything a second concurrent call would otherwise collide on is carried
+    per context rather than per process: the task identity the SDK reads, and
+    the stream its output is attributed to. Threads propagate that context, so
+    the same mechanism covers a handler that awaits.
+
+    Shutdown is the same shape as the process manager's: the signal sets the
+    event, each loop finishes the invocation it is holding rather than dropping
+    it, and the container exits once they have all returned.
+    """
+
+    runner: FunctionRunner
+    workers: int
+    shutdown: threading.Event = field(default_factory=threading.Event)
+    threads: list[threading.Thread] = field(default_factory=list, init=False)
+
+    def run(self) -> int:
+        self.runner.install_output_routing()
+        try:
+            self.runner.run_startup_hooks_once()
+        except BaseException:
+            print(traceback.format_exc(), file=sys.stderr)
+            return 1
+        previous_handlers = {
+            handled_signal: signal.signal(handled_signal, self._request_shutdown)
+            for handled_signal in (signal.SIGINT, signal.SIGTERM)
+        }
+        try:
+            for index in range(self.workers):
+                thread = threading.Thread(
+                    target=self._serve,
+                    name=f"function-worker-{index}",
+                    daemon=True,
+                )
+                thread.start()
+                self.threads.append(thread)
+            for thread in self.threads:
+                thread.join()
+        finally:
+            self.shutdown.set()
+            for handled_signal, previous_handler in previous_handlers.items():
+                signal.signal(handled_signal, previous_handler)
+        return 0
+
+    def _serve(self) -> None:
+        try:
+            self.runner.serve(shutdown=self.shutdown)
+        except BaseException:
+            # A slot that dies takes its own capacity with it and nothing else.
+            # Said on the container's stream because there is no task to blame:
+            # whatever it was holding was already settled by `run_task`.
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+
+    def _request_shutdown(self, signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        self.shutdown.set()
+
+
 def main() -> int:
     config = config_from_env()
     concurrency = _concurrency(os.environ.get(FUNCTION_CONCURRENCY_ENV))
     if concurrency <= 1:
-        # Served in this process. A manager here would fork one child to do the
-        # same work and add a process to supervise for nothing.
+        # Served in this process. A manager here would supervise one slot doing
+        # the same work, whichever kind of slot it is.
         return FunctionRunner(config).run()
+    if config.in_process:
+        return FunctionThreadManager(runner=FunctionRunner(config), workers=concurrency).run()
     return FunctionProcessManager(config=config, workers=concurrency).run()
 
 

@@ -188,6 +188,7 @@ class FunctionAutoscaleResult(ContractModel):
     active: bool = True
     lock_acquired: bool = True
     valid: bool = True
+    failed_containers: list[str] = Field(default_factory=list)
     actions: list[FunctionAutoscaleAction] = Field(default_factory=list)
 
     @property
@@ -260,13 +261,29 @@ class FunctionAutoscalingService:
         *,
         now: datetime | None = None,
     ) -> FunctionAutoscaleResult:
-        del now
+        current_time = now or utc_now()
         active = _deployment_active(self.services, stub)
         containers = _containers_for_stub(self.services, stub)
         current = len(_active_containers(containers))
         pending = _pending_container_count(containers)
         queue_length = self.functions.unclaimed_task_count(stub.id)
         config = _function_autoscaler_config(stub.config)
+        # A container that fails on startup frees the slot it was counted in,
+        # so the backlog still reads as unserved and the next tick provisions
+        # again. `max_containers` does not bound that — nothing is ever alive to
+        # count against it — so a stub whose `on_start` cannot succeed is
+        # started for as long as the work sits there. This is what bounds it,
+        # and the resource guardrail below is what bounds the healthy case
+        # against the workspace's own limits.
+        failed_containers = _recent_failed_container_ids(
+            containers,
+            now=current_time,
+            window_seconds=_failed_container_window_seconds(stub.config),
+        )
+        failure_threshold = _failed_container_threshold(stub.config)
+        failure_threshold_reached = (
+            failure_threshold > 0 and len(failed_containers) >= failure_threshold
+        )
         sample = BacklogAutoscalerSample(
             queue_length=queue_length,
             running_tasks=0,
@@ -275,6 +292,23 @@ class FunctionAutoscalingService:
         decision = decide_backlog_scale(sample, config)
         desired = decision.desired_containers if active else 0
         reason = "deployment inactive" if not active else decision.reason.value
+        result_decision = decision.decision
+        if active and failure_threshold_reached:
+            desired = 0
+            reason = "failed container threshold reached"
+            result_decision = _backlog_scale_kind(desired, current)
+        guardrail = AutoscalerGuardrailPlan()
+        if active and decision.valid and desired > current:
+            guardrail = plan_autoscaler_start_guardrails(
+                self.redis,
+                stub=stub,
+                current_count=current,
+                desired_count=desired,
+            )
+            if guardrail.limited:
+                desired = guardrail.desired_count
+                reason = guardrail.reason
+                result_decision = _backlog_scale_kind(desired, current)
         actions: list[FunctionAutoscaleAction] = []
         if active and decision.valid and desired > current:
             actions.extend(self._scale_up(stub, desired - current))
@@ -285,10 +319,11 @@ class FunctionAutoscalingService:
             current_containers=current,
             pending_containers=pending,
             desired_containers=desired,
-            decision=decision.decision,
+            decision=result_decision,
             reason=reason,
             active=active,
             valid=decision.valid,
+            failed_containers=failed_containers,
             actions=actions,
         )
         _record_autoscaler_state(
@@ -1514,6 +1549,16 @@ def _endpoint_desired_containers(
     desired = min(max(required, config.min_containers), config.max_containers)
     reason = "replica limit reached" if desired < required else "endpoint requests active"
     return desired, reason
+
+
+def _backlog_scale_kind(desired: int, current: int) -> BacklogScaleDecisionKind:
+    if current < 0 or desired < 0:
+        return BacklogScaleDecisionKind.Invalid
+    if desired > current:
+        return BacklogScaleDecisionKind.ScaleUp
+    if desired < current:
+        return BacklogScaleDecisionKind.ScaleDown
+    return BacklogScaleDecisionKind.Hold
 
 
 def _endpoint_scale_kind(desired: int, current: int) -> EndpointScaleDecisionKind:

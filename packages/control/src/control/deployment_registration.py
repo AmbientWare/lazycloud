@@ -227,6 +227,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                 ),
                 "keep_warm": resolve_keep_warm_seconds(spec.kind, resources.keep_warm),
                 "concurrency": resources.concurrency,
+                "in_process": _metadata_optional_bool(metadata, "in_process") or False,
                 "checkpoint_enabled": (
                     _metadata_optional_bool(metadata, "checkpoint_enabled") or False
                 ),

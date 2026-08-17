@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from shared.task_context import task_context
 from shared.tasks import TaskStatus
 
 ASGIReceive = Callable[[], Awaitable[dict[str, Any]]]
@@ -43,19 +43,19 @@ class TaskLifecycleMiddleware:
             return
         lifecycle = TaskLifecycleData(task_id=task_id, started_at=time.time())
         scope.setdefault("state", {})["task_lifecycle_data"] = lifecycle
-        previous_task_id = os.environ.get("TASK_ID")
-        os.environ["TASK_ID"] = task_id
+        # Per request, not per process. Two overlapping requests each set the
+        # identity the SDK reads, and with a process global the second one wins
+        # for both — so a call spawned by the first is recorded as a child of
+        # the second, and the first's restore on the way out clears an identity
+        # the second is still using.
         try:
-            await self.app(scope, receive, send)
+            with task_context(task_id):
+                await self.app(scope, receive, send)
         except Exception:
             lifecycle.status = TaskStatus.Failed
             raise
         finally:
             lifecycle.finished_at = time.time()
-            if previous_task_id is None:
-                os.environ.pop("TASK_ID", None)
-            else:
-                os.environ["TASK_ID"] = previous_task_id
 
 
 WebsocketTaskLifecycleMiddleware = TaskLifecycleMiddleware

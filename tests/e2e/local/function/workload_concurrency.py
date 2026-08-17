@@ -4,7 +4,7 @@ import os
 import secrets
 import time
 
-from lazycloud import App, Image
+from lazycloud import App, Image, current_task_id
 
 APP_NAME = f"function_concurrency_{secrets.token_hex(6)}"
 CONCURRENCY = 4
@@ -34,6 +34,6 @@ def hold(value: int) -> dict[str, str | int | float]:
         "value": value * value,
         "pid": os.getpid(),
         "container_id": os.environ.get("CONTAINER_ID", ""),
-        "task_id": os.environ.get("TASK_ID", ""),
+        "task_id": current_task_id(),
         "held": time.monotonic() - started,
     }
