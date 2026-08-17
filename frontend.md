@@ -1,6 +1,0 @@
-- [x] remove the /card on gpu price. 
-- [x] price page should not have the grid background. alternatig the normal colors we have as solid is better. 
-- [x] change "A container meters from the second it starts and stops the second it does. You pay the published rate for the cores, the memory, and the cards it held — and nothing for the rest of an hour it never used." to "A container meters from the second it starts and stops the second it does. You pay for the compute you use!
-- [x] remove the full "Bring your own cloud" seciton in pricing page and just add a "Bring your own cloud" below egress. and just say its an 8% management fee on the listed items above.
-- [x] change the "The rates above are the whole price. A plan only changes the balance." title to just "pricing plans"
-- [x] change "The cloud should keep up with how fast you build." to "Your cloud should accelerate you, not be the bottleneck."
