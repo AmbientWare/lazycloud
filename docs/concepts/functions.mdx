@@ -52,13 +52,18 @@ and `retries=3`.
   `retry_delay_seconds` between attempts.
 - `retry_policy` gives full control as a `RetryPolicy` (or plain mapping):
   `max_attempts`, `delay_seconds`, `backoff` (`"fixed"` or `"exponential"`),
-  `max_delay_seconds`, and `retry_for` exception references.
+  `max_delay_seconds`, and `retry_on_statuses`.
 
 ## Serving several calls at once
 
-A container stays warm between invocations, and `concurrency` sets how many it
-serves at the same time. Each slot runs in its own process by default, so one
-call cannot disturb another and CPU-bound work runs genuinely in parallel.
+A container stays warm between invocations for `keep_warm` seconds — 10 by
+default — so a call arriving inside that window reaches an interpreter that has
+already imported the handler and run `on_start`. Set `keep_warm=0` to retire a
+container as soon as it goes idle, which trades warm starts for no idle cost.
+
+`concurrency` sets how many invocations one container serves at the same time.
+Each slot runs in its own process by default, so one call cannot disturb another
+and CPU-bound work runs genuinely in parallel.
 
 `in_process=True` puts the slots in one interpreter instead. Use it when the
 slots need to share something a process cannot duplicate — a model on a GPU is
