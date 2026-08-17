@@ -785,6 +785,40 @@ class ControlPlaneService:
                 raise ConflictError(msg)
         self._publish_stub_change(stub, WorkspaceChangeType.Deleted)
 
+    def discard_registration_source_stub(
+        self,
+        stub_id: str,
+        *,
+        workspace: str = "default",
+    ) -> bool:
+        """Remove the stub a deployment registration was built from.
+
+        A deploy registers a stub first, to carry the uploaded source and the
+        built image, and the registration then writes the durable stub that the
+        deployment owns. The first one has done its job at that point: its
+        config was copied forward, and nothing refers to it.
+
+        Refused rather than forced if anything does refer to it, or if it turns
+        out to own a deployment of its own. A stub someone invoked directly
+        before deploying is a stub with tasks against it, and that is a stub
+        still in use.
+        """
+
+        with self.context.database.session() as session:
+            workspace_record = self.context.workspace(session, workspace)
+            repository = StubRepository(session)
+            stub = repository.get_for_update(stub_id, workspace_id=workspace_record.id)
+            if stub is None:
+                return False
+            if stub.deployment_id:
+                return False
+            if repository.registration_is_bound(stub.id):
+                return False
+            if not repository.delete(stub.id, workspace_id=workspace_record.id):
+                return False
+        self._publish_stub_change(stub, WorkspaceChangeType.Deleted)
+        return True
+
     def get_stub_config(
         self,
         stub_id_or_name: str,

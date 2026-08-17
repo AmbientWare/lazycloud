@@ -64,6 +64,13 @@ class DeploymentStubRegistry(Protocol):
         workspace: str = "default",
     ) -> None: ...
 
+    def discard_registration_source_stub(
+        self,
+        stub_id: str,
+        *,
+        workspace: str = "default",
+    ) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class DeploymentRegistrationService:
@@ -169,6 +176,16 @@ class DeploymentRegistrationService:
                     [binding_failure, cleanup_failure],
                 ) from None
             raise
+        # The stub this registration was built from has been copied forward and
+        # is referred to by nothing. Left behind it is a second stub with the
+        # same name and no deployment, which reads as a workload of its own to
+        # anything that lists stubs — an autoscaler holding a warm floor found
+        # it that way and held a second copy of one.
+        if source_stub is not None and source_stub.id != stub.id:
+            self.stubs.discard_registration_source_stub(
+                source_stub.id,
+                workspace=workspace,
+            )
         return DeploymentRegistration(app_id=app.id, stub_id=stub.id)
 
     def _source_stub(
