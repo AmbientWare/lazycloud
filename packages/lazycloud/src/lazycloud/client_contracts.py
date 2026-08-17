@@ -169,8 +169,6 @@ def _operation_name(kind: DeploymentKind) -> ClientOperationName | None:
         return ClientOperationName.Remote
     if kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
         return ClientOperationName.Request
-    if kind is DeploymentKind.TaskQueue:
-        return ClientOperationName.Put
     return None
 
 

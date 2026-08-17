@@ -29,24 +29,6 @@ if __name__ == "__main__":
     print(hello.local("lazycloud"))
 """
 
-TASK_QUEUE_TEMPLATE = """from __future__ import annotations
-
-from lazycloud import App, Image
-
-app = App("task_queue_example")
-image = Image(python_version="3.12")
-
-
-@app.task_queue(name="summaries", image=image, workers=1)
-def summarize(values: list[int]) -> dict[str, int]:
-    return {"count": len(values), "total": sum(values)}
-
-
-if __name__ == "__main__":
-    print(summarize.local([1, 2, 3]))
-"""
-
-
 @dataclass(frozen=True, slots=True)
 class ExampleTemplate:
     name: str
@@ -65,14 +47,6 @@ TEMPLATES: dict[str, ExampleTemplate] = {
         files={
             "quickstart.py": QUICKSTART_TEMPLATE,
             "README.md": "# Quickstart\n\nRun locally with `python quickstart.py`.\n",
-        },
-    ),
-    "task-queue": ExampleTemplate(
-        name="task-queue",
-        description="Task queue app.",
-        files={
-            "task_queue.py": TASK_QUEUE_TEMPLATE,
-            "README.md": "# Task Queue\n\nRun locally with `python task_queue.py`.\n",
         },
     ),
 }

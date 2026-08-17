@@ -13,8 +13,6 @@ from lazycloud.cli.main import build_public_cli
 from lazycloud.client_handles import EndpointHandle
 from lazycloud.control import ControlClientConfig
 from lazycloud.json_contracts import JsonValue, parse_json_object
-from lazycloud.session.task import Task, TaskBatch
-from pydantic import BaseModel
 from shared.deployments import DeploymentKind
 from shared.http.client_manifests import (
     ClientContract,
@@ -143,35 +141,6 @@ class _FakeClientManifestGateway:
                 ),
                 ClientManifestResource(
                     app=request.app,
-                    name="summarize",
-                    kind=DeploymentKind.TaskQueue,
-                    stub_id="stub-summarize",
-                    deployment_id="dep-summarize",
-                    deployment_version=5,
-                    invoke_url=f"{request.external_url}/task-queue/stub-summarize",
-                    invoke_path="/api/v1/taskqueues/summarize/latest",
-                    inputs={"fields": {}},
-                    client_contract=_client_contract(
-                        ClientOperationName.Put,
-                        [
-                            ClientParameter(
-                                name="items",
-                                json_schema={
-                                    "type": "array",
-                                    "items": {"type": "integer"},
-                                },
-                            )
-                        ],
-                        return_schema={
-                            "title": "Summary",
-                            "type": "object",
-                            "properties": {"total": {"type": "integer"}},
-                            "required": ["total"],
-                        },
-                    ),
-                ),
-                ClientManifestResource(
-                    app=request.app,
                     name="worker",
                     kind=DeploymentKind.Pod,
                     stub_id="stub-worker",
@@ -248,20 +217,10 @@ class _GeneratedSiteHandle(Protocol):
 
 
 @runtime_checkable
-class _GeneratedTaskQueueHandle(Protocol):
-    put: Callable[..., Task | bool]
-    async_put: Callable[..., Awaitable[Task | bool]]
-    put_many: Callable[..., TaskBatch]
-    async_put_many: Callable[..., Awaitable[TaskBatch]]
-    Summary: type[BaseModel]
-
-
-@runtime_checkable
 class _GeneratedClientPackage(Protocol):
     __all__: list[str]
     health: _GeneratedHealthHandle
     site: _GeneratedSiteHandle
-    summarize: _GeneratedTaskQueueHandle
 
 
 def _client_contract(

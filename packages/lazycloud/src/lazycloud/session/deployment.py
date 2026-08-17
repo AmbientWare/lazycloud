@@ -857,8 +857,6 @@ def _default_tasks_per_container(
 ) -> int:
     if spec.kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
         return max(_metadata_int(metadata, "workers"), 1) * spec.resources.concurrency
-    if spec.kind is DeploymentKind.TaskQueue:
-        return spec.resources.concurrency
     return 1
 
 
