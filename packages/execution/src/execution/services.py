@@ -8,6 +8,7 @@ from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
 from pydantic import JsonValue
+from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
@@ -51,7 +52,16 @@ class ExecutionContainerService(Protocol):
         options: ContainerSchedulingOptions,
     ) -> SchedulerSubmissionResult: ...
 
-    def stop(self, container_id: str) -> ContainerRecord: ...
+    # The reason is part of the request, not a detail of the implementation: it
+    # is what decides whether the invocations the container was holding are
+    # cancelled or handed back. A caller that cannot say why it is stopping a
+    # container cannot say what should become of somebody else's work.
+    def stop(
+        self,
+        container_id: str,
+        *,
+        reason: StopContainerReason = StopContainerReason.User,
+    ) -> ContainerRecord: ...
 
     def delete(self, container_id: str) -> None: ...
 

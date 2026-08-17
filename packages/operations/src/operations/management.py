@@ -33,8 +33,11 @@ from database.repositories.orchestration import (
 from database.repositories.storage import ObjectRepository
 from execution.containers.planning import validate_checkpoint_activation
 from execution.containers.service import ContainerService
+from execution.functions.service import FUNCTION_LIKE_STUB_KINDS, FunctionControlService
 from execution.tasks import TaskService
 from observability.events import EventService
+from observability.metrics import MetricsService
+from observability.usage import UsageService
 from pydantic import Field
 from shared.container_requests import ContainerShutdownTarget, WorkerStartupKind
 from shared.containers import ContainerRecord, ContainerStatus
@@ -86,6 +89,14 @@ class ManagementServices(Protocol):
 
     @property
     def tasks(self) -> TaskService: ...
+
+    # Cancelling a function task is the function service's decision to make, and
+    # this is what that service needs to be built from here.
+    @property
+    def metrics(self) -> MetricsService: ...
+
+    @property
+    def usage(self) -> UsageService: ...
 
 
 class CursorPage[T: ContractModel](ContractModel):
@@ -1071,9 +1082,40 @@ class ManagementService:
             if is_terminal_task_status(task.status):
                 skipped.append(task_id)
                 continue
-            self.services.tasks.cancel(task_id)
+            self._cancel_task(task)
             stopped.append(task_id)
         return TaskStopResult(stopped=tuple(stopped), skipped=tuple(skipped))
+
+    def _cancel_task(self, task: Task) -> None:
+        """Cancel one task through whatever owns stopping its kind of work.
+
+        Writing `cancelled` on the row is all a cancel used to be, and for a
+        function that left the handler running to completion: the caller was
+        told their work had stopped while it went on producing side effects and
+        being billed. Nothing inside the container watches the row, so reaching
+        the work means going through the service that knows what stopping this
+        workload does to the invocations beside it.
+
+        Built here the way this service builds its control plane, and safe to
+        build without a gateway origin because cancelling only settles work: it
+        stops a container and fails what was waiting on the cancelled call.
+        Nothing on this path starts a container, which is the one thing that
+        would need to tell a container where to call back.
+        """
+
+        stub = self._stub_for_task(task)
+        if stub is not None and stub.kind in FUNCTION_LIKE_STUB_KINDS:
+            FunctionControlService(self.services).cancel_task(task.id)
+            return
+        self.services.tasks.cancel(task.id)
+
+    def _stub_for_task(self, task: Task) -> StubRecord | None:
+        if not task.stub_id:
+            return None
+        try:
+            return self.control_plane.get_stub(task.stub_id)
+        except NotFoundError:
+            return None
 
     def task_metrics(
         self,
