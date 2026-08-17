@@ -80,6 +80,8 @@ class FunctionAutoscaleControl(Protocol):
 
     def unclaimed_task_count(self, stub_id: str) -> int: ...
 
+    def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
+
 
 class EndpointAutoscaleControl(Protocol):
     def start_endpoint_serve(
@@ -527,7 +529,12 @@ class FunctionAutoscaler:
         return FUNCTION_AUTOSCALER
 
     def selects(self, stub: StubRecord) -> bool:
-        return stub.kind is StubKind.Function
+        # Bound to a deployment, as the other two workloads also require. A
+        # deploy leaves behind a stub with no deployment id, and provisioning
+        # from that one would hold a second copy of everything this stub is
+        # configured to hold — invisible while a function held containers only
+        # for work it had, and a doubled bill once it holds a warm floor.
+        return stub.kind is StubKind.Function and bool(stub.deployment_id)
 
     def partition(
         self,
@@ -558,7 +565,9 @@ class FunctionAutoscaler:
             decision=decision.decision,
             valid=decision.valid,
             max_containers=config.effective_max_containers,
+            min_containers=config.min_containers,
             tasks_per_container=config.tasks_per_container,
+            keep_warm_seconds=stub.config.runtime.keep_warm,
             saturated=_backlog_pressure_saturated(signal, config),
         )
 
@@ -585,8 +594,42 @@ class FunctionAutoscaler:
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
-        del stub, containers, count, keep_warm_seconds, active_instance, now
-        return []
+        """Remove containers only where nothing else will.
+
+        A function container ends itself when its idle window passes, so where
+        there is a window the way to have fewer is to stop giving them work —
+        stopping one early would throw away exactly the warm container the next
+        call was going to reach. A stub with a warm floor has no window to wait
+        for, and then this is the only thing that can bring the count down.
+
+        Busy containers are left alone. Stopping one settles what it holds by
+        releasing it, so no invocation is lost, but the part that had already
+        run is, and a handler that is not idempotent would run it twice.
+        """
+
+        del active_instance, now
+        if keep_warm_seconds >= 0:
+            return []
+        candidates = [
+            container for container in containers if container.status is ContainerStatus.Running
+        ]
+        busy = self.functions.containers_holding_work([item.id for item in candidates])
+        idle = [container for container in candidates if container.id not in busy]
+        idle.sort(key=lambda container: container.created_at, reverse=True)
+        actions: list[AutoscaleAction] = []
+        for container in idle[:count]:
+            stopped = self.services.containers.stop(
+                container.id,
+                reason=StopContainerReason.Scheduler,
+            )
+            actions.append(
+                AutoscaleAction(
+                    container_id=stopped.id,
+                    action="stop",
+                    reason="held container count is above the warm floor",
+                )
+            )
+        return actions
 
 
 @dataclass(slots=True)
@@ -820,6 +863,7 @@ def _function_autoscaler_config(config: StubConfig) -> BacklogAutoscalerConfig:
     autoscaler = config.autoscaler
     return BacklogAutoscalerConfig(
         tasks_per_container=autoscaler.tasks_per_container,
+        min_containers=autoscaler.min_containers,
         max_containers=function_container_ceiling(autoscaler.max_containers),
     )
 

@@ -10,6 +10,16 @@ from shared.enums import StringEnum
 
 
 class QueueDepthAutoscaler(ContractModel):
+    """How many containers a workload wants for the work it can see.
+
+    `min_containers` is a floor held with nothing queued — containers already up
+    when a call arrives, so it does not pay for a start. For a function the floor
+    also decides the keep-warm window: a container that retires itself after an
+    idle window cannot be part of a count that is supposed to persist, so
+    declaring a floor makes the window infinite and the autoscaler the only
+    thing that removes one.
+    """
+
     type: Literal["queue_depth"] = "queue_depth"
     min_containers: int = Field(default=0, ge=0)
     max_containers: int = Field(default=1, ge=0)
@@ -138,6 +148,7 @@ class PodStopPlan(ContractModel):
 class BacklogScaleReason(StringEnum):
     InvalidSample = "invalid-sample"
     QueueEmpty = "queue-empty"
+    WarmFloor = "warm-floor"
     QueuePending = "queue-pending"
     ReplicaLimit = "replica-limit"
 
@@ -169,6 +180,7 @@ class BacklogAutoscalerSample(ContractModel):
 
 class BacklogAutoscalerConfig(ContractModel):
     tasks_per_container: int = Field(default=1, ge=1)
+    min_containers: int = Field(default=0, ge=0)
     max_containers: int = Field(default=1, ge=0)
     gateway_max_replicas: int | None = Field(default=None, ge=0)
 
@@ -265,17 +277,19 @@ def decide_backlog_scale(
             sample=sample,
             effective_max_containers=autoscaler_config.effective_max_containers,
         )
+    floor = min(autoscaler_config.min_containers, autoscaler_config.effective_max_containers)
     if sample.queue_length == 0:
-        desired = 0
-        reason = BacklogScaleReason.QueueEmpty
+        desired = floor
+        reason = BacklogScaleReason.WarmFloor if floor > 0 else BacklogScaleReason.QueueEmpty
     else:
         required = (sample.queue_length + autoscaler_config.tasks_per_container - 1) // (
             autoscaler_config.tasks_per_container
         )
-        desired = min(required, autoscaler_config.effective_max_containers)
+        capped = min(required, autoscaler_config.effective_max_containers)
+        desired = max(capped, floor)
         reason = (
             BacklogScaleReason.ReplicaLimit
-            if desired < required
+            if capped < required
             else BacklogScaleReason.QueuePending
         )
     return BacklogScaleDecision(

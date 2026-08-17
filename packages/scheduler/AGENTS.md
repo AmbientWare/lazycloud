@@ -58,3 +58,30 @@ container for an idle stub so a cold call does not wait for a tick, and nothing
 else may start one — the ceiling is enforced where the container is reserved,
 in the transaction that both counts what is live and inserts the row that adds
 to it.
+
+## A function's warm floor
+
+`min_containers` is held with nothing queued, and it is the only way to ask this
+platform for interpreters that are already warm — a model resident in VRAM, a
+handler already imported. `@app.function` is the one task execution model here,
+so a user who needs that has nowhere else to express it. beta9 (AGPL-3.0) zeroes
+`MinContainers` for its task-queue stubs, which is the closest analogue; it can,
+because its warm capacity is expressed by other deployment kinds. Ours cannot.
+
+A floor and a finite idle window contradict each other: a function container
+retires itself when the window passes with no work, so the floor would start,
+idle out, and start again on the next tick — a count that is right whenever it
+is read and warm at no point. Declaring a floor therefore makes the window
+infinite, which is the same coupling pods take from the other end, and it moves
+removal to the autoscaler because nothing else will do it.
+
+Scale-down stops only containers holding no invocation. That is what makes a
+drain unnecessary rather than deferred: a stop settles claims by releasing them,
+so no invocation would be lost, but the part of one that had already run would
+be, and a handler that is not idempotent would run it twice. Skipping busy
+containers means the count stays above the floor while work is in flight, which
+is the honest answer — those containers are doing the thing they exist for.
+
+Where there is a window, scale-down does nothing and self-retirement removes the
+excess. Stopping a container early there would throw away the warm container the
+next call was about to reach, which is the whole point of pooling.

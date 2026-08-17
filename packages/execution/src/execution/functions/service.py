@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlPlaneService, StubKind, StubRecord
 from database.repositories.execution import (
     TaskDependencyRepository,
     TaskRepository,
@@ -351,15 +351,36 @@ class FunctionControlService:
         with self.services.context.database.session() as session:
             return TaskRepository(session).count_unclaimed_for_stub(stub_id)
 
+    def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
+        """Which of these containers is serving an invocation right now.
+
+        Asked before a scale-down chooses what to stop. A stop settles what a
+        container was holding by releasing it, so stopping a busy one loses no
+        invocation — it loses the part of one that had already run, and a
+        handler that is not idempotent runs that part again.
+        """
+
+        with self.services.context.database.session() as session:
+            repository = TaskRepository(session)
+            return {
+                container_id
+                for container_id in container_ids
+                if repository.list_inflight_for_container(container_id)
+            }
+
     def start_function_container(self, stub_id: str) -> bool:
         """Start one more container for this stub, because the autoscaler said so.
 
         How deep the backlog warrants going has already been answered by the
         caller; the ceiling is not taken on trust and is checked again where the
         container is reserved, which is the only place it can be checked without
-        racing. It still needs a task to start from — a container is planned
-        from its stub but reserved against work that exists — and takes the
-        oldest unclaimed one, which is also the one it will most likely serve.
+        racing.
+
+        It takes the oldest unclaimed task if there is one — that is the
+        invocation this container will most likely serve, and a task that has
+        since finished withdraws the warrant. With nothing waiting, the warrant
+        is the stub's own warm floor, which is a promise about containers rather
+        than about work, so the container is reserved from the stub alone.
         """
 
         with self.services.context.database.session() as session:
@@ -368,13 +389,22 @@ class FunctionControlService:
                 stub_id=stub_id,
             )
         pending = next(iter(candidates), None)
-        if pending is None:
+        if pending is not None:
+            scheduled = self._schedule_function_task(
+                pending,
+                authority=FunctionContainerStartAuthority.Autoscaler,
+            )
+            return scheduled is not None
+        stub = self.control_plane.get_stub(stub_id)
+        if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
             return False
-        scheduled = self._schedule_function_task(
-            pending,
+        launched = self._launch_function_container(
+            stub,
+            task=None,
+            eligible_at=None,
             authority=FunctionContainerStartAuthority.Autoscaler,
         )
-        return scheduled is not None
+        return launched is not None
 
     def _schedule_function_task(
         self,
@@ -394,9 +424,35 @@ class FunctionControlService:
         stub = self.control_plane.get_stub(task.stub_id)
         if not self._cron_execution_allowed(task, stub_kind=stub.kind):
             return None
+        return self._launch_function_container(
+            stub,
+            task=task,
+            eligible_at=eligible_at,
+            authority=authority,
+        )
+
+    def _launch_function_container(
+        self,
+        stub: StubRecord,
+        *,
+        task: Task | None,
+        eligible_at: datetime | None,
+        authority: FunctionContainerStartAuthority,
+    ) -> SchedulerSubmissionResult | None:
+        """Plan, reserve and submit one container for this stub.
+
+        The container is the stub's, not the task's. A task is passed when one
+        prompted the start, and it is read only to decide whether starting
+        anything is warranted — a finished or not-yet-due task warrants nothing.
+        A warm floor is its own warrant and passes none.
+        """
+
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
-        if task.invocation is None:
+        # A task with nothing to run cannot be served by any container, so it
+        # fails here rather than after one has been started for it. A warm start
+        # carries no task and nothing to check.
+        if task is not None and task.invocation is None:
             self.services.tasks.transition(
                 task,
                 TaskStatus.Failed,
@@ -521,13 +577,14 @@ class FunctionControlService:
                 container,
                 WorkspaceChangeType.Updated,
             )
-            updated = self.services.tasks.transition(
-                task,
-                TaskStatus.Failed,
-                error=scheduled.reason,
-                exit_code=1,
-            )
-            self.release_dependents(updated)
+            if task is not None:
+                updated = self.services.tasks.transition(
+                    task,
+                    TaskStatus.Failed,
+                    error=scheduled.reason,
+                    exit_code=1,
+                )
+                self.release_dependents(updated)
         return scheduled
 
     def assert_may_accept_invocation(self, stub_id: str) -> None:
@@ -746,7 +803,7 @@ class FunctionControlService:
 
     def _reserve_function_container(
         self,
-        task: Task,
+        task: Task | None,
         *,
         container_plan: planning.FunctionContainerStartPlan,
         stub_id: str,
@@ -773,6 +830,7 @@ class FunctionControlService:
 
         rejected: Task | None = None
         container: ContainerRecord | None = None
+        current: Task | None = None
         with self.services.context.database.session() as session:
             containers = ContainerRepository(session)
             containers.lock_stub_capacity(stub_id)
@@ -783,17 +841,18 @@ class FunctionControlService:
             ):
                 return None
             task_repository = TaskRepository(session)
-            current = task_repository.get_for_update_across_workspaces(task.id)
-            if current is None or is_terminal_task_status(current.status):
-                return None
-            if current.status not in {TaskStatus.Pending, TaskStatus.Retry}:
-                return None
-            if (
-                current.status is TaskStatus.Retry
-                and current.next_retry_at is not None
-                and (eligible_at or datetime.now(UTC)) < current.next_retry_at
-            ):
-                return None
+            if task is not None:
+                current = task_repository.get_for_update_across_workspaces(task.id)
+                if current is None or is_terminal_task_status(current.status):
+                    return None
+                if current.status not in {TaskStatus.Pending, TaskStatus.Retry}:
+                    return None
+                if (
+                    current.status is TaskStatus.Retry
+                    and current.next_retry_at is not None
+                    and (eligible_at or datetime.now(UTC)) < current.next_retry_at
+                ):
+                    return None
             try:
                 container = self.services.containers.reserve_pending(
                     session,
@@ -803,12 +862,17 @@ class FunctionControlService:
                         image=container_plan.image_id or FUNCTION_IMAGE,
                         command=list(container_plan.entrypoint),
                         workspace_id=stub_workspace_id,
-                        stub_id=current.stub_id,
+                        stub_id=stub_id,
                         app_id=stub_app_id,
                         env=env_sequence_mapping(container_plan.env),
                     ),
                 )
             except ConflictError:
+                # The app was deleted between the plan and the reservation. A
+                # task that prompted this start is cancelled with the reason; a
+                # warm start has no caller to tell.
+                if current is None:
+                    return None
                 current.status = TaskStatus.Cancelled
                 current.error = "owning app is not active"
                 current.finished_at = datetime.now(UTC)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -302,6 +302,8 @@ class FunctionApiService(Protocol):
     def unclaimed_task_count(self, stub_id: str) -> int: ...
 
     def start_function_container(self, stub_id: str) -> bool: ...
+
+    def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
 

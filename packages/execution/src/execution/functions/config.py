@@ -34,8 +34,10 @@ class FunctionRuntimeConfig(ContainerResourceConfig):
     requires_gpu: bool = False
     retries: int = Field(default=0, ge=0)
     checkpoint_enabled: bool = False
-    # Idle seconds a container stays available for the next call. `-1` never
-    # scales to zero; `0` is the old behaviour, one container per invocation.
+    # Idle seconds a container stays available for the next call. `-1` is a
+    # container that does not retire itself, which is what a declared warm floor
+    # resolves to — past that point the autoscaler is what removes one. `0` is
+    # one container per invocation.
     keep_warm: int = Field(default=DEFAULT_FUNCTION_KEEP_WARM_SECONDS, ge=-1)
     # How many invocations one container serves at once.
     concurrency: int = Field(default=1, gt=0)
