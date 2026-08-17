@@ -413,6 +413,7 @@ def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
                         spec.kind,
                         spec.resources.keep_warm,
                         min_containers=declared_min_containers(spec.metadata),
+                        scheduled=bool(spec.cron),
                     ),
                 }
             ),

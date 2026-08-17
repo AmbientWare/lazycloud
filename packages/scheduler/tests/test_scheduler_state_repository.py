@@ -619,7 +619,7 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     assert scheduled == []
     cancelled = isolated_services.tasks.get(task_id)
     assert cancelled.status is TaskStatus.Cancelled
-    assert cancelled.error == "cron deployment is inactive"
+    assert cancelled.error == "scheduled deployment is inactive"
     assert len(container_scheduler.requests) == 1
     assert isolated_services.cron_jobs.list()[0].enabled is False
 

@@ -8,8 +8,8 @@ APP_NAME = f"function_schedule_{secrets.token_hex(6)}"
 app = App(APP_NAME)
 
 
-@app.cron(
-    "every 1m",
+@app.function(
+    cron="every 1m",
     name="scheduled-marker",
     image=Image(python_version="3.12"),
     cpu=0.25,

@@ -111,6 +111,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
                 request.stub_type,
                 request.keep_warm_seconds,
                 min_containers=request.autoscaler.min_containers,
+                scheduled=bool(request.cron),
             ),
             concurrency=request.concurrent_requests,
             in_process=request.in_process,
@@ -226,6 +227,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             keep_warm=resolve_keep_warm_seconds(
                 kind,
                 runtime_config.keep_warm,
+                scheduled=bool(config.cron),
             ),
         ),
         env={key: value or "" for key, value in config.env.items()},

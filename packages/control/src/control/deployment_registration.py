@@ -275,6 +275,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
             "route": spec.route,
             "domain": spec.domain,
             "methods": list(spec.methods),
+            "cron": spec.cron,
             "command": list(spec.command),
             "ports": {str(name): port for name, port in spec.ports.items()},
             "volumes": [_volume_mount_config(volume) for volume in spec.volumes],
@@ -335,6 +336,7 @@ def _resolved_keep_warm_seconds(spec: DeploymentSpec) -> int:
         spec.kind,
         spec.resources.keep_warm,
         min_containers=declared_min_containers(_deployment_metadata(spec)),
+        scheduled=bool(spec.cron),
     )
 
 
