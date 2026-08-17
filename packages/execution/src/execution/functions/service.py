@@ -55,6 +55,7 @@ from shared.http.functions import (
 )
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskDependency, TaskStatus, is_terminal_task_status
+from shared.timestamps import utc_now
 
 from execution.config import env_sequence_mapping
 from execution.containers.planning import ContainerSchedulingOptions
@@ -269,7 +270,10 @@ class FunctionControlService:
             task = task_repository.get_for_update_across_workspaces(task_id)
             if task is None:
                 raise NotFoundError(f"task not found: {task_id}")
-            if task.container_id or is_terminal_task_status(task.status):
+            # Readiness is established once. `claimable_at` is what says so, and
+            # it outlives the arrangement where one container served one task —
+            # `container_id` only stood in for it while those were the same fact.
+            if task.claimable_at is not None or is_terminal_task_status(task.status):
                 return None
             dependencies = TaskDependencyRepository(session).list_for_task(task.id)
             upstream_tasks: list[Task] = []
@@ -327,6 +331,14 @@ class FunctionControlService:
             return None
         if any(upstream.status is not TaskStatus.Complete for upstream in upstream_tasks):
             return None
+        # Recorded before anything acts on it. A task marked claimable and never
+        # scheduled is recoverable — the row says it is runnable and nothing owns
+        # it. A task scheduled and never marked is not, because the only evidence
+        # it was ready would be the container that failed to start.
+        with self.services.context.database.session() as session:
+            marked = TaskRepository(session).mark_claimable(task.id, at=utc_now())
+        if marked is not None:
+            task = marked
         return self._schedule_function_task(task)
 
     def _schedule_function_task(

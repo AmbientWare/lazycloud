@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Barrier, Event
 from uuid import uuid4
 
 import pytest
+from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import AutoscalerStateRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
+from database.tables.apps import StubTable
+from database.tables.orchestration import ContainerTable
 from database.tables.identity import WorkspaceTable
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
@@ -18,6 +21,8 @@ from shared.autoscaler_state import (
 from shared.errors import NotFoundError
 from shared.identity import WorkspaceStatus
 from shared.objects import ObjectWriteCommand
+from shared.tasks import Task, TaskStatus
+from shared.timestamps import utc_now
 from sqlalchemy import delete
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
@@ -360,6 +365,108 @@ def test_postgresql_contended_volume_name_settles_on_the_constraint() -> None:
         with database.session() as session:
             names = [row.name for row in VolumeRepository(session).list(workspace_id=workspace_id)]
         assert names == ["contended"]
+    finally:
+        _remove_test_workspace(database, workspace_id)
+        database.dispose()
+
+
+def test_postgresql_claimable_task_is_taken_by_exactly_one_container() -> None:
+    """A runnable task goes to one container, however many ask at once.
+
+    Pooled containers poll for their own work, so several ask for the same stub's
+    tasks at the same instant. `SKIP LOCKED` is what makes that safe — the loser
+    steps over a row the winner holds rather than blocking on it or taking it
+    twice — and taking one twice would run a customer's function two times and
+    bill for both.
+
+    Proven against PostgreSQL because that is the guarantee: SQLite ignores
+    `FOR UPDATE SKIP LOCKED` entirely, so the shared in-memory fixture would
+    report this passing whether or not the clause were there.
+    """
+
+    database = _postgres_database()
+    workspace_id = _create_workspace(database, "task-claim")
+    stub_id = str(uuid4())
+    contenders = 8
+    container_ids = [str(uuid4()) for _ in range(contenders)]
+    with database.session() as session:
+        session.add(
+            StubTable(
+                id=stub_id,
+                external_id=str(uuid4()),
+                workspace_id=workspace_id,
+                name="claimable",
+                type="function",
+                payload={},
+            )
+        )
+        for container_id in container_ids:
+            session.add(
+                ContainerTable(
+                    id=container_id,
+                    workspace_id=workspace_id,
+                    stub_id=stub_id,
+                    name=f"container-{container_id}",
+                    image="python:3.12-slim",
+                    status="running",
+                    payload={},
+                )
+            )
+        session.flush()
+        tasks = TaskRepository(session)
+        wanted = {
+            tasks.upsert(
+                Task(
+                    id=str(uuid4()),
+                    name=f"claimable-{index}",
+                    workspace_id=workspace_id,
+                    stub_id=stub_id,
+                    status=TaskStatus.Pending,
+                    claimable_at=utc_now(),
+                ),
+                workspace_id=workspace_id,
+            ).id
+            for index in range(4)
+        }
+        # Waiting on an upstream: eligible in every respect except the one that
+        # decides it, so a claim that ignored `claimable_at` would take it.
+        blocked = tasks.upsert(
+            Task(
+                id=str(uuid4()),
+                name="waiting-on-upstream",
+                workspace_id=workspace_id,
+                stub_id=stub_id,
+                status=TaskStatus.Pending,
+                claimable_at=None,
+            ),
+            workspace_id=workspace_id,
+        ).id
+
+    start = Barrier(contenders)
+
+    def claim(container_index: int) -> list[str]:
+        with database.session() as session:
+            start.wait(timeout=10)
+            return [
+                task.id
+                for task in TaskRepository(session).claim_for_stub(
+                    stub_id,
+                    container_id=container_ids[container_index],
+                    limit=4,
+                )
+            ]
+
+    try:
+        with ThreadPoolExecutor(max_workers=contenders) as pool:
+            claimed = [id for result in pool.map(claim, range(contenders)) for id in result]
+
+        assert len(claimed) == len(set(claimed)), "a task was claimed more than once"
+        assert set(claimed) == wanted
+        assert blocked not in claimed
+        with database.session() as session:
+            still_waiting = TaskRepository(session).get_across_workspaces(blocked)
+        assert still_waiting is not None
+        assert still_waiting.container_id is None
     finally:
         _remove_test_workspace(database, workspace_id)
         database.dispose()
