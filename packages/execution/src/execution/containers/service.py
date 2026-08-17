@@ -31,7 +31,7 @@ from shared.container_requests import (
     WorkerContainerRequestPayload,
     WorkerStartupKind,
 )
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
@@ -591,12 +591,7 @@ class ContainerService:
         reason: StopContainerReason = StopContainerReason.User,
     ) -> ContainerRecord:
         record = self.get(container_id)
-        terminal_statuses = {
-            ContainerStatus.Exited,
-            ContainerStatus.Failed,
-            ContainerStatus.Stopped,
-        }
-        state_changed = record.status not in terminal_statuses
+        state_changed = record.status not in TERMINAL_CONTAINER_STATUSES
         if state_changed:
             cancellation = self._cancel_scheduler_request(record.id)
             if cancellation.worker_stop_required:
@@ -660,12 +655,7 @@ class ContainerService:
         record = self.get(container_id)
         if record.workspace_id != workspace_id:
             raise NotFoundError(f"container not found: {container_id}")
-        terminal_statuses = {
-            ContainerStatus.Exited,
-            ContainerStatus.Failed,
-            ContainerStatus.Stopped,
-        }
-        if record.status in terminal_statuses:
+        if record.status in TERMINAL_CONTAINER_STATUSES:
             return record
         cancellation = self._cancel_scheduler_request(record.id)
         if cancellation.worker_stop_required:
@@ -674,6 +664,10 @@ class ContainerService:
                 worker_id=cancellation.worker_id,
                 reason=StopContainerReason.Admin,
             )
+        # Deliberately does not settle what the container was holding, unlike
+        # every other stop. A deleting workspace accepts no task writes at all,
+        # and the claims do not outlive it either way: finalization deletes every
+        # row the workspace owns, the tasks among them.
         record.status = ContainerStatus.Stopped
         record.finished_at = utc_now()
         with self.context.database.session() as session:

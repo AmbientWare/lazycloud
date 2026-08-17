@@ -33,7 +33,7 @@ from scheduler.containers import (
 from scheduler.state import SchedulerWorkerRequest
 from shared.billing_quotes import ContainerShape
 from shared.compute_fleet import Machine, Worker
-from shared.container_requests import WorkerStartupKind
+from shared.container_requests import StopContainerReason, WorkerStartupKind
 from shared.containers import ContainerRecord
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.tasks import TaskStatus
@@ -548,3 +548,34 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
     )
     with isolated_services.context.database.session() as session:
         assert ContainerBillingShapeRepository(session).shape_for(container.id) == placed
+
+
+def test_a_terminal_container_cannot_claim_a_task(
+    isolated_services: ApiServices,
+) -> None:
+    """A start that arrives after the container ended is refused, not written.
+
+    Releasing a claim and the container noticing it should stop are not ordered
+    against each other, so a start can arrive from a container the platform has
+    already finished settling. Written, that claim names a container every
+    settlement path has run past: no claim query can see the row, no retry
+    reaches it, and its caller waits for a result nothing is left to produce.
+    """
+
+    container = isolated_services.containers.run(
+        "retired-container",
+        "python:3.12",
+        ["python", "-c", "print('ok')"],
+    )
+    task = isolated_services.tasks.create("released-invocation", container_id=container.id)
+    isolated_services.tasks.start(task.id, container_id=container.id)
+
+    # The platform's own stop, which hands the invocation back rather than
+    # cancelling it — the state a late start arrives into.
+    isolated_services.containers.stop(container.id, reason=StopContainerReason.Scheduler)
+    assert isolated_services.tasks.get(task.id).container_id is None
+
+    with pytest.raises(ConflictError):
+        isolated_services.tasks.start(task.id, container_id=container.id)
+
+    assert isolated_services.tasks.get(task.id).container_id is None

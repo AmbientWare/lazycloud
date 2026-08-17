@@ -23,7 +23,7 @@ from shared.container_requests import (
     RuntimeContainerStatus,
     WorkerStartupKind,
 )
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.http.pods import (
@@ -121,14 +121,6 @@ from execution.pods.proxy import (
     PodProxyUnavailable,
 )
 from execution.services import ExecutionServices
-
-TERMINAL_CONTAINER_STATUSES = frozenset(
-    {
-        ContainerStatus.Exited,
-        ContainerStatus.Failed,
-        ContainerStatus.Stopped,
-    }
-)
 
 
 @dataclass(slots=True)
