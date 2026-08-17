@@ -385,6 +385,7 @@ class FunctionRunner:
             context,
             log=self.append_container_log,
             capture_output=False,
+            raise_on_error=True,
         )
         # After the handler is imported and `on_start` has run, so the image
         # captured is one that is ready to serve rather than one that still has

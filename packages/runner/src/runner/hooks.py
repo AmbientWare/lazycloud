@@ -34,7 +34,20 @@ def run_lifecycle_hooks(
     *,
     log: HookLogger,
     capture_output: bool = True,
+    raise_on_error: bool = False,
 ) -> None:
+    """Run every hook registered for this point in the lifecycle.
+
+    A failing hook is normally logged and stepped over: it is commentary on work
+    that happened, and losing the commentary must not lose the work.
+
+    `raise_on_error` is for the one hook where that is wrong. A container whose
+    `on_start` did not finish has not loaded whatever the handler expects to be
+    there, so serving calls with it produces failures blamed on the callers'
+    code. Reported and swallowed, the whole container's worth of invocations
+    fails one at a time for a reason that appears nowhere near the cause.
+    """
+
     for reference in hooks.refs(hook):
         try:
             callback = load_callable(reference)
@@ -49,6 +62,8 @@ def run_lifecycle_hooks(
             stderr.flush()
         except BaseException as exc:
             log("stderr", _hook_error(reference, exc))
+            if raise_on_error:
+                raise
 
 
 class _HookLogStream:
