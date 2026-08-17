@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 
-import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisClient
-from database.repositories.orchestration import ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
 from execution.taskqueues.service import TaskQueueControlService
@@ -31,7 +29,6 @@ from shared.containers import ContainerStatus
 from shared.env import (
     CHECKPOINT_ENABLED_ENV,
 )
-from shared.errors import ConflictError
 from shared.function_payloads import (
     FunctionCloudpickleInvocation,
     FunctionCloudpickleResult,
@@ -40,7 +37,6 @@ from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
     FunctionClaimRequest,
-    FunctionGetArgsRequest,
     FunctionInvokeBody,
     FunctionSetResultBody,
 )
@@ -281,98 +277,6 @@ def test_function_result_and_completion_reject_stale_container_attempt(
     assert finished.status is TaskStatus.Running
     assert isolated_services.tasks.get(task.id).status is TaskStatus.Running
     assert isolated_services.tasks.get(task.id).function_result is None
-
-
-def test_function_args_require_running_current_container_across_retry_replacement(
-    isolated_services: ApiServices,
-) -> None:
-    scheduler = _Scheduler()
-    isolated_services.containers.scheduler = scheduler
-    stub = ControlPlaneService(isolated_services.context).create_stub(
-        "function-args-fence",
-        kind=StubKind.Function,
-        handler="pkg.fn:handler",
-        config={"runtime": {"image_id": "image-fn", "retries": 1}},
-    )
-    service = FunctionControlService(isolated_services)
-    invocation = FunctionCloudpickleInvocation.from_bytes(
-        cloudpickle_bytes({"args": (2,), "kwargs": {}})
-    )
-    invoked = service.function_invoke(FunctionInvokeBody(stub_id=stub.id, invocation=invocation))
-    first_container = scheduler.requests[0].container_id
-    claimed = service.function_claim(
-        FunctionClaimRequest(stub_id=stub.id, container_id=first_container)
-    )
-    assert claimed.task is not None
-    assert claimed.task.task_id == invoked.task_id
-
-    with pytest.raises(ConflictError, match="pending"):
-        service.function_get_args(
-            FunctionGetArgsRequest(
-                task_id=invoked.task_id,
-                container_id=first_container,
-            )
-        )
-    running = isolated_services.tasks.transition(
-        isolated_services.tasks.get(invoked.task_id),
-        TaskStatus.Running,
-    )
-    assert (
-        service.function_get_args(
-            FunctionGetArgsRequest(task_id=running.id, container_id=first_container)
-        ).invocation
-        == invocation
-    )
-    with pytest.raises(ConflictError, match="does not own"):
-        service.function_get_args(
-            FunctionGetArgsRequest(task_id=running.id, container_id="stale-container")
-        )
-
-    retry = service.finish_function_task(
-        running.id,
-        TaskStatus.Failed,
-        container_id=first_container,
-        error="retry",
-        exit_code=1,
-    )
-    assert retry.status is TaskStatus.Retry
-    assert len(scheduler.requests) == 1
-    previous_container = isolated_services.containers.get(first_container)
-    previous_container.status = ContainerStatus.Failed
-    previous_container.finished_at = datetime.now(UTC)
-    with isolated_services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            previous_container,
-            workspace_id=previous_container.workspace_id,
-            name=previous_container.name,
-            status=previous_container.status.value,
-        )
-    assert len(service.schedule_due_retries(now=datetime.now(UTC))) == 1
-    assert len(scheduler.requests) == 2
-    replacement_container = scheduler.requests[1].container_id
-    assert replacement_container != first_container
-    reclaimed = service.function_claim(
-        FunctionClaimRequest(stub_id=stub.id, container_id=replacement_container)
-    )
-    assert reclaimed.task is not None
-    assert reclaimed.task.task_id == running.id
-    replacement = isolated_services.tasks.transition(
-        isolated_services.tasks.get(running.id),
-        TaskStatus.Running,
-    )
-    with pytest.raises(ConflictError, match="does not own"):
-        service.function_get_args(
-            FunctionGetArgsRequest(task_id=replacement.id, container_id=first_container)
-        )
-    assert (
-        service.function_get_args(
-            FunctionGetArgsRequest(
-                task_id=replacement.id,
-                container_id=replacement_container,
-            )
-        ).invocation
-        == invocation
-    )
 
 
 def test_function_cancel_stops_container_and_rejects_terminal_writes(

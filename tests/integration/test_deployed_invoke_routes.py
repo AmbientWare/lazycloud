@@ -30,8 +30,6 @@ from shared.http.endpoints import (
 from shared.http.functions import (
     FunctionCronRequest,
     FunctionCronResponse,
-    FunctionGetArgsRequest,
-    FunctionGetArgsResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -110,8 +108,6 @@ class RecordingFunctionService:
         _ = poll_interval_seconds, keepalive_interval_seconds
         yield self.function_invoke(request)
 
-    def function_get_args(self, request: FunctionGetArgsRequest) -> FunctionGetArgsResponse:
-        raise AssertionError(f"unexpected function_get_args call: {request}")
 
     def function_set_result(
         self,

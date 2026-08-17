@@ -61,24 +61,6 @@ class FunctionInvokeResponse(HttpModel):
         )
 
 
-class FunctionGetArgsRequest(HttpModel):
-    task_id: str
-    container_id: str
-
-
-class FunctionGetArgsResponse(HttpModel):
-    invocation: FunctionInvocationPayload
-    dependencies: list[FunctionDependencyBinding] = Field(
-        default_factory=list,
-        max_length=FUNCTION_DEPENDENCY_MAX_COUNT,
-    )
-
-    @model_validator(mode="after")
-    def validate_bindings(self) -> FunctionGetArgsResponse:
-        validate_function_dependency_bindings(self.dependencies)
-        return self
-
-
 class FunctionClaimRequest(HttpModel):
     """A container asking its stub for one invocation to run.
 
@@ -187,8 +169,6 @@ __all__ = [
     "FunctionClaimedTask",
     "FunctionCronRequest",
     "FunctionCronResponse",
-    "FunctionGetArgsRequest",
-    "FunctionGetArgsResponse",
     "FunctionInvokeBody",
     "FunctionInvokeResponse",
     "FunctionMonitorRequest",

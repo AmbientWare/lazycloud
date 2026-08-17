@@ -46,8 +46,6 @@ from shared.http.functions import (
     FunctionClaimResponse,
     FunctionCronRequest,
     FunctionCronResponse,
-    FunctionGetArgsRequest,
-    FunctionGetArgsResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -555,8 +553,11 @@ class FunctionControlService:
             error=error,
             exit_code=exit_code,
         )
-        if outcome.retry_scheduling_owned and outcome.retry_decision.delay_seconds <= 0:
-            self._schedule_function_task(outcome.task)
+        # A retry due immediately is not scheduled from here. Making it runnable
+        # means releasing its claim, and that is `schedule_due_retries`, which
+        # owns the decision for delayed retries too — one path rather than two
+        # that must agree. Scheduling it here without releasing did nothing: a
+        # task in `retry` is invisible to a claim and counts toward no capacity.
         if outcome.state_changed and is_terminal_task_status(outcome.task.status):
             self.release_dependents(outcome.task)
         return outcome.task
@@ -882,29 +883,6 @@ class FunctionControlService:
                 last_keepalive = time.monotonic()
                 yield FunctionInvokeResponse.from_result(task_id=initial.task_id)
             time.sleep(sleep_seconds)
-
-    def function_get_args(self, request: FunctionGetArgsRequest) -> FunctionGetArgsResponse:
-        with self.services.context.database.session() as session:
-            task = TaskRepository(session).get_for_update_across_workspaces(request.task_id)
-            if task is None:
-                raise NotFoundError(f"function arguments not found: {request.task_id}")
-            assigned_container_id = task.container_id or ""
-            if task.status is not TaskStatus.Running:
-                raise ConflictError(
-                    f"function arguments are unavailable while task {task.id} is "
-                    f"{task.status.value}"
-                )
-            if not assigned_container_id or assigned_container_id != request.container_id:
-                raise ConflictError(
-                    f"container {request.container_id} does not own function task {task.id}"
-                )
-            if task.invocation is None:
-                raise InvalidInputError(f"function task {task.id} has no invocation payload")
-            validate_function_dependency_bindings(task.dependency_bindings)
-            return FunctionGetArgsResponse(
-                invocation=task.invocation,
-                dependencies=task.dependency_bindings,
-            )
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
         """Give a container asking for work one invocation to run, if there is one.

@@ -654,11 +654,6 @@ def _decode_dependency_result(binding: FunctionDependencyBinding) -> Any:
     return cloudpickle.loads(binding.result.bytes_value())
 
 
-def execute_handler(handler_ref: str, invocation: FunctionInvocation) -> Any:
-    handler = load_callable(handler_ref)
-    return invoke_handler(handler, *invocation.args, **invocation.kwargs)
-
-
 def config_from_env(env: dict[str, str] | None = None) -> FunctionRunnerConfig:
     source = env or os.environ
     return FunctionRunnerConfig(

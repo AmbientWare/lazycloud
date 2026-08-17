@@ -12,7 +12,6 @@ from shared.http.functions import (
     FunctionCallDependency,
     FunctionCronRequest,
     FunctionCronResponse,
-    FunctionGetArgsResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -86,14 +85,6 @@ class FunctionControlClient:
         ):
             yield _validate_response(FunctionInvokeResponse, item)
 
-    def get_args(self, task_id: str, container_id: str) -> FunctionGetArgsResponse:
-        return _validate_response(
-            FunctionGetArgsResponse,
-            self.channel.post(
-                self._scoped("/api/v1/functions/get-args"),
-                {"task_id": task_id, "container_id": container_id},
-            ),
-        )
 
     def set_result(
         self,

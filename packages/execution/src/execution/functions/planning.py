@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from enum import StrEnum
 
 from compute.resources import normalize_gpu_count
@@ -11,10 +10,8 @@ from shared.env import (
     APP_ID_ENV,
     CONTAINER_ID_ENV,
     GATEWAY_TOKEN_ENV,
-    INPUTS_ENV,
     KEEP_WARM_SECONDS_ENV,
     LIFECYCLE_HOOKS_ENV,
-    OUTPUTS_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
@@ -60,10 +57,7 @@ class FunctionContainerEnvVar(StrEnum):
     WorkspaceId = WORKSPACE_ID_ENV
     WorkspaceName = WORKSPACE_NAME_ENV
     AppId = APP_ID_ENV
-    CallbackUrl = "CALLBACK_URL"
-    Inputs = INPUTS_ENV
     LifecycleHooks = LIFECYCLE_HOOKS_ENV
-    Outputs = OUTPUTS_ENV
 
 
 class FunctionContainerStartRequest(ContractModel):
@@ -74,10 +68,7 @@ class FunctionContainerStartRequest(ContractModel):
     handler: str
     keep_warm_seconds: int = 0
     gateway_token: str = ""
-    callback_url: str = ""
-    stub_kind: DeploymentKind = DeploymentKind.Function
-    container_id: str | None = None
-    container_id_suffix: str = "00000000"
+    container_id: str
     python_executable: ManagedPythonExecutable = FUNCTION_DEFAULT_PYTHON_EXECUTABLE
     runner_module: str = FUNCTION_RUNNER_MODULE
     cpu_millicores: int = Field(default=0, ge=0)
@@ -89,8 +80,6 @@ class FunctionContainerStartRequest(ContractModel):
     image_id: str = ""
     env: list[str] = Field(default_factory=list)
     secret_env: list[str] = Field(default_factory=list)
-    inputs: dict[str, JsonValue] = Field(default_factory=dict)
-    outputs: dict[str, JsonValue] = Field(default_factory=dict)
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
 
 
@@ -232,14 +221,8 @@ def plan_function_invoke(request: FunctionInvokeRequest) -> FunctionInvokePlan:
 def plan_function_container_start(
     request: FunctionContainerStartRequest,
 ) -> FunctionContainerStartPlan:
-    container_id = request.container_id or function_container_id(
-        request.stub_kind,
-        request.stub_id,
-        request.container_id_suffix,
-    )
-    inputs_json = json.dumps(request.inputs, sort_keys=True)
+    container_id = request.container_id
     lifecycle_hooks_json = request.lifecycle_hooks.model_dump_json()
-    outputs_json = json.dumps(request.outputs, sort_keys=True)
     return FunctionContainerStartPlan(
         container_id=container_id,
         entrypoint=[request.python_executable, "-m", request.runner_module],
@@ -257,10 +240,7 @@ def plan_function_container_start(
             f"{FunctionContainerEnvVar.WorkspaceId.value}={request.workspace_id}",
             f"{FunctionContainerEnvVar.WorkspaceName.value}={request.workspace_name}",
             f"{FunctionContainerEnvVar.AppId.value}={request.app_id}",
-            f"{FunctionContainerEnvVar.CallbackUrl.value}={request.callback_url}",
-            f"{FunctionContainerEnvVar.Inputs.value}={inputs_json}",
             f"{FunctionContainerEnvVar.LifecycleHooks.value}={lifecycle_hooks_json}",
-            f"{FunctionContainerEnvVar.Outputs.value}={outputs_json}",
         ],
         cpu_millicores=request.cpu_millicores or DEFAULT_FUNCTION_CONTAINER_CPU_MILLICORES,
         memory_mib=request.memory_mib or DEFAULT_FUNCTION_CONTAINER_MEMORY_MIB,

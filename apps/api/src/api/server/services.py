@@ -179,8 +179,6 @@ from shared.http.functions import (
     FunctionClaimResponse,
     FunctionCronRequest,
     FunctionCronResponse,
-    FunctionGetArgsRequest,
-    FunctionGetArgsResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -312,8 +310,6 @@ class FunctionApiService(Protocol):
     ) -> Iterable[FunctionInvokeResponse]: ...
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
-
-    def function_get_args(self, request: FunctionGetArgsRequest) -> FunctionGetArgsResponse: ...
 
     def function_set_result(self, request: FunctionSetResultBody) -> FunctionSetResultResponse: ...
 

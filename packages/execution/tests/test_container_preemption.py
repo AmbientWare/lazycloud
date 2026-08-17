@@ -35,6 +35,14 @@ def _running_task(
     kind: StubKind,
     name: str,
 ) -> tuple[Task, ContainerRecord]:
+    """One task a container is running, shaped the way production shapes it.
+
+    A pooled function container carries no `task_id` of its own — it is started
+    for its stub and what it is running is recorded only by the claim. Setting
+    one here would let preemption resolve the task through a field production
+    leaves empty, and the claim-side lookup that actually runs would go untested.
+    """
+
     control = ControlPlaneService(services.context)
     stub = control.create_stub(name, kind=kind)
     task = services.tasks.create(
@@ -51,17 +59,17 @@ def _running_task(
                 "command": ["python", "-m", "runner"],
                 "workspace_id": stub.workspace_id,
                 "stub_id": stub.id,
-                "task_id": task.id,
+                **({} if kind is StubKind.Function else {"task_id": task.id}),
                 "status": ContainerStatus.Running.value,
             },
             workspace_id=stub.workspace_id,
             name=name,
             status=ContainerStatus.Running.value,
         )
-    task.container_id = container.id
-    task.status = TaskStatus.Running
-    task.attempt_number = 1
-    task = services.tasks.save(task)
+    # Started through the service rather than by hand, so the attempt row exists.
+    # It is the durable record that this container ran this task, and settling a
+    # preemption twice resolves the task through it once the claim is cleared.
+    task = services.tasks.start(task.id, container_id=container.id)
     return task, container
 
 

@@ -36,9 +36,17 @@ class _RecordingScheduler:
         )
 
 
-def test_function_retry_waits_for_previous_container_to_become_terminal(
+def test_function_retry_reuses_a_warm_container_and_starts_one_only_when_none_is_free(
     isolated_services: ApiServices,
 ) -> None:
+    """A retry costs a new container only when nothing is free to take it.
+
+    The retried task goes back to being claimable, so while the first container
+    is still alive it is that container's to pick up and no second is started.
+    Once that container is gone the work would otherwise sit claimable with
+    nothing coming for it, and capacity has to be started for it.
+    """
+
     scheduler = _RecordingScheduler()
     isolated_services = replace(
         isolated_services,

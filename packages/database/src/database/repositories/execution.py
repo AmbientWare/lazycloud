@@ -525,6 +525,25 @@ class TaskAttemptRepository:
         )
         return [TaskAttempt.model_validate(row.payload) for row in self.session.scalars(statement)]
 
+    def latest_task_id_for_container(self, container_id: str) -> str:
+        """Which task this container most recently attempted.
+
+        Survives the task being settled, unlike the claim: finishing a task
+        clears `container_id`, so a second settlement of the same container has
+        nothing left on the task to find it by. The attempt row is the durable
+        record that this container ran this work, and it is what makes settling
+        twice resolve the same task and report the same no-op.
+        """
+
+        statement = (
+            select(TaskAttemptTable)
+            .where(TaskAttemptTable.container_id == container_id)
+            .order_by(TaskAttemptTable.created_at.desc(), TaskAttemptTable.attempt_number.desc())
+            .limit(1)
+        )
+        row = self.session.scalars(statement).first()
+        return str(row.task_id) if row is not None else ""
+
     def latest_for_task(self, task_id: str) -> TaskAttempt | None:
         statement = (
             select(TaskAttemptTable)
