@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from database.records.apps import StubRecord
-from database.repositories.execution import TaskRepository
+from database.repositories.execution import TaskAttemptRepository, TaskRepository
 from pydantic import Field
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
@@ -95,7 +95,13 @@ class PreemptedContainerService:
 
         with self.services.context.database.session() as session:
             held = TaskRepository(session).list_inflight_for_container(container.id)
-        return held[0].id if held else ""
+            if held:
+                return held[0].id
+            # Nothing in flight, which is either a container that was between
+            # calls or one already settled. The attempt row tells the two apart,
+            # and resolving the settled one is what keeps a second settlement an
+            # idempotent no-op rather than a report that nothing ever ran here.
+            return TaskAttemptRepository(session).latest_task_id_for_container(container.id)
 
     def _container_stub_kind(self, container: ContainerRecord) -> StubKind:
         if not container.stub_id:

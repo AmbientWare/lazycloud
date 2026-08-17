@@ -12,8 +12,6 @@ from shared.http.functions import (
     FunctionClaimResponse,
     FunctionCronRequest,
     FunctionCronResponse,
-    FunctionGetArgsRequest,
-    FunctionGetArgsResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -67,17 +65,6 @@ def function_invoke_stream(
         _function_ndjson(service.function_invoke_stream(request)),
         media_type="application/x-ndjson",
     )
-
-
-@router.post("/get-args", response_model=FunctionGetArgsResponse)
-def function_get_args(
-    request: FunctionGetArgsRequest,
-    workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-    service: FunctionApiService = Depends(function_service),
-) -> FunctionGetArgsResponse:
-    require_task_workspace(services, request.task_id, workspace_id)
-    return service.function_get_args(request)
 
 
 @router.post("/claim", response_model=FunctionClaimResponse)
