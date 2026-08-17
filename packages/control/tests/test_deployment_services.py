@@ -594,3 +594,46 @@ def _json_path(value: JsonValue, *path: str | int) -> JsonValue:
             assert isinstance(current, list)
             current = current[segment]
     return current
+
+
+def test_registration_keeps_a_source_stub_that_something_is_using(
+    isolated_services: ApiServices,
+) -> None:
+    """A stub invoked before it was deployed is not swept up by deploying it.
+
+    Registration copies its source stub forward and discards it, because the
+    ordinary one is a staging row nothing refers to. A user who called the
+    function before deploying leaves tasks against that row, and it stops being
+    disposable the moment anything points at it.
+    """
+
+    control_plane = ControlPlaneService(
+        isolated_services.context,
+        workspace_changes=isolated_services.workspace_changes,
+    )
+    workspace = owned_workspace(control_plane, "default")
+    source_stub = control_plane.create_stub(
+        "used-before-deploy",
+        workspace=workspace.id,
+        kind=StubKind.Function,
+        handler="pkg:function",
+    )
+    isolated_services.tasks.create(
+        "invoked-before-deploy",
+        workspace_id=workspace.id,
+        stub_id=source_stub.id,
+    )
+
+    deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="used-before-deploy",
+            kind=DeploymentKind.Function,
+            handler="pkg:function",
+            metadata={"stub_id": source_stub.id},
+        ),
+        workspace=workspace.id,
+    )
+
+    assert deployment.stub_id is not None
+    assert deployment.stub_id != source_stub.id
+    assert control_plane.get_stub(source_stub.id, workspace=workspace.id).id == source_stub.id
