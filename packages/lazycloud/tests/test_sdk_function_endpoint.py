@@ -456,19 +456,22 @@ def test_function_spawn_serializes_call_dependencies(
     ]
 
 
-def test_cron_decorates_raw_callable_and_registers_after_deploy(
+def test_a_function_declares_its_own_schedule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A schedule is an argument to a function, and it travels with its stub.
+
+    The whole deploy is one call: the stub the deployment is built from carries
+    the expression, so the schedule is created where the deployment registers
+    rather than by a second request that could fail on its own.
+    """
+
     monkeypatch.delenv(IMPORTING_USER_CODE_ENV, raising=False)
-    monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
     monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
     function_client = FakeFunctionClient()
     deployment_client = FakeDeploymentClient(stub_id_from_type=True)
 
-    @App("test").cron(
-        "*/5 * * * *",
-        name="cron-task",
-    )
+    @App("test").function(cron="*/5 * * * *", name="cron-task")
     def cron_task() -> str:
         return "local"
 
@@ -482,37 +485,17 @@ def test_cron_decorates_raw_callable_and_registers_after_deploy(
     response = cron_task.deploy(name="nightly-task", workspace="team")
 
     assert cron_task.local() == "local"
-    assert spec.kind is DeploymentKind.CronJob
+    assert spec.kind is DeploymentKind.Function
     assert spec.name == "cron-task"
     assert spec.cron == "*/5 * * * *"
-    assert deployment_client.stub_requests[0].stub_type == "cron-job"
-    # The schedule travels with the stub the deploy is built from, so the server
-    # can create it in the same call rather than being told in a second one.
+    # Unset rather than the function default, so the backend can tell a schedule
+    # keeping zero from an author who asked for a window.
+    assert spec.resources.keep_warm is None
+    assert deployment_client.stub_requests[0].stub_type == "function"
     assert deployment_client.stub_requests[0].cron == "*/5 * * * *"
-    assert deployment_client.deploy_requests[0].stub_id == "stub-cron-job"
+    assert deployment_client.deploy_requests[0].stub_id == "stub-function"
     assert deployment_client.deploy_requests[0].name == "nightly-task"
-    assert response.deployment_id == "dep-stub-cron-job"
-
-
-def test_cron_rejects_decorated_function_binding_helper(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(IMPORTING_USER_CODE_ENV, raising=False)
-    monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
-    monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
-
-    @App("test").function(name="already-decorated")
-    def already_decorated() -> None:
-        return None
-
-    _bind_internal_state(
-        already_decorated,
-        stub_id="stub-1",
-        client=FakeFunctionClient(),
-    )
-
-    with pytest.raises(TypeError, match="raw callable"):
-        App("test").cron("@hourly")(already_decorated)
+    assert response.deployment_id == "dep-stub-function"
 
 
 def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:

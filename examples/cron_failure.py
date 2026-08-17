@@ -16,8 +16,8 @@ app = App(os.getenv(APP_NAME_ENV, "cron_failure"))
 image = Image(python_version="3.12")
 
 
-@app.cron(
-    "every 1m",
+@app.function(
+    cron="every 1m",
     name="failing-heartbeat",
     image=image,
     cpu=0.25,

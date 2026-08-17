@@ -137,8 +137,8 @@ def jobs(value: int = 5, fail: bool = False, delay_seconds: float = 0) -> JobRes
     return {"accepted": True, "value": value}
 
 
-@app.cron(
-    "every 1m",
+@app.function(
+    cron="every 1m",
     name="heartbeat",
     image=image,
     cpu=0.25,

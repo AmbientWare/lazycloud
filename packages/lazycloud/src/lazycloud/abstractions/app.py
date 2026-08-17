@@ -12,7 +12,6 @@ from shared.autoscaling import QueueDepthAutoscaler
 from shared.deployment_records import (
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
-    DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -35,8 +34,7 @@ from lazycloud.abstractions.endpoint import (
 from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
 from lazycloud.abstractions.endpoint import _endpoint as endpoint_decorator
 from lazycloud.abstractions.endpoint import _realtime as realtime_decorator
-from lazycloud.abstractions.function import CronJob, Function, FunctionOptions
-from lazycloud.abstractions.function import _cron as cron_decorator
+from lazycloud.abstractions.function import Function, FunctionOptions
 from lazycloud.abstractions.function import _function as function_decorator
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
@@ -113,7 +111,8 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
-        keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+        cron: str | None = None,
+        keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -158,7 +157,8 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
-        keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+        cron: str | None = None,
+        keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -202,7 +202,8 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
-        keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+        cron: str | None = None,
+        keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -274,6 +275,7 @@ class App:
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             in_process=in_process,
+            cron=cron,
             keep_warm=keep_warm,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
@@ -308,116 +310,6 @@ class App:
             return self._register(function_decorator(target, _app_slug=self.slug, **kwargs))
 
         return decorate if func is None else decorate(func)
-
-    def cron(
-        self,
-        cron: str,
-        *,
-        image: Image | None = None,
-        name: str | None = None,
-        cpu: float | None = DEFAULT_FUNCTION_CPU,
-        memory: str | None = DEFAULT_FUNCTION_MEMORY,
-        disk: str | None = None,
-        gpu: str | None = None,
-        gpu_count: int = 0,
-        timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
-        concurrency: int = 1,
-        in_process: bool = False,
-        keep_warm: int | None = None,
-        max_pending_tasks: int | None = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
-        retries: int = DEFAULT_FUNCTION_RETRIES,
-        retry_policy: RetryPolicyInput = None,
-        retry_delay_seconds: float = 0.0,
-        callback_url: str | None = None,
-        authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
-        env: dict[str, str] | None = None,
-        secrets: list[str] | None = None,
-        volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-        on_start: LifecycleHookInput = None,
-        on_running: LifecycleHookInput = None,
-        on_success: LifecycleHookInput = None,
-        on_error: LifecycleHookInput = None,
-        on_retry: LifecycleHookInput = None,
-        on_failure: LifecycleHookInput = None,
-        on_cancelled: LifecycleHookInput = None,
-        on_timeout: LifecycleHookInput = None,
-        on_finish: LifecycleHookInput = None,
-        task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-        inputs: SchemaInput = None,
-        outputs: SchemaInput = None,
-        docker_enabled: bool = False,
-        pool: PoolInput = None,
-        provider: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Callable[[Callable[P, R]], CronJob[P, R]]:
-        """Register a scheduled function owned by this app.
-
-        The schedule uses standard cron syntax. The decorated callable keeps its
-        normal Python signature for local execution, while deploy registers it
-        as a scheduled app resource.
-
-        Args:
-            cron: Cron expression that controls when the function runs.
-            image: Image definition used to build or select the runtime image.
-            name: Deployment resource name. Defaults to the callable name.
-            cpu, memory, gpu, gpu_count: Compute resources requested per run.
-            timeout_seconds: Maximum runtime for one scheduled invocation.
-            retries: Number of retry attempts for failed scheduled runs.
-            callback_url: Optional webhook called for execution events.
-            authorized: Whether calls require an authenticated client.
-            env, secrets, volumes: Runtime configuration injected into workers.
-            on_start and task lifecycle hooks: Hooks invoked by the workload runner.
-            task_policy: Scheduling policy for invocation retries and timeouts.
-            inputs, outputs: Optional schema metadata for clients and validation.
-            docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, provider, metadata: Scheduling group and custom metadata.
-        """
-        kwargs = _function_options(
-            image=image,
-            name=name,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            concurrency=concurrency,
-            in_process=in_process,
-            keep_warm=keep_warm,
-            max_pending_tasks=max_pending_tasks,
-            autoscaler=autoscaler,
-            retries=retries,
-            retry_policy=retry_policy,
-            retry_delay_seconds=retry_delay_seconds,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env,
-            secrets=secrets,
-            volumes=volumes,
-            on_start=on_start,
-            on_running=on_running,
-            on_success=on_success,
-            on_error=on_error,
-            on_retry=on_retry,
-            on_failure=on_failure,
-            on_cancelled=on_cancelled,
-            on_timeout=on_timeout,
-            on_finish=on_finish,
-            task_policy=task_policy,
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=False,
-            pool=pool,
-            provider=provider,
-            metadata=metadata,
-        )
-
-        def decorate(target: Callable[P, R]) -> CronJob[P, R]:
-            return self._register(cron_decorator(cron, _app_slug=self.slug, **kwargs)(target))
-
-        return decorate
 
     @overload
     def endpoint(
@@ -1296,6 +1188,7 @@ def _function_options(
     timeout_seconds: int | None,
     concurrency: int,
     in_process: bool,
+    cron: str | None,
     keep_warm: int | None,
     max_pending_tasks: int | None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
@@ -1336,6 +1229,7 @@ def _function_options(
         "timeout_seconds": timeout_seconds,
         "concurrency": concurrency,
         "in_process": in_process,
+        "cron": cron,
         "keep_warm": keep_warm,
         "max_pending_tasks": max_pending_tasks,
         "autoscaler": autoscaler,

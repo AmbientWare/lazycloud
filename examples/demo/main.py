@@ -75,7 +75,7 @@ def stream_count(count: int = 10, delay_seconds: float = 1.0) -> int:
     return count
 
 
-@demo.cron("every 1m", name="cron-marker", image=demo_image, cpu=1.0, memory="256Mi")
+@demo.function(cron="every 1m", name="cron-marker", image=demo_image, cpu=1.0, memory="256Mi")
 def cron_marker() -> int:
     print("cron-marker-ok", flush=True)
     return 21

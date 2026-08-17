@@ -419,7 +419,7 @@ class FunctionControlService:
             )
             return None
         stub = self.control_plane.get_stub(task.stub_id)
-        if not self._cron_execution_allowed(task, stub_kind=stub.kind):
+        if not self._scheduled_execution_allowed(task, scheduled=bool(stub.config.cron)):
             return None
         return self._launch_function_container(
             stub,
@@ -625,14 +625,22 @@ class FunctionControlService:
                 f"it accepts ({limit}); raise max_pending_tasks to queue more"
             )
 
-    def _cron_execution_allowed(self, task: Task, *, stub_kind: StubKind) -> bool:
-        if stub_kind is not StubKind.CronJob:
+    def _scheduled_execution_allowed(self, task: Task, *, scheduled: bool) -> bool:
+        """A run that fired may outlive the deployment that scheduled it.
+
+        Only a scheduled run can: every other invocation has a caller waiting,
+        and a caller cannot invoke a deployment that is gone. This one was
+        enqueued by a tick, so between the tick and the claim its deployment may
+        have been stopped or deleted, and running it then is work nobody wants.
+        """
+
+        if not scheduled:
             return True
         if not task.deployment_id:
             updated = self.services.tasks.transition(
                 task,
                 TaskStatus.Failed,
-                error="cron task is missing deployment_id",
+                error="scheduled task is missing deployment_id",
                 exit_code=1,
             )
             self.release_dependents(updated)
@@ -643,12 +651,12 @@ class FunctionControlService:
             deployment = None
         if deployment is not None and deployment.active and deployment.deleted_at is None:
             return True
-        reason = "cron deployment is unavailable"
+        reason = "scheduled deployment is unavailable"
         if deployment is not None:
             reason = (
-                "cron deployment is deleted"
+                "scheduled deployment is deleted"
                 if deployment.deleted_at is not None
-                else "cron deployment is inactive"
+                else "scheduled deployment is inactive"
             )
         updated = self.services.tasks.transition(
             task,

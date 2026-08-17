@@ -21,7 +21,6 @@ from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
-    DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -121,6 +120,7 @@ class FunctionOptions(TypedDict, total=False):
     timeout_seconds: int | None
     concurrency: int
     in_process: bool
+    cron: str | None
     keep_warm: int | None
     max_pending_tasks: int | None
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
@@ -165,7 +165,8 @@ class Function(Generic[P, R]):
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
     concurrency: int = 1
     in_process: bool = False
-    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS
+    cron: str | None = None
+    keep_warm: int | None = None
     max_pending_tasks: int | None = None
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
     retries: int = DEFAULT_FUNCTION_RETRIES
@@ -277,6 +278,7 @@ class Function(Generic[P, R]):
             name=self.resource_name,
             kind=kind,
             handler=dotted_reference(self.func),
+            cron=self.cron,
             image=self.image.spec(),
             resources=Resources(
                 cpu=self.cpu,
@@ -735,7 +737,8 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     in_process: bool = False,
-    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+    cron: str | None = None,
+    keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -781,7 +784,8 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     in_process: bool = False,
-    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+    cron: str | None = None,
+    keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -826,7 +830,8 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     in_process: bool = False,
-    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+    cron: str | None = None,
+    keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -869,6 +874,7 @@ def _function(
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             in_process=in_process,
+            cron=cron,
             keep_warm=keep_warm,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
@@ -904,113 +910,6 @@ def _function(
     return decorate(func)
 
 
-@dataclass
-class CronJob(Function[P, R], Generic[P, R]):
-    cron: str = ""
-
-    def spec(self, *, kind: DeploymentKind = DeploymentKind.CronJob) -> DeploymentSpec:
-        spec = super().spec(kind=kind)
-        return spec.model_copy(update={"cron": self.cron})
-
-
-def _cron(
-    cron: str | None = None,
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    cpu: float | None = None,
-    memory: str | None = None,
-    disk: str | None = None,
-    gpu: str | None = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = None,
-    concurrency: int = 1,
-    in_process: bool = False,
-    keep_warm: int | None = None,
-    max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
-    retries: int = 0,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
-    callback_url: str | None = None,
-    authorized: bool | None = None,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    on_running: LifecycleHookInput = None,
-    on_success: LifecycleHookInput = None,
-    on_error: LifecycleHookInput = None,
-    on_retry: LifecycleHookInput = None,
-    on_failure: LifecycleHookInput = None,
-    on_cancelled: LifecycleHookInput = None,
-    on_timeout: LifecycleHookInput = None,
-    on_finish: LifecycleHookInput = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = False,
-    pool: PoolInput = None,
-    provider: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> Callable[[Callable[P, R]], CronJob[P, R]]:
-    if cron is None:
-        msg = "cron() missing required argument: 'cron'"
-        raise TypeError(msg)
-
-    def decorate(target: Callable[P, R]) -> CronJob[P, R]:
-        if isinstance(target, Function):
-            msg = "cron() decorates a raw callable; apply @app.cron(...) directly"
-            raise TypeError(msg)
-        return CronJob(
-            target,
-            _app_slug=_app_slug,
-            image=image or Image(),
-            name=name,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            concurrency=concurrency,
-            in_process=in_process,
-            keep_warm=keep_warm,
-            max_pending_tasks=max_pending_tasks,
-            autoscaler=autoscaler,
-            retries=retries,
-            retry_policy=retry_policy,
-            retry_delay_seconds=retry_delay_seconds,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env or {},
-            secrets=secrets or [],
-            volumes=volume_mounts(volumes or ()),
-            on_start=on_start,
-            on_running=on_running,
-            on_success=on_success,
-            on_error=on_error,
-            on_retry=on_retry,
-            on_failure=on_failure,
-            on_cancelled=on_cancelled,
-            on_timeout=on_timeout,
-            on_finish=on_finish,
-            task_policy=_normalized_task_policy(task_policy),
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            pool=pool,
-            provider=provider,
-            metadata=metadata or {},
-            cron=cron,
-        )
-
-    return decorate
-
-
 def _normalized_task_policy(
     value: TaskPolicy | Mapping[str, Any] | None,
 ) -> TaskPolicy | None:
@@ -1029,12 +928,10 @@ def _default_function_client(config: ControlClientConfig) -> FunctionControlClie
 
 
 __all__ = [
-    "CronJob",
     "Function",
     "FunctionCall",
     "FunctionOperationError",
     "FunctionOptions",
     "VolumeExport",
-    "_cron",
     "_function",
 ]

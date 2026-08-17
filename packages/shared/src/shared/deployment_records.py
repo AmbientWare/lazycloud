@@ -127,6 +127,7 @@ def resolve_keep_warm_seconds(
     value: int | float | None,
     *,
     min_containers: int = 0,
+    scheduled: bool = False,
 ) -> int:
     """The idle seconds a container survives for, given what else was asked for.
 
@@ -136,6 +137,10 @@ def resolve_keep_warm_seconds(
     whenever it is read and warm at no point. A declared floor therefore means
     the container does not retire itself, and the autoscaler is what removes one.
 
+    A schedule says the opposite. Its next run is minutes or hours away, so a
+    window held open after each one is paid for and reaches nothing; a scheduled
+    workload keeps zero unless its author asked for a window by name.
+
     Answered here because two owners build a stub config — a deployment
     registration and the gateway's get-or-create — and a rule about the window
     that lived in one of them would hold on one deploy path and not the other.
@@ -143,9 +148,11 @@ def resolve_keep_warm_seconds(
 
     if _deployment_kind(kind) is DeploymentKind.Function and min_containers > 0:
         return -1
-    if value is None:
-        return default_keep_warm_seconds(kind)
-    return int(value)
+    if value is not None:
+        return int(value)
+    if scheduled:
+        return 0
+    return default_keep_warm_seconds(kind)
 
 
 def resolve_cpu(kind: DeploymentKind | str, value: int | float | None) -> float | None:
