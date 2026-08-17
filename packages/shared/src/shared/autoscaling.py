@@ -23,6 +23,20 @@ class QueueDepthAutoscaler(ContractModel):
         return self
 
 
+def function_container_ceiling(max_containers: int) -> int:
+    """The most containers one function stub may hold at once.
+
+    Floored at one because `max_containers` defaults to a policy nobody wrote,
+    not to a refusal: a function declared without an autoscaler still has to be
+    able to run. Every start of a function container is refused past this, so
+    the number has to mean the same thing to the autoscaler deciding depth and
+    to the reservation that grants it — two readings of it would disagree, and
+    the disagreement would arrive as a bill.
+    """
+
+    return max(max_containers, 1)
+
+
 class PodStubType(StringEnum):
     Pod = "pod"
     PodDeployment = "pod/deployment"
@@ -338,5 +352,6 @@ __all__ = [
     "TaskQueueScaleReason",
     "decide_pod_scale",
     "decide_task_queue_scale",
+    "function_container_ceiling",
     "select_stoppable_pod_containers",
 ]

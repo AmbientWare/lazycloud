@@ -243,12 +243,17 @@ class TaskRepository:
         )
         return [Task.model_validate(row.payload) for row in rows]
 
-    def list_unclaimed_claimable(self, *, limit: int) -> list[Task]:
+    def list_unclaimed_claimable(self, *, limit: int, stub_id: str | None = None) -> list[Task]:
         """Runnable work nobody has taken, oldest first, across every workspace.
 
         Read by the sweep that has to notice work with nowhere to run: a claim
         makes a task somebody's responsibility, and until one happens the task is
         only as alive as the container that was expected to ask for it.
+
+        `stub_id` narrows it for a caller provisioning one stub. Reading the
+        oldest row overall and discarding it when it belongs elsewhere answers a
+        different question — whether this stub owns the platform's oldest work —
+        and a stub whose backlog arrived second would never be provisioned.
         """
 
         rows = self.session.scalars(
@@ -257,6 +262,7 @@ class TaskRepository:
                 TaskTable.status == TaskStatus.Pending.value,
                 TaskTable.container_id.is_(None),
                 TaskTable.claimable_at.is_not(None),
+                *([TaskTable.stub_id == stub_id] if stub_id is not None else []),
             )
             .order_by(TaskTable.claimable_at, TaskTable.id)
             .limit(limit)
@@ -298,22 +304,6 @@ class TaskRepository:
                 select(func.count(TaskTable.id)).where(
                     TaskTable.stub_id == stub_id,
                     TaskTable.status.in_([status.value for status in IN_FLIGHT_TASK_STATUSES]),
-                )
-            )
-            or 0
-        )
-
-    def count_claimed_inflight_for_stub(self, stub_id: str) -> int:
-        """Work for this stub a container has taken and not yet finished."""
-
-        return int(
-            self.session.scalar(
-                select(func.count(TaskTable.id)).where(
-                    TaskTable.stub_id == stub_id,
-                    TaskTable.container_id.is_not(None),
-                    TaskTable.status.in_(
-                        [TaskStatus.Pending.value, TaskStatus.Running.value],
-                    ),
                 )
             )
             or 0

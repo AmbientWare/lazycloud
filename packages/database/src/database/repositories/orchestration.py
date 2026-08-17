@@ -31,7 +31,7 @@ from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, Containe
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.routing import AgentBackendRoute
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -340,6 +340,28 @@ class ContainerRepository:
                 )
             )
             or 0
+        )
+
+    def lock_stub_capacity(self, stub_id: str) -> None:
+        """Serialize the starts competing for one stub's container ceiling.
+
+        `count_live_for_stub` on its own is a read, and a ceiling read by two
+        transactions at once is not a ceiling: a burst of six invocations each
+        saw the same count and each started a container, so a limit of six held
+        nine. Held for the transaction that both counts and inserts the
+        reservation, so the count the decision was made on is the count the
+        insert lands against.
+
+        Scoped to the stub, which is what the ceiling is about — starts for
+        other functions do not queue behind this one. SQLite admits a single
+        writer at a time and needs no second mechanism.
+        """
+
+        if self.session.get_bind().dialect.name != "postgresql":
+            return
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"stub-container-capacity:{stub_id}"},
         )
 
     def count_live_for_stub(self, stub_id: str) -> int:

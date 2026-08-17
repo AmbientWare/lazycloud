@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -120,8 +121,17 @@ class _InMemoryWorkspaceBuckets:
         del bucket
 
 
-@pytest.fixture
-def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
+@contextmanager
+def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServices]:
+    """The production service graph over whichever database is handed in.
+
+    Separate from the fixture so a test needing a real PostgreSQL backend gets
+    the same wiring rather than assembling its own. Only the database differs;
+    everything a workspace needs before it can run anything — the account, the
+    published control-plane origin, provisioned storage — is set up here, and a
+    graph missing any of it refuses work for a reason the test did not intend.
+    """
+
     redis = RedisClient(FakeRedis(), key_prefix="test")
     binary_redis = redis.with_key_prefix("test")
     maps = RedisMapService(binary_redis)
@@ -129,12 +139,7 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
     volume_filesystem = LocalVolumeFilesystem(tmp_path / "volumes")
 
     services = ApiServices.create(
-        DatabaseClient.from_settings(
-            DatabaseSettings(
-                url="sqlite+pysqlite:///:memory:",
-                application_name=DatabaseApplicationName.Test,
-            )
-        ),
+        database,
         root=tmp_path,
         redis_client=redis,
         binary_redis_client=binary_redis,
@@ -169,6 +174,18 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         yield services
     finally:
         services.close()
+
+
+@pytest.fixture
+def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(
+            url="sqlite+pysqlite:///:memory:",
+            application_name=DatabaseApplicationName.Test,
+        )
+    )
+    with service_graph(database, tmp_path) as services:
+        yield services
 
 
 def owned_workspace(
