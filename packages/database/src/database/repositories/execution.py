@@ -135,6 +135,69 @@ class TaskRepository:
         row = self.session.scalars(statement).first()
         return Task.model_validate(row.payload) if row is not None else None
 
+    def mark_claimable(self, task_id: str, *, at: datetime) -> Task | None:
+        """Record that this task's inputs have resolved, once.
+
+        A second caller is answered with the task unchanged rather than a refusal:
+        several upstreams finishing together all try to release the same dependent,
+        and only one of them can be first. Returns `None` when the task is gone.
+        """
+
+        row = self.session.scalars(
+            select(TaskTable).where(TaskTable.id == task_id).with_for_update()
+        ).first()
+        if row is None:
+            return None
+        task = Task.model_validate(row.payload)
+        if task.claimable_at is not None:
+            return task
+        task.claimable_at = at
+        return self.upsert(task)
+
+    def claim_for_stub(
+        self,
+        stub_id: str,
+        *,
+        container_id: str,
+        limit: int,
+    ) -> list[Task]:
+        """Take up to `limit` runnable tasks for this stub, binding them to a container.
+
+        `SKIP LOCKED` is what makes two containers asking at once safe: the loser
+        steps over the row the winner is holding rather than blocking behind it or
+        taking it twice. Writing `container_id` inside the same transaction *is*
+        the claim — it is the field every later reader already treats as ownership,
+        so a claim and a pre-assignment are indistinguishable downstream.
+
+        Only tasks whose inputs have resolved are visible here, so a dependent
+        cannot be picked up before the results it is waiting on exist.
+        """
+
+        if limit <= 0:
+            return []
+        rows = (
+            self.session.scalars(
+                select(TaskTable)
+                .where(
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.status == TaskStatus.Pending.value,
+                    TaskTable.container_id.is_(None),
+                    TaskTable.claimable_at.is_not(None),
+                )
+                .order_by(TaskTable.claimable_at, TaskTable.id)
+                .with_for_update(skip_locked=True)
+                .limit(limit)
+            )
+            .unique()
+            .all()
+        )
+        claimed: list[Task] = []
+        for row in rows:
+            task = Task.model_validate(row.payload)
+            task.container_id = container_id
+            claimed.append(self.upsert(task))
+        return claimed
+
     def list(
         self,
         *,

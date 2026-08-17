@@ -232,6 +232,14 @@ class Task(ContractModel):
     attempt_number: int = Field(default=0, ge=0)
     max_attempts: int = Field(default=1, ge=1)
     next_retry_at: datetime | None = None
+    claimable_at: datetime | None = None
+    """When this task's inputs resolved and it became eligible to run.
+
+    Null while a dependency is still outstanding, so a task that waits on another
+    is invisible to a claim until its bindings exist. Set once and never cleared —
+    it records that readiness happened, rather than that something acted on it.
+    """
+
     result: JsonValue = None
     error: str | None = None
     exit_code: int | None = None

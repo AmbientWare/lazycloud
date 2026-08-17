@@ -29,6 +29,9 @@ class TaskTable(IdPayloadTable, DatabaseBase):
         Index("ix_tasks_root_created", "root_task_id", "created_at", "id"),
         Index("ix_tasks_status_created", "status", "created_at"),
         Index("ix_tasks_retry_due", "status", "next_retry_at"),
+        # The claim reads exactly these three, in this order: work for one stub,
+        # not yet finished, whose inputs have resolved. Oldest first.
+        Index("ix_tasks_stub_claimable", "stub_id", "status", "claimable_at"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -71,6 +74,13 @@ class TaskTable(IdPayloadTable, DatabaseBase):
     attempt_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When this task's inputs resolved and it became eligible to run.
+    #
+    # Null while a dependency is still outstanding. Set once, never cleared, and
+    # never moved: it is the durable record that readiness was established, which
+    # `container_id` only stood in for while one container served one task. A
+    # claim reads it; nothing else may write it twice.
+    claimable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
