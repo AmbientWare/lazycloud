@@ -12,6 +12,7 @@ from database.repositories.orchestration import (
     MachineRepository,
     WorkerRepository,
 )
+from database.types import DatabaseSession
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.billing_quotes import ContainerShape
@@ -158,6 +159,32 @@ class ContainerSchedulingPersistenceService:
                 extra={"container_id": container.id},
             )
 
+    def _release_pooled_claims(
+        self,
+        session: DatabaseSession,
+        container: ContainerRecord,
+    ) -> None:
+        """Give back the invocations this container had taken, if any.
+
+        A pooled container is started for its stub and never carries a task id,
+        so the branch above — which addresses the task the container was created
+        for — cannot see its work. Read from the task side instead, as the
+        preemption sweep does, because the claim is the only record of what a
+        pooled container is running.
+
+        Released rather than failed. Losing the record here is what strands the
+        caller: the task keeps naming a container that is gone, which no claim
+        query can see and no retry reaches. The work itself is still wanted —
+        this container being unreachable is the platform's problem, not the
+        caller's.
+        """
+
+        repository = TaskRepository(session)
+        for held in repository.list_inflight_for_container(container.id):
+            if held.id == container.task_id:
+                continue
+            repository.release_claim(held.id)
+
     def mark_scheduling_failed(
         self,
         request: SchedulerWorkerRequest,
@@ -193,6 +220,7 @@ class ContainerSchedulingPersistenceService:
                         task,
                         workspace_id=container.workspace_id,
                     )
+            self._release_pooled_claims(session, container)
         self.events.emit(
             "container.schedule.failed",
             resource_type="container",

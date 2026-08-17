@@ -2429,9 +2429,17 @@ class WorkerRepositoryService:
                         ),
                         finished_at=container.finished_at,
                     )
+            # Whatever the container had claimed goes back to the pool. A pooled
+            # container carries no task id of its own, so the sync above — which
+            # settles the task the container was created for — cannot see its
+            # work, and an exit nobody asked for would otherwise leave the task
+            # naming a container that is gone: invisible to a claim, unreachable
+            # by a retry, and waited on forever by its caller.
+            self._release_pooled_claims(session, container)
             # The preemption retry intent must commit with the terminal state it belongs to.
             # A container that needs no settling is marked settled here so the recovery
-            # sweep only ever sees work that is genuinely outstanding.
+            # sweep only ever sees work that is genuinely outstanding. A pooled
+            # container's claims were just released, so it needs no second pass.
             settle_required = bool(reconcile_preemption and container.task_id)
             if preempted and not settle_required:
                 container.preemption_settled_at = container.preemption_settled_at or now
@@ -2452,6 +2460,25 @@ class WorkerRepositoryService:
             self._mark_container_preemption_settled(container.id)
         if updated_task is not None:
             self._publish_runtime_task_change(container, updated_task)
+
+    def _release_pooled_claims(
+        self,
+        session: DatabaseSession,
+        container: ContainerRecord,
+    ) -> None:
+        """Give back the invocations a pooled container was holding when it died.
+
+        Read from the task side because the claim is the only record: a function
+        container is started for its stub and its `task_id` stays empty for its
+        whole life. Released rather than failed — the container going away is the
+        platform's problem, and the caller's invocation is still wanted.
+        """
+
+        repository = TaskRepository(session)
+        for held in repository.list_inflight_for_container(container.id):
+            if held.id == container.task_id:
+                continue
+            repository.release_claim(held.id)
 
     def _mark_container_preemption_settled(self, container_id: str) -> None:
         if self.services is None:
