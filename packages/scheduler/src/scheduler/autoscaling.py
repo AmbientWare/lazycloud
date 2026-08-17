@@ -239,15 +239,32 @@ class FunctionAutoscalingService:
             token = token_urlsafe(16)
             lock_key = self._lock_key(stub)
             if not self._acquire_lock(lock_key, token):
-                results.append(
-                    FunctionAutoscaleResult(
-                        stub_id=stub.id,
-                        workspace_id=stub.workspace_id,
-                        decision=BacklogScaleDecisionKind.Hold,
-                        reason="autoscaler lock already held",
-                        lock_acquired=False,
-                    )
+                result = FunctionAutoscaleResult(
+                    stub_id=stub.id,
+                    workspace_id=stub.workspace_id,
+                    decision=BacklogScaleDecisionKind.Hold,
+                    reason="autoscaler lock already held",
+                    lock_acquired=False,
                 )
+                # Recorded rather than skipped, as the other two autoscalers
+                # already do. A tick that found the lock held is why a stub did
+                # not scale, and leaving no state for it makes the history read
+                # as if the autoscaler never looked.
+                _record_autoscaler_state(
+                    self.services,
+                    source=FUNCTION_AUTOSCALER_SOURCE,
+                    target_kind=AutoscalerTargetKind.Function,
+                    stub=stub,
+                    current_count=result.current_containers,
+                    desired_count=result.desired_containers,
+                    decision=result.decision.value,
+                    reason=result.reason,
+                    active=result.active,
+                    valid=result.valid,
+                    lock_acquired=result.lock_acquired,
+                    owner_lock_key=lock_key,
+                )
+                results.append(result)
                 continue
             try:
                 results.append(self.reconcile_stub(stub, now=current_time))

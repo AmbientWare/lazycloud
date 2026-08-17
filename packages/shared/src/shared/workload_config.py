@@ -51,7 +51,6 @@ class StubRuntimeConfig(ContractModel):
     requires_gpu: bool = False
     image_id: str | None = None
     timeout_seconds: int | float | None = Field(default=None, ge=0)
-    task_ttl_seconds: int = Field(default=0, ge=0)
     retries: int = Field(default=0, ge=0)
     keep_warm: int = Field(default=0, ge=-1)
     concurrency: int = Field(default=1, gt=0)

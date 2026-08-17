@@ -61,11 +61,7 @@ def current_root_task_id() -> str:
     root of its own graph.
     """
 
-    return (
-        _ROOT_TASK_ID.get()
-        or os.environ.get(ROOT_TASK_ID_ENV, "").strip()
-        or current_task_id()
-    )
+    return _ROOT_TASK_ID.get() or os.environ.get(ROOT_TASK_ID_ENV, "").strip() or current_task_id()
 
 
 __all__ = [

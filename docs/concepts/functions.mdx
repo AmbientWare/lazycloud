@@ -54,6 +54,29 @@ and `retries=3`.
   `max_attempts`, `delay_seconds`, `backoff` (`"fixed"` or `"exponential"`),
   `max_delay_seconds`, and `retry_for` exception references.
 
+## Serving several calls at once
+
+A container stays warm between invocations, and `concurrency` sets how many it
+serves at the same time. Each slot runs in its own process by default, so one
+call cannot disturb another and CPU-bound work runs genuinely in parallel.
+
+`in_process=True` puts the slots in one interpreter instead. Use it when the
+slots need to share something a process cannot duplicate — a model on a GPU is
+loaded once by `on_start` and served by every slot, where four processes would
+try to load four copies onto one card. The trade is the interpreter's: CPU-bound
+handlers contend for the GIL rather than running in parallel, so it suits work
+that waits on a device, a network call, or a library that releases the lock.
+
+```python
+@app.function(gpu="A100", concurrency=8, in_process=True, on_start=load_model)
+def embed(text: str) -> list[float]:
+    return MODEL.encode(text).tolist()
+```
+
+Read the current invocation's task id with `lazycloud.current_task_id()` rather
+than the `TASK_ID` environment variable — several invocations share one
+environment, and only the accessor answers per call.
+
 ```python
 from lazycloud import RetryPolicy, RetryBackoff
 

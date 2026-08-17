@@ -119,7 +119,6 @@ class FunctionControlService:
                 planning.FunctionInvokeRequest(
                     invocation=request.invocation,
                     headless=request.headless,
-                    task_ttl_seconds=config.runtime.task_ttl_seconds,
                     configured_retry_count=retry_policy.retry_count,
                 )
             )
@@ -175,7 +174,6 @@ class FunctionControlService:
                     "parent_task_id": task.parent_task_id or "",
                     "root_task_id": task.root_task_id or task.id,
                     "dependency_count": len(dependencies),
-                    "task_ttl_seconds": invoke_plan.task_ttl_seconds,
                     "headless": invoke_plan.headless,
                 },
                 workspace_id=stub.workspace_id,
