@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated
 
@@ -112,7 +113,36 @@ def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
     return 0
 
 
-def resolve_keep_warm_seconds(kind: DeploymentKind | str, value: int | float | None) -> int:
+def declared_min_containers(metadata: Mapping[str, JsonValue]) -> int:
+    """The warm floor a deployment asked for, before anything resolves it."""
+
+    raw = metadata.get("autoscaler")
+    if raw is None:
+        return 0
+    return QueueDepthAutoscaler.model_validate(raw).min_containers
+
+
+def resolve_keep_warm_seconds(
+    kind: DeploymentKind | str,
+    value: int | float | None,
+    *,
+    min_containers: int = 0,
+) -> int:
+    """The idle seconds a container survives for, given what else was asked for.
+
+    A function container retires itself when this window passes with no work, so
+    a warm floor and a finite window contradict each other: the floor would
+    start, idle out, and start again on the next tick — a count that is right
+    whenever it is read and warm at no point. A declared floor therefore means
+    the container does not retire itself, and the autoscaler is what removes one.
+
+    Answered here because two owners build a stub config — a deployment
+    registration and the gateway's get-or-create — and a rule about the window
+    that lived in one of them would hold on one deploy path and not the other.
+    """
+
+    if _deployment_kind(kind) is DeploymentKind.Function and min_containers > 0:
+        return -1
     if value is None:
         return default_keep_warm_seconds(kind)
     return int(value)
@@ -259,8 +289,18 @@ class DeploymentSpec(ContractModel):
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> DeploymentSpec:
-        if self.resources.keep_warm == -1 and self.kind is not DeploymentKind.Pod:
-            msg = "keep_warm=-1 is only supported for pod workloads"
+        # A container that never retires itself has to be one something else
+        # removes. A pod deployment is that by construction; a function is only
+        # that when it declares a warm floor, which is what puts its count under
+        # the autoscaler. Without one, the container would simply never go away.
+        if (
+            self.resources.keep_warm == -1
+            and self.kind is not DeploymentKind.Pod
+            and not (
+                self.kind is DeploymentKind.Function and declared_min_containers(self.metadata) > 0
+            )
+        ):
+            msg = "keep_warm=-1 is only supported for pod workloads and functions with a warm floor"
             raise ValueError(msg)
         autoscaler = self.metadata.get("autoscaler")
         if autoscaler is not None:
@@ -327,6 +367,7 @@ __all__ = [
     "DeploymentSpec",
     "Resources",
     "VolumeMount",
+    "declared_min_containers",
     "default_keep_warm_seconds",
     "resolve_authorized",
     "resolve_cpu",

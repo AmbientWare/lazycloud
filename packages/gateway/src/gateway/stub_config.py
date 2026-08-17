@@ -110,6 +110,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             keep_warm=resolve_keep_warm_seconds(
                 request.stub_type,
                 request.keep_warm_seconds,
+                min_containers=request.autoscaler.min_containers,
             ),
             concurrency=request.concurrent_requests,
             in_process=request.in_process,

@@ -217,8 +217,21 @@ class GetOrCreateStubRequest(HttpModel):
 
     @model_validator(mode="after")
     def never_keep_warm_is_pod_only(self) -> GetOrCreateStubRequest:
-        if self.keep_warm_seconds == -1 and self.stub_type != DeploymentKind.Pod.value:
-            msg = "keep_warm_seconds=-1 is only supported for pod workloads"
+        # The same rule the deployment record states: a container that does not
+        # retire itself needs something that removes it, which for a function is
+        # the autoscaler holding it to a declared floor.
+        if (
+            self.keep_warm_seconds == -1
+            and self.stub_type != DeploymentKind.Pod.value
+            and not (
+                self.stub_type == DeploymentKind.Function.value
+                and self.autoscaler.min_containers > 0
+            )
+        ):
+            msg = (
+                "keep_warm_seconds=-1 is only supported for pod workloads and "
+                "functions with a warm floor"
+            )
             raise ValueError(msg)
         if self.keep_warm_seconds == -1 and self.autoscaler.max_containers == 0:
             msg = "keep_warm_seconds=-1 requires max_containers to be greater than zero"

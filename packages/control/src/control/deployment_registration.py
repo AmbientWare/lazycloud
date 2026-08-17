@@ -12,6 +12,7 @@ from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
     VolumeMount,
+    declared_min_containers,
     resolve_authorized,
     resolve_cpu,
     resolve_disk,
@@ -225,7 +226,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                     spec.kind,
                     spec.retry_policy.retry_count if spec.retry_policy is not None else None,
                 ),
-                "keep_warm": resolve_keep_warm_seconds(spec.kind, resources.keep_warm),
+                "keep_warm": _resolved_keep_warm_seconds(spec),
                 "concurrency": resources.concurrency,
                 "in_process": _metadata_optional_bool(metadata, "in_process") or False,
                 "checkpoint_enabled": (
@@ -304,6 +305,20 @@ def _deployment_pool(metadata: Mapping[str, JsonValue]) -> str:
         name = pool.get("name")
         return name.strip() if isinstance(name, str) else ""
     return ""
+
+
+def _resolved_keep_warm_seconds(spec: DeploymentSpec) -> int:
+    """The idle window this deployment's containers get.
+
+    Pods take the coupling from the other end in `_deployment_autoscaler_config`:
+    a pod asking never to scale to zero is asking for a floor of at least one.
+    """
+
+    return resolve_keep_warm_seconds(
+        spec.kind,
+        spec.resources.keep_warm,
+        min_containers=declared_min_containers(_deployment_metadata(spec)),
+    )
 
 
 def _deployment_autoscaler_config(spec: DeploymentSpec) -> dict[str, JsonValue]:

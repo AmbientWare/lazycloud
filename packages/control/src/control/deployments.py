@@ -13,6 +13,7 @@ from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
 from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
+    declared_min_containers,
     resolve_authorized,
     resolve_cpu,
     resolve_keep_warm_seconds,
@@ -394,6 +395,7 @@ def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
                     "keep_warm": resolve_keep_warm_seconds(
                         spec.kind,
                         spec.resources.keep_warm,
+                        min_containers=declared_min_containers(spec.metadata),
                     ),
                 }
             ),
