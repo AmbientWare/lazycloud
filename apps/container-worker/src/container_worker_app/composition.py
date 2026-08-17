@@ -267,6 +267,10 @@ def build_worker_process_services(
             pool_mode=execution.pool_mode,
             billing_owner=execution.billing_owner,
         ),
+        # The only thing that keeps a running container's scheduler record
+        # alive. Its TTL is re-armed by a write, and nothing else writes after
+        # the container is marked running.
+        container_states=container_repository,
         settings=ContainerRuntimeMonitorSettings(
             sample_interval_seconds=configuration.monitoring.metrics_interval_seconds
         ),

@@ -5,6 +5,11 @@ from datetime import UTC, datetime
 from time import monotonic, sleep
 
 from shared.realtime.contracts import ContainerMetricsPayload
+from shared.scheduling import (
+    ContainerStatusUpdatePlan,
+    SchedulerContainerState,
+    SchedulerContainerStatus,
+)
 from shared.usage import UsageBillingOwner
 from worker.container_metrics import (
     ContainerMetricsRawSample,
@@ -19,6 +24,7 @@ from worker.events import (
     plan_worker_usage_metrics,
 )
 from worker.monitoring import ContainerRuntimeMonitorSettings, WorkerContainerRuntimeMonitor
+from worker.status import CONTAINER_STATE_TTL_SECONDS
 from worker.supervision import WorkerUsageEmissionResult
 from worker.tools import NetworkIoCounters, ProcessIoCounters
 
@@ -402,3 +408,97 @@ def test_the_last_window_of_a_containers_life_survives_a_refusal() -> None:
     # rather than widening to reach the present.
     assert set(usage.offered) == {usage.offered[0]}
     assert len(usage.offered) == 2
+
+
+@dataclass
+class _RecordingContainerStates:
+    """The scheduler's container state, as the worker sees it over HTTP."""
+
+    state: SchedulerContainerState | None
+    refreshes: list[tuple[SchedulerContainerStatus, int]] = field(default_factory=list)
+
+    def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+        del container_id
+        return self.state
+
+    def update_container_status(
+        self,
+        container_id: str,
+        status: SchedulerContainerStatus,
+        *,
+        ttl_seconds: int,
+    ) -> ContainerStatusUpdatePlan:
+        self.refreshes.append((status, ttl_seconds))
+        return ContainerStatusUpdatePlan(
+            container_id=container_id,
+            previous_status=status,
+            next_status=status,
+            changed=False,
+            ttl_seconds=ttl_seconds,
+        )
+
+
+def _monitored_request() -> ContainerRequestContext:
+    return ContainerRequestContext(
+        container_id="ctr-heartbeat",
+        workspace_id="workspace-1",
+        stub_id="stub-1",
+        cpu_millicores=1000,
+        memory_mib=128,
+    )
+
+
+def test_container_monitor_rearms_the_scheduler_state_ttl_while_the_container_runs() -> None:
+    """A container that is working is kept alive in the scheduler's record.
+
+    The TTL is re-armed only by a write and the worker writes `Running` once, at
+    start. Left alone the record expires under a healthy container after fifteen
+    minutes, while a function may be invoked for an hour — and the orphan sweep
+    then fails a container that is still serving, stops counting it toward its
+    stub's ceiling, and counts it against the stub's failure threshold.
+    """
+
+    states = _RecordingContainerStates(
+        state=SchedulerContainerState(
+            container_id="ctr-heartbeat",
+            stub_id="stub-1",
+            workspace_id="workspace-1",
+            status=SchedulerContainerStatus.Running,
+        )
+    )
+    monitor = WorkerContainerRuntimeMonitor(
+        container_states=states,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+
+    handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
+    deadline = monotonic() + 5.0
+    while not states.refreshes and monotonic() < deadline:
+        sleep(0.01)
+    handle.stop()
+
+    assert states.refreshes, "a running container's state was never re-armed"
+    status, ttl = states.refreshes[0]
+    assert status is SchedulerContainerStatus.Running
+    assert ttl == CONTAINER_STATE_TTL_SECONDS
+
+
+def test_container_monitor_stops_heartbeating_a_state_the_platform_dropped() -> None:
+    """A vanished state is not recreated.
+
+    Rewriting it would resurrect a container the platform has already decided it
+    does not know about, which is the one case where letting the orphan sweep
+    reap it is the correct outcome.
+    """
+
+    states = _RecordingContainerStates(state=None)
+    monitor = WorkerContainerRuntimeMonitor(
+        container_states=states,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+
+    handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
+    sleep(0.2)
+    handle.stop()
+
+    assert states.refreshes == []
