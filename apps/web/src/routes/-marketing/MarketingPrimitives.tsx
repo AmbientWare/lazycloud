@@ -252,7 +252,7 @@ export function Faq({ items }: { items: Array<{ question: string; answer: string
 
 export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
   return (
-    <section className="marketing-final-cta relative !min-h-[clamp(32rem,75svh,43.125rem)] overflow-hidden border-t border-input bg-muted text-foreground [@media(max-height:500px)]:!min-h-[27rem]">
+    <section className="marketing-final-cta relative !min-h-[clamp(32rem,75svh,43.125rem)] overflow-hidden border-t border-input text-foreground [@media(max-height:500px)]:!min-h-[27rem]">
       <div className="marketing-cta-grid" aria-hidden="true" />
       <div
         className={cn(

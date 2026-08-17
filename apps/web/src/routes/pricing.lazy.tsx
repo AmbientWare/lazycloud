@@ -270,7 +270,7 @@ function MarketingPricing() {
                       </dd>
                     </div>
                     <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                      <dt className="text-muted-foreground">Containers at once</dt>
+                      <dt className="text-muted-foreground">Concurrent containers</dt>
                       <dd className="font-mono font-medium">{plan.maxConcurrentContainers}</dd>
                     </div>
                   </dl>

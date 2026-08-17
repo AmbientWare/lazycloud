@@ -17,6 +17,7 @@ from typing import (
 )
 
 from pydantic import ValidationError
+from shared.autoscaling import QueueDepthAutoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
@@ -123,6 +124,7 @@ class FunctionOptions(TypedDict, total=False):
     timeout_seconds: int | None
     concurrency: int
     max_pending_tasks: int | None
+    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
     retries: int
     retry_policy: RetryPolicyInput
     retry_delay_seconds: float
@@ -164,6 +166,7 @@ class Function(Generic[P, R]):
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
     concurrency: int = 1
     max_pending_tasks: int | None = None
+    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
     retries: int = DEFAULT_FUNCTION_RETRIES
     retry_policy: RetryPolicyInput = None
     retry_delay_seconds: float = 0.0
@@ -305,6 +308,7 @@ class Function(Generic[P, R]):
             ),
             metadata=build_resource_metadata(
                 app=self._app_slug,
+                autoscaler=self.autoscaler,
                 max_pending_tasks=self.max_pending_tasks,
                 retries=self.retries,
                 callback_url=self.callback_url,
@@ -729,6 +733,7 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     max_pending_tasks: int | None = None,
+    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -772,6 +777,7 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     max_pending_tasks: int | None = None,
+    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -814,6 +820,7 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     max_pending_tasks: int | None = None,
+    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -854,6 +861,7 @@ def _function(
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             max_pending_tasks=max_pending_tasks,
+            autoscaler=autoscaler,
             retries=retries,
             retry_policy=retry_policy,
             retry_delay_seconds=retry_delay_seconds,
@@ -939,6 +947,7 @@ def _cron(
     timeout_seconds: int | None = None,
     concurrency: int = 1,
     max_pending_tasks: int | None = None,
+    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = 0,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -986,6 +995,7 @@ def _cron(
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             max_pending_tasks=max_pending_tasks,
+            autoscaler=autoscaler,
             retries=retries,
             retry_policy=retry_policy,
             retry_delay_seconds=retry_delay_seconds,

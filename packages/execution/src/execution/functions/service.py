@@ -342,11 +342,35 @@ class FunctionControlService:
             task = marked
         return self._schedule_function_task(task)
 
+    def unclaimed_task_count(self, stub_id: str) -> int:
+        """How much runnable work this stub has that nobody has taken."""
+
+        with self.services.context.database.session() as session:
+            return TaskRepository(session).count_unclaimed_for_stub(stub_id)
+
+    def start_function_container(self, stub_id: str) -> bool:
+        """Start one more container for this stub, because the autoscaler said so.
+
+        The capacity question has already been answered by the caller, against
+        the backlog and the stub's ceiling, so this does not ask it again. It
+        still needs a task to start from — a container is planned from its stub
+        but reserved against work that exists — and takes the oldest unclaimed
+        one, which is also the one it will most likely end up serving.
+        """
+
+        with self.services.context.database.session() as session:
+            candidates = TaskRepository(session).list_unclaimed_claimable(limit=1)
+        pending = next((task for task in candidates if task.stub_id == stub_id), None)
+        if pending is None:
+            return False
+        return self._schedule_function_task(pending, capacity_decided=True) is not None
+
     def _schedule_function_task(
         self,
         task: Task,
         *,
         eligible_at: datetime | None = None,
+        capacity_decided: bool = False,
     ) -> SchedulerSubmissionResult | None:
         if not task.stub_id:
             self.services.tasks.transition(
@@ -370,7 +394,7 @@ class FunctionControlService:
             )
             return None
 
-        if not self._needs_another_container(stub.id):
+        if not capacity_decided and not self._needs_another_container(stub.id):
             # Somebody is already able to take this. Starting a container anyway
             # is what made every call a cold start, and it is the one thing this
             # whole arrangement exists to stop doing.
@@ -674,16 +698,20 @@ class FunctionControlService:
         limit: int,
         at: datetime,
     ) -> list[Task]:
-        """Start capacity for runnable work that has nothing coming to take it.
+        """Give each stub's backlog enough containers to be worked through.
 
-        Releasing a claim and having somewhere to run are separate events, and a
-        container that dies between them strands the task: it is claimable, owned
-        by nobody, and every container that would have asked for it is gone. The
-        row says runnable forever and the caller waits forever.
+        Two failures at once. Work can be claimable with nothing coming for it —
+        releasing a claim and having somewhere to run are separate events, and a
+        container dying between them leaves a row that says runnable forever
+        while its caller waits forever. And work can have one container for a
+        hundred calls, which finishes eventually and looks identical to a
+        platform that has stopped.
 
-        One container per stub, not one per task. What the depth of the backlog
-        should cost in containers is the autoscaler's decision; this only refuses
-        to let work sit with no way to run at all.
+        Depth is decided by the same rule task queues use, against the same kind
+        of sample: how much is waiting, over how much one container takes, capped
+        by what the stub's autoscaler allows. Reusing that decision rather than
+        inventing a second one is deliberate — two scaling rules in one codebase
+        disagree, and the disagreement shows up as a bill.
         """
 
         scheduled: list[Task] = []

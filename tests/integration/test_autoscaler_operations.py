@@ -10,6 +10,7 @@ from cli.main import build_admin_cli
 from control.service import ControlPlaneService, StubKind, StubRecord
 from coordination.redis_client import RedisClient
 from execution.endpoints.service import EndpointControlService, EndpointDispatchStateRepository
+from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
 from execution.taskqueues.service import TaskQueueControlService
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaling import (
     TASK_QUEUE_AUTOSCALER_SOURCE,
     EndpointAutoscalingService,
+    FunctionAutoscalingService,
     PodAutoscalingService,
     TaskQueueAutoscalingService,
 )
@@ -176,6 +178,11 @@ def _autoscaler_operations(
             services,
             redis=redis,
             task_queues=task_queues,
+        ),
+        function_autoscaler=FunctionAutoscalingService(
+            services,
+            redis=redis,
+            functions=FunctionControlService(services),
         ),
         endpoint_autoscaler=EndpointAutoscalingService(
             services,

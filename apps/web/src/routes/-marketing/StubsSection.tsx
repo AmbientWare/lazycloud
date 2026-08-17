@@ -157,7 +157,7 @@ export function StubsSection() {
 
   return (
     <section
-      className="border-t border-input bg-background py-14 sm:py-20 lg:py-28"
+      className="border-t border-input bg-muted py-14 sm:py-20 lg:py-28"
       data-animation-state={active ? "running" : "reset"}
       ref={sectionRef}
     >

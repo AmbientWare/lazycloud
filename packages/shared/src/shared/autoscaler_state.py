@@ -10,6 +10,7 @@ from shared.timestamps import utc_now
 
 
 class AutoscalerTargetKind(StringEnum):
+    Function = "function"
     TaskQueue = "task-queue"
     Endpoint = "endpoint"
     Pod = "pod"

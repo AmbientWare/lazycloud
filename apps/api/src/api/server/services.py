@@ -138,6 +138,7 @@ from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
     EndpointAutoscalingDispatchObservation,
     EndpointAutoscalingService,
+    FunctionAutoscalingService,
     PodAutoscalingService,
     TaskQueueAutoscalingService,
 )
@@ -310,6 +311,10 @@ class FunctionApiService(Protocol):
     ) -> Iterable[FunctionInvokeResponse]: ...
 
     def assert_may_accept_invocation(self, stub_id: str) -> None: ...
+
+    def unclaimed_task_count(self, stub_id: str) -> int: ...
+
+    def start_function_container(self, stub_id: str) -> bool: ...
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
 
@@ -1288,6 +1293,11 @@ def _compose_api_services(
             core,
             redis=redis,
             task_queues=taskqueue_control,
+        ),
+        function_autoscaler=FunctionAutoscalingService(
+            core,
+            redis=redis,
+            functions=function,
         ),
         endpoint_autoscaler=EndpointAutoscalingService(
             core,

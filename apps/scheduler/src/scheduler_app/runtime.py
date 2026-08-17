@@ -19,6 +19,7 @@ from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from scheduler.agent_pool import SchedulerAgentPoolService
 from scheduler.autoscaling import (
     EndpointAutoscalingService,
+    FunctionAutoscalingService,
     PodAutoscalingService,
     TaskQueueAutoscalingService,
 )
@@ -235,6 +236,11 @@ class SchedulerRuntime:
                     scheduler_services,
                     redis=redis_client,
                     task_queues=task_queue_control,
+                ),
+                function_autoscaler=FunctionAutoscalingService(
+                    scheduler_services,
+                    redis=redis_client,
+                    functions=function_control,
                 ),
                 endpoints=EndpointAutoscalingService(
                     scheduler_services,
