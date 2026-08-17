@@ -115,20 +115,17 @@ def retry_policy_config(
     *,
     retries: int | None = None,
     retry_delay_seconds: float | None = None,
-    retry_for_refs: Iterable[str] | None = None,
 ) -> RetryPolicy | None:
     if (
         value is None
         and (retries is None or retries <= 0)
         and (retry_delay_seconds is None or retry_delay_seconds <= 0)
-        and not retry_for_refs
     ):
         return None
     return normalize_retry_policy(
         value,
         retries=retries,
         delay_seconds=retry_delay_seconds,
-        retry_for=retry_for_refs,
     )
 
 

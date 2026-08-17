@@ -12,6 +12,7 @@ from shared.autoscaling import QueueDepthAutoscaler
 from shared.deployment_records import (
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
+    DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -112,6 +113,7 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
+        keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -156,6 +158,7 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
+        keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -199,6 +202,7 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
+        keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -245,6 +249,10 @@ class App:
                 one process each, so anything `on_start` loaded is loaded once.
                 Needed to share a GPU; costs process isolation and true CPU
                 parallelism.
+            keep_warm: Idle seconds a container stays available for the next
+                call, so a second call inside the window reaches an interpreter
+                that has already imported the handler and run `on_start`. `0`
+                retires it as soon as it goes idle.
             retries: Number of retry attempts for failed invocations.
             callback_url: Optional webhook called for execution events.
             authorized: Whether calls require an authenticated client.
@@ -266,6 +274,7 @@ class App:
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             in_process=in_process,
+            keep_warm=keep_warm,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,
@@ -314,6 +323,7 @@ class App:
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
         in_process: bool = False,
+        keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -374,6 +384,7 @@ class App:
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             in_process=in_process,
+            keep_warm=keep_warm,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,
@@ -1285,6 +1296,7 @@ def _function_options(
     timeout_seconds: int | None,
     concurrency: int,
     in_process: bool,
+    keep_warm: int | None,
     max_pending_tasks: int | None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
     retries: int,
@@ -1324,6 +1336,7 @@ def _function_options(
         "timeout_seconds": timeout_seconds,
         "concurrency": concurrency,
         "in_process": in_process,
+        "keep_warm": keep_warm,
         "max_pending_tasks": max_pending_tasks,
         "autoscaler": autoscaler,
         "retries": retries,

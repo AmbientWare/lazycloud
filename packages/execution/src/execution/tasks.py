@@ -661,7 +661,7 @@ def _task_retry_policy(
     if policy is None:
         return None
     resolved = normalize_retry_policy(policy)
-    if resolved.max_attempts == 1 and not resolved.retry_for and resolved.delay_seconds == 0:
+    if resolved.max_attempts == 1 and resolved.delay_seconds == 0:
         return None
     return resolved
 

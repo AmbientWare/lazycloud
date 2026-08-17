@@ -21,6 +21,7 @@ from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
+    DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
@@ -123,6 +124,7 @@ class FunctionOptions(TypedDict, total=False):
     timeout_seconds: int | None
     concurrency: int
     in_process: bool
+    keep_warm: int | None
     max_pending_tasks: int | None
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
     retries: int
@@ -166,6 +168,7 @@ class Function(Generic[P, R]):
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
     concurrency: int = 1
     in_process: bool = False
+    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS
     max_pending_tasks: int | None = None
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
     retries: int = DEFAULT_FUNCTION_RETRIES
@@ -286,6 +289,7 @@ class Function(Generic[P, R]):
                 gpu_count=self.gpu_count,
                 timeout_seconds=self._effective_timeout_seconds(),
                 concurrency=self.concurrency,
+                keep_warm=self.keep_warm,
                 preemptible=self.preemptible,
             ),
             env=self.env,
@@ -734,6 +738,7 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     in_process: bool = False,
+    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -779,6 +784,7 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     in_process: bool = False,
+    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -823,6 +829,7 @@ def _function(
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
     in_process: bool = False,
+    keep_warm: int | None = DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -865,6 +872,7 @@ def _function(
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             in_process=in_process,
+            keep_warm=keep_warm,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,
@@ -952,6 +960,7 @@ def _cron(
     timeout_seconds: int | None = None,
     concurrency: int = 1,
     in_process: bool = False,
+    keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     retries: int = 0,
@@ -1001,6 +1010,7 @@ def _cron(
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
             in_process=in_process,
+            keep_warm=keep_warm,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,

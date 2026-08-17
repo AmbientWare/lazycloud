@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 
-from pydantic import Field, JsonValue, field_validator, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
@@ -53,12 +53,6 @@ class RetryPolicy(ContractModel):
     retry_on_statuses: tuple[TaskStatus, ...] = Field(
         default_factory=lambda: DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE
     )
-    retry_for: tuple[str, ...] = ()
-
-    @field_validator("retry_for")
-    @classmethod
-    def retry_for_entries_must_be_non_empty(cls, value: Iterable[str]) -> tuple[str, ...]:
-        return tuple(str(item).strip() for item in value if str(item).strip())
 
     @model_validator(mode="after")
     def max_delay_must_not_be_lower_than_base_delay(self) -> RetryPolicy:
@@ -77,7 +71,6 @@ class RetryPolicy(ContractModel):
         retries: int = 0,
         *,
         delay_seconds: float = 0.0,
-        retry_for: Iterable[str] = (),
         retry_on_statuses: Iterable[TaskStatus] | None = None,
     ) -> RetryPolicy:
         return cls(
@@ -88,7 +81,6 @@ class RetryPolicy(ContractModel):
                 if retry_on_statuses is not None
                 else DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE
             ),
-            retry_for=tuple(retry_for),
         )
 
 
@@ -105,10 +97,9 @@ def normalize_retry_policy(
     *,
     retries: int | None = None,
     delay_seconds: float | None = None,
-    retry_for: Iterable[str] | None = None,
 ) -> RetryPolicy:
     resolved = _policy_from_value(policy)
-    if retries is None and delay_seconds is None and retry_for is None:
+    if retries is None and delay_seconds is None:
         return resolved
     return RetryPolicy(
         max_attempts=(max(int(retries), 0) + 1 if retries is not None else resolved.max_attempts),
@@ -118,7 +109,6 @@ def normalize_retry_policy(
         backoff=resolved.backoff,
         max_delay_seconds=resolved.max_delay_seconds,
         retry_on_statuses=resolved.retry_on_statuses,
-        retry_for=tuple(retry_for) if retry_for is not None else resolved.retry_for,
     )
 
 
