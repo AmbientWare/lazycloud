@@ -109,6 +109,7 @@ class FunctionControlService:
                     session, workspace_id=stub.workspace_id
                 )
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
+            self._assert_within_pending_limit(stub.id, config)
             retry_policy = config.effective_retry_policy
             invoke_plan = plan_function_invoke(
                 planning.FunctionInvokeRequest(
@@ -480,6 +481,47 @@ class FunctionControlService:
             )
             self.release_dependents(updated)
         return scheduled
+
+    def assert_may_accept_invocation(self, stub_id: str) -> None:
+        """The backpressure refusal, asked before a streaming response begins.
+
+        A stream sends its status before the generator runs, so this raised from
+        inside one cannot be a refusal — it reaches the caller as a response that
+        breaks mid-flight, which is how a clear limit turns into a gateway error
+        with nothing in it about the limit.
+        """
+
+        stub = self.control_plane.get_stub(stub_id)
+        if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+            return
+        config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
+        self._assert_within_pending_limit(stub.id, config)
+
+    def _assert_within_pending_limit(self, stub_id: str, config: FunctionStubConfig) -> None:
+        """Refuse work this function has no prospect of getting to.
+
+        A fan-out that outruns what the platform will start containers for
+        otherwise queues without bound, and every queued call is billable work
+        somebody is waiting on. Failing the call that crosses the line tells the
+        caller immediately, where accepting it would report success and then be
+        indistinguishable from a function that is merely slow.
+
+        Deliberately approximate: two calls arriving together can both read the
+        same count and both be admitted. The limit bounds a runaway rather than
+        rationing the last slot, and a tighter one would mean serialising every
+        invocation of every function behind a lock.
+        """
+
+        limit = config.effective_max_pending_tasks
+        if limit <= 0:
+            return
+        with self.services.context.database.session() as session:
+            in_flight = TaskRepository(session).count_inflight_for_stub(stub_id)
+        if in_flight >= limit:
+            raise CapacityLimitReachedError(
+                f"this function already has {in_flight} calls in flight, which is the most "
+                f"it accepts ({limit}); raise max_pending_tasks to queue more"
+            )
 
     def _needs_another_container(self, stub_id: str) -> bool:
         """Whether this stub has more runnable work than containers free to take it.

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
-from shared.deployment_records import DEFAULT_FUNCTION_KEEP_WARM_SECONDS
+from shared.deployment_records import (
+    DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+    DEFAULT_MAX_PENDING_TASKS,
+)
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy
 
@@ -46,6 +49,7 @@ class FunctionStubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
     object_id: str = ""
+    max_pending_tasks: int | None = Field(default=None, ge=0)
     image: FunctionImageConfig = Field(default_factory=FunctionImageConfig)
     runtime: FunctionRuntimeConfig = Field(default_factory=FunctionRuntimeConfig)
     env: dict[str, str] = Field(default_factory=dict)
@@ -53,6 +57,12 @@ class FunctionStubConfig(BaseModel):
     volumes: list[VolumeConfig] = Field(default_factory=list)
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
+
+    @property
+    def effective_max_pending_tasks(self) -> int:
+        if self.max_pending_tasks is None:
+            return DEFAULT_MAX_PENDING_TASKS
+        return self.max_pending_tasks
 
     @property
     def effective_image_id(self) -> str:
