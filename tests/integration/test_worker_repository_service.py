@@ -26,7 +26,7 @@ from compute.agent_control import (
 from compute.state import (
     RedisComputeStateRepository,
 )
-from control.service import ControlPlaneService
+from control.service import ControlPlaneService, StubKind
 from coordination.event_bus import (
     EventBusEvent,
     EventBusEventType,
@@ -3096,3 +3096,62 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
 
     refused, _ = _record(finished_at + timedelta(days=1), finished_at + timedelta(days=2))
     assert refused == 403
+
+
+def test_worker_repository_exit_releases_what_a_pooled_container_had_claimed(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    """A crashed pooled container gives its invocations back to the pool.
+
+    This is the common shape of an uncommanded death — OOM, a node lost, user
+    code that segfaults — and the control plane never asked for it, so nothing
+    on the stop path runs. A function container carries no task id, so the
+    terminal-state sync that settles a container-addressed task cannot see what
+    this one was running. Left unreleased the task keeps naming a dead
+    container: no claim query can see it, no retry reaches it, and its caller
+    waits forever.
+    """
+
+    redis = real_redis_actors.client()
+    service = _worker_repository_service(isolated_services, redis)
+    stub = ControlPlaneService(isolated_services.context).create_stub(
+        "pooled-exit",
+        kind=StubKind.Function,
+        handler="pkg.jobs:handler",
+        config={"image": {"image_id": "image"}},
+    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).records.create(
+            {
+                "name": "pooled-exit",
+                "image": FUNCTION_IMAGE,
+                "command": ["python", "-m", "runner.function"],
+                "workspace_id": workspace_id,
+                "stub_id": stub.id,
+                "runtime_worker_id": "worker-1",
+                "status": ContainerStatus.Running.value,
+            },
+            workspace_id=workspace_id,
+            name="pooled-exit",
+            status=ContainerStatus.Running.value,
+        )
+    claimed = isolated_services.tasks.create(
+        "claimed-invocation",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+    )
+    isolated_services.tasks.start(claimed.id, container_id=container.id)
+
+    service.set_container_exit_code(
+        SetContainerExitCodeRequest(container_id=container.id, exit_code=137),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
+    )
+
+    released = isolated_services.tasks.get(claimed.id)
+    assert released.container_id is None, (
+        f"task {released.id} still names the container that died holding it, so no "
+        "claim can see it and its caller waits forever"
+    )
+    assert released.status is TaskStatus.Pending

@@ -100,7 +100,7 @@ from shared.realtime.contracts import (
     create_cloud_event_record,
 )
 from shared.scheduling import WorkerUnavailableReason
-from shared.tasks import RetryPolicy, Task, TaskStatus
+from shared.tasks import RetryPolicy, Task, TaskStatus, is_terminal_task_status
 from shared.usage import UsageBillingOwner
 from tests.redis_fakes import FakeRedis
 
@@ -3017,3 +3017,79 @@ class _FailureHandler:
     ) -> None:
         _ = now
         self.calls.append((request.container_id, reason))
+
+
+def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
+    isolated_services: ApiServices,
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A pooled container reaped as orphaned must give back what it claimed.
+
+    A function container is started for its stub and never carries a task id, so
+    every settlement path keyed on `container.task_id` is blind to it. The sweep
+    marks the record `Failed` either way; if the claim is not settled with it the
+    task keeps naming a dead container, which no claim query can see and no retry
+    reaches, and its caller waits forever.
+    """
+
+    redis = real_redis_actors.client()
+    worker_repo = RedisSchedulerWorkerRepository(redis)
+    container_repo = RedisSchedulerContainerRepository(redis)
+    request_service = _request_service(
+        worker_repo,
+        container_repo,
+        failure_handler=ContainerSchedulingPersistenceService(
+            isolated_services.context,
+            isolated_services.events,
+            isolated_services.workspace_changes,
+        ),
+    )
+    stub = ControlPlaneService(isolated_services.context).create_stub(
+        "orphan-claim",
+        kind=StubKind.Function,
+        handler="pkg.jobs:handler",
+        config={"image": {"image_id": "image"}},
+    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        # Started for the stub, holding no task id of its own — how pooling
+        # starts every function container.
+        pooled = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="pooled-function-container",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+                stub_id=stub.id,
+                status=ContainerStatus.Running,
+            )
+        )
+    claimed = isolated_services.tasks.create(
+        "claimed-invocation",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+    )
+    isolated_services.tasks.start(claimed.id, container_id=pooled.id)
+
+    scheduler = Scheduler(
+        services=isolated_services,
+        workloads=SchedulerWorkloadControls(containers=request_service),
+        states=SchedulerStateStores(
+            orphaned_container_confirmations=RedisOrphanedContainerConfirmationRepository(redis),
+        ),
+        orphaned_container_reconcile_interval_seconds=0,
+        orphaned_container_confirmation_seconds=60,
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    scheduler.reconcile_orphaned_containers(now=now)
+    confirmed = scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=61))
+
+    assert confirmed == [pooled.id]
+    assert isolated_services.containers.get(pooled.id).status is ContainerStatus.Failed
+    settled = isolated_services.tasks.get(claimed.id)
+    assert settled.container_id != pooled.id or is_terminal_task_status(settled.status), (
+        f"task {settled.id} is {settled.status.value} still naming the reaped container: "
+        "no claim query can see it and no retry reaches it, so its caller waits forever"
+    )
