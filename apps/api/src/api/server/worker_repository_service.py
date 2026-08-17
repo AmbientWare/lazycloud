@@ -55,7 +55,7 @@ from scheduler.state import (
 from shared.app_identity import NAME
 from shared.cache_records import CacheEntry
 from shared.container_requests import StopContainerReason
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import (
     ConflictError,
     DomainError,
@@ -2340,11 +2340,7 @@ class WorkerRepositoryService:
                 container.status = container_status
                 if container_status is ContainerStatus.Running and container.started_at is None:
                     container.started_at = now
-                if container_status in {
-                    ContainerStatus.Exited,
-                    ContainerStatus.Failed,
-                    ContainerStatus.Stopped,
-                }:
+                if container_status in TERMINAL_CONTAINER_STATUSES:
                     container.finished_at = container.finished_at or now
                     self._release_container_runtime_state(container)
                     updated_task = self._sync_runtime_task_for_container_terminal_state(

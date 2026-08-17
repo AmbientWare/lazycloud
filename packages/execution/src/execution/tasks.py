@@ -12,6 +12,7 @@ from foundation.ids import optional_uuid, required_uuid
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
+from shared.containers import TERMINAL_CONTAINER_STATUSES
 from shared.errors import ConflictError, NotFoundError
 from shared.events import EventLevel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
@@ -298,6 +299,24 @@ class TaskService:
                 msg = (
                     f"task {current.id} is assigned to container {assigned_container_id}, "
                     f"not {resolved_container_id}"
+                )
+                raise ConflictError(msg)
+            # A claim from a container that is already terminal is refused rather
+            # than written. The claim is the only record of who owns an
+            # invocation, and every path that gives one back runs when a
+            # container ends: one written afterwards is settled by nothing, sees
+            # no claim query because the row is no longer free, and leaves its
+            # caller waiting on a container that is gone. It happens when a stop
+            # releases the claim while the container is still alive enough to
+            # report the start it had already begun.
+            if (
+                claim
+                and resolved_container_id
+                and _container_is_terminal(session, resolved_container_id)
+            ):
+                msg = (
+                    f"container {resolved_container_id} is no longer running and "
+                    f"cannot claim task {current.id}"
                 )
                 raise ConflictError(msg)
             persisted_container_id = (
@@ -653,6 +672,13 @@ def _container_exists(session: DatabaseSession, container_id: str | None) -> boo
     if not container_id:
         return False
     return ContainerRepository(session).records.get_across_workspaces(container_id) is not None
+
+
+def _container_is_terminal(session: DatabaseSession, container_id: str) -> bool:
+    record = ContainerRepository(session).records.get_across_workspaces(container_id)
+    if record is None:
+        return False
+    return record.status in TERMINAL_CONTAINER_STATUSES
 
 
 def _task_retry_policy(

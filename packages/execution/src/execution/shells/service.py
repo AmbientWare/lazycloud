@@ -13,7 +13,7 @@ from control.service import ControlPlaneService, StubRecord
 from database.repositories.orchestration import ContainerRepository
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
 from shared.container_requests import WorkerStartupKind
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.http.shells import (
@@ -318,7 +318,7 @@ class ShellControlService:
                 container_id=container_id,
                 status=ShellTicketCompensationStatus.Failed,
             )
-        if _is_terminal_container_status(container.status):
+        if container.status in TERMINAL_CONTAINER_STATUSES:
             self._record_ticket_compensation(
                 container,
                 action="shell.ticket.compensated",
@@ -335,7 +335,7 @@ class ShellControlService:
         except Exception:
             LOGGER.warning("shell container %s did not stop", container.id, exc_info=True)
             refreshed = self._container_after_stop_failure(container.id, workspace_id)
-            if refreshed is not None and _is_terminal_container_status(refreshed.status):
+            if refreshed is not None and refreshed.status in TERMINAL_CONTAINER_STATUSES:
                 return ShellTicketCompensationResult(
                     container_id=refreshed.id,
                     status=ShellTicketCompensationStatus.Cleaned,
@@ -353,7 +353,7 @@ class ShellControlService:
                 status=ShellTicketCompensationStatus.Failed,
                 failure_recorded=recorded,
             )
-        if not _is_terminal_container_status(stopped.status):
+        if stopped.status not in TERMINAL_CONTAINER_STATUSES:
             recorded = self._record_ticket_compensation(
                 stopped,
                 action="shell.ticket.compensation_failed",
@@ -691,14 +691,6 @@ def _env_tuple_to_mapping(values: Iterable[str]) -> dict[str, str]:
         if separator:
             env[key] = item
     return env
-
-
-def _is_terminal_container_status(status: ContainerStatus) -> bool:
-    return status in {
-        ContainerStatus.Exited,
-        ContainerStatus.Failed,
-        ContainerStatus.Stopped,
-    }
 
 
 def _rollback_shell_port(

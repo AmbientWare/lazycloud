@@ -34,6 +34,20 @@ counts and what a shutdown sweep stops have to be the same set, or an account is
 refused for holding containers nothing will ever stop.
 """
 
+TERMINAL_CONTAINER_STATUSES: frozenset[ContainerStatus] = frozenset(
+    {
+        ContainerStatus.Exited,
+        ContainerStatus.Failed,
+        ContainerStatus.Stopped,
+    }
+)
+"""The statuses a container never leaves.
+
+The complement of `LIVE_CONTAINER_STATUSES`, and the point past which every path
+that settles what a container was holding has already run. Work bound to a
+container in one of these is work nothing else will come back for.
+"""
+
 
 class ContainerRecord(ContractModel):
     id: str
