@@ -30,6 +30,7 @@ from worker.runtime_config import RuntimeContainerStatus, runtime_capabilities
 CHECKPOINT_RUNNER_KINDS = {
     WorkerStartupKind.Endpoint,
     WorkerStartupKind.Asgi,
+    WorkerStartupKind.Function,
     WorkerStartupKind.TaskQueue,
 }
 CHECKPOINT_HTTP_KINDS = {WorkerStartupKind.Pod, WorkerStartupKind.PodRun}

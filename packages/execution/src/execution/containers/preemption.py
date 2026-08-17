@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from database.records.apps import StubRecord
+from database.repositories.execution import TaskRepository
 from pydantic import Field
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
@@ -73,14 +74,33 @@ class PreemptedContainerService:
         """
         recovered: list[str] = []
         for container in self.services.containers.unsettled_preemptions(limit=limit):
-            if container.task_id:
-                self.preempted(
-                    container,
-                    exit_code=container.exit_code if container.exit_code is not None else 0,
-                )
+            # Asked unconditionally. A pooled container never carries a task id,
+            # so gating on one here would skip precisely the containers whose
+            # claims this sweep exists to give back.
+            self.preempted(
+                container,
+                exit_code=container.exit_code if container.exit_code is not None else 0,
+            )
             self.services.containers.mark_preemption_settled(container.id)
             recovered.append(container.id)
         return recovered
+
+    def _claimed_task_id(self, container: ContainerRecord) -> str:
+        """The invocation this container had taken, if it had taken one.
+
+        Read from the task side because a pooled container is not started for a
+        task: `container.task_id` stays empty for its whole life and what it is
+        actually running is only recorded by the claim.
+        """
+
+        with self.services.context.database.session() as session:
+            held = TaskRepository(session).list_inflight_for_container(container.id)
+        return held[0].id if held else ""
+
+    def _container_stub_kind(self, container: ContainerRecord) -> StubKind:
+        if not container.stub_id:
+            return StubKind.Function
+        return self.stubs.get_stub(container.stub_id).kind
 
     def preempted(
         self,
@@ -88,9 +108,18 @@ class PreemptedContainerService:
         *,
         exit_code: int,
     ) -> PreemptedContainerResult:
-        task_id = container.task_id or ""
+        task_id = container.task_id or self._claimed_task_id(container)
         if not task_id:
-            raise ValueError("preempted container has no task outcome to reconcile")
+            # A pooled container preempted between calls was holding nothing, so
+            # there is no outcome to reconcile. That is an ordinary state for a
+            # warm container rather than the inconsistency this used to be, when
+            # every container existed for exactly one task.
+            return PreemptedContainerResult(
+                task_id="",
+                container_id=container.id,
+                workload_kind=self._container_stub_kind(container),
+                status=TaskStatus.Pending,
+            )
         task = self.services.tasks.get(task_id)
         stub_id = task.stub_id or container.stub_id or ""
         if not stub_id:

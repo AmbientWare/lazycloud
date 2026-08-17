@@ -226,6 +226,23 @@ class TaskRepository:
         task.started_at = None
         return self.upsert(task)
 
+    def list_inflight_for_container(self, container_id: str) -> list[Task]:
+        """Work this container has claimed and not finished.
+
+        What a stopping container is still holding. Read from the task side
+        rather than the container's own `task_id`, because a pooled container is
+        not started for a task and that field says nothing about what it went on
+        to claim.
+        """
+
+        rows = self.session.scalars(
+            select(TaskTable).where(
+                TaskTable.container_id == container_id,
+                TaskTable.status.in_([status.value for status in IN_FLIGHT_TASK_STATUSES]),
+            )
+        )
+        return [Task.model_validate(row.payload) for row in rows]
+
     def list_unclaimed_claimable(self, *, limit: int) -> list[Task]:
         """Runnable work nobody has taken, oldest first, across every workspace.
 

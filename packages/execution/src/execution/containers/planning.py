@@ -99,6 +99,7 @@ def validate_checkpoint_request(
     if startup_kind not in {
         WorkerStartupKind.Endpoint,
         WorkerStartupKind.Asgi,
+        WorkerStartupKind.Function,
         WorkerStartupKind.TaskQueue,
         WorkerStartupKind.Pod,
         WorkerStartupKind.PodRun,

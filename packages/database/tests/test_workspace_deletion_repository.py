@@ -370,6 +370,165 @@ def test_postgresql_contended_volume_name_settles_on_the_constraint() -> None:
         database.dispose()
 
 
+def test_postgresql_released_claim_returns_to_exactly_one_other_container() -> None:
+    """A stopped container gives its invocation back, and one container takes it.
+
+    The failure this rules out loses a customer's call silently: a pooled
+    container is stopped while holding a claim, and if the claim is not given
+    back the task names a container that no longer exists, no claim ever sees it
+    again, and the caller waits on a result nothing will produce.
+
+    Releasing twice is included because two paths can both settle one stopping
+    container — the stop itself and the preemption sweep that recovers what a
+    crash left unsettled — and a release that ran twice must not put the same
+    invocation in front of two containers.
+    """
+
+    database = _postgres_database()
+    workspace_id = _create_workspace(database, "claim-release")
+    stub_id = str(uuid4())
+    contenders = 8
+    container_ids = [str(uuid4()) for _ in range(contenders)]
+    with database.session() as session:
+        session.add(
+            StubTable(
+                id=stub_id,
+                external_id=str(uuid4()),
+                workspace_id=workspace_id,
+                name="releasable",
+                type="function",
+                payload={},
+            )
+        )
+        for container_id in container_ids:
+            session.add(
+                ContainerTable(
+                    id=container_id,
+                    workspace_id=workspace_id,
+                    stub_id=stub_id,
+                    name=f"container-{container_id}",
+                    image="python:3.12-slim",
+                    status="running",
+                    payload={},
+                )
+            )
+        session.flush()
+        tasks = TaskRepository(session)
+        task_id = tasks.upsert(
+            Task(
+                id=str(uuid4()),
+                name="held-then-released",
+                workspace_id=workspace_id,
+                stub_id=stub_id,
+                status=TaskStatus.Pending,
+                claimable_at=utc_now(),
+            ),
+            workspace_id=workspace_id,
+        ).id
+
+    try:
+        with database.session() as session:
+            first = TaskRepository(session).claim_for_stub(
+                stub_id, container_id=container_ids[0], limit=1
+            )
+        assert [task.id for task in first] == [task_id]
+
+        # Settled twice, as two independent recovery paths would.
+        for _ in range(2):
+            with database.session() as session:
+                TaskRepository(session).release_claim(task_id)
+
+        start = Barrier(contenders - 1)
+
+        def reclaim(container_index: int) -> list[str]:
+            with database.session() as session:
+                start.wait(timeout=10)
+                return [
+                    task.id
+                    for task in TaskRepository(session).claim_for_stub(
+                        stub_id,
+                        container_id=container_ids[container_index + 1],
+                        limit=1,
+                    )
+                ]
+
+        with ThreadPoolExecutor(max_workers=contenders - 1) as pool:
+            reclaimed = [id for result in pool.map(reclaim, range(contenders - 1)) for id in result]
+
+        assert reclaimed == [task_id], "a released task went to none or several containers"
+        with database.session() as session:
+            settled = TaskRepository(session).get_across_workspaces(task_id)
+        assert settled is not None
+        assert settled.container_id in container_ids[1:]
+        assert settled.claimable_at is not None, "releasing must not unmake readiness"
+    finally:
+        _remove_test_workspace(database, workspace_id)
+        database.dispose()
+
+
+def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release() -> None:
+    """A container stopping after its call finished must not rerun the call.
+
+    The window is real: a container reports its result and is stopped moments
+    later, so the settle path runs against a task that has already completed.
+    Returning it to pending would hand somebody's finished invocation to another
+    container and deliver the second answer over the first.
+    """
+
+    database = _postgres_database()
+    workspace_id = _create_workspace(database, "late-release")
+    stub_id = str(uuid4())
+    container_id = str(uuid4())
+    with database.session() as session:
+        session.add(
+            StubTable(
+                id=stub_id,
+                external_id=str(uuid4()),
+                workspace_id=workspace_id,
+                name="finished",
+                type="function",
+                payload={},
+            )
+        )
+        session.add(
+            ContainerTable(
+                id=container_id,
+                workspace_id=workspace_id,
+                stub_id=stub_id,
+                name="container-finished",
+                image="python:3.12-slim",
+                status="running",
+                payload={},
+            )
+        )
+        session.flush()
+        task_id = TaskRepository(session).upsert(
+            Task(
+                id=str(uuid4()),
+                name="already-complete",
+                workspace_id=workspace_id,
+                stub_id=stub_id,
+                status=TaskStatus.Complete,
+                container_id=container_id,
+                claimable_at=utc_now(),
+            ),
+            workspace_id=workspace_id,
+        ).id
+
+    try:
+        with database.session() as session:
+            assert TaskRepository(session).release_claim(task_id) is None
+        with database.session() as session:
+            tasks = TaskRepository(session)
+            settled = tasks.get_across_workspaces(task_id)
+            assert settled is not None
+            assert settled.status is TaskStatus.Complete
+            assert tasks.claim_for_stub(stub_id, container_id=str(uuid4()), limit=1) == []
+    finally:
+        _remove_test_workspace(database, workspace_id)
+        database.dispose()
+
+
 def test_postgresql_claimable_task_is_taken_by_exactly_one_container() -> None:
     """A runnable task goes to one container, however many ask at once.
 

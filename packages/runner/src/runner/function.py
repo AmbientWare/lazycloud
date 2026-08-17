@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
+    CHECKPOINT_ENABLED_ENV,
     CONTAINER_ID_ENV,
     GATEWAY_HTTP_URL_ENV,
     GATEWAY_TOKEN_ENV,
@@ -24,6 +25,7 @@ from shared.env import (
     TASK_ID_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
+    truthy_env_value,
 )
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
@@ -62,6 +64,7 @@ from shared.lifecycle import (
 from shared.serialization import to_json_value
 from shared.tasks import TaskStatus
 
+from runner.checkpoints import wait_for_checkpoint
 from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.runtime import (
@@ -99,6 +102,8 @@ class FunctionRunnerConfig:
     timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS
     keep_warm_seconds: int = 0
     poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
+    checkpoint_enabled: bool = False
+    workers: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +143,15 @@ class FunctionRunner:
     channel: FunctionControlChannel | None = None
     _handler: Any = field(default=None, init=False)
     _startup_hooks_ran: bool = field(default=False, init=False)
+    # Identity lives here rather than on the config because restoring from a
+    # checkpoint hands the process a different container to be, and what it
+    # reports itself as afterwards has to be the one it actually is.
+    container_id: str = field(default="", init=False)
+    container_hostname: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        self.container_id = self.config.container_id
+        self.container_hostname = self.config.container_hostname
 
     @property
     def control(self) -> FunctionControlChannel:
@@ -186,7 +200,7 @@ class FunctionRunner:
                     "/api/v1/functions/claim",
                     FunctionClaimRequest(
                         stub_id=self.config.stub_id,
-                        container_id=self.config.container_id,
+                        container_id=self.container_id,
                     ).model_dump(mode="json"),
                 )
             )
@@ -270,7 +284,7 @@ class FunctionRunner:
                 "/gateway/tasks/start",
                 StartTaskRequest(
                     task_id=task.task_id,
-                    container_id=self.config.container_id,
+                    container_id=self.container_id,
                 ).model_dump(mode="json"),
             )
         )
@@ -281,7 +295,7 @@ class FunctionRunner:
                 "/api/v1/functions/set-result",
                 FunctionSetResultBody(
                     task_id=task.task_id,
-                    container_id=self.config.container_id,
+                    container_id=self.container_id,
                     result=result,
                 ).model_dump(mode="json"),
             )
@@ -324,8 +338,8 @@ class FunctionRunner:
                         task_id=task.task_id,
                         task_duration=duration_seconds,
                         task_status=TaskStatus.Failed,
-                        container_id=self.config.container_id,
-                        container_hostname=self.config.container_hostname,
+                        container_id=self.container_id,
+                        container_hostname=self.container_hostname,
                         result_base64="",
                     ).model_dump(mode="json"),
                 )
@@ -360,8 +374,8 @@ class FunctionRunner:
             workspace_id=self.config.workspace_id,
             workspace_name=self.config.workspace_name,
             app_id=self.config.app_id,
-            container_id=self.config.container_id,
-            container_hostname=self.config.container_hostname,
+            container_id=self.container_id,
+            container_hostname=self.container_hostname,
             handler=self.config.handler_ref,
             resource_kind=DeploymentKind.Function,
         )
@@ -372,6 +386,16 @@ class FunctionRunner:
             log=self.append_container_log,
             capture_output=False,
         )
+        # After the handler is imported and `on_start` has run, so the image
+        # captured is one that is ready to serve rather than one that still has
+        # the expensive part ahead of it.
+        restored = wait_for_checkpoint(
+            enabled=self.config.checkpoint_enabled,
+            workers=self.config.workers,
+        )
+        if restored is not None:
+            self.container_id = restored.container_id
+            self.container_hostname = restored.container_hostname
 
     def run_error_hooks(
         self,
@@ -449,8 +473,8 @@ class FunctionRunner:
             workspace_id=self.config.workspace_id,
             workspace_name=self.config.workspace_name,
             app_id=self.config.app_id,
-            container_id=self.config.container_id,
-            container_hostname=self.config.container_hostname,
+            container_id=self.container_id,
+            container_hostname=self.container_hostname,
             handler=self.config.handler_ref,
             resource_kind=DeploymentKind.Function,
             attempt_number=attempt_number or task.attempt_number,
@@ -649,6 +673,7 @@ def config_from_env(env: dict[str, str] | None = None) -> FunctionRunnerConfig:
         lifecycle_hooks=lifecycle_hooks_from_env(source.get(LIFECYCLE_HOOKS_ENV)),
         keep_warm_seconds=_keep_warm_seconds(source.get(KEEP_WARM_SECONDS_ENV)),
         poll_interval_seconds=DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS,
+        checkpoint_enabled=truthy_env_value(source.get(CHECKPOINT_ENABLED_ENV)),
     )
 
 

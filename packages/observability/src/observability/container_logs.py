@@ -295,6 +295,11 @@ class ContainerLogIngestionService:
         container: ContainerRecord,
     ) -> str:
         if not container.task_id:
+            # A pooled container is started for its stub and serves many calls,
+            # so its own output — startup, `on_start`, anything printed between
+            # invocations — belongs to no task. Blank is that answer, not a
+            # lookup that failed; per-invocation output is attributed by the
+            # runner against the task it claimed.
             return ""
         task = TaskRepository(session).get_across_workspaces(container.task_id)
         if task is None:

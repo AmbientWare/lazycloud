@@ -14,6 +14,7 @@ from typing import Protocol
 from uuid import UUID
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
+from database.repositories.execution import TaskRepository
 from database.repositories.images import ImageArchiveRepository
 from database.repositories.orchestration import (
     ContainerPageCursor,
@@ -536,6 +537,53 @@ class ContainerService:
             ),
         )
 
+    # Why a container stopped decides what happens to the work it was holding.
+    # These are the reasons where the work itself is over: the caller asked for it
+    # to stop, or an operator did. Everything else is the platform moving capacity
+    # around — the invocation is still wanted, and belongs back in the pool.
+    _CLAIM_CANCELLING_REASONS = frozenset(
+        {
+            StopContainerReason.User,
+            StopContainerReason.Admin,
+            StopContainerReason.Unfunded,
+        }
+    )
+
+    def _settle_claimed_work(
+        self,
+        record: ContainerRecord,
+        *,
+        reason: StopContainerReason,
+    ) -> None:
+        """Decide what becomes of the invocations this container had claimed.
+
+        A pooled container holds somebody's in-flight call. Losing the claim
+        silently is the failure this exists to prevent: the task would keep
+        naming a container that is gone, no claim would ever see it again, and
+        the caller would wait on a result nothing was left to produce.
+
+        Released rather than cancelled wherever the stop was the platform's idea.
+        Scaling down, reclaiming a preemptible node or expiring a keep-warm
+        window are all reasons to run the call elsewhere, never reasons to tell
+        the caller their function was cancelled.
+        """
+
+        with self.context.database.session() as session:
+            held = TaskRepository(session).list_inflight_for_container(record.id)
+        # Both directions of the association, because they can disagree. A
+        # container started for one task names it before that task names back;
+        # a pooled container is named only by whatever it later claimed.
+        task_ids = {task.id for task in held}
+        if record.task_id:
+            task_ids.add(record.task_id)
+        if reason in self._CLAIM_CANCELLING_REASONS:
+            for task_id in task_ids:
+                self.tasks.cancel(task_id)
+            return
+        for task_id in task_ids:
+            with self.context.database.session() as session:
+                TaskRepository(session).release_claim(task_id)
+
     def stop(
         self,
         container_id: str,
@@ -557,8 +605,7 @@ class ContainerService:
                     worker_id=cancellation.worker_id,
                     reason=reason,
                 )
-            if record.task_id:
-                self.tasks.cancel(record.task_id)
+            self._settle_claimed_work(record, reason=reason)
             record.status = ContainerStatus.Stopped
             record.finished_at = utc_now()
             self._release_runtime_state(record)
