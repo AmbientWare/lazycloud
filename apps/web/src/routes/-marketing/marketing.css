@@ -954,7 +954,7 @@
 }
 
 .marketing-final-cta {
-  background: var(--muted);
+  background: var(--background);
 }
 
 @keyframes marketing-rise {

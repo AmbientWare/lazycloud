@@ -11,9 +11,11 @@ from shared.worker_events import AUTOSCALER_SCALE_DECISION_ACTIONS
 
 from scheduler.autoscaling import (
     ENDPOINT_AUTOSCALER_SOURCE,
+    FUNCTION_AUTOSCALER_SOURCE,
     POD_AUTOSCALER_SOURCE,
     TASK_QUEUE_AUTOSCALER_SOURCE,
     EndpointAutoscalingService,
+    FunctionAutoscalingService,
     PodAutoscalingService,
     SchedulerServices,
     TaskQueueAutoscalingService,
@@ -49,6 +51,7 @@ class AutoscalerReconcileResponse(ContractModel):
 class AutoscalerOperationsService:
     services: SchedulerServices
     task_queue_autoscaler: TaskQueueAutoscalingService
+    function_autoscaler: FunctionAutoscalingService
     endpoint_autoscaler: EndpointAutoscalingService
     pod_autoscaler: PodAutoscalingService
 
@@ -178,7 +181,14 @@ class AutoscalerOperationsService:
     def _service_for_kind(
         self,
         target_kind: AutoscalerTargetKind,
-    ) -> TaskQueueAutoscalingService | EndpointAutoscalingService | PodAutoscalingService:
+    ) -> (
+        TaskQueueAutoscalingService
+        | FunctionAutoscalingService
+        | EndpointAutoscalingService
+        | PodAutoscalingService
+    ):
+        if target_kind is AutoscalerTargetKind.Function:
+            return self.function_autoscaler
         if target_kind is AutoscalerTargetKind.TaskQueue:
             return self.task_queue_autoscaler
         if target_kind is AutoscalerTargetKind.Endpoint:
@@ -192,6 +202,8 @@ class AutoscalerOperationsService:
 
 
 def _source_for_kind(target_kind: AutoscalerTargetKind) -> str:
+    if target_kind is AutoscalerTargetKind.Function:
+        return FUNCTION_AUTOSCALER_SOURCE
     if target_kind is AutoscalerTargetKind.TaskQueue:
         return TASK_QUEUE_AUTOSCALER_SOURCE
     if target_kind is AutoscalerTargetKind.Endpoint:
@@ -200,6 +212,8 @@ def _source_for_kind(target_kind: AutoscalerTargetKind) -> str:
 
 
 def _target_kind_for_stub(stub: StubRecord) -> AutoscalerTargetKind:
+    if stub.kind is StubKind.Function:
+        return AutoscalerTargetKind.Function
     if stub.kind is StubKind.TaskQueue:
         return AutoscalerTargetKind.TaskQueue
     if stub.kind in {StubKind.Endpoint, StubKind.Asgi}:

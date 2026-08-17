@@ -210,42 +210,45 @@ const parityModes = [
   {
     key: "local",
     Plate: LocalPlate,
-    title: "Local",
+    stage: "01 · Develop",
+    title: "Run it locally",
     call: "embed.local(rows)",
-    body: "Runs in-process. Your debugger, your breakpoints.",
+    body: "Call it in-process with your debugger, breakpoints, and local data.",
   },
   {
     key: "gpu",
     Plate: GpuPlate,
-    title: "On a GPU",
+    stage: "02 · Run",
+    title: "Run it in the cloud",
     call: "embed.remote(rows)",
-    body: "Same call, our capacity. Nothing deployed.",
+    body: "Invoke it whenever you need a GPU or more capacity. No deployment required.",
   },
   {
     key: "production",
     Plate: ProductionPlate,
-    title: "In production",
+    stage: "03 · Deploy",
+    title: "Deploy it as a service",
     call: "lazycloud deploy app.py:app",
-    body: "A live service that scales out, then back to zero.",
+    body: "Publish a stable endpoint that stays available while compute scales to zero between calls.",
   },
 ];
 
 /* Placed after the control-plane rail: the rail establishes that one platform
    covers every phase, and this is the sharpest instance of it — the same
-   function, unchanged, across all three. Ahead of the typed-client story, which
-   is a narrower point. */
+   function, unchanged, across all three execution modes. Ahead of the
+   typed-client story, which is a narrower point. */
 function ParitySection() {
   return (
     <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
-          label="Local · GPU · production"
+          label="Develop · run · deploy"
           title={
             <>
-              One function. <em>Three places.</em>
+              One function. <em>From local to live.</em>
             </>
           }
-          body="The same function in-process, on a GPU, and deployed. Nothing to port, which is why an agent can write it without knowing how your cloud is wired."
+          body="Call it in-process while you build. Run it in the cloud whenever you need a GPU or more capacity, without creating a deployment. When you need a stable endpoint, deploy the same function as a service. No rewrite between steps."
         />
 
         <div className="max-w-[820px]">
@@ -262,7 +265,12 @@ function ParitySection() {
           {parityModes.map((mode) => (
             <article key={mode.key}>
               <mode.Plate />
-              <h3 className="mt-5 text-[19px] leading-tight font-medium">{mode.title}</h3>
+              <p className="mt-5 font-mono text-[10px] font-medium tracking-[0.12em] text-brand uppercase">
+                {mode.stage}
+              </p>
+              <h3 className="mt-2 text-[19px] leading-tight font-medium sm:min-h-12">
+                {mode.title}
+              </h3>
               <code className="mt-2 block font-mono text-[12px] break-all text-brand">
                 {mode.call}
               </code>
@@ -377,7 +385,7 @@ function MarketingHome() {
 
         <ComputeSection />
 
-        <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
+        <section className="border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
               <SectionHeading title="What will you build?" />
@@ -693,7 +701,7 @@ const computePaths = [
 
 function ComputeSection() {
   return (
-    <section className="border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
+    <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
           title={

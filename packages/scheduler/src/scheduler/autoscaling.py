@@ -65,6 +65,7 @@ TASK_QUEUE_AUTOSCALER_LOCK_TTL_SECONDS = 10
 TASK_QUEUE_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
 TASK_QUEUE_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
 TASK_QUEUE_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
+FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
 TASK_QUEUE_AUTOSCALER_SOURCE = "taskqueue.autoscaler"
 ENDPOINT_AUTOSCALER_LOCK_TTL_SECONDS = 10
 ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
@@ -206,6 +207,194 @@ class PodAutoscaleResult(ContractModel):
 
 
 type AutoscaleAction = TaskQueueAutoscaleAction | EndpointAutoscaleAction | PodAutoscaleAction
+
+
+class FunctionAutoscaleControl(Protocol):
+    def start_function_container(self, stub_id: str) -> bool: ...
+
+    def unclaimed_task_count(self, stub_id: str) -> int: ...
+
+
+class FunctionAutoscaleAction(ContractModel):
+    container_id: str
+    action: str
+    reason: str = ""
+
+
+class FunctionAutoscaleResult(ContractModel):
+    stub_id: str
+    workspace_id: str
+    queue_length: int = 0
+    current_containers: int = 0
+    pending_containers: int = 0
+    desired_containers: int = 0
+    decision: TaskQueueScaleDecisionKind
+    reason: str
+    active: bool = True
+    lock_acquired: bool = True
+    valid: bool = True
+    actions: list[FunctionAutoscaleAction] = Field(default_factory=list)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.actions)
+
+
+@dataclass(slots=True)
+class FunctionAutoscalingService:
+    """Give a function's backlog enough containers to be worked through.
+
+    Written as a fourth service rather than folded into a shared base. Three of
+    the four are about to become three of three when task queues go, and an
+    abstraction extracted now would be shaped around the member that is leaving.
+
+    The scaling rule itself is reused rather than rewritten: a function's
+    backlog and a task queue's are the same sample — how much is waiting, over
+    how much one container takes, capped by what the stub allows. Two rules
+    would disagree eventually, and the disagreement would show up as a bill.
+
+    Scaling down is deliberately not done here. A function container already
+    ends itself when its keep-warm window passes with no work, so the way to
+    have fewer is to stop giving them any — stopping one from outside risks
+    taking an invocation with it, which is the one failure this whole change
+    has been careful about.
+    """
+
+    services: SchedulerServices
+    redis: RedisClient
+    functions: FunctionAutoscaleControl
+
+    def reconcile(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> list[FunctionAutoscaleResult]:
+        current_time = now or utc_now()
+        stubs = [
+            stub
+            for stub in self.services.scheduler_workloads.list_stubs()
+            if stub.kind is StubKind.Function
+        ]
+        results: list[FunctionAutoscaleResult] = []
+        for stub in stubs[: max(limit, 0)]:
+            token = token_urlsafe(16)
+            lock_key = self._lock_key(stub)
+            if not self._acquire_lock(lock_key, token):
+                results.append(
+                    FunctionAutoscaleResult(
+                        stub_id=stub.id,
+                        workspace_id=stub.workspace_id,
+                        decision=TaskQueueScaleDecisionKind.Hold,
+                        reason="autoscaler lock already held",
+                        lock_acquired=False,
+                    )
+                )
+                continue
+            try:
+                results.append(self.reconcile_stub(stub, now=current_time))
+            finally:
+                self._release_lock(lock_key, token)
+        return results
+
+    def reconcile_stub(
+        self,
+        stub: StubRecord,
+        *,
+        now: datetime | None = None,
+    ) -> FunctionAutoscaleResult:
+        del now
+        active = _deployment_active(self.services, stub)
+        containers = _containers_for_stub(self.services, stub)
+        current = len(_active_containers(containers))
+        pending = _pending_container_count(containers)
+        queue_length = self.functions.unclaimed_task_count(stub.id)
+        config = _function_autoscaler_config(stub.config)
+        sample = TaskQueueAutoscalerSample(
+            queue_length=queue_length,
+            running_tasks=0,
+            current_containers=current,
+        )
+        decision = decide_task_queue_scale(sample, config)
+        desired = decision.desired_containers if active else 0
+        reason = "deployment inactive" if not active else decision.reason.value
+        actions: list[FunctionAutoscaleAction] = []
+        if active and decision.valid and desired > current:
+            actions.extend(self._scale_up(stub, desired - current))
+        result = FunctionAutoscaleResult(
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            queue_length=queue_length,
+            current_containers=current,
+            pending_containers=pending,
+            desired_containers=desired,
+            decision=decision.decision,
+            reason=reason,
+            active=active,
+            valid=decision.valid,
+            actions=actions,
+        )
+        _record_autoscaler_state(
+            self.services,
+            source=FUNCTION_AUTOSCALER_SOURCE,
+            target_kind=AutoscalerTargetKind.Function,
+            stub=stub,
+            current_count=current,
+            desired_count=desired,
+            decision=result.decision.value,
+            reason=reason,
+            active=active,
+            valid=result.valid,
+            signal_name="unclaimed_tasks",
+            signal_value=queue_length,
+        )
+        return result
+
+    def _scale_up(self, stub: StubRecord, count: int) -> list[FunctionAutoscaleAction]:
+        actions: list[FunctionAutoscaleAction] = []
+        for _ in range(count):
+            try:
+                started = self.functions.start_function_container(stub.id)
+            except DomainError as exc:
+                actions.append(
+                    FunctionAutoscaleAction(
+                        container_id="",
+                        action="scale-up-failed",
+                        reason=exc.message,
+                    )
+                )
+                break
+            if not started:
+                break
+            actions.append(FunctionAutoscaleAction(container_id="", action="scale-up"))
+        return actions
+
+    def _lock_key(self, stub: StubRecord) -> str:
+        return self.redis.key("autoscaling", "functions", stub.workspace_id, stub.id, "lock")
+
+    def _acquire_lock(self, key: str, token: str) -> bool:
+        return bool(
+            self.redis.set(
+                key,
+                token,
+                nx=True,
+                ex=TASK_QUEUE_AUTOSCALER_LOCK_TTL_SECONDS,
+            )
+        )
+
+    def _release_lock(self, key: str, token: str) -> None:
+        if _redis_text(self.redis.get(key)) == token:
+            self.redis.delete(key)
+
+
+def _function_autoscaler_config(config: StubConfig) -> TaskQueueAutoscalerConfig:
+    autoscaler = config.autoscaler
+    return TaskQueueAutoscalerConfig(
+        tasks_per_container=autoscaler.tasks_per_container,
+        # A function with no autoscaler configured still has to be able to run,
+        # so an unset ceiling means one container rather than none.
+        max_containers=max(autoscaler.max_containers, 1),
+    )
 
 
 @dataclass(slots=True)
