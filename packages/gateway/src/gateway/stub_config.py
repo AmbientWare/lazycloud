@@ -112,6 +112,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
                 request.keep_warm_seconds,
             ),
             concurrency=request.concurrent_requests,
+            in_process=request.in_process,
             workers=request.workers,
             checkpoint_enabled=request.checkpoint_enabled,
             checkpoint_readiness_path=_metadata_string(

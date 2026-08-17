@@ -726,6 +726,7 @@ def _stub_request_from_spec(
         max_pending_tasks=_metadata_int(metadata, "max_pending_tasks"),
         keep_warm_seconds=spec.resources.keep_warm,
         concurrent_requests=spec.resources.concurrency,
+        in_process=_metadata_bool(metadata, "in_process"),
         env=[f"{key}={value}" for key, value in spec.env.items()],
         secrets=[SecretVar(name=name) for name in spec.secrets],
         volumes=[

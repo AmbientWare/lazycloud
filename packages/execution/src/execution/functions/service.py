@@ -417,6 +417,7 @@ class FunctionControlService:
                 container_id=container_id,
                 keep_warm_seconds=config.runtime.keep_warm,
                 concurrency=config.runtime.concurrency,
+                in_process=config.runtime.in_process,
                 python_executable=config.image.python_executable,
                 cpu_millicores=config.runtime.requested_cpu_millicores,
                 memory_mib=config.runtime.requested_memory_mib,

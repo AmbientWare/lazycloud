@@ -111,6 +111,7 @@ class App:
         gpu_count: int = 0,
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
+        in_process: bool = False,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -154,6 +155,7 @@ class App:
         gpu_count: int = 0,
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
+        in_process: bool = False,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -196,6 +198,7 @@ class App:
         gpu_count: int = 0,
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
+        in_process: bool = False,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -237,6 +240,11 @@ class App:
             name: Deployment resource name. Defaults to the callable name.
             cpu, memory, gpu, gpu_count: Compute resources requested per worker.
             timeout_seconds: Maximum runtime for one invocation.
+            concurrency: Invocations one container serves at once.
+            in_process: Serve those invocations in one interpreter rather than
+                one process each, so anything `on_start` loaded is loaded once.
+                Needed to share a GPU; costs process isolation and true CPU
+                parallelism.
             retries: Number of retry attempts for failed invocations.
             callback_url: Optional webhook called for execution events.
             authorized: Whether calls require an authenticated client.
@@ -257,6 +265,7 @@ class App:
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
+            in_process=in_process,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,
@@ -304,6 +313,7 @@ class App:
         gpu_count: int = 0,
         timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         concurrency: int = 1,
+        in_process: bool = False,
         max_pending_tasks: int | None = None,
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
@@ -363,6 +373,7 @@ class App:
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
             concurrency=concurrency,
+            in_process=in_process,
             max_pending_tasks=max_pending_tasks,
             autoscaler=autoscaler,
             retries=retries,
@@ -1273,6 +1284,7 @@ def _function_options(
     gpu_count: int,
     timeout_seconds: int | None,
     concurrency: int,
+    in_process: bool,
     max_pending_tasks: int | None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
     retries: int,
@@ -1311,6 +1323,7 @@ def _function_options(
         "gpu_count": gpu_count,
         "timeout_seconds": timeout_seconds,
         "concurrency": concurrency,
+        "in_process": in_process,
         "max_pending_tasks": max_pending_tasks,
         "autoscaler": autoscaler,
         "retries": retries,

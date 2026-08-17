@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from shared.enums import StringEnum
 
@@ -23,6 +24,7 @@ GATEWAY_HTTP_PORT_ENV = "GATEWAY_HTTP_PORT"
 GATEWAY_HTTP_TLS_ENV = "GATEWAY_HTTP_TLS"
 GATEWAY_HTTP_URL_ENV = "GATEWAY_HTTP_URL"
 FUNCTION_CONCURRENCY_ENV = "FUNCTION_CONCURRENCY"
+FUNCTION_IN_PROCESS_ENV = "FUNCTION_IN_PROCESS"
 GATEWAY_TOKEN_ENV = "GATEWAY_TOKEN"
 HOT_RELOAD_ENV = "HOT_RELOAD"
 HOT_RELOAD_DIR_ENV = "HOT_RELOAD_DIR"
@@ -60,6 +62,7 @@ class ExecutionEnvVar(StringEnum):
     GatewayHttpTls = GATEWAY_HTTP_TLS_ENV
     GatewayHttpUrl = GATEWAY_HTTP_URL_ENV
     FunctionConcurrency = FUNCTION_CONCURRENCY_ENV
+    FunctionInProcess = FUNCTION_IN_PROCESS_ENV
     GatewayToken = GATEWAY_TOKEN_ENV
     HotReload = HOT_RELOAD_ENV
     HotReloadDir = HOT_RELOAD_DIR_ENV
@@ -79,20 +82,42 @@ def truthy_env_value(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY_ENV_VALUES
 
 
+_IMPORTING_USER_CODE: ContextVar[bool] = ContextVar(
+    "lazycloud_importing_user_code",
+    default=False,
+)
+
+
 @contextmanager
-def importing_user_code(
-    env: MutableMapping[str, str] | None = None,
-) -> Iterator[None]:
-    source = env if env is not None else os.environ
-    previous = source.get(IMPORTING_USER_CODE_ENV)
-    source[IMPORTING_USER_CODE_ENV] = "true"
+def importing_user_code() -> Iterator[None]:
+    """Mark the enclosed import as user code being loaded, not run.
+
+    Held per context rather than in the environment. A container that imports a
+    handler while another invocation is mid-flight would otherwise flip a
+    process-wide flag under it, and the SDK reads that flag to decide whether a
+    call is a real invocation or a decorator firing during import — so the wrong
+    answer there turns a user's call into a silent no-op.
+    """
+
+    token = _IMPORTING_USER_CODE.set(True)
     try:
         yield
     finally:
-        if previous is None:
-            source.pop(IMPORTING_USER_CODE_ENV, None)
-        else:
-            source[IMPORTING_USER_CODE_ENV] = previous
+        _IMPORTING_USER_CODE.reset(token)
+
+
+def importing_user_code_now(env: Mapping[str, str] | None = None) -> bool:
+    """Whether user code is being imported in this context.
+
+    The environment is still consulted, because a process launched purely to
+    import — the CLI resolving a handler reference — says so there and never
+    enters the context manager.
+    """
+
+    if _IMPORTING_USER_CODE.get():
+        return True
+    source = env if env is not None else os.environ
+    return truthy_env_value(source.get(IMPORTING_USER_CODE_ENV))
 
 
 def no_gateway_origin() -> str:
@@ -115,6 +140,7 @@ __all__ = [
     "ENDPOINT_SERVE_LOCK_ENV",
     "ENDPOINT_WORKERS_ENV",
     "FUNCTION_CONCURRENCY_ENV",
+    "FUNCTION_IN_PROCESS_ENV",
     "GATEWAY_GRPC_HOST_ENV",
     "GATEWAY_GRPC_PORT_ENV",
     "GATEWAY_GRPC_TLS_ENV",
@@ -141,6 +167,7 @@ __all__ = [
     "WORKSPACE_NAME_ENV",
     "ExecutionEnvVar",
     "importing_user_code",
+    "importing_user_code_now",
     "no_gateway_origin",
     "truthy_env_value",
 ]

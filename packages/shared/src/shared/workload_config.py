@@ -55,6 +55,7 @@ class StubRuntimeConfig(ContractModel):
     retries: int = Field(default=0, ge=0)
     keep_warm: int = Field(default=0, ge=-1)
     concurrency: int = Field(default=1, gt=0)
+    in_process: bool = False
     workers: int = Field(default=0, ge=0)
     checkpoint_enabled: bool = False
     checkpoint_readiness_path: str = ""

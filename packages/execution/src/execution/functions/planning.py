@@ -11,6 +11,7 @@ from shared.env import (
     CHECKPOINT_ENABLED_ENV,
     CONTAINER_ID_ENV,
     FUNCTION_CONCURRENCY_ENV,
+    FUNCTION_IN_PROCESS_ENV,
     GATEWAY_TOKEN_ENV,
     KEEP_WARM_SECONDS_ENV,
     LIFECYCLE_HOOKS_ENV,
@@ -62,6 +63,7 @@ class FunctionContainerEnvVar(StrEnum):
     AppId = APP_ID_ENV
     LifecycleHooks = LIFECYCLE_HOOKS_ENV
     CheckpointEnabled = CHECKPOINT_ENABLED_ENV
+    InProcess = FUNCTION_IN_PROCESS_ENV
 
 
 class FunctionContainerStartRequest(ContractModel):
@@ -72,6 +74,7 @@ class FunctionContainerStartRequest(ContractModel):
     handler: str
     keep_warm_seconds: int = 0
     concurrency: int = Field(default=1, gt=0)
+    in_process: bool = False
     gateway_token: str = ""
     container_id: str
     python_executable: ManagedPythonExecutable = FUNCTION_DEFAULT_PYTHON_EXECUTABLE
@@ -276,6 +279,10 @@ def plan_function_container_start(
             # would be a guess that the claim then contradicts.
             f"{FunctionContainerEnvVar.KeepWarmSeconds.value}={request.keep_warm_seconds}",
             f"{FunctionContainerEnvVar.Concurrency.value}={request.concurrency}",
+            (
+                f"{FunctionContainerEnvVar.InProcess.value}="
+                f"{str(request.in_process).lower()}"
+            ),
             f"{FunctionContainerEnvVar.Handler.value}={request.handler}",
             f"{FunctionContainerEnvVar.GatewayToken.value}={request.gateway_token}",
             f"{FunctionContainerEnvVar.StubId.value}={request.stub_id}",

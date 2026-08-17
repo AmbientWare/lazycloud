@@ -1,6 +1,7 @@
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.gpu import GpuType
 from shared.image_building.authoring import LinuxArchitecture, PythonVersion
+from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
 
 from lazycloud import env, schema
@@ -71,6 +72,8 @@ __all__ = [
     "Task",
     "TaskPolicy",
     "Volume",
+    "current_root_task_id",
+    "current_task_id",
     "env",
     "experimental",
     "schema",

@@ -159,6 +159,7 @@ def build_resource_metadata(
     autoscaler: QueueDepthAutoscaler | Mapping[str, JsonValue] | None = None,
     task_policy: TaskPolicy | Mapping[str, JsonValue] | None = None,
     checkpoint_enabled: bool | None = None,
+    in_process: bool | None = None,
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     tcp: bool | None = None,
@@ -176,6 +177,7 @@ def build_resource_metadata(
     _set_if_value(metadata, "callback_url", callback_url)
     _set_if_value(metadata, "authorized", authorized)
     _set_if_value(metadata, "checkpoint_enabled", checkpoint_enabled)
+    _set_if_value(metadata, "in_process", in_process)
     _set_if_value(metadata, "tcp", tcp)
     _set_if_value(metadata, "block_network", block_network)
     _set_if_value(metadata, "docker_enabled", docker_enabled)

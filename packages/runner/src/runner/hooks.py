@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 from typing import Protocol
 
 from foundation.handler_loading import load_callable
@@ -12,6 +11,7 @@ from shared.lifecycle import (
 )
 
 from runner.invocation import invoke_handler
+from runner.runtime import routed_output
 
 
 class HookLogger(Protocol):
@@ -56,7 +56,9 @@ def run_lifecycle_hooks(
                 continue
             stdout = _HookLogStream("stdout", log)
             stderr = _HookLogStream("stderr", log)
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            # Routed per context rather than swapped process-wide: task hooks
+            # run inside an invocation, and several invocations run at once.
+            with routed_output(stdout, stderr):
                 invoke_handler(callback, context)
             stdout.flush()
             stderr.flush()
