@@ -27,8 +27,6 @@ from shared.http.endpoints import (
     StartEndpointServeResponse,
 )
 from shared.http.functions import (
-    FunctionCronRequest,
-    FunctionCronResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -102,9 +100,6 @@ class RecordingFunctionService:
 
     def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:
         raise AssertionError(f"unexpected function_monitor call: {request}")
-
-    def function_cron(self, request: FunctionCronRequest) -> FunctionCronResponse:
-        raise AssertionError(f"unexpected function_cron call: {request}")
 
 
 class RecordingEndpointService:

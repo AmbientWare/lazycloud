@@ -86,10 +86,32 @@ class CronJobRecord(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+def schedule_payload(
+    *,
+    stub_id: str,
+    workspace_name: str,
+    deployment_id: str,
+    cron: str,
+) -> dict[str, JsonValue]:
+    """What the scheduler reads back when the schedule fires.
+
+    The stub id is the load-bearing part: a schedule names a deployment, and the
+    tick has to reach the stub that deployment published to invoke it.
+    """
+
+    return {
+        "stub_id": stub_id,
+        "workspace_name": workspace_name,
+        "deployment_id": deployment_id,
+        "cron": cron,
+    }
+
+
 __all__ = [
     "CRON_ALIASES",
     "CronJobRecord",
     "CronJobRun",
     "next_cron_run",
     "normalize_cron_expression",
+    "schedule_payload",
 ]

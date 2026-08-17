@@ -42,7 +42,6 @@ from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
-    FunctionCronResponse,
     FunctionInvokeResponse,
 )
 from shared.http.gateway import (
@@ -90,7 +89,6 @@ LIFECYCLE_HOOK_TWO_REF = f"{lifecycle_hook_two.__module__}:lifecycle_hook_two"
 class FakeFunctionClient:
     invocations: list[tuple[str, bytes, bool]] = field(default_factory=list)
     contexts: list[tuple[str, str, list[FunctionCallDependency]]] = field(default_factory=list)
-    cron_jobs: list[tuple[str, str, str]] = field(default_factory=list)
     fail: bool = False
 
     def invoke(
@@ -121,10 +119,6 @@ class FakeFunctionClient:
             result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes({"ok": True})),
             done=True,
         )
-
-    def cron(self, stub_id: str, cron: str, deployment_id: str) -> FunctionCronResponse:
-        self.cron_jobs.append((stub_id, cron, deployment_id))
-        return FunctionCronResponse(cron_job_id="cron-1")
 
 
 @dataclass
@@ -492,10 +486,12 @@ def test_cron_decorates_raw_callable_and_registers_after_deploy(
     assert spec.name == "cron-task"
     assert spec.cron == "*/5 * * * *"
     assert deployment_client.stub_requests[0].stub_type == "cron-job"
+    # The schedule travels with the stub the deploy is built from, so the server
+    # can create it in the same call rather than being told in a second one.
+    assert deployment_client.stub_requests[0].cron == "*/5 * * * *"
     assert deployment_client.deploy_requests[0].stub_id == "stub-cron-job"
     assert deployment_client.deploy_requests[0].name == "nightly-task"
-    assert response.cron_job_id == "cron-1"
-    assert function_client.cron_jobs == [("stub-cron-job", "*/5 * * * *", "dep-stub-cron-job")]
+    assert response.deployment_id == "dep-stub-cron-job"
 
 
 def test_cron_rejects_decorated_function_binding_helper(

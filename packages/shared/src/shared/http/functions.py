@@ -149,16 +149,6 @@ class FunctionMonitorResponse(HttpModel):
     timed_out: bool = False
 
 
-class FunctionCronRequest(HttpModel):
-    stub_id: str
-    cron: str
-    deployment_id: str
-
-
-class FunctionCronResponse(HttpModel):
-    cron_job_id: str = ""
-
-
 __all__ = [
     "FUNCTION_CALL_REF_MARKER",
     "FunctionCallDependency",
@@ -167,8 +157,6 @@ __all__ = [
     "FunctionClaimRequest",
     "FunctionClaimResponse",
     "FunctionClaimedTask",
-    "FunctionCronRequest",
-    "FunctionCronResponse",
     "FunctionInvokeBody",
     "FunctionInvokeResponse",
     "FunctionMonitorRequest",

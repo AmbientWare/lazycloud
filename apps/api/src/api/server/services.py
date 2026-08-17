@@ -177,8 +177,6 @@ from shared.http.endpoints import (
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionCronRequest,
-    FunctionCronResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -310,8 +308,6 @@ class FunctionApiService(Protocol):
     def function_set_result(self, request: FunctionSetResultBody) -> FunctionSetResultResponse: ...
 
     def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse: ...
-
-    def function_cron(self, request: FunctionCronRequest) -> FunctionCronResponse: ...
 
 
 class EndpointApiService(Protocol):
@@ -884,6 +880,10 @@ class ApiServices(ApiServiceCore):
             DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
+        cron_jobs = CronJobService(
+            context,
+            workspace_changes=workspace_changes,
+        )
         deployments = DeploymentService(
             context,
             events,
@@ -891,6 +891,7 @@ class ApiServices(ApiServiceCore):
             DeploymentRegistrationService(apps, control_plane),
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
+            schedules=cron_jobs,
         )
         resolved_image_build_executor = image_build_executor or _image_build_executor(
             image_build_execution_config,
@@ -932,11 +933,6 @@ class ApiServices(ApiServiceCore):
             context=context,
             provider_factory=CloudflareSettings().provider,
             platform_base_domain=gateway_config.public_base_domain,
-        )
-        cron_jobs = CronJobService(
-            context,
-            deployments,
-            workspace_changes=workspace_changes,
         )
         collections = CollectionService(context)
         volumes = VolumeService(context, workspace_changes=workspace_changes)

@@ -172,6 +172,11 @@ class StubConfig(ContractModel):
     reconstructs the same claim the spec declared."""
 
     methods: list[str] = Field(default_factory=list)
+    cron: str | None = None
+    """Schedule this resource fires on, carried for the same reason `domain` is:
+    a deploy built from a stub has to reconstruct what the spec declared, and the
+    schedule is declared once and then persisted with everything else."""
+
     command: list[str] = Field(default_factory=list)
     ports: dict[str, int] = Field(default_factory=dict)
     volumes: list[StubVolumeConfig] = Field(default_factory=list)

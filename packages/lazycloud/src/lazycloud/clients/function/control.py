@@ -10,8 +10,6 @@ from shared.function_payloads import FunctionInvocationPayload, FunctionResultPa
 from shared.http.errors import HttpResponseDecodeError
 from shared.http.functions import (
     FunctionCallDependency,
-    FunctionCronRequest,
-    FunctionCronResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -118,24 +116,6 @@ class FunctionControlClient:
                     task_id=task_id,
                     stub_id=stub_id,
                     container_id=container_id,
-                ).model_dump(mode="json"),
-            ),
-        )
-
-    def cron(
-        self,
-        stub_id: str,
-        cron: str,
-        deployment_id: str,
-    ) -> FunctionCronResponse:
-        return _validate_response(
-            FunctionCronResponse,
-            self.channel.post(
-                self._scoped("/api/v1/functions/cron"),
-                FunctionCronRequest(
-                    stub_id=stub_id,
-                    cron=cron,
-                    deployment_id=deployment_id,
                 ).model_dump(mode="json"),
             ),
         )

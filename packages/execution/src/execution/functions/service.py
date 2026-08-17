@@ -46,8 +46,6 @@ from shared.http.functions import (
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionCronRequest,
-    FunctionCronResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -72,7 +70,6 @@ from execution.functions.planning import (
     function_cancellation_decision,
     function_container_start_allowed,
     plan_function_container_start,
-    plan_function_cron,
     plan_function_invoke,
     plan_function_monitor,
 )
@@ -1138,35 +1135,6 @@ class FunctionControlService:
             complete=plan.complete,
             timed_out=plan.timed_out,
         )
-
-    def function_cron(self, request: FunctionCronRequest) -> FunctionCronResponse:
-        stub = self.control_plane.get_stub(request.stub_id)
-        deployment = self.services.deployments.get(request.deployment_id)
-        if (
-            stub.kind not in FUNCTION_LIKE_STUB_KINDS
-            or stub.deployment_id != deployment.id
-            or deployment.stub_id != stub.id
-        ):
-            msg = "cron schedule must reference its function-like deployment stub"
-            raise InvalidInputError(msg)
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
-        plan = plan_function_cron(
-            planning.FunctionCronRequest(
-                workspace_name=workspace.name,
-                stub_id=stub.id,
-                deployment_id=deployment.id,
-                deployment_name=deployment.name,
-                cron=request.cron,
-            )
-        )
-        record = self.services.cron_jobs.create(
-            plan.job_name,
-            request.cron,
-            deployment.id,
-            workspace=stub.workspace_id,
-            payload=plan.payload,
-        )
-        return FunctionCronResponse(cron_job_id=record.name)
 
     def _task_workspace_id(self, task: Task) -> str:
         if not task.workspace_id:

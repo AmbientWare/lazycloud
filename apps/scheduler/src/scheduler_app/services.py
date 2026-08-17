@@ -343,12 +343,17 @@ class SchedulerAppServices:
             DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
+        cron_jobs = CronJobService(
+            context,
+            workspace_changes=workspace_changes,
+        )
         deployments = DeploymentService(
             context,
             events,
             compute_policies,
             DeploymentRegistrationService(apps, control_plane),
             workspace_changes=workspace_changes,
+            schedules=cron_jobs,
         )
         _, tailnet_cleanup = scheduler_tailnet_services(
             context=context,
@@ -363,11 +368,7 @@ class SchedulerAppServices:
             autoscaler_states=AutoscalerStateService(context),
             apps=apps,
             deployments=deployments,
-            cron_jobs=CronJobService(
-                context,
-                deployments,
-                workspace_changes=workspace_changes,
-            ),
+            cron_jobs=cron_jobs,
             collections=CollectionService(context),
             containers=containers,
             container_shutdowns=container_shutdowns,

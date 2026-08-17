@@ -343,6 +343,7 @@ def _create_cron_function(
             kind=DeploymentKind.CronJob,
             handler="module:func",
             image=ImageSpec(python_version="3.11"),
+            cron="every 1m",
         )
     )
     stub = next(
@@ -350,17 +351,10 @@ def _create_cron_function(
         for item in ControlPlaneService(isolated_services.context).list_stubs()
         if item.deployment_id == deployment.id
     )
-    cron_job = isolated_services.cron_jobs.create(
-        f"{deployment.name}-{stub.id}",
-        "every 1m",
-        deployment.id,
-        payload={
-            "stub_id": stub.id,
-            "workspace_name": "default",
-            "deployment_id": deployment.id,
-            "cron": "every 1m",
-        },
-    )
+    # Declaring the schedule is what creates it; there is no second call.
+    schedules = isolated_services.cron_jobs.list()
+    assert len(schedules) == 1
+    cron_job = schedules[0]
     assert cron_job.cron == "*/1 * * * *"
     assert cron_job.next_run_at is not None
     return deployment, stub, cron_job
@@ -417,30 +411,18 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=container_scheduler),
     )
-    deployment = isolated_services.deployments.deploy(
+    isolated_services.deployments.deploy(
         DeploymentSpec(
             name="retrying-cron",
             kind=DeploymentKind.CronJob,
             handler="module:func",
+            cron="every 1m",
             retry_policy=RetryPolicy.from_retries(1),
         )
     )
-    stub = next(
-        item
-        for item in ControlPlaneService(isolated_services.context).list_stubs()
-        if item.deployment_id == deployment.id
-    )
-    cron_job = isolated_services.cron_jobs.create(
-        f"{deployment.name}-{stub.id}",
-        "every 1m",
-        deployment.id,
-        payload={
-            "stub_id": stub.id,
-            "workspace_name": "default",
-            "deployment_id": deployment.id,
-            "cron": "every 1m",
-        },
-    )
+    schedules = isolated_services.cron_jobs.list()
+    assert len(schedules) == 1
+    cron_job = schedules[0]
     assert cron_job.next_run_at is not None
 
     runs = _cron_scheduler(isolated_services, real_redis_actors.client()).tick(
@@ -577,25 +559,13 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
             name="pausable-cron",
             kind=DeploymentKind.CronJob,
             handler="module:func",
+            cron="every 1m",
             retry_policy=RetryPolicy.from_retries(1, delay_seconds=10),
         )
     )
-    stub = next(
-        item
-        for item in ControlPlaneService(isolated_services.context).list_stubs()
-        if item.deployment_id == deployment.id
-    )
-    cron_job = isolated_services.cron_jobs.create(
-        f"{deployment.name}-{stub.id}",
-        "every 1m",
-        deployment.id,
-        payload={
-            "stub_id": stub.id,
-            "workspace_name": "default",
-            "deployment_id": deployment.id,
-            "cron": "every 1m",
-        },
-    )
+    schedules = isolated_services.cron_jobs.list()
+    assert len(schedules) == 1
+    cron_job = schedules[0]
     assert cron_job.next_run_at is not None
 
     runs = _cron_scheduler(isolated_services, real_redis_actors.client()).tick(
@@ -688,13 +658,24 @@ def test_scheduler_tick_skips_cron_function_when_lock_is_held(
     assert container_scheduler.requests == []
 
 
-def test_new_cron_version_removes_prior_schedule(isolated_services: ApiServices) -> None:
+def test_new_cron_version_takes_over_the_prior_schedule(
+    isolated_services: ApiServices,
+) -> None:
+    """One schedule fires per resource, however many versions it has had.
+
+    Held by the row's key rather than by a sweep: the schedule is named for the
+    deployment's subdomain, which every version of a resource shares, so the
+    newest deploy upserts the same row and the previous version stops firing
+    without anything having to go looking for it.
+    """
+
     first, _first_stub, first_job = _create_cron_function(isolated_services)
     second = isolated_services.deployments.deploy(
         DeploymentSpec(
             name=first.name,
             kind=DeploymentKind.CronJob,
             handler="module:func_v2",
+            cron="0 * * * *",
         )
     )
     second_stub = next(
@@ -702,21 +683,18 @@ def test_new_cron_version_removes_prior_schedule(isolated_services: ApiServices)
         for item in ControlPlaneService(isolated_services.context).list_stubs()
         if item.deployment_id == second.id
     )
-    second_job = isolated_services.cron_jobs.create(
-        f"{second.name}-{second_stub.id}",
-        "0 * * * *",
-        second.id,
-        payload={
-            "stub_id": second_stub.id,
-            "workspace_name": "default",
-            "deployment_id": second.id,
-            "cron": "0 * * * *",
-        },
-    )
 
     jobs = isolated_services.cron_jobs.list()
-    assert [job.name for job in jobs] == [second_job.name]
-    assert first_job.name != second_job.name
+    assert len(jobs) == 1
+    assert jobs[0].name == first_job.name
+    assert jobs[0].deployment_id == second.id
+    assert jobs[0].cron == "0 * * * *"
+    assert jobs[0].payload == {
+        "stub_id": second_stub.id,
+        "workspace_name": "default",
+        "deployment_id": second.id,
+        "cron": "0 * * * *",
+    }
 
 
 def test_inactive_cron_deployment_never_enqueues(
