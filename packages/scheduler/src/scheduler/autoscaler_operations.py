@@ -199,7 +199,10 @@ def _target_kind_for_stub(stub: StubRecord) -> AutoscalerTargetKind:
         return AutoscalerTargetKind.Function
     if stub.kind in {StubKind.Endpoint, StubKind.Asgi}:
         return AutoscalerTargetKind.Endpoint
-    if stub.kind is StubKind.Pod:
+    # A sandbox is scaled by the pod workload on every tick, so refusing to name
+    # its kind here made the manual reconcile the one path that denied what the
+    # loop was already doing.
+    if stub.kind in {StubKind.Pod, StubKind.Sandbox}:
         return AutoscalerTargetKind.Pod
     msg = f"stub is not autoscaled: {stub.id}"
     raise ValueError(msg)
