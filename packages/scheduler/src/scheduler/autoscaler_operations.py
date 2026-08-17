@@ -13,12 +13,10 @@ from scheduler.autoscaling import (
     ENDPOINT_AUTOSCALER_SOURCE,
     FUNCTION_AUTOSCALER_SOURCE,
     POD_AUTOSCALER_SOURCE,
-    TASK_QUEUE_AUTOSCALER_SOURCE,
     EndpointAutoscalingService,
     FunctionAutoscalingService,
     PodAutoscalingService,
     SchedulerServices,
-    TaskQueueAutoscalingService,
 )
 
 
@@ -50,7 +48,6 @@ class AutoscalerReconcileResponse(ContractModel):
 @dataclass(slots=True)
 class AutoscalerOperationsService:
     services: SchedulerServices
-    task_queue_autoscaler: TaskQueueAutoscalingService
     function_autoscaler: FunctionAutoscalingService
     endpoint_autoscaler: EndpointAutoscalingService
     pod_autoscaler: PodAutoscalingService
@@ -181,16 +178,9 @@ class AutoscalerOperationsService:
     def _service_for_kind(
         self,
         target_kind: AutoscalerTargetKind,
-    ) -> (
-        TaskQueueAutoscalingService
-        | FunctionAutoscalingService
-        | EndpointAutoscalingService
-        | PodAutoscalingService
-    ):
+    ) -> FunctionAutoscalingService | EndpointAutoscalingService | PodAutoscalingService:
         if target_kind is AutoscalerTargetKind.Function:
             return self.function_autoscaler
-        if target_kind is AutoscalerTargetKind.TaskQueue:
-            return self.task_queue_autoscaler
         if target_kind is AutoscalerTargetKind.Endpoint:
             return self.endpoint_autoscaler
         return self.pod_autoscaler
@@ -204,8 +194,6 @@ class AutoscalerOperationsService:
 def _source_for_kind(target_kind: AutoscalerTargetKind) -> str:
     if target_kind is AutoscalerTargetKind.Function:
         return FUNCTION_AUTOSCALER_SOURCE
-    if target_kind is AutoscalerTargetKind.TaskQueue:
-        return TASK_QUEUE_AUTOSCALER_SOURCE
     if target_kind is AutoscalerTargetKind.Endpoint:
         return ENDPOINT_AUTOSCALER_SOURCE
     return POD_AUTOSCALER_SOURCE
@@ -214,8 +202,6 @@ def _source_for_kind(target_kind: AutoscalerTargetKind) -> str:
 def _target_kind_for_stub(stub: StubRecord) -> AutoscalerTargetKind:
     if stub.kind is StubKind.Function:
         return AutoscalerTargetKind.Function
-    if stub.kind is StubKind.TaskQueue:
-        return AutoscalerTargetKind.TaskQueue
     if stub.kind in {StubKind.Endpoint, StubKind.Asgi}:
         return AutoscalerTargetKind.Endpoint
     if stub.kind is StubKind.Pod:

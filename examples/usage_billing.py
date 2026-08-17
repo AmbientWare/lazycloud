@@ -46,17 +46,15 @@ def tracked_endpoint(value: int = 1) -> dict[str, int]:
     return {"value": value + 1}
 
 
-@app.task_queue(
-    name="tracked-task-queue",
+@app.function(
+    name="tracked-background",
     image=image,
-    authorized=False,
-    workers=1,
-    keep_warm_seconds=1,
+    concurrency=1,
 )
-def tracked_task_queue(value: int = 1) -> dict[str, int]:
+def tracked_background(value: int = 1) -> dict[str, int]:
     _exercise_disk_io(value)
     time.sleep(1.2)
     return {"value": value + 3}
 
 
-__all__ = ["app", "tracked_endpoint", "tracked_function", "tracked_task_queue"]
+__all__ = ["app", "tracked_background", "tracked_endpoint", "tracked_function"]

@@ -31,7 +31,6 @@ CHECKPOINT_RUNNER_KINDS = {
     WorkerStartupKind.Endpoint,
     WorkerStartupKind.Asgi,
     WorkerStartupKind.Function,
-    WorkerStartupKind.TaskQueue,
 }
 CHECKPOINT_HTTP_KINDS = {WorkerStartupKind.Pod, WorkerStartupKind.PodRun}
 AUTOMATIC_CHECKPOINT_CREATION_GRACE_SECONDS = 30 * 60

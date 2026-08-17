@@ -758,7 +758,6 @@ class App:
 
         return decorate
 
-
     def pod(
         self,
         *,
@@ -1472,7 +1471,6 @@ def _asgi_options(
         "pool": pool,
         "provider": provider,
     }
-
 
 
 def _pod_options(

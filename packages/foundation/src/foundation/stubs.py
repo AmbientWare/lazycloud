@@ -8,7 +8,6 @@ class StubScopedContainerPrefix(StringEnum):
     Sandbox = "sandbox"
     Pod = "pod"
     Endpoint = "endpoint"
-    TaskQueue = "taskqueue"
 
 
 class StubScopedContainerIdParts(ContractModel):

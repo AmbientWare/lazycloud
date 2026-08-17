@@ -50,8 +50,6 @@ from scheduler.autoscaling import (
     PodAutoscaleResult,
     PodAutoscalingService,
     PodControl,
-    TaskQueueAutoscaleResult,
-    TaskQueueAutoscalingService,
 )
 from scheduler.capacity_reservations import (
     CapacityProvisioningReservation,
@@ -383,7 +381,6 @@ class CronJobRunDraft(ContractModel):
 class SchedulerWorkloadControls:
     containers: SchedulerContainerRequestService | None = None
     dispatch_wake: WakeSignalWaiter | None = None
-    task_queues: TaskQueueAutoscalingService | None = None
     function_autoscaler: FunctionAutoscalingService | None = None
     endpoints: EndpointAutoscalingService | None = None
     pods: PodAutoscalingService | None = None
@@ -514,14 +511,6 @@ class Scheduler:
         return agent_pools
 
     @property
-    def task_queue_autoscaling_service(self) -> TaskQueueAutoscalingService:
-        task_queues = self.workloads.task_queues
-        if task_queues is None:
-            msg = "scheduler task queue autoscaler was not injected"
-            raise RuntimeError(msg)
-        return task_queues
-
-    @property
     def function_autoscaling_service(self) -> FunctionAutoscalingService:
         functions = self.workloads.function_autoscaler
         if functions is None:
@@ -637,14 +626,6 @@ class Scheduler:
             return []
         return self.agent_pool_service.reconcile(configs, now=now)
 
-    def reconcile_task_queues(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[TaskQueueAutoscaleResult]:
-        return self.task_queue_autoscaling_service.reconcile(now=now, limit=limit)
-
     def reconcile_functions(
         self,
         *,
@@ -726,11 +707,6 @@ class Scheduler:
         meter_events_pruned = self._best_effort_prune_meter_events(now=now)
         expired_pods = self._best_effort_expire_pods(now=now) if include_containers else []
         worker_cleanups = self._best_effort_cleanup_workers(now=now) if include_containers else []
-        task_queue_autoscaling = (
-            self._best_effort_reconcile_task_queues(now=now, limit=container_limit)
-            if include_containers
-            else []
-        )
         function_autoscaling = (
             self._best_effort_reconcile_functions(now=now, limit=container_limit)
             if include_containers
@@ -796,7 +772,6 @@ class Scheduler:
             cron_job_runs=self.tick(now=now) if include_cron_jobs else [],
             function_retries=function_retries,
             agent_pool_reconciliations=agent_pool_reconciliations,
-            task_queue_autoscaling=task_queue_autoscaling,
             function_autoscaling=function_autoscaling,
             endpoint_autoscaling=endpoint_autoscaling,
             pod_autoscaling=pod_autoscaling,
@@ -1261,18 +1236,6 @@ class Scheduler:
             LOGGER.exception("scheduler agent pool reconciliation failed")
             return []
 
-    def _best_effort_reconcile_task_queues(
-        self,
-        *,
-        now: datetime | None,
-        limit: int,
-    ) -> list[TaskQueueAutoscaleResult]:
-        try:
-            return self.reconcile_task_queues(now=now, limit=limit)
-        except Exception:
-            LOGGER.exception("scheduler task queue autoscaling failed")
-            return []
-
     def _best_effort_reconcile_functions(
         self,
         *,
@@ -1669,7 +1632,6 @@ class SchedulerRunResult(ContractModel):
     cron_job_runs: list[CronJobRun] = Field(default_factory=list)
     function_retries: list[Task] = Field(default_factory=list)
     agent_pool_reconciliations: list[AgentPoolReconcileResult] = Field(default_factory=list)
-    task_queue_autoscaling: list[TaskQueueAutoscaleResult] = Field(default_factory=list)
     function_autoscaling: list[FunctionAutoscaleResult] = Field(default_factory=list)
     endpoint_autoscaling: list[EndpointAutoscaleResult] = Field(default_factory=list)
     pod_autoscaling: list[PodAutoscaleResult] = Field(default_factory=list)

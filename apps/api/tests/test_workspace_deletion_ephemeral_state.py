@@ -23,7 +23,6 @@ _WORKLOAD_KEY_ROOTS: tuple[tuple[str, ...], ...] = (
     ("function",),
     ("pod",),
     ("task",),
-    ("taskqueue",),
     ("scheduler", "serve", "lock"),
 )
 

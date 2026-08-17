@@ -20,7 +20,7 @@ import {
 } from "./playground-form";
 
 /**
- * In-UI invoke for a deployed function/endpoint/task queue. The form is built
+ * In-UI invoke for a deployed function or endpoint. The form is built
  * from the deployment's recorded client contract (the same schema source
  * `lazycloud client get` uses); flat primitive schemas get typed inputs, anything
  * richer gets a raw JSON editor. Invoke fires the real invoke URL with the
@@ -265,7 +265,7 @@ function InvokeOutcome({
     );
   }
 
-  // Function and task-queue invokes create a task; link it.
+  // A function invoke creates a task; link it.
   if (result.taskId && kind !== "endpoint") {
     return (
       <div className="flex flex-wrap items-center gap-2">

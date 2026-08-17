@@ -73,7 +73,7 @@ def flaky_ingest(url: str) -> int: ...
   Functions intentionally have no `workers`, `keep_warm`, or `autoscaler`
   options — each invocation is scheduled as an independent task. Warm worker
   pools and queue-depth autoscaling belong to
-  [endpoints](/concepts/endpoints) and [task queues](/concepts/task-queues).
+  [endpoints](/concepts/endpoints).
 </Note>
 
 ## Secrets and environment
@@ -101,7 +101,7 @@ def load_model(name: str) -> str: ...
 
 ## Lifecycle hooks
 
-Functions (and task queues and cron jobs) accept hooks that the workload
+Functions (and cron jobs) accept hooks that the workload
 runner invokes at each stage of a task's life: `on_start`, `on_running`,
 `on_success`, `on_error`, `on_retry`, `on_failure`, `on_cancelled`,
 `on_timeout`, and `on_finish`. A hook is a callable, a decorated SDK object,

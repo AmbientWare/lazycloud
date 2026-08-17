@@ -55,7 +55,6 @@ from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalRepository, RedisSignalService
 from execution.task_rerun import TaskRerunService
-from execution.taskqueues.service import TaskQueueControlService
 from execution.tasks import TaskService
 from execution.volumes.control import VolumeControlService
 from execution.volumes.records import VolumeService
@@ -140,7 +139,6 @@ from scheduler.autoscaling import (
     EndpointAutoscalingService,
     FunctionAutoscalingService,
     PodAutoscalingService,
-    TaskQueueAutoscalingService,
 )
 from scheduler.capacity_reservations import (
     CapacityReservationService,
@@ -186,18 +184,6 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
-)
-from shared.http.taskqueues import (
-    StartTaskQueueServeRequest,
-    StartTaskQueueServeResponse,
-    TaskQueueCompleteBody,
-    TaskQueueCompleteResponse,
-    TaskQueueMonitorRequest,
-    TaskQueueMonitorResponse,
-    TaskQueuePopRequest,
-    TaskQueuePopResponse,
-    TaskQueuePutResponse,
-    TaskQueueStateResponse,
 )
 from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
 from shared.payments import PaymentProvider
@@ -378,29 +364,6 @@ class EndpointApiService(Protocol):
     ) -> None: ...
 
 
-class TaskQueueApiService(Protocol):
-    def task_queue_put(self, stub_id: str, payload: bytes) -> TaskQueuePutResponse: ...
-
-    def task_queue_pop(self, request: TaskQueuePopRequest) -> TaskQueuePopResponse: ...
-
-    def task_queue_monitor(
-        self,
-        request: TaskQueueMonitorRequest,
-    ) -> TaskQueueMonitorResponse: ...
-
-    def task_queue_complete(
-        self,
-        request: TaskQueueCompleteBody,
-    ) -> TaskQueueCompleteResponse: ...
-
-    def task_queue_state(self, stub_id: str) -> TaskQueueStateResponse: ...
-
-    def start_task_queue_serve(
-        self,
-        request: StartTaskQueueServeRequest,
-    ) -> StartTaskQueueServeResponse: ...
-
-
 @dataclass(frozen=True, slots=True)
 class ApiSchedulerWorkloadControl:
     control_plane: ControlPlaneService
@@ -555,7 +518,6 @@ class ApiServices(ApiServiceCore):
     pod_service: PodControlService
     shell_service: ShellControlService
     volume_service: VolumeControlService
-    taskqueue_service: TaskQueueApiService
     worker_repository_service: WorkerRepositoryService
     provider_node_enrollment_service: ProviderNodeEnrollmentService | None
     machine_lifecycle_service: MachineLifecycleService
@@ -619,7 +581,6 @@ class ApiServices(ApiServiceCore):
         pod_service: PodControlService | None = None,
         shell_service: ShellControlService | None = None,
         volume_service: VolumeControlService | None = None,
-        taskqueue_service: TaskQueueApiService | None = None,
         worker_repository_service: WorkerRepositoryService | None = None,
         owned_resources: tuple[ApiOwnedResource, ...] = (),
     ) -> ApiServices:
@@ -1074,7 +1035,6 @@ class ApiServices(ApiServiceCore):
             pod_service=pod_service,
             shell_service=shell_service,
             volume_service=volume_service,
-            taskqueue_service=taskqueue_service,
             worker_repository_service=worker_repository_service,
         )
 
@@ -1092,7 +1052,6 @@ class ApiServices(ApiServiceCore):
         pod_service: PodControlService | None = None,
         shell_service: ShellControlService | None = None,
         volume_service: VolumeControlService | None = None,
-        taskqueue_service: TaskQueueApiService | None = None,
         worker_repository_service: WorkerRepositoryService | None = None,
     ) -> ApiServices:
         return _compose_api_services(
@@ -1120,9 +1079,6 @@ class ApiServices(ApiServiceCore):
             pod_service=pod_service if pod_service is not None else self.pod_service,
             shell_service=shell_service if shell_service is not None else self.shell_service,
             volume_service=(volume_service if volume_service is not None else self.volume_service),
-            taskqueue_service=(
-                taskqueue_service if taskqueue_service is not None else self.taskqueue_service
-            ),
             worker_repository_service=(
                 worker_repository_service
                 if worker_repository_service is not None
@@ -1191,7 +1147,6 @@ def _compose_api_services(
     pod_service: PodControlService | None,
     shell_service: ShellControlService | None,
     volume_service: VolumeControlService | None,
-    taskqueue_service: TaskQueueApiService | None,
     worker_repository_service: WorkerRepositoryService | None,
 ) -> ApiServices:
     redis = core.redis()
@@ -1211,11 +1166,6 @@ def _compose_api_services(
         scheduler_containers=scheduler_containers,
         transport_factory=transport_factory,
         service_token=core.container_service_settings.token.get_secret_value(),
-    )
-    taskqueue_control = TaskQueueControlService(
-        core,
-        redis=redis,
-        gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
     )
     endpoint = endpoint_service or EndpointControlService(
         core,
@@ -1267,9 +1217,7 @@ def _compose_api_services(
         core,
         scheduler_workers=scheduler_workers,
         scheduler_containers=scheduler_containers,
-        task_queues=taskqueue_control,
     )
-    taskqueue = taskqueue_service or taskqueue_control
     public_ingress_config = PublicIngressSettings()
     provider_node_enrollment = (
         ProviderNodeEnrollmentService(
@@ -1289,11 +1237,6 @@ def _compose_api_services(
     )
     autoscaler_operations = AutoscalerOperationsService(
         core,
-        task_queue_autoscaler=TaskQueueAutoscalingService(
-            core,
-            redis=redis,
-            task_queues=taskqueue_control,
-        ),
         function_autoscaler=FunctionAutoscalingService(
             core,
             redis=redis,
@@ -1400,7 +1343,6 @@ def _compose_api_services(
         volume_service=(
             volume_service or VolumeControlService(core, filesystem=core.volume_filesystem)
         ),
-        taskqueue_service=taskqueue,
         worker_repository_service=worker_repository,
         provider_node_enrollment_service=provider_node_enrollment,
         machine_lifecycle_service=MachineLifecycleService(
@@ -1514,7 +1456,6 @@ def _worker_repository_service(
     *,
     scheduler_workers: RedisSchedulerWorkerRepository,
     scheduler_containers: RedisSchedulerContainerRepository,
-    task_queues: TaskQueueControlService,
 ) -> WorkerRepositoryService:
     redis = core.redis()
     return WorkerRepositoryService(
@@ -1551,7 +1492,6 @@ def _worker_repository_service(
             preempted_containers=PreemptedContainerService(
                 services=core,
                 stubs=core.control_plane_service,
-                task_queues=task_queues,
             ),
         ),
         redis=redis,

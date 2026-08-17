@@ -22,7 +22,7 @@ EVENT_AGGREGATE_SCAN_LIMIT = 50_000
 DEFAULT_LOG_READ_LIMIT = 100
 MAX_LOG_READ_LIMIT = 1_000
 LOG_PAGE_SCAN_LIMIT = 50_000
-STUB_SCOPED_CONTAINER_PREFIXES = frozenset({"sandbox", "pod", "endpoint", "taskqueue"})
+STUB_SCOPED_CONTAINER_PREFIXES = frozenset({"sandbox", "pod", "endpoint"})
 
 
 def extract_stub_id_from_stub_scoped_container_id(container_id: str) -> str:

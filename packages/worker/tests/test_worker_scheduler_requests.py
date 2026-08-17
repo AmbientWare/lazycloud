@@ -227,7 +227,7 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
 
 
 def test_worker_scheduler_request_processor_backgrounds_long_lived_container() -> None:
-    request = _request(payload={"image_id": "image-1", "startup_kind": "taskqueue"})
+    request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
     workers = _WorkerRepository(requests=[request])
     containers = _ContainerRepository(
         states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}

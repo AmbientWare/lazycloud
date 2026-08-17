@@ -14,7 +14,6 @@ CHECKPOINT_SIGNAL_ROOT = f"/tmp/{NAME}-checkpoint-signals"
 MANAGED_PACKAGE_ROOT = f"/tmp/{NAME}-packages"
 FUNCTION_IMAGE = f"{NAME}-function"
 ENDPOINT_IMAGE = f"{NAME}-endpoint"
-TASK_QUEUE_IMAGE = f"{NAME}-taskqueue"
 POD_IMAGE = f"{NAME}-pod"
 SHELL_IMAGE = f"{NAME}-shell"
 SHELL_LOG_PATH = f"/tmp/{NAME}-shell.log"
@@ -129,7 +128,6 @@ __all__ = [
     "STATE_DIR",
     "TAILSCALED_SOCKET_NAME",
     "TAILSCALED_STATE_NAME",
-    "TASK_QUEUE_IMAGE",
     "WORKER_BOOTSTRAP_IMAGE",
     "WORKER_BOOTSTRAP_PROCESS_NAME",
     "WORKER_BUNDLE_ROOT",

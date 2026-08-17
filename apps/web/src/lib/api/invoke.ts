@@ -4,7 +4,7 @@ import { functionInvokeResponseSchema, type JsonValue } from "@/lib/api/schemas"
 /**
  * Honest result of firing a deployed invoke URL: the real HTTP status and
  * body, plus the created task id when the backend returned one
- * (function/task-queue invokes respond `{task_id: ...}`).
+ * (function invokes respond `{task_id: ...}`).
  */
 export type InvokeResult = {
   status: number;

@@ -12,7 +12,6 @@ from execution.endpoints.service import EndpointControlService, EndpointDispatch
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
 from execution.services import ExecutionServices
-from execution.taskqueues.service import TaskQueueControlService
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
@@ -21,7 +20,6 @@ from scheduler.autoscaling import (
     EndpointAutoscalingService,
     FunctionAutoscalingService,
     PodAutoscalingService,
-    TaskQueueAutoscalingService,
 )
 from scheduler.capacity_controls import SchedulerCapacityControllerProvider
 from scheduler.capacity_reservations import (
@@ -191,11 +189,6 @@ class SchedulerRuntime:
             execution_services,
             gateway_http_url=runtime_origin,
         )
-        task_queue_control = TaskQueueControlService(
-            execution_services,
-            redis=redis_client,
-            gateway_http_url=runtime_origin,
-        )
         endpoint_control = EndpointControlService(
             execution_services,
             gateway_http_url=runtime_origin,
@@ -207,7 +200,6 @@ class SchedulerRuntime:
         preemption_recovery = PreemptedContainerService(
             services=execution_services,
             stubs=scheduler_services.scheduler_workloads,
-            task_queues=task_queue_control,
         )
         capacity_controllers = SchedulerCapacityControllerProvider(
             services=scheduler_services,
@@ -232,11 +224,6 @@ class SchedulerRuntime:
             workloads=SchedulerWorkloadControls(
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
-                task_queues=TaskQueueAutoscalingService(
-                    scheduler_services,
-                    redis=redis_client,
-                    task_queues=task_queue_control,
-                ),
                 function_autoscaler=FunctionAutoscalingService(
                     scheduler_services,
                     redis=redis_client,

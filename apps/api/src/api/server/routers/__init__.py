@@ -16,7 +16,6 @@ from api.server.routers import (
     shells,
     signals,
     system,
-    taskqueues,
     volumes,
     webhooks,
     worker_repository,
@@ -30,7 +29,6 @@ def include_api_routers(app: FastAPI) -> None:
     app.include_router(resource_api.router)
     app.include_router(control_plane.router)
     app.include_router(volumes.router)
-    app.include_router(taskqueues.router)
     app.include_router(endpoints.router)
     app.include_router(functions.router)
     app.include_router(gateway.router)

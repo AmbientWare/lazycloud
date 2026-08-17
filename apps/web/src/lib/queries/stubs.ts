@@ -4,7 +4,6 @@ import { apiRequest, withWorkspace } from "@/lib/api/client";
 import {
   stubListSchema,
   taskLatencyTimeseriesSchema,
-  taskQueueStateSchema,
   type Stub,
 } from "@/lib/api/schemas";
 
@@ -54,14 +53,3 @@ export function taskLatencyQueryOptions(
   });
 }
 
-export function taskQueueStateQueryOptions(workspaceId: string, stubId: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.workloads.taskQueueState(workspaceId, stubId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/taskqueues/${encodeURIComponent(stubId)}/state`, workspaceId),
-        taskQueueStateSchema,
-      ),
-    refetchInterval: 10_000,
-  });
-}

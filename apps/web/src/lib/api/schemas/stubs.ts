@@ -1,14 +1,12 @@
 import { z } from "zod";
 
-// Synced to packages/shared/src/shared/http/stubs.py (StubResponse, StubListResponse)
-// and packages/shared/src/shared/http/taskqueues.py (TaskQueueStateResponse);
+// Synced to packages/shared/src/shared/http/stubs.py (StubResponse, StubListResponse);
 // scoped to the fields the dashboard renders.
 
 export const stubKinds = [
   "function",
   "endpoint",
   "asgi",
-  "task-queue",
   "pod",
   "shell",
   "sandbox",
@@ -46,11 +44,3 @@ export const stubListSchema = z.object({
   stubs: z.array(stubSchema).default([]),
 });
 
-export const taskQueueStateSchema = z.object({
-  queue_depth: z.number(),
-  oldest_pending_at: z.string().nullish(),
-  active_consumers: z.number(),
-  busy_consumers: z.number(),
-  available_consumers: z.number(),
-});
-export type TaskQueueState = z.infer<typeof taskQueueStateSchema>;

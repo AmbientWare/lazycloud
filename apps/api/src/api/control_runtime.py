@@ -51,7 +51,6 @@ from api.server.services import (
     ApiServices,
     EndpointApiService,
     FunctionApiService,
-    TaskQueueApiService,
 )
 from api.server.worker_repository_service import WorkerRepositoryService
 from api.settings import (
@@ -110,7 +109,6 @@ class ControlPlaneRuntime:
         pod_service: PodControlService | None = None,
         shell_service: ShellControlService | None = None,
         volume_service: VolumeControlService | None = None,
-        taskqueue_service: TaskQueueApiService | None = None,
         worker_repository_service: WorkerRepositoryService | None = None,
     ) -> ControlPlaneRuntime:
         overrides = (
@@ -125,7 +123,6 @@ class ControlPlaneRuntime:
             pod_service,
             shell_service,
             volume_service,
-            taskqueue_service,
             worker_repository_service,
         )
         graph = (
@@ -141,7 +138,6 @@ class ControlPlaneRuntime:
                 pod_service=pod_service,
                 shell_service=shell_service,
                 volume_service=volume_service,
-                taskqueue_service=taskqueue_service,
                 worker_repository_service=worker_repository_service,
             )
             if any(override is not None for override in overrides)

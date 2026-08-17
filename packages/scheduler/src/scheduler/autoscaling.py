@@ -16,17 +16,16 @@ from shared.autoscaler_state import (
     autoscaler_state_name,
 )
 from shared.autoscaling import (
+    BacklogAutoscalerConfig,
+    BacklogAutoscalerSample,
+    BacklogScaleDecisionKind,
     PodAutoscalerConfig,
     PodAutoscalerSample,
     PodContainerState,
     PodScaleDecisionKind,
     PodStubType,
-    TaskQueueAutoscalerConfig,
-    TaskQueueAutoscalerSample,
-    TaskQueueScaleDecision,
-    TaskQueueScaleDecisionKind,
+    decide_backlog_scale,
     decide_pod_scale,
-    decide_task_queue_scale,
     function_container_ceiling,
     select_stoppable_pod_containers,
 )
@@ -35,23 +34,17 @@ from shared.contracts import ContractModel
 from shared.errors import DomainError, NotFoundError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
-from shared.http.taskqueues import StartTaskQueueServeRequest, StartTaskQueueServeResponse
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.worker_events import (
     ENDPOINT_SCALE_DECISION_ACTION,
     POD_SCALE_DECISION_ACTION,
-    TASK_QUEUE_SCALE_DECISION_ACTION,
 )
 from shared.workload_config import StubConfig
 from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
     pod_total_connections_key,
-    task_queue_keep_warm_lock_key,
-    task_queue_processing_lock_key,
-    task_queue_running_lock_index_key,
-    task_queue_running_lock_key,
 )
 
 from scheduler.autoscaling_guardrails import (
@@ -62,12 +55,10 @@ from scheduler.services import (
     SchedulerServices,
 )
 
-TASK_QUEUE_AUTOSCALER_LOCK_TTL_SECONDS = 10
-TASK_QUEUE_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
-TASK_QUEUE_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
-TASK_QUEUE_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
+AUTOSCALER_LOCK_TTL_SECONDS = 10
+AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
+AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
 FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
-TASK_QUEUE_AUTOSCALER_SOURCE = "taskqueue.autoscaler"
 ENDPOINT_AUTOSCALER_LOCK_TTL_SECONDS = 10
 ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
 ENDPOINT_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
@@ -89,15 +80,6 @@ class PodContainerStateReader(Protocol):
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
 
 
-class TaskQueueAutoscaleControl(Protocol):
-    def expire_pending_tasks(self, stub_id: str, *, now: datetime | None = None) -> int: ...
-
-    def start_task_queue_serve(
-        self,
-        request: StartTaskQueueServeRequest,
-    ) -> StartTaskQueueServeResponse: ...
-
-
 class EndpointAutoscaleControl(Protocol):
     def start_endpoint_serve(
         self,
@@ -116,34 +98,6 @@ class EndpointAutoscalingDispatchReader(Protocol):
     def active_count(self, stub_id: str) -> int: ...
 
     def list_by_stub(self, stub_id: str) -> list[EndpointAutoscalingDispatchObservation]: ...
-
-
-class TaskQueueAutoscaleAction(ContractModel):
-    container_id: str
-    action: str
-    reason: str = ""
-
-
-class TaskQueueAutoscaleResult(ContractModel):
-    stub_id: str
-    workspace_id: str
-    queue_length: int = 0
-    running_tasks: int = 0
-    current_containers: int = 0
-    pending_containers: int = 0
-    desired_containers: int = 0
-    decision: TaskQueueScaleDecisionKind
-    reason: str
-    active: bool = True
-    lock_acquired: bool = True
-    valid: bool = True
-    failed_containers: list[str] = Field(default_factory=list)
-    actions: list[TaskQueueAutoscaleAction] = Field(default_factory=list)
-    guardrails: dict[str, JsonValue] = Field(default_factory=dict)
-
-    @property
-    def changed(self) -> bool:
-        return bool(self.actions)
 
 
 class EndpointScaleDecisionKind(StrEnum):
@@ -207,7 +161,7 @@ class PodAutoscaleResult(ContractModel):
         return bool(self.actions)
 
 
-type AutoscaleAction = TaskQueueAutoscaleAction | EndpointAutoscaleAction | PodAutoscaleAction
+type AutoscaleAction = FunctionAutoscaleAction | EndpointAutoscaleAction | PodAutoscaleAction
 
 
 class FunctionAutoscaleControl(Protocol):
@@ -229,7 +183,7 @@ class FunctionAutoscaleResult(ContractModel):
     current_containers: int = 0
     pending_containers: int = 0
     desired_containers: int = 0
-    decision: TaskQueueScaleDecisionKind
+    decision: BacklogScaleDecisionKind
     reason: str
     active: bool = True
     lock_acquired: bool = True
@@ -250,14 +204,11 @@ class FunctionAutoscalingService:
     tick, and stops there; everything about depth is decided here, from the
     whole backlog, once per tick per stub.
 
-    Written as a fourth service rather than folded into a shared base. Three of
-    the four are about to become three of three when task queues go, and an
-    abstraction extracted now would be shaped around the member that is leaving.
-
-    The scaling rule itself is reused rather than rewritten: a function's
-    backlog and a task queue's are the same sample — how much is waiting, over
-    how much one container takes, capped by what the stub allows. Two rules
-    would disagree eventually, and the disagreement would show up as a bill.
+    The backlog rule it decides by is `decide_backlog_scale`, shared with
+    nothing else today and deliberately kept general: how much is waiting, over
+    how much one container takes, capped by what the stub allows. Endpoints
+    scale on in-flight dispatches and pods on connections, so what they share
+    with this is the shape of a reconcile pass rather than the sample it reads.
 
     Scaling down is deliberately not done here. A function container already
     ends itself when its keep-warm window passes with no work, so the way to
@@ -291,7 +242,7 @@ class FunctionAutoscalingService:
                     FunctionAutoscaleResult(
                         stub_id=stub.id,
                         workspace_id=stub.workspace_id,
-                        decision=TaskQueueScaleDecisionKind.Hold,
+                        decision=BacklogScaleDecisionKind.Hold,
                         reason="autoscaler lock already held",
                         lock_acquired=False,
                     )
@@ -316,12 +267,12 @@ class FunctionAutoscalingService:
         pending = _pending_container_count(containers)
         queue_length = self.functions.unclaimed_task_count(stub.id)
         config = _function_autoscaler_config(stub.config)
-        sample = TaskQueueAutoscalerSample(
+        sample = BacklogAutoscalerSample(
             queue_length=queue_length,
             running_tasks=0,
             current_containers=current,
         )
-        decision = decide_task_queue_scale(sample, config)
+        decision = decide_backlog_scale(sample, config)
         desired = decision.desired_containers if active else 0
         reason = "deployment inactive" if not active else decision.reason.value
         actions: list[FunctionAutoscaleAction] = []
@@ -384,7 +335,7 @@ class FunctionAutoscalingService:
                 key,
                 token,
                 nx=True,
-                ex=TASK_QUEUE_AUTOSCALER_LOCK_TTL_SECONDS,
+                ex=AUTOSCALER_LOCK_TTL_SECONDS,
             )
         )
 
@@ -393,304 +344,12 @@ class FunctionAutoscalingService:
             self.redis.delete(key)
 
 
-def _function_autoscaler_config(config: StubConfig) -> TaskQueueAutoscalerConfig:
+def _function_autoscaler_config(config: StubConfig) -> BacklogAutoscalerConfig:
     autoscaler = config.autoscaler
-    return TaskQueueAutoscalerConfig(
+    return BacklogAutoscalerConfig(
         tasks_per_container=autoscaler.tasks_per_container,
         max_containers=function_container_ceiling(autoscaler.max_containers),
     )
-
-
-@dataclass(slots=True)
-class TaskQueueAutoscalingService:
-    services: SchedulerServices
-    redis: RedisClient
-    task_queues: TaskQueueAutoscaleControl
-
-    def reconcile(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[TaskQueueAutoscaleResult]:
-        current_time = now or utc_now()
-        stubs = [
-            stub
-            for stub in self.services.scheduler_workloads.list_stubs()
-            if stub.kind is StubKind.TaskQueue and _task_queue_autoscaling_enabled(stub)
-        ]
-        results: list[TaskQueueAutoscaleResult] = []
-        for stub in stubs[: max(limit, 0)]:
-            token = token_urlsafe(16)
-            lock_key = self._lock_key(stub)
-            if not self._acquire_lock(lock_key, token):
-                result = TaskQueueAutoscaleResult(
-                    stub_id=stub.id,
-                    workspace_id=stub.workspace_id,
-                    decision=TaskQueueScaleDecisionKind.Hold,
-                    reason="autoscaler lock already held",
-                    lock_acquired=False,
-                )
-                _record_autoscaler_state(
-                    self.services,
-                    source=TASK_QUEUE_AUTOSCALER_SOURCE,
-                    target_kind=AutoscalerTargetKind.TaskQueue,
-                    stub=stub,
-                    current_count=result.current_containers,
-                    desired_count=result.desired_containers,
-                    decision=result.decision.value,
-                    reason=result.reason,
-                    active=result.active,
-                    valid=result.valid,
-                    lock_acquired=result.lock_acquired,
-                    owner_lock_key=lock_key,
-                )
-                results.append(result)
-                continue
-            try:
-                results.append(self.reconcile_stub(stub, now=current_time))
-            finally:
-                self._release_lock(lock_key, token)
-        return results
-
-    def reconcile_stub(
-        self,
-        stub: StubRecord,
-        *,
-        now: datetime | None = None,
-    ) -> TaskQueueAutoscaleResult:
-        current_time = now or utc_now()
-        self.task_queues.expire_pending_tasks(stub.id, now=current_time)
-        active = _deployment_active(self.services, stub)
-        containers = _task_queue_containers(self.services, stub)
-        current = len(_active_containers(containers))
-        pending = _pending_container_count(containers)
-        queue_length = _queue_length(self.services, stub)
-        workspace_id = stub.workspace_id
-        running_tasks = _running_task_count(self.redis, workspace_id, stub, containers)
-        config = _task_queue_autoscaler_config(stub.config)
-        failed_containers = _recent_failed_task_queue_container_ids(
-            containers,
-            now=current_time,
-            window_seconds=_failed_container_window_seconds(stub.config),
-        )
-        failure_threshold = _failed_container_threshold(stub.config)
-        failure_threshold_reached = (
-            failure_threshold > 0 and len(failed_containers) >= failure_threshold
-        )
-        sample = TaskQueueAutoscalerSample(
-            queue_length=queue_length,
-            running_tasks=running_tasks,
-            current_containers=current,
-        )
-        decision = decide_task_queue_scale(sample, config)
-        desired = decision.desired_containers if active else 0
-        reason = "deployment inactive" if not active else decision.reason.value
-        result_decision = decision.decision
-        if active and failure_threshold_reached:
-            desired = 0
-            reason = "failed container threshold reached"
-            result_decision = (
-                TaskQueueScaleDecisionKind.ScaleDown
-                if current > 0
-                else TaskQueueScaleDecisionKind.Hold
-            )
-        guardrail = AutoscalerGuardrailPlan()
-        if active and decision.valid and desired > current:
-            guardrail = plan_autoscaler_start_guardrails(
-                self.redis,
-                stub=stub,
-                current_count=current,
-                desired_count=desired,
-            )
-            if guardrail.limited:
-                desired = guardrail.desired_count
-                reason = guardrail.reason
-                result_decision = _task_queue_scale_kind(desired, current)
-        actions: list[TaskQueueAutoscaleAction] = []
-        if decision.valid:
-            delta = desired - current
-            if delta > 0:
-                actions.extend(self._scale_up(stub, delta))
-            elif delta < 0:
-                actions.extend(self._scale_down(stub, workspace_id, containers, -delta))
-        result = TaskQueueAutoscaleResult(
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            queue_length=queue_length,
-            running_tasks=running_tasks,
-            current_containers=current,
-            pending_containers=pending,
-            desired_containers=desired,
-            decision=result_decision,
-            reason=reason,
-            active=active,
-            valid=decision.valid,
-            failed_containers=failed_containers,
-            actions=actions,
-            guardrails=guardrail.payload(),
-        )
-        self._emit_scale_event(stub, result, config, decision)
-        return result
-
-    def _scale_up(self, stub: StubRecord, count: int) -> list[TaskQueueAutoscaleAction]:
-        actions: list[TaskQueueAutoscaleAction] = []
-        timeout = _task_queue_timeout_seconds(stub.config)
-        for _ in range(count):
-            try:
-                response = self.task_queues.start_task_queue_serve(
-                    StartTaskQueueServeRequest(stub_id=stub.id, timeout=timeout)
-                )
-            except DomainError as exc:
-                actions.append(
-                    TaskQueueAutoscaleAction(
-                        container_id="",
-                        action="scale-up-failed",
-                        reason=exc.message,
-                    )
-                )
-                break
-            actions.append(
-                TaskQueueAutoscaleAction(
-                    container_id=response.container_id,
-                    action="start",
-                    reason="queue depth requires more consumers",
-                )
-            )
-        return actions
-
-    def _scale_down(
-        self,
-        stub: StubRecord,
-        workspace_id: str,
-        containers: list[ContainerRecord],
-        count: int,
-    ) -> list[TaskQueueAutoscaleAction]:
-        actions: list[TaskQueueAutoscaleAction] = []
-        for container in _stoppable_task_queue_containers(
-            self.redis,
-            workspace_id,
-            stub,
-            containers,
-        ):
-            if len(actions) >= count:
-                break
-            stopped = self.services.containers.stop(container.id)
-            actions.append(
-                TaskQueueAutoscaleAction(
-                    container_id=stopped.id,
-                    action="stop",
-                    reason="queue depth no longer requires consumer",
-                )
-            )
-        return actions
-
-    def _emit_scale_event(
-        self,
-        stub: StubRecord,
-        result: TaskQueueAutoscaleResult,
-        config: TaskQueueAutoscalerConfig,
-        decision: TaskQueueScaleDecision,
-    ) -> None:
-        if _should_persist_scale_event(
-            self.services,
-            target_kind=AutoscalerTargetKind.TaskQueue,
-            stub=stub,
-            decision=result.decision.value,
-            desired_count=result.desired_containers,
-            reason=result.reason,
-            valid=result.valid,
-            actions_taken=bool(result.actions),
-        ):
-            event_data: dict[str, JsonValue] = {
-                "source": TASK_QUEUE_AUTOSCALER_SOURCE,
-                "stub_id": stub.id,
-                "workspace_id": stub.workspace_id,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "desired_containers": result.desired_containers,
-                "queue_length": result.queue_length,
-                "running_tasks": result.running_tasks,
-                "failed_containers": list(result.failed_containers),
-                "decision": result.decision.value,
-                "reason": result.reason,
-                "valid": result.valid,
-                "effective_max_containers": decision.effective_max_containers,
-                "guardrails": result.guardrails,
-                "actions": _autoscale_action_json_values(result.actions),
-            }
-            self.services.events.emit(
-                TASK_QUEUE_SCALE_DECISION_ACTION,
-                resource_type="stub",
-                resource_id=stub.id,
-                message="task queue autoscaler selected desired container count",
-                data=event_data,
-                workspace_id=stub.workspace_id,
-            )
-        _record_autoscaler_metrics(
-            self.services,
-            source=TASK_QUEUE_AUTOSCALER_SOURCE,
-            stub=stub,
-            kind=stub.kind.value,
-            current_containers=result.current_containers,
-            pending_containers=result.pending_containers,
-            desired_containers=result.desired_containers,
-            signal_name="queue_length",
-            signal_value=result.queue_length,
-            max_containers=decision.effective_max_containers or config.max_containers,
-            pressure_saturated=_task_queue_pressure_saturated(
-                result.queue_length,
-                config,
-                decision.effective_max_containers or config.max_containers,
-            ),
-            failed_container_count=len(result.failed_containers),
-            decision=result.decision.value,
-            reason=result.reason,
-            guardrails=result.guardrails,
-            actions=_autoscale_action_payloads(result.actions),
-        )
-        _record_autoscaler_state(
-            self.services,
-            source=TASK_QUEUE_AUTOSCALER_SOURCE,
-            target_kind=AutoscalerTargetKind.TaskQueue,
-            stub=stub,
-            current_count=result.current_containers,
-            desired_count=result.desired_containers,
-            signal_name="queue_length",
-            signal_value=result.queue_length,
-            decision=result.decision.value,
-            reason=result.reason,
-            active=result.active,
-            valid=result.valid,
-            lock_acquired=result.lock_acquired,
-            owner_lock_key=self._lock_key(stub),
-            failed_container_count=len(result.failed_containers),
-            last_sample={
-                "queue_length": result.queue_length,
-                "running_tasks": result.running_tasks,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "guardrails": result.guardrails,
-            },
-            last_actions=_autoscale_action_payloads(result.actions),
-        )
-
-    def _lock_key(self, stub: StubRecord) -> str:
-        return self.redis.key("autoscaling", "taskqueues", stub.workspace_id, stub.id, "lock")
-
-    def _acquire_lock(self, key: str, token: str) -> bool:
-        return bool(
-            self.redis.set(
-                key,
-                token,
-                nx=True,
-                ex=TASK_QUEUE_AUTOSCALER_LOCK_TTL_SECONDS,
-            )
-        )
-
-    def _release_lock(self, key: str, token: str) -> None:
-        if _redis_text(self.redis.get(key)) == token:
-            self.redis.delete(key)
 
 
 @dataclass(slots=True)
@@ -1351,11 +1010,6 @@ class EndpointAutoscalerConfig(ContractModel):
     keep_warm_seconds: int = 0
 
 
-def _task_queue_autoscaling_enabled(stub: StubRecord) -> bool:
-    raw = stub.config.metadata.get("autoscaling_enabled", True)
-    return raw is not False
-
-
 def _endpoint_autoscaling_enabled(stub: StubRecord) -> bool:
     raw = stub.config.metadata.get("autoscaling_enabled", True)
     return raw is not False
@@ -1519,15 +1173,6 @@ def _is_no_worker_capacity(reason: str) -> bool:
     return "no worker capacity" in normalized or "worker capacity" in normalized
 
 
-def _task_queue_pressure_saturated(
-    queue_length: int,
-    config: TaskQueueAutoscalerConfig,
-    max_containers: int,
-) -> bool:
-    target_messages = max(max_containers, 0) * max(config.tasks_per_container, 1)
-    return target_messages > 0 and queue_length > target_messages
-
-
 def _endpoint_pressure_saturated(
     active_requests: int,
     config: EndpointAutoscalerConfig,
@@ -1651,13 +1296,6 @@ def _deployment_active(services: SchedulerServices, stub: StubRecord) -> bool:
     return deployment.active and deployment.deleted_at is None
 
 
-def _task_queue_containers(
-    services: SchedulerServices,
-    stub: StubRecord,
-) -> list[ContainerRecord]:
-    return _containers_for_stub(services, stub)
-
-
 def _containers_for_stub(
     services: SchedulerServices,
     stub: StubRecord,
@@ -1702,100 +1340,6 @@ def _pending_container_count(containers: list[ContainerRecord]) -> int:
     return sum(1 for container in containers if container.status is ContainerStatus.Pending)
 
 
-def _queue_length(services: SchedulerServices, stub: StubRecord) -> int:
-    queue_name = f"taskqueue:{stub.id}"
-    return services.collections.queue_depth(queue_name, workspace_id=stub.workspace_id)
-
-
-def _running_task_count(
-    redis: RedisClient,
-    workspace_id: str,
-    stub: StubRecord,
-    containers: list[ContainerRecord],
-) -> int:
-    count = 0
-    for container in containers:
-        if container.status not in {ContainerStatus.Pending, ContainerStatus.Running}:
-            continue
-        index_key = _redis_key(
-            redis,
-            task_queue_running_lock_index_key(workspace_id, stub.id, container.id),
-        )
-        task_ids = [_redis_text(item) for item in redis.set_members(index_key)]
-        for task_id in task_ids:
-            lock_key = _redis_key(
-                redis,
-                task_queue_running_lock_key(workspace_id, stub.id, container.id, task_id),
-            )
-            if int(redis.exists(lock_key) or 0) > 0:
-                count += 1
-    return count
-
-
-def _stoppable_task_queue_containers(
-    redis: RedisClient,
-    workspace_id: str,
-    stub: StubRecord,
-    containers: list[ContainerRecord],
-) -> list[ContainerRecord]:
-    candidates = [
-        container
-        for container in containers
-        if container.status is ContainerStatus.Running
-        and _scheduler_status(redis, container.id) is not SchedulerContainerStatus.Stopping
-        and not _container_has_keep_warm_lock(redis, workspace_id, stub.id, container.id)
-        and not _container_has_processing_lock(redis, workspace_id, stub.id, container.id)
-        and not _container_has_running_task(redis, workspace_id, stub.id, container.id)
-    ]
-    candidates.sort(key=lambda container: container.created_at, reverse=True)
-    return candidates
-
-
-def _container_has_keep_warm_lock(
-    redis: RedisClient,
-    workspace_id: str,
-    stub_id: str,
-    container_id: str,
-) -> bool:
-    return _exists(
-        redis,
-        task_queue_keep_warm_lock_key(workspace_id, stub_id, container_id),
-    )
-
-
-def _container_has_processing_lock(
-    redis: RedisClient,
-    workspace_id: str,
-    stub_id: str,
-    container_id: str,
-) -> bool:
-    return _exists(
-        redis,
-        task_queue_processing_lock_key(workspace_id, stub_id, container_id),
-    )
-
-
-def _container_has_running_task(
-    redis: RedisClient,
-    workspace_id: str,
-    stub_id: str,
-    container_id: str,
-) -> bool:
-    index_key = _redis_key(
-        redis,
-        task_queue_running_lock_index_key(workspace_id, stub_id, container_id),
-    )
-    task_ids = [_redis_text(item) for item in redis.set_members(index_key)]
-    for task_id in task_ids:
-        if _exists(
-            redis,
-            task_queue_running_lock_key(workspace_id, stub_id, container_id, task_id),
-        ):
-            return True
-        redis.set_remove(index_key, task_id)
-    return False
-
-
 def _scheduler_status(
     redis: RedisClient,
     container_id: str,
@@ -1808,15 +1352,6 @@ def _scheduler_status(
         return SchedulerContainerStatus(_redis_text(raw))
     except ValueError:
         return None
-
-
-def _recent_failed_task_queue_container_ids(
-    containers: list[ContainerRecord],
-    *,
-    now: datetime,
-    window_seconds: int,
-) -> list[str]:
-    return _recent_failed_container_ids(containers, now=now, window_seconds=window_seconds)
 
 
 def _recent_failed_container_ids(
@@ -1991,16 +1526,6 @@ def _endpoint_scale_kind(desired: int, current: int) -> EndpointScaleDecisionKin
     return EndpointScaleDecisionKind.Hold
 
 
-def _task_queue_scale_kind(desired: int, current: int) -> TaskQueueScaleDecisionKind:
-    if current < 0 or desired < 0:
-        return TaskQueueScaleDecisionKind.Invalid
-    if desired > current:
-        return TaskQueueScaleDecisionKind.ScaleUp
-    if desired < current:
-        return TaskQueueScaleDecisionKind.ScaleDown
-    return TaskQueueScaleDecisionKind.Hold
-
-
 def _pod_scale_kind(desired: int, current: int) -> PodScaleDecisionKind:
     if current < 0 or desired < 0:
         return PodScaleDecisionKind.Invalid
@@ -2011,20 +1536,12 @@ def _pod_scale_kind(desired: int, current: int) -> PodScaleDecisionKind:
     return PodScaleDecisionKind.Hold
 
 
-def _task_queue_autoscaler_config(config: StubConfig) -> TaskQueueAutoscalerConfig:
-    autoscaler = config.autoscaler
-    return TaskQueueAutoscalerConfig(
-        tasks_per_container=autoscaler.tasks_per_container,
-        max_containers=autoscaler.max_containers,
-    )
-
-
 def _failed_container_threshold(config: StubConfig) -> int:
     return _first_configured_non_negative(
         config.autoscaler.failed_container_threshold,
         config.autoscaler.max_failed_containers,
         config.autoscaler.failure_threshold,
-        default=TASK_QUEUE_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD,
+        default=AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD,
     )
 
 
@@ -2032,16 +1549,7 @@ def _failed_container_window_seconds(config: StubConfig) -> int:
     return _first_configured_non_negative(
         config.autoscaler.failed_container_window_seconds,
         config.autoscaler.failure_window_seconds,
-        default=TASK_QUEUE_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
-    )
-
-
-def _task_queue_timeout_seconds(config: StubConfig) -> int:
-    return (
-        int(config.task_policy.timeout_seconds)
-        or int(config.task_policy.timeout)
-        or int(config.runtime.timeout_seconds or 0)
-        or TASK_QUEUE_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS
+        default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
     )
 
 
@@ -2131,7 +1639,4 @@ __all__ = [
     "PodAutoscaleResult",
     "PodAutoscalingService",
     "SchedulerServices",
-    "TaskQueueAutoscaleAction",
-    "TaskQueueAutoscaleResult",
-    "TaskQueueAutoscalingService",
 ]

@@ -1,7 +1,7 @@
 import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 
 /** Deployment kinds the playground can invoke with a JSON payload. */
-export const PLAYGROUND_KINDS = new Set(["function", "endpoint", "task-queue"]);
+export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);
 
 const PRIMITIVE_TYPES = ["string", "integer", "number", "boolean"] as const;
 type PrimitiveType = (typeof PRIMITIVE_TYPES)[number];

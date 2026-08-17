@@ -29,6 +29,7 @@ if __name__ == "__main__":
     print(hello.local("lazycloud"))
 """
 
+
 @dataclass(frozen=True, slots=True)
 class ExampleTemplate:
     name: str

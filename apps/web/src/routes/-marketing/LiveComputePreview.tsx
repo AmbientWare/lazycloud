@@ -80,14 +80,14 @@ const LANES: Lane[] = [
              "0 running" while still showing placing and idle transitions. */
           {
             name: "release-checks",
-            kind: "task queue",
+            kind: "function",
             resource: "4 vCPU",
             start: 4,
             duration: 15,
           },
           {
             name: "dependency-audit",
-            kind: "task queue",
+            kind: "function",
             resource: "1 vCPU",
             start: 23,
             duration: 9,

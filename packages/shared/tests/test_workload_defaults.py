@@ -11,11 +11,6 @@ from shared.deployment_records import (
     DEFAULT_HTTP_MEMORY,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
     DEFAULT_MAX_PENDING_TASKS,
-    DEFAULT_TASK_QUEUE_CPU,
-    DEFAULT_TASK_QUEUE_KEEP_WARM_SECONDS,
-    DEFAULT_TASK_QUEUE_MEMORY,
-    DEFAULT_TASK_QUEUE_RETRIES,
-    DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS,
     DeploymentSpec,
     Resources,
 )
@@ -72,14 +67,6 @@ def test_deployment_concurrency_is_positive_at_public_http_boundaries() -> None:
             DEFAULT_HTTP_TIMEOUT_SECONDS,
             DEFAULT_HTTP_KEEP_WARM_SECONDS,
             None,
-        ),
-        (
-            DeploymentKind.TaskQueue,
-            DEFAULT_TASK_QUEUE_CPU,
-            DEFAULT_TASK_QUEUE_MEMORY,
-            DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS,
-            DEFAULT_TASK_QUEUE_KEEP_WARM_SECONDS,
-            DEFAULT_TASK_QUEUE_RETRIES,
         ),
     ],
 )

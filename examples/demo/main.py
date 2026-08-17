@@ -12,16 +12,17 @@ from lazycloud.http_transport import request_raw
 from lazycloud.json_contracts import parse_json_value
 from pydantic import BaseModel, JsonValue
 from shared.http.compute import MachineJoinCommandRequest
+from shared.http.gateway import DeployStubResponse
 
 from lazycloud import (
     App,
     Artifact,
     Client,
+    FunctionCall,
     Image,
     Map,
     Queue,
     Secret,
-    Task,
     Volume,
     experimental,
     schema,
@@ -191,10 +192,10 @@ class SummarizeResult(BaseModel):
     total: int
 
 
-@demo.task_queue(
+@demo.function(
     name="summaries",
     image=demo_image,
-    workers=2,
+    concurrency=2,
     max_pending_tasks=100,
     autoscaler={"max_containers": 3, "tasks_per_container": 1},
 )
@@ -229,14 +230,14 @@ def run_remote_stream_count(count: int = 10, delay_seconds: float = 1.0) -> int:
     return int(stream_count.remote(count, delay_seconds))
 
 
-def run_remote_task_queue_summary(values: list[int] | None = None) -> dict[str, JsonValue]:
+def run_remote_background_summary(values: list[int] | None = None) -> dict[str, JsonValue]:
     selected_values = values or [1, 4, 9, 16]
     deployment = summarize.deploy(name=f"demo-summaries-{int(time.time())}")
-    if not deployment.deployment_id:
-        msg = "task queue deploy failed"
+    if not isinstance(deployment, DeployStubResponse) or not deployment.deployment_id:
+        msg = "background function deploy failed"
         raise RuntimeError(msg)
     try:
-        handle = summarize.put(selected_values)
+        handle = summarize.spawn(selected_values)
         result = handle.result(wait=True, timeout_seconds=60, poll_interval_seconds=0.5)
         return {
             "deployment_id": deployment.deployment_id,
@@ -248,7 +249,7 @@ def run_remote_task_queue_summary(values: list[int] | None = None) -> dict[str, 
         Client().deployment.delete(deployment.deployment_id)
 
 
-def run_remote_task_queue_autoscale_stress(
+def run_remote_background_autoscale_stress(
     batch_count: int = 6,
     batch_size: int = 3,
 ) -> dict[str, JsonValue]:
@@ -260,15 +261,15 @@ def run_remote_task_queue_autoscale_stress(
         raise ValueError(msg)
     deployment_name = f"autoscale-summaries-{int(time.time())}"
     deployment = summarize.deploy(name=deployment_name)
-    if not deployment.deployment_id:
-        msg = "task queue deploy failed"
+    if not isinstance(deployment, DeployStubResponse) or not deployment.deployment_id:
+        msg = "background function deploy failed"
         raise RuntimeError(msg)
-    handles: list[Task] = []
+    handles: list[FunctionCall[SummarizeResult]] = []
     try:
         for batch_index in range(batch_count):
             start = batch_index * batch_size
             values = list(range(start, start + batch_size))
-            handle = summarize.put(values)
+            handle = summarize.spawn(values)
             handles.append(handle)
         results = [
             handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
@@ -295,7 +296,7 @@ def run_remote_task_queue_autoscale_stress(
             Client().deployment.stop(deployment.deployment_id)
         except Exception as cleanup_error:
             raise ExceptionGroup(
-                "task-queue autoscale stress and deployment cleanup failed",
+                "background autoscale stress and deployment cleanup failed",
                 [workflow_error, cleanup_error],
             ) from workflow_error
         raise

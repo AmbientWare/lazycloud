@@ -28,7 +28,6 @@ _WORKSPACE_WORKLOAD_REDIS_ROOTS: tuple[tuple[str, ...], ...] = (
     ("function",),
     ("pod",),
     ("task",),
-    ("taskqueue",),
     ("scheduler", "serve", "lock"),
 )
 

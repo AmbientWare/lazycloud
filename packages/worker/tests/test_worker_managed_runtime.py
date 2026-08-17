@@ -22,7 +22,6 @@ from worker.managed_runtime_catalog import (
         (WorkerStartupKind.Function, "runner.function"),
         (WorkerStartupKind.Endpoint, "runner.serve"),
         (WorkerStartupKind.Asgi, "runner.serve"),
-        (WorkerStartupKind.TaskQueue, "runner.taskqueue"),
     ],
 )
 def test_managed_runtime_wraps_target_interpreter_and_preserves_user_paths(

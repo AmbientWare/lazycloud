@@ -123,8 +123,6 @@ def deployment_handler_path(kind: str, name: str, *, version: int | None = None)
 
 
 def handler_prefix(kind: str) -> str:
-    if kind == "task-queue":
-        return "api/v1/taskqueues"
     if kind == "function":
         return "api/v1/functions"
     if kind == "endpoint":

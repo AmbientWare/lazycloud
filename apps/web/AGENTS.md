@@ -3,7 +3,7 @@
 `apps/web` is the browser control plane for the platform—an operational surface,
 not a marketing site. Its product model is
 `Workspace -> App -> Workload -> Task -> Container`, where function, endpoint,
-ASGI, task queue, cron, pod, and sandbox are kinds of workload.
+ASGI, cron, pod, and sandbox are kinds of workload.
 
 Customer surfaces speak in human names, kind, status, version, and time. IDs stay
 available for URLs, queries, actions, and operator records. Relationships and

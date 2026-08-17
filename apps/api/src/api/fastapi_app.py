@@ -57,7 +57,6 @@ from api.server.services import (
     ApiServices,
     EndpointApiService,
     FunctionApiService,
-    TaskQueueApiService,
 )
 from api.server.tcp_ingress import tcp_ingress_server_from_settings
 from api.server.worker_repository_service import WorkerRepositoryService
@@ -101,7 +100,6 @@ def create_app(
     pod_service: PodControlService | None = None,
     shell_service: ShellControlService | None = None,
     volume_service: VolumeControlService | None = None,
-    taskqueue_service: TaskQueueApiService | None = None,
     worker_repository_service: WorkerRepositoryService | None = None,
 ) -> FastAPI:
     runtime = ControlPlaneRuntime.from_services(
@@ -117,7 +115,6 @@ def create_app(
         pod_service=pod_service,
         shell_service=shell_service,
         volume_service=volume_service,
-        taskqueue_service=taskqueue_service,
         worker_repository_service=worker_repository_service,
     )
     return _create_app(runtime)

@@ -9,7 +9,7 @@ from shared.timestamps import utc_now
 
 
 class QueueMessage(ContractModel):
-    """Durable JSON message claimed by a task-queue consumer."""
+    """Durable JSON message a queue consumer claims."""
 
     id: str
     queue: str

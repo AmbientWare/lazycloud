@@ -124,7 +124,7 @@ def test_retry_callback_uses_bounded_delivery_retries_and_stable_idempotency(
     )
     stub = ControlPlaneService(isolated_services.context).create_stub(
         "retry-callback",
-        kind=StubKind.TaskQueue,
+        kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task"},
     )
     task = isolated_services.tasks.create(

@@ -594,7 +594,6 @@ def runs_in_background(kind: WorkerStartupKind) -> bool:
         WorkerStartupKind.Function,
         WorkerStartupKind.Endpoint,
         WorkerStartupKind.Asgi,
-        WorkerStartupKind.TaskQueue,
         WorkerStartupKind.Pod,
         WorkerStartupKind.PodRun,
         WorkerStartupKind.Sandbox,

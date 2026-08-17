@@ -49,8 +49,6 @@ export const workspaceQueryKeys = {
     list: (workspaceId: string, appId: string | null) =>
       [...workspaceRoot(workspaceId), "workloads", "list", { appId }] as const,
     cron: (workspaceId: string) => [...workspaceRoot(workspaceId), "workloads", "cron"] as const,
-    taskQueueState: (workspaceId: string, stubId: string) =>
-      [...workspaceRoot(workspaceId), "workloads", "task-queue-state", stubId] as const,
   },
   tasks: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks"] as const,

@@ -47,20 +47,6 @@ def require_function_stub_workspace(
     )
 
 
-def require_task_queue_stub_workspace(
-    control_plane: ControlPlaneService,
-    stub_id: str,
-    workspace_id: str,
-) -> StubRecord:
-    return require_stub_workspace(
-        control_plane,
-        stub_id,
-        workspace_id,
-        resource_name="task queue",
-        expected_kinds=StubKind.TaskQueue,
-    )
-
-
 def require_endpoint_stub_workspace(
     control_plane: ControlPlaneService,
     stub_id: str,

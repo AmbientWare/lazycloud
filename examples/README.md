@@ -20,7 +20,7 @@ security boundaries, and cleanup:
 - [Sandboxed coding agent](../docs/examples/sandboxed-coding-agent.mdx)
   — a trusted planner Function and a network-blocked execution Sandbox.
 - [Parallel Parquet processing on S3](../docs/examples/parallel-parquet-s3.mdx)
-  — Task Queue fan-out over CloudBucket-mounted partitions.
+  — Function fan-out over CloudBucket-mounted partitions.
 
 Run the deployment and invocation commands in a guide from the repository
 root. Examples use importable module targets such as
@@ -30,8 +30,8 @@ example directory.
 ## All Workloads
 
 `examples.all_workloads` is one app that makes every currently deployable
-workload kind visible in the dashboard: function, endpoint, ASGI, task queue,
-cron, and pod. It also creates an on-demand sandbox through the public SDK;
+workload kind visible in the dashboard: function, endpoint, ASGI, cron, and
+pod. It also creates an on-demand sandbox through the public SDK;
 sandboxes are not deployments.
 
 Deploy all workload kinds:
@@ -40,7 +40,7 @@ Deploy all workload kinds:
 uv run lazycloud deploy examples.all_workloads:app --workspace default
 ```
 
-Create successful, failed, nested, and queued Tasks:
+Create successful, failed, nested, and spawned Tasks:
 
 ```sh
 uv run lazycloud run examples.all_workloads:exercise_runs 7
@@ -52,8 +52,8 @@ Each Task-producing path is also callable independently:
 uv run lazycloud run examples.all_workloads:run_function 7
 uv run lazycloud run examples.all_workloads:run_function_failure 13
 uv run lazycloud run examples.all_workloads:run_nested_function 6
-uv run lazycloud run examples.all_workloads:run_task_queue 5
-uv run lazycloud run examples.all_workloads:run_task_queue_failure 17
+uv run lazycloud run examples.all_workloads:run_background_job 5
+uv run lazycloud run examples.all_workloads:run_background_job_failure 17
 ```
 
 Exercise inbound HTTP workloads:

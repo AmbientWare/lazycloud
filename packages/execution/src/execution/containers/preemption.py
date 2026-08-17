@@ -5,14 +5,12 @@ from typing import Protocol
 
 from database.records.apps import StubRecord
 from database.repositories.execution import TaskAttemptRepository, TaskRepository
-from pydantic import Field
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
 from shared.deployments import StubKind
 from shared.tasks import TaskStatus
 
 from execution.services import ExecutionServices
-from execution.taskqueues.service import TaskQueuePreemptedResult
 
 
 class PreemptedContainerResult(ContractModel):
@@ -23,9 +21,6 @@ class PreemptedContainerResult(ContractModel):
     changed: bool = False
     retry_scheduled: bool = False
     stale_attempt: bool = False
-    queue_message_released: bool = False
-    queue_message_acknowledged: bool = False
-    details: dict[str, bool] = Field(default_factory=dict)
 
 
 class PreemptionStubReader(Protocol):
@@ -35,18 +30,6 @@ class PreemptionStubReader(Protocol):
         *,
         workspace: str | None = None,
     ) -> StubRecord: ...
-
-
-class PreemptedTaskQueueControl(Protocol):
-    def task_queue_preempted(
-        self,
-        *,
-        stub_id: str,
-        task_id: str,
-        container_id: str,
-        exit_code: int | None = None,
-        error: str = "task queue container was preempted",
-    ) -> TaskQueuePreemptedResult: ...
 
 
 class PreemptedContainerControl(Protocol):
@@ -62,7 +45,6 @@ class PreemptedContainerControl(Protocol):
 class PreemptedContainerService:
     services: ExecutionServices
     stubs: PreemptionStubReader
-    task_queues: PreemptedTaskQueueControl
 
     def recover_unsettled(self, *, limit: int = 100) -> list[str]:
         """Settle preemption intents whose inline attempt never completed.
@@ -131,26 +113,6 @@ class PreemptedContainerService:
         if not stub_id:
             raise ValueError("preempted task has no workload identity")
         stub = self.stubs.get_stub(stub_id)
-        if stub.kind is StubKind.TaskQueue:
-            queue = self.task_queues.task_queue_preempted(
-                stub_id=stub.id,
-                task_id=task.id,
-                container_id=container.id,
-                exit_code=exit_code,
-            )
-            return PreemptedContainerResult(
-                task_id=queue.task_id,
-                container_id=queue.container_id,
-                workload_kind=stub.kind,
-                status=queue.status,
-                changed=queue.changed,
-                retry_scheduled=queue.retry_scheduled,
-                stale_attempt=queue.stale_attempt,
-                queue_message_released=queue.message_released,
-                queue_message_acknowledged=queue.message_acknowledged,
-                details={"locks_cleared": queue.locks_cleared},
-            )
-
         retry_allowed = stub.kind in {StubKind.Function, StubKind.CronJob}
         outcome = self.services.tasks.finish_with_retry(
             task.id,
@@ -177,6 +139,5 @@ __all__ = [
     "PreemptedContainerControl",
     "PreemptedContainerResult",
     "PreemptedContainerService",
-    "PreemptedTaskQueueControl",
     "PreemptionStubReader",
 ]

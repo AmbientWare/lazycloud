@@ -17,7 +17,6 @@ def test_stub_scoped_container_id_parser_accepts_current_prefixes() -> None:
         "sandbox": StubScopedContainerPrefix.Sandbox,
         "pod": StubScopedContainerPrefix.Pod,
         "endpoint": StubScopedContainerPrefix.Endpoint,
-        "taskqueue": StubScopedContainerPrefix.TaskQueue,
     }
     for prefix, expected in expected_prefixes.items():
         container_id = f"{prefix}-{stub_id}-1717f4fc"
