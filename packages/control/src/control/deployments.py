@@ -9,7 +9,12 @@ from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
-from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
+from shared.cron import (
+    CronJobRecord,
+    next_cron_run,
+    normalize_cron_expression,
+    schedule_payload,
+)
 from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
@@ -23,7 +28,6 @@ from shared.deployment_records import (
     resolve_timeout_seconds,
 )
 from shared.deployment_subdomains import deployment_subdomain
-from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.tasks import RetryPolicy
@@ -75,6 +79,21 @@ class DeploymentPoolResolver(Protocol):
     def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str: ...
 
 
+class DeploymentScheduleWriter(Protocol):
+    """The one thing deploying needs from schedules: give this one its own."""
+
+    def create_for_deployment(
+        self,
+        deployment: Deployment,
+        *,
+        cron: str,
+        stub_id: str,
+        workspace: str,
+        workspace_name: str,
+        queue: str = "tasks",
+    ) -> CronJobRecord: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentService:
     context: ControlContext
@@ -83,6 +102,7 @@ class DeploymentService:
     registrar: DeploymentRegistrar
     workspace_changes: WorkspaceChangePublisher | None = None
     placement_resources: DeploymentPlacementResourceManager | None = None
+    schedules: DeploymentScheduleWriter | None = None
 
     def deploy(self, spec: DeploymentSpec, *, workspace: str = "default") -> Deployment:
         normalized_spec = _normalize_runtime_spec(spec)
@@ -116,21 +136,6 @@ class DeploymentService:
                 and deployment.app_id == app_id
             ]
             version = max((item.version for item in existing), default=0) + 1
-            if normalized_spec.kind is DeploymentKind.CronJob:
-                # Only one schedule may fire per cron deployment name: deploying
-                # a new version supersedes and deactivates the previous ones.
-                now = utc_now()
-                for prior in existing:
-                    if not prior.active or prior.deleted_at is not None:
-                        continue
-                    prior.active = False
-                    prior.updated_at = now
-                    repository.records.upsert(
-                        prior,
-                        workspace_id=workspace_record.id,
-                        name=prior.name,
-                        status="inactive",
-                    )
             subdomain = deployment_subdomain(
                 workspace_id=workspace_record.id,
                 app_name=app_resolution.app_name,
@@ -187,6 +192,18 @@ class DeploymentService:
                     workspace_id=workspace_record.id,
                     name=deployment.name,
                     status="active" if deployment.active else "inactive",
+                )
+            # After the stub exists, because a schedule names the stub it fires,
+            # and inside this block so a failure here is compensated with the
+            # rest of the deploy rather than leaving a schedule for a deployment
+            # that was rolled back.
+            if normalized_spec.cron and self.schedules is not None:
+                self.schedules.create_for_deployment(
+                    deployment,
+                    cron=normalized_spec.cron,
+                    stub_id=registration.stub_id,
+                    workspace=workspace_record.id,
+                    workspace_name=workspace_record.name,
                 )
         except Exception as deployment_failure:
             compensation_failures: list[Exception] = []
@@ -419,49 +436,52 @@ def _metadata_str(metadata: Mapping[str, JsonValue], key: str) -> str:
 @dataclass(slots=True)
 class CronJobService:
     context: ControlContext
-    deployments: DeploymentService
     workspace_changes: WorkspaceChangePublisher | None = None
 
-    def create(
+    def create_for_deployment(
         self,
-        name: str,
-        cron: str,
-        deployment_id: str,
+        deployment: Deployment,
         *,
-        workspace: str = "default",
+        cron: str,
+        stub_id: str,
+        workspace: str,
+        workspace_name: str,
         queue: str = "tasks",
-        payload: JsonValue = None,
     ) -> CronJobRecord:
-        deployments = self.deployments.list(workspace=workspace)
-        deployment = next((item for item in deployments if item.id == deployment_id), None)
-        if deployment is None:
-            msg = f"deployment not found in workspace: {deployment_id}"
-            raise NotFoundError(msg)
+        """Give this deployment the schedule its spec declared.
+
+        Takes the deployment rather than an id because the caller has already
+        resolved it, and because looking it up here would mean depending on the
+        service that deploys — which depends on the registration that calls this.
+
+        Named for the deployment's subdomain, which is the one identity a
+        resource keeps across its versions and which is already checked for
+        collisions when it is minted. So deploying again upserts the same row and
+        the previous version's schedule stops existing, rather than a scan that
+        has to remember to compare app as well as name — the scan did not, and
+        two apps in one workspace deleted each other's schedules.
+        """
+
         try:
             normalized_cron = normalize_cron_expression(cron)
             next_run_at = next_cron_run(normalized_cron)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
-        prior_deployment_ids = {
-            item.id
-            for item in deployments
-            if item.id != deployment.id
-            and item.name == deployment.name
-            and item.kind is deployment.kind
-        }
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             repository = CronJobRepository(session)
-            for existing in repository.list(workspace_id=workspace_id):
-                if existing.deployment_id in prior_deployment_ids:
-                    repository.records.delete(existing.name, workspace_id=workspace_id)
             record = CronJobRecord(
                 workspace_id=workspace_id,
-                name=name,
+                name=deployment.subdomain,
                 cron=normalized_cron,
                 deployment_id=deployment.id,
                 queue=queue,
-                payload=payload,
+                payload=schedule_payload(
+                    stub_id=stub_id,
+                    workspace_name=workspace_name,
+                    deployment_id=deployment.id,
+                    cron=normalized_cron,
+                ),
                 next_run_at=next_run_at,
             )
             saved = repository.upsert(record, workspace_id=workspace_id)

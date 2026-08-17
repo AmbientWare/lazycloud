@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from compute.resources import normalize_gpu_count
-from pydantic import Field, JsonValue, computed_field
+from pydantic import Field, computed_field
 from shared.contracts import ContractModel
 from shared.deployments import DeploymentKind
 from shared.env import (
@@ -222,19 +222,6 @@ class FunctionTaskCancellationDecision(ContractModel):
     terminal_before_cancel: bool = False
 
 
-class FunctionCronRequest(ContractModel):
-    workspace_name: str
-    stub_id: str
-    deployment_id: str
-    deployment_name: str
-    cron: str
-
-
-class FunctionCronPlan(ContractModel):
-    job_name: str
-    payload: dict[str, JsonValue]
-
-
 def function_prefix_key() -> str:
     return "function"
 
@@ -390,16 +377,4 @@ def function_cancellation_decision(
         should_update=inflight,
         should_stop_container=inflight and bool(container_id),
         terminal_before_cancel=is_terminal_task_status(current_status),
-    )
-
-
-def plan_function_cron(request: FunctionCronRequest) -> FunctionCronPlan:
-    return FunctionCronPlan(
-        job_name=f"{request.deployment_name}-{request.stub_id}",
-        payload={
-            "stub_id": request.stub_id,
-            "workspace_name": request.workspace_name,
-            "deployment_id": request.deployment_id,
-            "cron": request.cron,
-        },
     )

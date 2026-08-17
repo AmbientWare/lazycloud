@@ -7,10 +7,8 @@ from database.types import DatabaseSession
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
-from pydantic import JsonValue
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.scheduling import SchedulerContainerSubmitStatus
@@ -89,18 +87,6 @@ class ExecutionLookupService(Protocol):
     def get(self, deployment_id_or_name: str) -> Deployment: ...
 
 
-class ExecutionCronJobService(Protocol):
-    def create(
-        self,
-        name: str,
-        cron: str,
-        deployment_id: str,
-        *,
-        workspace: str = "default",
-        payload: JsonValue,
-    ) -> CronJobRecord: ...
-
-
 class ExecutionServices(Protocol):
     @property
     def context(self) -> ExecutionContext: ...
@@ -125,9 +111,6 @@ class ExecutionServices(Protocol):
 
     @property
     def apps(self) -> AppReader: ...
-
-    @property
-    def cron_jobs(self) -> ExecutionCronJobService: ...
 
     @property
     def object_storage(self) -> ObjectStorage: ...

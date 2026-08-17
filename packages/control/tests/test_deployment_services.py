@@ -390,9 +390,16 @@ def test_cron_schedule_follows_deployment_lifecycle(
     isolated_services: ApiServices,
 ) -> None:
     deployment = isolated_services.deployments.deploy(
-        DeploymentSpec(name="hourly", kind=DeploymentKind.CronJob, handler="pkg:hourly")
+        DeploymentSpec(
+            name="hourly",
+            kind=DeploymentKind.CronJob,
+            handler="pkg:hourly",
+            cron="0 * * * *",
+        )
     )
-    isolated_services.cron_jobs.create("hourly", "0 * * * *", deployment.id)
+    # Deploying is what creates the schedule: the spec declared one, so there is
+    # nothing else to call.
+    assert len(isolated_services.cron_jobs.list()) == 1
     management = ManagementService(isolated_services)
 
     management.set_deployment_active("default", deployment.id, active=False)
@@ -419,10 +426,11 @@ def test_cron_schedule_is_deleted_with_app(isolated_services: ApiServices) -> No
             name="cleanup",
             kind=DeploymentKind.CronJob,
             handler="pkg:cleanup",
+            cron="every 1m",
             metadata={"app": "cron_cleanup"},
         )
     )
-    isolated_services.cron_jobs.create("cleanup", "every 1m", deployment.id)
+    assert len(isolated_services.cron_jobs.list()) == 1
     assert deployment.app_id is not None
 
     isolated_services.apps.delete(deployment.app_id, workspace="default")

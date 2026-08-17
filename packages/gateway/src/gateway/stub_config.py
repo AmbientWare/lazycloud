@@ -145,6 +145,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
         route=request.route,
         domain=request.domain,
         methods=request.methods,
+        cron=request.cron or None,
         command=request.command,
         ports={str(port): port for port in request.ports},
         volumes=[
@@ -244,6 +245,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
         ],
         route=config.route,
         methods=config.methods or ["GET", "POST"],
+        cron=config.cron,
         command=config.command,
         ports=config.ports,
         metadata={

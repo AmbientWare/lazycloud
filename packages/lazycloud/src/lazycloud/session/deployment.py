@@ -720,6 +720,7 @@ def _stub_request_from_spec(
         route=spec.route,
         domain=spec.domain,
         methods=list(spec.methods),
+        cron=spec.cron or "",
         retry_policy=spec.retry_policy,
         timeout=spec.resources.timeout_seconds or _metadata_int(metadata, "timeout"),
         workers=_metadata_int(metadata, "workers"),

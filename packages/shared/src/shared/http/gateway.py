@@ -178,6 +178,7 @@ class GetOrCreateStubRequest(HttpModel):
     route: str | None = None
     domain: str | None = None
     methods: list[str] = Field(default_factory=list)
+    cron: str = ""
     retries: int = 0
     retry_policy: RetryPolicy | None = None
     timeout: int = 0

@@ -10,8 +10,6 @@ from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionCronRequest,
-    FunctionCronResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -101,17 +99,6 @@ def function_monitor(
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     require_task_workspace(services, request.task_id, workspace_id)
     return service.function_monitor(request)
-
-
-@router.post("/cron", response_model=FunctionCronResponse)
-def function_cron(
-    request: FunctionCronRequest,
-    workspace_id: write_workspace,
-    control_plane: ControlPlaneService = Depends(control_plane_service),
-    service: FunctionApiService = Depends(function_service),
-) -> FunctionCronResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    return service.function_cron(request)
 
 
 @router.post("/id/{stub_id}", response_model=FunctionInvokeResponse)

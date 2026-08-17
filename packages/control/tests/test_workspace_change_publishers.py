@@ -180,15 +180,12 @@ def test_cron_execution_publishes_after_last_and_next_run_persist(
 ) -> None:
     workspace = ControlPlaneService(isolated_services.context).get_workspace("default")
     deployment = isolated_services.deployments.deploy(
-        DeploymentSpec(name="live-cron", handler="package:function"),
+        DeploymentSpec(name="live-cron", handler="package:function", cron="every 1m"),
         workspace=workspace.id,
     )
-    cron_job = isolated_services.cron_jobs.create(
-        "live-cron-minute",
-        "every 1m",
-        deployment.id,
-        workspace=workspace.id,
-    )
+    schedules = isolated_services.cron_jobs.list(workspace=workspace.id)
+    assert len(schedules) == 1
+    cron_job = schedules[0]
     assert cron_job.next_run_at is not None
     due_at = cron_job.next_run_at
     repository = isolated_services.workspace_changes.repository

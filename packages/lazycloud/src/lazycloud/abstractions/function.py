@@ -38,7 +38,6 @@ from shared.function_payloads import (
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
-    FunctionCronResponse,
     FunctionInvokeResponse,
 )
 from shared.http.gateway import DeployStubResponse
@@ -89,8 +88,6 @@ class _FunctionClient(Protocol):
         root_task_id: str = "",
         dependencies: list[FunctionCallDependency] | None = None,
     ) -> Iterator[FunctionInvokeResponse]: ...
-
-    def cron(self, stub_id: str, cron: str, deployment_id: str) -> FunctionCronResponse: ...
 
 
 class FunctionOperationError(RuntimeError):
@@ -373,7 +370,7 @@ class Function(Generic[P, R]):
         name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
-    ) -> DeployStubResponse | FunctionCronResponse:
+    ) -> DeployStubResponse:
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
@@ -914,36 +911,6 @@ class CronJob(Function[P, R], Generic[P, R]):
     def spec(self, *, kind: DeploymentKind = DeploymentKind.CronJob) -> DeploymentSpec:
         spec = super().spec(kind=kind)
         return spec.model_copy(update={"cron": self.cron})
-
-    def deploy(
-        self,
-        *,
-        name: str | None = None,
-        workspace: str | None = None,
-        source_root: str | Path | None = None,
-    ) -> FunctionCronResponse:
-        deployment = super().deploy(
-            name=name,
-            workspace=workspace,
-            source_root=source_root,
-        )
-        if not isinstance(deployment, DeployStubResponse):
-            msg = "function deployment returned an invalid response"
-            raise FunctionOperationError(msg)
-        if not deployment.deployment_id:
-            msg = "deployment_id is required to create a cron job"
-            raise FunctionOperationError(msg)
-        if not self.stub_id:
-            msg = "stub_id is required to create a cron job"
-            raise FunctionOperationError(msg)
-        try:
-            return self.control_client.cron(
-                self.stub_id,
-                self.cron,
-                deployment.deployment_id,
-            )
-        except RuntimeError as exc:
-            raise FunctionOperationError(str(exc)) from exc
 
 
 def _cron(
