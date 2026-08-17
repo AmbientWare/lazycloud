@@ -18,9 +18,10 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaling import (
     ENDPOINT_AUTOSCALER_SOURCE,
-    EndpointAutoscalingService,
-    FunctionAutoscalingService,
-    PodAutoscalingService,
+    AutoscalingDriver,
+    EndpointAutoscaler,
+    FunctionAutoscaler,
+    PodAutoscaler,
 )
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.autoscaler_state import (
@@ -167,24 +168,32 @@ def _autoscaler_operations(
     pods = PodControlService(services, redis=redis)
     return AutoscalerOperationsService(
         services,
-        function_autoscaler=FunctionAutoscalingService(
+        function_autoscaler=AutoscalingDriver(
             services,
             redis=redis,
-            functions=FunctionControlService(services),
+            workload=FunctionAutoscaler(services, functions=FunctionControlService(services)),
         ),
-        endpoint_autoscaler=EndpointAutoscalingService(
+        endpoint_autoscaler=AutoscalingDriver(
             services,
             redis=redis,
-            endpoints=endpoints,
-            dispatches=ApiEndpointDispatchAutoscalingReader(
-                EndpointDispatchStateRepository(services)
+            workload=EndpointAutoscaler(
+                services,
+                redis=redis,
+                endpoints=endpoints,
+                dispatches=ApiEndpointDispatchAutoscalingReader(
+                    EndpointDispatchStateRepository(services)
+                ),
             ),
         ),
-        pod_autoscaler=PodAutoscalingService(
+        pod_autoscaler=AutoscalingDriver(
             services,
             redis=redis,
-            pods=pods,
-            container_states=RedisSchedulerContainerRepository(redis),
+            workload=PodAutoscaler(
+                services,
+                redis=redis,
+                pods=pods,
+                container_states=RedisSchedulerContainerRepository(redis),
+            ),
         ),
     )
 

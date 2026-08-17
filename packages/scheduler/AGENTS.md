@@ -12,21 +12,46 @@ terminal cancellation have to hold when two schedulers race, when a worker dies
 mid-task, and when a lease expires under work that is still running. Prefer a
 design where losing a race is safe over one where losing it is merely unlikely.
 
-## Autoscalers stay separate
+## One autoscaler, three workloads
 
-There are three — function, endpoint, pod — and they are written as three
-rather than one spine with three configurations. They share the shape of a
-reconcile pass (select stubs, take the stub's lock, decide, act) and nothing
-below it: a function scales on backlog depth, an endpoint on in-flight
-dispatches, a pod on connections, and each produces a different result
-contract. A generic spine over three unrelated samples and three unrelated
-results hides the per-kind differences that are the whole content.
+`AutoscalingDriver` runs the reconcile pass and a `WorkloadAutoscaler` supplies
+what is genuinely per kind: which stubs it selects, the signal it samples, the
+count that signal argues for, how it starts one container, and which containers
+it may stop. A function scales on backlog depth, an endpoint on in-flight
+dispatches, a pod on connections — that difference is the strategy, and nothing
+above it is.
 
-What they must share is the safety, and that is shared by being the same code
-rather than the same abstraction: every one of them bounds starts by the failed
-container threshold within a window, applies the workspace resource guardrail
-before scaling up, and records its state even on a tick that found the lock
-held. A tick with no state recorded reads as an autoscaler that never looked.
+This was three separate services, on the argument that a spine over three
+unrelated samples would hide the per-kind content and that the safety could be
+shared by being the same code rather than the same abstraction. Written out
+three times it stopped being the same code. The function autoscaler — the third
+copy — never read the pause flag an operator sets, never recorded a metric,
+never emitted an event the history endpoint could return, and wrote a state row
+that said no actions were taken however many it took. Each omission was
+invisible in the diff that made it, because the copy it was missing from was
+complete on its own terms.
+
+So the safety is now unreachable from a workload rather than repeated in each:
+stub selection including the pause, the stub lock and the state a contended tick
+still records, the failed-container threshold and its window, the inactive
+deployment, the workspace guardrail, and the metrics, event, and state row a
+tick leaves behind. A workload cannot skip one of those, because it is never
+handed them.
+
+Composition, not inheritance. A base class with abstract hooks would reuse the
+same code, but it would also put the pass in the subclass's reach, which is the
+door the three copies walked through. A strategy is handed a stub, a signal, and
+a count, and hands back a plan.
+
+The kinds differ in what they scale on, not in what an operator can ask about
+them. One `AutoscaleResult` carries `kind`, `signal_name` and `signal_value`
+instead of a field per kind, so the state row, the metrics, the history, and the
+reconcile output have one shape and no per-kind branch to forget.
+
+A scale-down is the platform's decision, so it stops containers with
+`StopContainerReason.Scheduler`. The `User` default would settle the claims a
+container holds as cancellations, which tells callers their work was cancelled
+when what happened is that capacity moved.
 
 Capacity for a function is owned here. An invocation may start the first
 container for an idle stub so a cold call does not wait for a tick, and nothing

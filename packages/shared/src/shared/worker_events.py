@@ -11,6 +11,7 @@ TASK_EVENT_RESOURCE_TYPE = "task"
 CONTAINER_EVENT_RESOURCE_TYPE = "container"
 
 GATEWAY_REQUEST_EVENT_ACTION = "gateway.request"
+FUNCTION_SCALE_DECISION_ACTION = "function.autoscaler.scale_decision"
 ENDPOINT_SCALE_DECISION_ACTION = "endpoint.autoscaler.scale_decision"
 POD_SCALE_DECISION_ACTION = "pod.autoscaler.scale_decision"
 WORKER_POOL_SIZER_DECISION_ACTION = "worker_pool.sizer.decision"
@@ -18,10 +19,16 @@ WORKER_POOL_DRAIN_DECISION_ACTION = "worker_pool.drain.decision"
 
 AUTOSCALER_SCALE_DECISION_ACTIONS = frozenset(
     {
+        FUNCTION_SCALE_DECISION_ACTION,
         ENDPOINT_SCALE_DECISION_ACTION,
         POD_SCALE_DECISION_ACTION,
     }
 )
+"""Every action the autoscaler history reads.
+
+One kind missing from this set is a kind whose decisions an operator cannot see:
+the history endpoint filters on it, so the events are written and then never
+returned."""
 
 # Control-loop and per-request telemetry actions: emitted continuously while the
 # platform runs, useful for short-window diagnosis, and pruned on a much shorter

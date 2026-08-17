@@ -135,10 +135,11 @@ from provider_stripe import StripeSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
+    AutoscalingDriver,
+    EndpointAutoscaler,
     EndpointAutoscalingDispatchObservation,
-    EndpointAutoscalingService,
-    FunctionAutoscalingService,
-    PodAutoscalingService,
+    FunctionAutoscaler,
+    PodAutoscaler,
 )
 from scheduler.capacity_reservations import (
     CapacityReservationService,
@@ -1237,22 +1238,32 @@ def _compose_api_services(
     )
     autoscaler_operations = AutoscalerOperationsService(
         core,
-        function_autoscaler=FunctionAutoscalingService(
+        function_autoscaler=AutoscalingDriver(
             core,
             redis=redis,
-            functions=function,
+            workload=FunctionAutoscaler(core, functions=function),
         ),
-        endpoint_autoscaler=EndpointAutoscalingService(
+        endpoint_autoscaler=AutoscalingDriver(
             core,
             redis=redis,
-            endpoints=endpoint,
-            dispatches=ApiEndpointDispatchAutoscalingReader(EndpointDispatchStateRepository(core)),
+            workload=EndpointAutoscaler(
+                core,
+                redis=redis,
+                endpoints=endpoint,
+                dispatches=ApiEndpointDispatchAutoscalingReader(
+                    EndpointDispatchStateRepository(core)
+                ),
+            ),
         ),
-        pod_autoscaler=PodAutoscalingService(
+        pod_autoscaler=AutoscalingDriver(
             core,
             redis=redis,
-            pods=pod,
-            container_states=scheduler_containers,
+            workload=PodAutoscaler(
+                core,
+                redis=redis,
+                pods=pod,
+                container_states=scheduler_containers,
+            ),
         ),
     )
     scheduler_worker_admin = SchedulerWorkerAdminService(

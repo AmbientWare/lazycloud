@@ -43,12 +43,8 @@ from scheduler.agent_pool import (
     SchedulerAgentPoolService,
 )
 from scheduler.autoscaling import (
-    EndpointAutoscaleResult,
-    EndpointAutoscalingService,
-    FunctionAutoscaleResult,
-    FunctionAutoscalingService,
-    PodAutoscaleResult,
-    PodAutoscalingService,
+    AutoscaleResult,
+    AutoscalingDriver,
     PodControl,
 )
 from scheduler.capacity_reservations import (
@@ -381,9 +377,9 @@ class CronJobRunDraft(ContractModel):
 class SchedulerWorkloadControls:
     containers: SchedulerContainerRequestService | None = None
     dispatch_wake: WakeSignalWaiter | None = None
-    function_autoscaler: FunctionAutoscalingService | None = None
-    endpoints: EndpointAutoscalingService | None = None
-    pods: PodAutoscalingService | None = None
+    function_autoscaler: AutoscalingDriver | None = None
+    endpoints: AutoscalingDriver | None = None
+    pods: AutoscalingDriver | None = None
     pod_control: PodControl | None = None
     functions: ScheduledFunctionControl | None = None
     preemption_recovery: SchedulerPreemptionRecovery | None = None
@@ -511,7 +507,7 @@ class Scheduler:
         return agent_pools
 
     @property
-    def function_autoscaling_service(self) -> FunctionAutoscalingService:
+    def function_autoscaling_service(self) -> AutoscalingDriver:
         functions = self.workloads.function_autoscaler
         if functions is None:
             msg = "scheduler function autoscaler was not injected"
@@ -519,7 +515,7 @@ class Scheduler:
         return functions
 
     @property
-    def endpoint_autoscaling_service(self) -> EndpointAutoscalingService:
+    def endpoint_autoscaling_service(self) -> AutoscalingDriver:
         endpoints = self.workloads.endpoints
         if endpoints is None:
             msg = "scheduler endpoint autoscaler was not injected"
@@ -527,7 +523,7 @@ class Scheduler:
         return endpoints
 
     @property
-    def pod_autoscaling_service(self) -> PodAutoscalingService:
+    def pod_autoscaling_service(self) -> AutoscalingDriver:
         pods = self.workloads.pods
         if pods is None:
             msg = "scheduler pod autoscaler was not injected"
@@ -631,7 +627,7 @@ class Scheduler:
         *,
         now: datetime | None = None,
         limit: int = 100,
-    ) -> list[FunctionAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         return self.function_autoscaling_service.reconcile(now=now, limit=limit)
 
     def reconcile_endpoints(
@@ -639,7 +635,7 @@ class Scheduler:
         *,
         now: datetime | None = None,
         limit: int = 100,
-    ) -> list[EndpointAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         return self.endpoint_autoscaling_service.reconcile(now=now, limit=limit)
 
     def reconcile_pods(
@@ -647,7 +643,7 @@ class Scheduler:
         *,
         now: datetime | None = None,
         limit: int = 100,
-    ) -> list[PodAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         return self.pod_autoscaling_service.reconcile(now=now, limit=limit)
 
     def refresh_pool_states(
@@ -1241,7 +1237,7 @@ class Scheduler:
         *,
         now: datetime | None,
         limit: int,
-    ) -> list[FunctionAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         try:
             return self.reconcile_functions(now=now, limit=limit)
         except Exception:
@@ -1253,7 +1249,7 @@ class Scheduler:
         *,
         now: datetime | None,
         limit: int,
-    ) -> list[EndpointAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         try:
             return self.reconcile_endpoints(now=now, limit=limit)
         except Exception:
@@ -1265,7 +1261,7 @@ class Scheduler:
         *,
         now: datetime | None,
         limit: int,
-    ) -> list[PodAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         try:
             return self.reconcile_pods(now=now, limit=limit)
         except Exception:
@@ -1632,9 +1628,9 @@ class SchedulerRunResult(ContractModel):
     cron_job_runs: list[CronJobRun] = Field(default_factory=list)
     function_retries: list[Task] = Field(default_factory=list)
     agent_pool_reconciliations: list[AgentPoolReconcileResult] = Field(default_factory=list)
-    function_autoscaling: list[FunctionAutoscaleResult] = Field(default_factory=list)
-    endpoint_autoscaling: list[EndpointAutoscaleResult] = Field(default_factory=list)
-    pod_autoscaling: list[PodAutoscaleResult] = Field(default_factory=list)
+    function_autoscaling: list[AutoscaleResult] = Field(default_factory=list)
+    endpoint_autoscaling: list[AutoscaleResult] = Field(default_factory=list)
+    pod_autoscaling: list[AutoscaleResult] = Field(default_factory=list)
     expired_pods: list[ContainerRecord] = Field(default_factory=list)
     pool_states: dict[str, WorkerPoolStateSnapshot] = Field(default_factory=dict)
     capacity_reservations: list[CapacityProvisioningReservation] = Field(default_factory=list)

@@ -20,7 +20,7 @@ from gateway.pod_proxy import RedisPodProxyConnectionRepository
 from observability.stream_state import RedisEventStreamRepository
 from operations.management import ManagementService
 from pydantic import JsonValue
-from scheduler.autoscaling import PodAutoscalingService
+from scheduler.autoscaling import AutoscalingDriver, PodAutoscaler
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
@@ -69,7 +69,7 @@ def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
 
     result = _pod_autoscaler(isolated_services, redis).reconcile()[0]
 
-    assert result.total_connections == 0
+    assert result.signal_value == 0
     assert result.current_containers == 0
     assert result.desired_containers == 0
     assert result.actions == []
@@ -165,11 +165,15 @@ def test_pod_autoscaler_replaces_running_records_without_live_scheduler_state(
         }
     )
 
-    result = PodAutoscalingService(
+    result = AutoscalingDriver(
         isolated_services,
         redis=redis,
-        pods=PodControlService(isolated_services, redis=redis),
-        container_states=states,
+        workload=PodAutoscaler(
+            isolated_services,
+            redis=redis,
+            pods=PodControlService(isolated_services, redis=redis),
+            container_states=states,
+        ),
     ).reconcile(now=current_time)[0]
 
     assert result.current_containers == 0
@@ -282,7 +286,7 @@ def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
 
     result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
-    assert result.total_connections == 0
+    assert result.signal_value == 0
     assert result.current_containers == 4
     assert result.desired_containers == 1
     assert [action.container_id for action in result.actions] == [idle.id]
@@ -335,7 +339,7 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
 
     assert redis.ttl(lock_key) == -1
     active = _pod_autoscaler(isolated_services, redis).reconcile()[0]
-    assert active.total_connections == 1
+    assert active.signal_value == 1
     assert active.actions == []
 
     service.finish_pod_proxy(
@@ -349,7 +353,7 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
 
     assert 1 <= redis.ttl(lock_key) <= 2
     idle_but_warm = _pod_autoscaler(isolated_services, redis).reconcile()[0]
-    assert idle_but_warm.total_connections == 0
+    assert idle_but_warm.signal_value == 0
     assert idle_but_warm.desired_containers == 0
     assert idle_but_warm.actions == []
     assert isolated_services.containers.get(container.id).status is ContainerStatus.Running
@@ -426,7 +430,7 @@ def _assert_pod_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
 
     result = _pod_autoscaler(isolated_services, redis).reconcile()[0]
 
-    assert result.total_connections == 4
+    assert result.signal_value == 4
     assert result.current_containers == 0
     assert result.desired_containers == 2
     assert result.reason == "workspace cpu quota reached"
@@ -488,7 +492,7 @@ def _assert_pod_autoscaler_halts_scale_up_after_failed_container_threshold(
 
     result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
-    assert result.total_connections == 4
+    assert result.signal_value == 4
     assert result.current_containers == 0
     assert result.desired_containers == 0
     assert result.reason == "failed container threshold reached"
@@ -521,7 +525,7 @@ def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
     assert updated.config.autoscaler.min_containers == 0
     assert updated.config.autoscaler.max_containers == 0
     result = _pod_autoscaler(isolated_services, redis).reconcile()[0]
-    assert result.total_connections == 4
+    assert result.signal_value == 4
     assert result.desired_containers == 0
     assert result.actions == []
     assert scheduler.requests == []
@@ -565,11 +569,15 @@ def _create_pod_stub(
     ).stub
 
 
-def _pod_autoscaler(services: ApiServices, redis: RedisClient) -> PodAutoscalingService:
-    return PodAutoscalingService(
+def _pod_autoscaler(services: ApiServices, redis: RedisClient) -> AutoscalingDriver:
+    return AutoscalingDriver(
         services,
         redis=redis,
-        pods=PodControlService(services, redis=redis),
+        workload=PodAutoscaler(
+            services,
+            redis=redis,
+            pods=PodControlService(services, redis=redis),
+        ),
     )
 
 

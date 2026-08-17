@@ -51,6 +51,8 @@ class SchedulerProcessResult:
     container_dispatch_count: int
     dispatched_container_count: int
     app_lifecycle_reconcile_count: int = 0
+    function_autoscale_count: int = 0
+    function_autoscale_action_count: int = 0
     endpoint_autoscale_count: int = 0
     endpoint_autoscale_action_count: int = 0
     pod_autoscale_count: int = 0
@@ -92,6 +94,8 @@ class SchedulerProcessResult:
             "cron_job_run_count": self.cron_job_run_count,
             "function_retry_count": self.function_retry_count,
             "app_lifecycle_reconcile_count": self.app_lifecycle_reconcile_count,
+            "function_autoscale_count": self.function_autoscale_count,
+            "function_autoscale_action_count": self.function_autoscale_action_count,
             "endpoint_autoscale_count": self.endpoint_autoscale_count,
             "endpoint_autoscale_action_count": self.endpoint_autoscale_action_count,
             "pod_autoscale_count": self.pod_autoscale_count,
@@ -185,6 +189,10 @@ def run_scheduler(
                 container_dispatch_count=len(result.container_dispatches),
                 dispatched_container_count=sum(
                     1 for dispatch in result.container_dispatches if dispatch.dispatched
+                ),
+                function_autoscale_count=len(result.function_autoscaling),
+                function_autoscale_action_count=sum(
+                    len(item.actions) for item in result.function_autoscaling
                 ),
                 endpoint_autoscale_count=len(result.endpoint_autoscaling),
                 endpoint_autoscale_action_count=sum(

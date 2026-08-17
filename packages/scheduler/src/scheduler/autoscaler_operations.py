@@ -13,9 +13,7 @@ from scheduler.autoscaling import (
     ENDPOINT_AUTOSCALER_SOURCE,
     FUNCTION_AUTOSCALER_SOURCE,
     POD_AUTOSCALER_SOURCE,
-    EndpointAutoscalingService,
-    FunctionAutoscalingService,
-    PodAutoscalingService,
+    AutoscalingDriver,
     SchedulerServices,
 )
 
@@ -48,9 +46,9 @@ class AutoscalerReconcileResponse(ContractModel):
 @dataclass(slots=True)
 class AutoscalerOperationsService:
     services: SchedulerServices
-    function_autoscaler: FunctionAutoscalingService
-    endpoint_autoscaler: EndpointAutoscalingService
-    pod_autoscaler: PodAutoscalingService
+    function_autoscaler: AutoscalingDriver
+    endpoint_autoscaler: AutoscalingDriver
+    pod_autoscaler: AutoscalingDriver
 
     def status(
         self,
@@ -175,10 +173,7 @@ class AutoscalerOperationsService:
             autoscaling_enabled=enabled,
         )
 
-    def _service_for_kind(
-        self,
-        target_kind: AutoscalerTargetKind,
-    ) -> FunctionAutoscalingService | EndpointAutoscalingService | PodAutoscalingService:
+    def _service_for_kind(self, target_kind: AutoscalerTargetKind) -> AutoscalingDriver:
         if target_kind is AutoscalerTargetKind.Function:
             return self.function_autoscaler
         if target_kind is AutoscalerTargetKind.Endpoint:

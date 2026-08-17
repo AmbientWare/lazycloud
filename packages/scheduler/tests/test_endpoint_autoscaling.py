@@ -15,8 +15,9 @@ from execution.endpoints.service import EndpointControlService, EndpointDispatch
 from observability.stream_state import RedisEventStreamRepository
 from pydantic import JsonValue
 from scheduler.autoscaling import (
+    AutoscalingDriver,
+    EndpointAutoscaler,
     EndpointAutoscalingDispatchObservation,
-    EndpointAutoscalingService,
 )
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
@@ -69,7 +70,7 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
 
     assert len(results) == 1
     result = results[0]
-    assert result.active_requests == 3
+    assert result.signal_value == 3
     assert result.current_containers == 0
     assert result.desired_containers == 3
     assert [action.action for action in result.actions] == ["start", "start", "start"]
@@ -152,7 +153,7 @@ def _assert_endpoint_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
 
     result = _endpoint_autoscaler(isolated_services, redis).reconcile()[0]
 
-    assert result.active_requests == 3
+    assert result.signal_value == 3
     assert result.current_containers == 0
     assert result.desired_containers == 2
     assert result.reason == "workspace cpu quota reached"
@@ -213,7 +214,7 @@ def _assert_endpoint_autoscaler_halts_scale_up_after_failed_container_threshold(
 
     result = _endpoint_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
-    assert result.active_requests == 2
+    assert result.signal_value == 2
     assert result.current_containers == 0
     assert result.desired_containers == 0
     assert result.reason == "failed container threshold reached"
@@ -345,15 +346,19 @@ def _endpoint_containers(services: ApiServices, stub: StubRecord) -> list[Contai
 def _endpoint_autoscaler(
     services: ApiServices,
     redis: RedisClient,
-) -> EndpointAutoscalingService:
-    return EndpointAutoscalingService(
+) -> AutoscalingDriver:
+    return AutoscalingDriver(
         services,
         redis=redis,
-        endpoints=EndpointControlService(
+        workload=EndpointAutoscaler(
             services,
-            gateway_http_url=lambda: "http://gateway.internal:9000",
+            redis=redis,
+            endpoints=EndpointControlService(
+                services,
+                gateway_http_url=lambda: "http://gateway.internal:9000",
+            ),
+            dispatches=_EndpointDispatchReader(EndpointDispatchStateRepository(services)),
         ),
-        dispatches=_EndpointDispatchReader(EndpointDispatchStateRepository(services)),
     )
 
 
