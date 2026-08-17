@@ -121,6 +121,7 @@ class FunctionOptions(TypedDict, total=False):
     gpu: str | None
     gpu_count: int
     timeout_seconds: int | None
+    concurrency: int
     retries: int
     retry_policy: RetryPolicyInput
     retry_delay_seconds: float
@@ -160,6 +161,7 @@ class Function(Generic[P, R]):
     gpu: str | None = None
     gpu_count: int = 0
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
+    concurrency: int = 1
     retries: int = DEFAULT_FUNCTION_RETRIES
     retry_policy: RetryPolicyInput = None
     retry_delay_seconds: float = 0.0
@@ -277,6 +279,7 @@ class Function(Generic[P, R]):
                 gpu=self.gpu,
                 gpu_count=self.gpu_count,
                 timeout_seconds=self._effective_timeout_seconds(),
+                concurrency=self.concurrency,
                 preemptible=self.preemptible,
             ),
             env=self.env,
@@ -721,6 +724,7 @@ def _function(
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
+    concurrency: int = 1,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -762,6 +766,7 @@ def _function(
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
+    concurrency: int = 1,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -802,6 +807,7 @@ def _function(
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
+    concurrency: int = 1,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -840,6 +846,7 @@ def _function(
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
+            concurrency=concurrency,
             retries=retries,
             retry_policy=retry_policy,
             retry_delay_seconds=retry_delay_seconds,
@@ -923,6 +930,7 @@ def _cron(
     gpu: str | None = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = None,
+    concurrency: int = 1,
     retries: int = 0,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -968,6 +976,7 @@ def _cron(
             gpu=gpu,
             gpu_count=gpu_count,
             timeout_seconds=timeout_seconds,
+            concurrency=concurrency,
             retries=retries,
             retry_policy=retry_policy,
             retry_delay_seconds=retry_delay_seconds,
