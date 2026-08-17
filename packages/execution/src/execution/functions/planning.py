@@ -28,7 +28,6 @@ from shared.tasks import (
 
 from execution.config import ManagedPythonExecutable
 
-DEFAULT_FUNCTION_TASK_TTL_SECONDS = 43_200
 DEFAULT_FUNCTION_CONTAINER_CPU_MILLICORES = 100
 DEFAULT_FUNCTION_CONTAINER_MEMORY_MIB = 128
 DEFAULT_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS = 60
@@ -40,13 +39,11 @@ FUNCTION_DEFAULT_PYTHON_EXECUTABLE = "python3.12"
 class FunctionInvokeRequest(ContractModel):
     invocation: FunctionInvocationPayload
     headless: bool = False
-    task_ttl_seconds: int = Field(default=0, ge=0)
     configured_retry_count: int = Field(default=0, ge=0)
 
 
 class FunctionInvokePlan(ContractModel):
     invocation: FunctionInvocationPayload
-    task_ttl_seconds: int = DEFAULT_FUNCTION_TASK_TTL_SECONDS
     retry_count: int = 0
     headless: bool = False
 
@@ -257,7 +254,6 @@ def function_container_id(stub_kind: DeploymentKind, task_id: str, suffix: str) 
 def plan_function_invoke(request: FunctionInvokeRequest) -> FunctionInvokePlan:
     return FunctionInvokePlan(
         invocation=request.invocation,
-        task_ttl_seconds=request.task_ttl_seconds or DEFAULT_FUNCTION_TASK_TTL_SECONDS,
         retry_count=request.configured_retry_count,
         headless=request.headless,
     )
@@ -279,10 +275,7 @@ def plan_function_container_start(
             # would be a guess that the claim then contradicts.
             f"{FunctionContainerEnvVar.KeepWarmSeconds.value}={request.keep_warm_seconds}",
             f"{FunctionContainerEnvVar.Concurrency.value}={request.concurrency}",
-            (
-                f"{FunctionContainerEnvVar.InProcess.value}="
-                f"{str(request.in_process).lower()}"
-            ),
+            (f"{FunctionContainerEnvVar.InProcess.value}={str(request.in_process).lower()}"),
             f"{FunctionContainerEnvVar.Handler.value}={request.handler}",
             f"{FunctionContainerEnvVar.GatewayToken.value}={request.gateway_token}",
             f"{FunctionContainerEnvVar.StubId.value}={request.stub_id}",
