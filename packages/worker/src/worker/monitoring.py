@@ -11,6 +11,11 @@ from typing import Protocol
 from pydantic import field_validator
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsData
+from shared.scheduling import (
+    ContainerStatusUpdatePlan,
+    SchedulerContainerState,
+    SchedulerContainerStatus,
+)
 from shared.timestamps import utc_now
 
 from worker.container_metrics import (
@@ -19,6 +24,11 @@ from worker.container_metrics import (
     WorkerContainerMetricsService,
 )
 from worker.events import ContainerLifecyclePayload, ContainerRequestContext, WorkerUsageEvidence
+from worker.status import (
+    WorkerStatusHeartbeatAction,
+    normalize_worker_container_status,
+    plan_worker_status_heartbeat,
+)
 from worker.supervision import WorkerUsageEmissionResult
 
 LOGGER = logging.getLogger(__name__)
@@ -26,6 +36,26 @@ LOGGER = logging.getLogger(__name__)
 
 class ContainerRuntimeMonitorHandle(Protocol):
     def stop(self) -> ContainerRuntimeMonitoringResult: ...
+
+
+class ContainerStateHeartbeatRepository(Protocol):
+    """The scheduler's view of a container, read and re-armed by its worker.
+
+    Split from the finalization repository because this is the only consumer
+    that both reads a container's state and writes it back on a timer; the
+    protocol names exactly that pair so nothing wider has to be injected to get
+    it.
+    """
+
+    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
+    def update_container_status(
+        self,
+        container_id: str,
+        status: SchedulerContainerStatus,
+        *,
+        ttl_seconds: int,
+    ) -> ContainerStatusUpdatePlan: ...
 
 
 class ContainerRuntimeMonitor(Protocol):
@@ -117,6 +147,7 @@ class WorkerContainerRuntimeMonitor:
     metrics: WorkerContainerMetricsService | None = None
     metrics_source_factory: ContainerMetricsSourceFactory | None = None
     usage_recorder: WorkerUsageWindowRecorder | None = None
+    container_states: ContainerStateHeartbeatRepository | None = None
     settings: ContainerRuntimeMonitorSettings = field(
         default_factory=ContainerRuntimeMonitorSettings
     )
@@ -146,6 +177,7 @@ class WorkerContainerRuntimeMonitor:
             started_pid=started_pid,
             metrics=metrics,
             usage_recorder=self.usage_recorder,
+            container_states=self.container_states,
             settings=self.settings,
             _started_at=started_at,
             _started_at_utc=utc_now(),
@@ -218,6 +250,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
     started_pid: int
     metrics: WorkerContainerMetricsService | None
     usage_recorder: WorkerUsageWindowRecorder | None
+    container_states: ContainerStateHeartbeatRepository | None
     settings: ContainerRuntimeMonitorSettings
     _started_at: float
     _started_at_utc: datetime
@@ -233,7 +266,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _thread: threading.Thread | None = None
 
     def start(self) -> None:
-        if self.metrics is None and self.usage_recorder is None:
+        if self.metrics is None and self.usage_recorder is None and self.container_states is None:
             return
         self._thread = threading.Thread(
             target=self._run,
@@ -264,6 +297,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
         self._publish_once(recorded_at=monotonic())
         while not self._stop.wait(self.settings.sample_interval_seconds):
             current = monotonic()
+            self._heartbeat_container_state()
             self._publish_once(recorded_at=current)
             try:
                 self._record_usage_until(recorded_at=current)
@@ -278,6 +312,60 @@ class _ThreadedContainerRuntimeMonitorHandle:
                     exc_info=True,
                     extra={"container_id": self.request.container_id},
                 )
+
+    def _heartbeat_container_state(self) -> None:
+        """Re-arm the scheduler's record of this container while it is running.
+
+        The state carries a TTL that is re-armed only by a write, and the worker
+        writes `Running` exactly once at start. Without this tick the record
+        simply expires under a container that is working perfectly well, and the
+        orphan sweep then marks it failed — after which nothing counts it toward
+        its stub's ceiling, the failure threshold starts counting it against the
+        stub, and no stop is ever sent, so it keeps claiming. A container is
+        allowed to outlive fifteen minutes; an invocation may take an hour.
+
+        A missing state is deliberately not rewritten. Recreating it would hide
+        a container the platform has already decided it does not know about,
+        which is the one case where letting the sweep reap it is correct.
+        """
+
+        if self.container_states is None:
+            return
+        container_id = self.request.container_id
+        try:
+            state = self.container_states.get_container_state(container_id)
+            plan = plan_worker_status_heartbeat(
+                state_status=(
+                    normalize_worker_container_status(state.status) if state is not None else None
+                ),
+                state_missing=state is None,
+                runtime_started=True,
+                runtime_pid=self.started_pid,
+            )
+            if plan.action is not WorkerStatusHeartbeatAction.UpdateStatus:
+                # Missing, exited or stopping: all decided elsewhere. Stop
+                # heartbeating rather than asserting a liveness this thread is
+                # not the authority on.
+                self._stop.set()
+                LOGGER.info(
+                    "container state heartbeat stopping",
+                    extra={"container_id": container_id, "reason": plan.reason},
+                )
+                return
+            self.container_states.update_container_status(
+                container_id,
+                SchedulerContainerStatus.Running,
+                ttl_seconds=plan.expiry_seconds,
+            )
+        except Exception:
+            # One failed refresh is survivable — the TTL outlives many ticks, and
+            # the next one re-arms it. Letting it out of this thread would end
+            # metering for the rest of the container's life along with it.
+            LOGGER.warning(
+                "container state heartbeat failed",
+                exc_info=True,
+                extra={"container_id": container_id},
+            )
 
     def _flush_usage(self, *, recorded_at: float) -> WorkerUsageEmissionResult | None:
         """Drain what the container owes for the last time, retrying if refused.
