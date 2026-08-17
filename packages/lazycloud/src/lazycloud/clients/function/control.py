@@ -85,7 +85,6 @@ class FunctionControlClient:
         ):
             yield _validate_response(FunctionInvokeResponse, item)
 
-
     def set_result(
         self,
         task_id: str,

@@ -502,18 +502,22 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release() -> No
             )
         )
         session.flush()
-        task_id = TaskRepository(session).upsert(
-            Task(
-                id=str(uuid4()),
-                name="already-complete",
+        task_id = (
+            TaskRepository(session)
+            .upsert(
+                Task(
+                    id=str(uuid4()),
+                    name="already-complete",
+                    workspace_id=workspace_id,
+                    stub_id=stub_id,
+                    status=TaskStatus.Complete,
+                    container_id=container_id,
+                    claimable_at=utc_now(),
+                ),
                 workspace_id=workspace_id,
-                stub_id=stub_id,
-                status=TaskStatus.Complete,
-                container_id=container_id,
-                claimable_at=utc_now(),
-            ),
-            workspace_id=workspace_id,
-        ).id
+            )
+            .id
+        )
 
     try:
         with database.session() as session:
