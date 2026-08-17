@@ -27,6 +27,7 @@ from shared.autoscaling import (
     TaskQueueScaleDecisionKind,
     decide_pod_scale,
     decide_task_queue_scale,
+    function_container_ceiling,
     select_stoppable_pod_containers,
 )
 from shared.containers import ContainerRecord, ContainerStatus
@@ -244,6 +245,11 @@ class FunctionAutoscaleResult(ContractModel):
 class FunctionAutoscalingService:
     """Give a function's backlog enough containers to be worked through.
 
+    The only thing that provisions a function past its first container. An
+    invocation may bring an idle stub up so a cold call does not wait for a
+    tick, and stops there; everything about depth is decided here, from the
+    whole backlog, once per tick per stub.
+
     Written as a fourth service rather than folded into a shared base. Three of
     the four are about to become three of three when task queues go, and an
     abstraction extracted now would be shaped around the member that is leaving.
@@ -391,9 +397,7 @@ def _function_autoscaler_config(config: StubConfig) -> TaskQueueAutoscalerConfig
     autoscaler = config.autoscaler
     return TaskQueueAutoscalerConfig(
         tasks_per_container=autoscaler.tasks_per_container,
-        # A function with no autoscaler configured still has to be able to run,
-        # so an unset ceiling means one container rather than none.
-        max_containers=max(autoscaler.max_containers, 1),
+        max_containers=function_container_ceiling(autoscaler.max_containers),
     )
 
 

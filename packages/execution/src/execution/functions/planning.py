@@ -167,6 +167,42 @@ class FunctionStreamCancelPlan(ContractModel):
     next_status: TaskStatus | None = None
 
 
+class FunctionContainerStartAuthority(StrEnum):
+    """How much capacity the caller asking for a container is entitled to.
+
+    `ColdStart` is every path that reacts to one task: an invocation arriving, a
+    retry coming due, a backlog found with nothing alive to serve it. It may
+    bring a stub up from nothing so a single call is not made to wait for a
+    scheduler tick, and it stops there — depth past the first container is a
+    judgement about a backlog, and only the autoscaler sees one whole. Six
+    invocations arriving together each reading the same counts and each deciding
+    to provision is what let a ceiling of six hold nine containers.
+    """
+
+    ColdStart = "cold-start"
+    Autoscaler = "autoscaler"
+
+
+def function_container_start_allowed(
+    *,
+    authority: FunctionContainerStartAuthority,
+    live_containers: int,
+    max_containers: int,
+) -> bool:
+    """Whether one more container may be started for a stub in this state.
+
+    Both halves are answered here so that the ceiling has exactly one reading.
+    `live_containers` must have been sampled under the lock the reservation
+    holds; answered against a stale count this decides nothing.
+    """
+
+    if live_containers >= max_containers:
+        return False
+    if authority is FunctionContainerStartAuthority.Autoscaler:
+        return True
+    return live_containers == 0
+
+
 class FunctionTaskCancellationReason(StrEnum):
     Expired = "expired"
     ExceededRetryLimit = "exceeded_retry_limit"

@@ -15,6 +15,7 @@ from database.repositories.execution import (
 from database.repositories.orchestration import ContainerRepository
 from pydantic import JsonValue
 from shared.app_identity import FUNCTION_IMAGE
+from shared.autoscaling import function_container_ceiling
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
     WorkerStartupKind,
@@ -63,9 +64,11 @@ from execution.containers.service import PendingContainerReservation
 from execution.functions import planning
 from execution.functions.config import FunctionStubConfig
 from execution.functions.planning import (
+    FunctionContainerStartAuthority,
     FunctionContainerStartRequest,
     FunctionTaskCancellationReason,
     function_cancellation_decision,
+    function_container_start_allowed,
     plan_function_container_start,
     plan_function_cron,
     plan_function_invoke,
@@ -351,26 +354,34 @@ class FunctionControlService:
     def start_function_container(self, stub_id: str) -> bool:
         """Start one more container for this stub, because the autoscaler said so.
 
-        The capacity question has already been answered by the caller, against
-        the backlog and the stub's ceiling, so this does not ask it again. It
-        still needs a task to start from — a container is planned from its stub
-        but reserved against work that exists — and takes the oldest unclaimed
-        one, which is also the one it will most likely end up serving.
+        How deep the backlog warrants going has already been answered by the
+        caller; the ceiling is not taken on trust and is checked again where the
+        container is reserved, which is the only place it can be checked without
+        racing. It still needs a task to start from — a container is planned
+        from its stub but reserved against work that exists — and takes the
+        oldest unclaimed one, which is also the one it will most likely serve.
         """
 
         with self.services.context.database.session() as session:
-            candidates = TaskRepository(session).list_unclaimed_claimable(limit=1)
-        pending = next((task for task in candidates if task.stub_id == stub_id), None)
+            candidates = TaskRepository(session).list_unclaimed_claimable(
+                limit=1,
+                stub_id=stub_id,
+            )
+        pending = next(iter(candidates), None)
         if pending is None:
             return False
-        return self._schedule_function_task(pending, capacity_decided=True) is not None
+        scheduled = self._schedule_function_task(
+            pending,
+            authority=FunctionContainerStartAuthority.Autoscaler,
+        )
+        return scheduled is not None
 
     def _schedule_function_task(
         self,
         task: Task,
         *,
         eligible_at: datetime | None = None,
-        capacity_decided: bool = False,
+        authority: FunctionContainerStartAuthority = (FunctionContainerStartAuthority.ColdStart),
     ) -> SchedulerSubmissionResult | None:
         if not task.stub_id:
             self.services.tasks.transition(
@@ -392,12 +403,6 @@ class FunctionControlService:
                 error="function task is missing its invocation payload",
                 exit_code=1,
             )
-            return None
-
-        if not capacity_decided and not self._needs_another_container(stub.id):
-            # Somebody is already able to take this. Starting a container anyway
-            # is what made every call a cold start, and it is the one thing this
-            # whole arrangement exists to stop doing.
             return None
 
         container_id = str(uuid4())
@@ -426,10 +431,13 @@ class FunctionControlService:
         container = self._reserve_function_container(
             task,
             container_plan=container_plan,
+            stub_id=stub.id,
             stub_name=stub.name,
             stub_workspace_id=stub.workspace_id,
             stub_app_id=stub.app_id,
             eligible_at=eligible_at,
+            authority=authority,
+            max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
         )
         if container is None:
             return None
@@ -546,27 +554,6 @@ class FunctionControlService:
                 f"this function already has {in_flight} calls in flight, which is the most "
                 f"it accepts ({limit}); raise max_pending_tasks to queue more"
             )
-
-    def _needs_another_container(self, stub_id: str) -> bool:
-        """Whether this stub has more runnable work than containers free to take it.
-
-        Idle capacity is live containers minus the work they are already holding.
-        A container counts as free the moment it exists, before it has claimed
-        anything, which is deliberate: two calls arriving together must not each
-        start a container for work one of them is about to pick up.
-
-        The read is not serialized against concurrent starts, so a burst can
-        briefly under-provision — several tasks each seeing the same idle
-        container and waiting on it. That queues rather than loses work, and
-        provisioning for depth is the autoscaler's job, not this decision's.
-        """
-
-        with self.services.context.database.session() as session:
-            live = ContainerRepository(session).count_live_for_stub(stub_id)
-            tasks = TaskRepository(session)
-            held = tasks.count_claimed_inflight_for_stub(stub_id)
-            unclaimed = tasks.count_unclaimed_for_stub(stub_id)
-        return unclaimed > max(live - held, 0)
 
     def _cron_execution_allowed(self, task: Task, *, stub_kind: StubKind) -> bool:
         if stub_kind is not StubKind.CronJob:
@@ -698,20 +685,17 @@ class FunctionControlService:
         limit: int,
         at: datetime,
     ) -> list[Task]:
-        """Give each stub's backlog enough containers to be worked through.
+        """Give a stub with runnable work and nothing alive somewhere to run it.
 
-        Two failures at once. Work can be claimable with nothing coming for it —
-        releasing a claim and having somewhere to run are separate events, and a
+        Releasing a claim and having somewhere to run are separate events, and a
         container dying between them leaves a row that says runnable forever
-        while its caller waits forever. And work can have one container for a
-        hundred calls, which finishes eventually and looks identical to a
-        platform that has stopped.
+        while its caller waits forever. Nothing else notices: the work is not
+        failed, not claimed, and not attached to anything that will report it.
 
-        Depth is decided by the same rule task queues use, against the same kind
-        of sample: how much is waiting, over how much one container takes, capped
-        by what the stub's autoscaler allows. Reusing that decision rather than
-        inventing a second one is deliberate — two scaling rules in one codebase
-        disagree, and the disagreement shows up as a bill.
+        Recovery only, one container per stub. How deep to go for a backlog that
+        is already being served is the autoscaler's decision, taken against the
+        whole queue on the same tick this runs on — a second opinion formed here
+        from one task row would be the two-starter race again.
         """
 
         scheduled: list[Task] = []
@@ -739,10 +723,13 @@ class FunctionControlService:
         task: Task,
         *,
         container_plan: planning.FunctionContainerStartPlan,
+        stub_id: str,
         stub_name: str,
         stub_workspace_id: str,
         stub_app_id: str | None,
         eligible_at: datetime | None,
+        authority: FunctionContainerStartAuthority,
+        max_containers: int,
     ) -> ContainerRecord | None:
         """Reserve a container for this stub, prompted by `task` but not bound to it.
 
@@ -750,11 +737,25 @@ class FunctionControlService:
         a finished or not-yet-due task warrants nothing — but the container that
         results serves the stub. Which invocation it runs is settled later, by the
         claim, and may well be a different one that arrived while it was starting.
+
+        The stub's ceiling is settled here and nowhere else. This is the only
+        point at which the count of what is already running and the row that adds
+        to it are the same transaction, so it is the only point at which refusing
+        past the ceiling refuses anything — a caller that checked earlier checked
+        a number another caller was in the middle of changing.
         """
 
         rejected: Task | None = None
         container: ContainerRecord | None = None
         with self.services.context.database.session() as session:
+            containers = ContainerRepository(session)
+            containers.lock_stub_capacity(stub_id)
+            if not function_container_start_allowed(
+                authority=authority,
+                live_containers=containers.count_live_for_stub(stub_id),
+                max_containers=max_containers,
+            ):
+                return None
             task_repository = TaskRepository(session)
             current = task_repository.get_for_update_across_workspaces(task.id)
             if current is None or is_terminal_task_status(current.status):
