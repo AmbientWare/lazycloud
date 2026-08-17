@@ -17,9 +17,10 @@ from images.settings import ImageBuildContainerSettings
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from scheduler.agent_pool import SchedulerAgentPoolService
 from scheduler.autoscaling import (
-    EndpointAutoscalingService,
-    FunctionAutoscalingService,
-    PodAutoscalingService,
+    AutoscalingDriver,
+    EndpointAutoscaler,
+    FunctionAutoscaler,
+    PodAutoscaler,
 )
 from scheduler.capacity_controls import SchedulerCapacityControllerProvider
 from scheduler.capacity_reservations import (
@@ -224,22 +225,30 @@ class SchedulerRuntime:
             workloads=SchedulerWorkloadControls(
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
-                function_autoscaler=FunctionAutoscalingService(
+                function_autoscaler=AutoscalingDriver(
                     scheduler_services,
                     redis=redis_client,
-                    functions=function_control,
+                    workload=FunctionAutoscaler(scheduler_services, functions=function_control),
                 ),
-                endpoints=EndpointAutoscalingService(
+                endpoints=AutoscalingDriver(
                     scheduler_services,
                     redis=redis_client,
-                    endpoints=endpoint_control,
-                    dispatches=endpoint_dispatches,
+                    workload=EndpointAutoscaler(
+                        scheduler_services,
+                        redis=redis_client,
+                        endpoints=endpoint_control,
+                        dispatches=endpoint_dispatches,
+                    ),
                 ),
-                pods=PodAutoscalingService(
+                pods=AutoscalingDriver(
                     scheduler_services,
                     redis=redis_client,
-                    pods=pod_control,
-                    container_states=container_states,
+                    workload=PodAutoscaler(
+                        scheduler_services,
+                        redis=redis_client,
+                        pods=pod_control,
+                        container_states=container_states,
+                    ),
                 ),
                 pod_control=pod_control,
                 functions=function_control,

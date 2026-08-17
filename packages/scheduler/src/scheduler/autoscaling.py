@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import StrEnum
 from secrets import token_urlsafe
 from typing import Protocol
 
@@ -18,17 +17,18 @@ from shared.autoscaler_state import (
 from shared.autoscaling import (
     BacklogAutoscalerConfig,
     BacklogAutoscalerSample,
-    BacklogScaleDecisionKind,
     PodAutoscalerConfig,
     PodAutoscalerSample,
     PodContainerState,
-    PodScaleDecisionKind,
     PodStubType,
+    ScaleDecisionKind,
     decide_backlog_scale,
     decide_pod_scale,
     function_container_ceiling,
+    scale_kind,
     select_stoppable_pod_containers,
 )
+from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import DomainError, NotFoundError
@@ -38,6 +38,7 @@ from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.worker_events import (
     ENDPOINT_SCALE_DECISION_ACTION,
+    FUNCTION_SCALE_DECISION_ACTION,
     POD_SCALE_DECISION_ACTION,
 )
 from shared.workload_config import StubConfig
@@ -59,14 +60,8 @@ AUTOSCALER_LOCK_TTL_SECONDS = 10
 AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
 AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
 FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
-ENDPOINT_AUTOSCALER_LOCK_TTL_SECONDS = 10
 ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
-ENDPOINT_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
-ENDPOINT_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
 ENDPOINT_AUTOSCALER_SOURCE = "endpoint.autoscaler"
-POD_AUTOSCALER_LOCK_TTL_SECONDS = 10
-POD_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
-POD_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
 POD_AUTOSCALER_SOURCE = "pod.autoscaler"
 
 
@@ -78,6 +73,12 @@ class PodControl(Protocol):
 
 class PodContainerStateReader(Protocol):
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
+
+class FunctionAutoscaleControl(Protocol):
+    def start_function_container(self, stub_id: str) -> bool: ...
+
+    def unclaimed_task_count(self, stub_id: str) -> int: ...
 
 
 class EndpointAutoscaleControl(Protocol):
@@ -100,33 +101,37 @@ class EndpointAutoscalingDispatchReader(Protocol):
     def list_by_stub(self, stub_id: str) -> list[EndpointAutoscalingDispatchObservation]: ...
 
 
-class EndpointScaleDecisionKind(StrEnum):
-    ScaleUp = "scale-up"
-    ScaleDown = "scale-down"
-    Hold = "hold"
-    Invalid = "invalid"
-
-
-class EndpointAutoscaleAction(ContractModel):
-    container_id: str
+class AutoscaleAction(ContractModel):
+    container_id: str = ""
     action: str
     reason: str = ""
 
 
-class EndpointAutoscaleResult(ContractModel):
+class AutoscaleResult(ContractModel):
+    """What one tick concluded about one workload.
+
+    `kind` is what separates the three, and the sample is carried as a name and
+    a number rather than a field per kind. A result shaped per kind meant every
+    reader of the autoscaler surface — the state row, the metrics, the history,
+    the operator's reconcile output — had a branch for each, and the kind added
+    last is the one each of those branches forgot.
+    """
+
+    kind: AutoscalerTargetKind
     stub_id: str
     workspace_id: str
-    active_requests: int = 0
+    signal_name: str = ""
+    signal_value: int = 0
     current_containers: int = 0
     pending_containers: int = 0
     desired_containers: int = 0
-    decision: EndpointScaleDecisionKind
+    decision: ScaleDecisionKind
     reason: str
     active: bool = True
     lock_acquired: bool = True
     valid: bool = True
     failed_containers: list[str] = Field(default_factory=list)
-    actions: list[EndpointAutoscaleAction] = Field(default_factory=list)
+    actions: list[AutoscaleAction] = Field(default_factory=list)
     guardrails: dict[str, JsonValue] = Field(default_factory=dict)
 
     @property
@@ -134,137 +139,141 @@ class EndpointAutoscaleResult(ContractModel):
         return bool(self.actions)
 
 
-class PodAutoscaleAction(ContractModel):
-    container_id: str
-    action: str
-    reason: str = ""
+@dataclass(frozen=True, slots=True)
+class AutoscalerIdentity:
+    """Everything that differs between kinds and is not a decision."""
+
+    kind: AutoscalerTargetKind
+    source: str
+    scale_decision_action: str
+    signal_name: str
+    lock_namespace: str
 
 
-class PodAutoscaleResult(ContractModel):
-    stub_id: str
-    workspace_id: str
-    total_connections: int = 0
-    current_containers: int = 0
-    pending_containers: int = 0
-    desired_containers: int = 0
-    decision: PodScaleDecisionKind
+FUNCTION_AUTOSCALER = AutoscalerIdentity(
+    kind=AutoscalerTargetKind.Function,
+    source=FUNCTION_AUTOSCALER_SOURCE,
+    scale_decision_action=FUNCTION_SCALE_DECISION_ACTION,
+    signal_name="unclaimed_tasks",
+    lock_namespace="functions",
+)
+ENDPOINT_AUTOSCALER = AutoscalerIdentity(
+    kind=AutoscalerTargetKind.Endpoint,
+    source=ENDPOINT_AUTOSCALER_SOURCE,
+    scale_decision_action=ENDPOINT_SCALE_DECISION_ACTION,
+    signal_name="active_requests",
+    lock_namespace="endpoints",
+)
+POD_AUTOSCALER = AutoscalerIdentity(
+    kind=AutoscalerTargetKind.Pod,
+    source=POD_AUTOSCALER_SOURCE,
+    scale_decision_action=POD_SCALE_DECISION_ACTION,
+    signal_name="total_connections",
+    lock_namespace="pods",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScalePlan:
+    """What a workload wants, before the driver decides what it may have.
+
+    Everything a workload knows and the driver does not: the count its own
+    signal argues for, and the configured limits the record arm reports. The
+    safety that turns this into what actually happens is not here.
+    """
+
+    desired_containers: int
     reason: str
-    active: bool = True
-    lock_acquired: bool = True
+    decision: ScaleDecisionKind
     valid: bool = True
-    failed_containers: list[str] = Field(default_factory=list)
-    actions: list[PodAutoscaleAction] = Field(default_factory=list)
-    guardrails: dict[str, JsonValue] = Field(default_factory=dict)
+    max_containers: int = 0
+    min_containers: int = 0
+    tasks_per_container: int = 1
+    keep_warm_seconds: int = 0
+    saturated: bool = False
+
+
+class WorkloadAutoscaler(Protocol):
+    """The part of autoscaling that is genuinely per kind.
+
+    A function scales on backlog depth, an endpoint on in-flight dispatches, a
+    pod on connections; they start containers three different ways and disagree
+    about which of them may be stopped. That is the whole of it. Deliberately no
+    reach into the pass that runs around this: what a workload cannot see, it
+    cannot forget to do.
+    """
 
     @property
-    def changed(self) -> bool:
-        return bool(self.actions)
+    def identity(self) -> AutoscalerIdentity: ...
 
+    def selects(self, stub: StubRecord) -> bool: ...
 
-type AutoscaleAction = FunctionAutoscaleAction | EndpointAutoscaleAction | PodAutoscaleAction
+    def partition(
+        self,
+        containers: list[ContainerRecord],
+    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
+        """Split what is holding capacity from what only claims to be."""
+        ...
 
+    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]: ...
 
-class FunctionAutoscaleControl(Protocol):
-    def start_function_container(self, stub_id: str) -> bool: ...
+    def sample(self, stub: StubRecord) -> int: ...
 
-    def unclaimed_task_count(self, stub_id: str) -> int: ...
+    def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan: ...
 
+    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]: ...
 
-class FunctionAutoscaleAction(ContractModel):
-    container_id: str
-    action: str
-    reason: str = ""
-
-
-class FunctionAutoscaleResult(ContractModel):
-    stub_id: str
-    workspace_id: str
-    queue_length: int = 0
-    current_containers: int = 0
-    pending_containers: int = 0
-    desired_containers: int = 0
-    decision: BacklogScaleDecisionKind
-    reason: str
-    active: bool = True
-    lock_acquired: bool = True
-    valid: bool = True
-    failed_containers: list[str] = Field(default_factory=list)
-    actions: list[FunctionAutoscaleAction] = Field(default_factory=list)
-
-    @property
-    def changed(self) -> bool:
-        return bool(self.actions)
+    def scale_down(
+        self,
+        stub: StubRecord,
+        containers: list[ContainerRecord],
+        count: int,
+        *,
+        keep_warm_seconds: int,
+        active_instance: bool,
+        now: datetime,
+    ) -> list[AutoscaleAction]: ...
 
 
 @dataclass(slots=True)
-class FunctionAutoscalingService:
-    """Give a function's backlog enough containers to be worked through.
+class AutoscalingDriver:
+    """The reconcile pass every workload gets, identically.
 
-    The only thing that provisions a function past its first container. An
-    invocation may bring an idle stub up so a cold call does not wait for a
-    tick, and stops there; everything about depth is decided here, from the
-    whole backlog, once per tick per stub.
+    Stub selection and the pause an operator set, the stub's lock and the state
+    a contended tick still records, the container counts, the failed-container
+    threshold, the inactive deployment, the workspace guardrail, and the metrics
+    and event and state row a tick leaves behind: all of it here, once, for
+    every kind.
 
-    The backlog rule it decides by is `decide_backlog_scale`, shared with
-    nothing else today and deliberately kept general: how much is waiting, over
-    how much one container takes, capped by what the stub allows. Endpoints
-    scale on in-flight dispatches and pods on connections, so what they share
-    with this is the shape of a reconcile pass rather than the sample it reads.
-
-    Scaling down is deliberately not done here. A function container already
-    ends itself when its keep-warm window passes with no work, so the way to
-    have fewer is to stop giving them any — stopping one from outside risks
-    taking an invocation with it, which is the one failure this whole change
-    has been careful about.
+    Written as three copies these drifted, and the drift was invisible because
+    each copy was individually correct. The function autoscaler was the newest
+    copy and it had never read the pause flag, never recorded a metric, and
+    never named an action it took — three ways of being absent from the surface
+    an operator uses, none of which looked like a bug in a diff.
     """
 
     services: SchedulerServices
     redis: RedisClient
-    functions: FunctionAutoscaleControl
+    workload: WorkloadAutoscaler
 
     def reconcile(
         self,
         *,
         now: datetime | None = None,
         limit: int = 100,
-    ) -> list[FunctionAutoscaleResult]:
+    ) -> list[AutoscaleResult]:
         current_time = now or utc_now()
         stubs = [
             stub
             for stub in self.services.scheduler_workloads.list_stubs()
-            if stub.kind is StubKind.Function
+            if self.workload.selects(stub) and _autoscaling_enabled(stub)
         ]
-        results: list[FunctionAutoscaleResult] = []
+        results: list[AutoscaleResult] = []
         for stub in stubs[: max(limit, 0)]:
             token = token_urlsafe(16)
             lock_key = self._lock_key(stub)
             if not self._acquire_lock(lock_key, token):
-                result = FunctionAutoscaleResult(
-                    stub_id=stub.id,
-                    workspace_id=stub.workspace_id,
-                    decision=BacklogScaleDecisionKind.Hold,
-                    reason="autoscaler lock already held",
-                    lock_acquired=False,
-                )
-                # Recorded rather than skipped, as the other two autoscalers
-                # already do. A tick that found the lock held is why a stub did
-                # not scale, and leaving no state for it makes the history read
-                # as if the autoscaler never looked.
-                _record_autoscaler_state(
-                    self.services,
-                    source=FUNCTION_AUTOSCALER_SOURCE,
-                    target_kind=AutoscalerTargetKind.Function,
-                    stub=stub,
-                    current_count=result.current_containers,
-                    desired_count=result.desired_containers,
-                    decision=result.decision.value,
-                    reason=result.reason,
-                    active=result.active,
-                    valid=result.valid,
-                    lock_acquired=result.lock_acquired,
-                    owner_lock_key=lock_key,
-                )
-                results.append(result)
+                results.append(self._record_lock_contention(stub, lock_key))
                 continue
             try:
                 results.append(self.reconcile_stub(stub, now=current_time))
@@ -277,21 +286,23 @@ class FunctionAutoscalingService:
         stub: StubRecord,
         *,
         now: datetime | None = None,
-    ) -> FunctionAutoscaleResult:
+    ) -> AutoscaleResult:
         current_time = now or utc_now()
+        identity = self.workload.identity
         active = _deployment_active(self.services, stub)
         containers = _containers_for_stub(self.services, stub)
-        current = len(_active_containers(containers))
+        holding, stale = self.workload.partition(containers)
+        actions = self.workload.recover(stale)
+        current = len(holding)
         pending = _pending_container_count(containers)
-        queue_length = self.functions.unclaimed_task_count(stub.id)
-        config = _function_autoscaler_config(stub.config)
-        # A container that fails on startup frees the slot it was counted in,
-        # so the backlog still reads as unserved and the next tick provisions
-        # again. `max_containers` does not bound that — nothing is ever alive to
-        # count against it — so a stub whose `on_start` cannot succeed is
-        # started for as long as the work sits there. This is what bounds it,
-        # and the resource guardrail below is what bounds the healthy case
-        # against the workspace's own limits.
+        signal = self.workload.sample(stub)
+        plan = self.workload.plan(stub, signal=signal, current=current)
+        # A container that fails on startup frees the slot it was counted in, so
+        # the signal still reads as unserved and the next tick provisions again.
+        # `max_containers` does not bound that — nothing is ever alive to count
+        # against it — so a stub whose startup cannot succeed is started for as
+        # long as the pressure sits there. This is what bounds it, and the
+        # workspace guardrail below is what bounds the healthy case.
         failed_containers = _recent_failed_container_ids(
             containers,
             now=current_time,
@@ -301,210 +312,19 @@ class FunctionAutoscalingService:
         failure_threshold_reached = (
             failure_threshold > 0 and len(failed_containers) >= failure_threshold
         )
-        sample = BacklogAutoscalerSample(
-            queue_length=queue_length,
-            running_tasks=0,
-            current_containers=current,
-        )
-        decision = decide_backlog_scale(sample, config)
-        desired = decision.desired_containers if active else 0
-        reason = "deployment inactive" if not active else decision.reason.value
-        result_decision = decision.decision
-        if active and failure_threshold_reached:
-            desired = 0
-            reason = "failed container threshold reached"
-            result_decision = _backlog_scale_kind(desired, current)
-        guardrail = AutoscalerGuardrailPlan()
-        if active and decision.valid and desired > current:
-            guardrail = plan_autoscaler_start_guardrails(
-                self.redis,
-                stub=stub,
-                current_count=current,
-                desired_count=desired,
-            )
-            if guardrail.limited:
-                desired = guardrail.desired_count
-                reason = guardrail.reason
-                result_decision = _backlog_scale_kind(desired, current)
-        actions: list[FunctionAutoscaleAction] = []
-        if active and decision.valid and desired > current:
-            actions.extend(self._scale_up(stub, desired - current))
-        result = FunctionAutoscaleResult(
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            queue_length=queue_length,
-            current_containers=current,
-            pending_containers=pending,
-            desired_containers=desired,
-            decision=result_decision,
-            reason=reason,
-            active=active,
-            valid=decision.valid,
-            failed_containers=failed_containers,
-            actions=actions,
-        )
-        _record_autoscaler_state(
-            self.services,
-            source=FUNCTION_AUTOSCALER_SOURCE,
-            target_kind=AutoscalerTargetKind.Function,
-            stub=stub,
-            current_count=current,
-            desired_count=desired,
-            decision=result.decision.value,
-            reason=reason,
-            active=active,
-            valid=result.valid,
-            signal_name="unclaimed_tasks",
-            signal_value=queue_length,
-        )
-        return result
-
-    def _scale_up(self, stub: StubRecord, count: int) -> list[FunctionAutoscaleAction]:
-        actions: list[FunctionAutoscaleAction] = []
-        for _ in range(count):
-            try:
-                started = self.functions.start_function_container(stub.id)
-            except DomainError as exc:
-                actions.append(
-                    FunctionAutoscaleAction(
-                        container_id="",
-                        action="scale-up-failed",
-                        reason=exc.message,
-                    )
-                )
-                break
-            if not started:
-                break
-            actions.append(FunctionAutoscaleAction(container_id="", action="scale-up"))
-        return actions
-
-    def _lock_key(self, stub: StubRecord) -> str:
-        return self.redis.key("autoscaling", "functions", stub.workspace_id, stub.id, "lock")
-
-    def _acquire_lock(self, key: str, token: str) -> bool:
-        return bool(
-            self.redis.set(
-                key,
-                token,
-                nx=True,
-                ex=AUTOSCALER_LOCK_TTL_SECONDS,
-            )
-        )
-
-    def _release_lock(self, key: str, token: str) -> None:
-        if _redis_text(self.redis.get(key)) == token:
-            self.redis.delete(key)
-
-
-def _function_autoscaler_config(config: StubConfig) -> BacklogAutoscalerConfig:
-    autoscaler = config.autoscaler
-    return BacklogAutoscalerConfig(
-        tasks_per_container=autoscaler.tasks_per_container,
-        max_containers=function_container_ceiling(autoscaler.max_containers),
-    )
-
-
-@dataclass(slots=True)
-class EndpointAutoscalingService:
-    services: SchedulerServices
-    redis: RedisClient
-    endpoints: EndpointAutoscaleControl
-    dispatches: EndpointAutoscalingDispatchReader
-
-    def reconcile(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[EndpointAutoscaleResult]:
-        current_time = now or utc_now()
-        stubs = [
-            stub
-            for stub in self.services.scheduler_workloads.list_stubs()
-            if stub.kind in {StubKind.Endpoint, StubKind.Asgi}
-            and stub.deployment_id
-            and _endpoint_autoscaling_enabled(stub)
-        ]
-        results: list[EndpointAutoscaleResult] = []
-        for stub in stubs[: max(limit, 0)]:
-            token = token_urlsafe(16)
-            lock_key = self._lock_key(stub)
-            if not self._acquire_lock(lock_key, token):
-                result = EndpointAutoscaleResult(
-                    stub_id=stub.id,
-                    workspace_id=stub.workspace_id,
-                    decision=EndpointScaleDecisionKind.Hold,
-                    reason="autoscaler lock already held",
-                    lock_acquired=False,
-                )
-                _record_autoscaler_state(
-                    self.services,
-                    source=ENDPOINT_AUTOSCALER_SOURCE,
-                    target_kind=AutoscalerTargetKind.Endpoint,
-                    stub=stub,
-                    current_count=result.current_containers,
-                    desired_count=result.desired_containers,
-                    decision=result.decision.value,
-                    reason=result.reason,
-                    active=result.active,
-                    valid=result.valid,
-                    lock_acquired=result.lock_acquired,
-                    owner_lock_key=lock_key,
-                )
-                results.append(result)
-                continue
-            try:
-                results.append(self.reconcile_stub(stub, now=current_time))
-            finally:
-                self._release_lock(lock_key, token)
-        return results
-
-    def reconcile_stub(
-        self,
-        stub: StubRecord,
-        *,
-        now: datetime | None = None,
-    ) -> EndpointAutoscaleResult:
-        current_time = now or utc_now()
-        active = _deployment_active(self.services, stub)
-        containers = _containers_for_stub(self.services, stub)
-        active_containers = _active_containers(containers)
-        current = len(active_containers)
-        pending = _pending_container_count(containers)
-        active_requests = self.dispatches.active_count(stub.id)
-        config = _endpoint_autoscaler_config(stub.config)
-        failed_containers = _recent_failed_container_ids(
-            containers,
-            now=current_time,
-            window_seconds=_endpoint_failed_container_window_seconds(stub.config),
-        )
-        failure_threshold = _endpoint_failed_container_threshold(stub.config)
-        failure_threshold_reached = (
-            failure_threshold > 0 and len(failed_containers) >= failure_threshold
-        )
-        desired, reason = _endpoint_desired_containers(
-            active_requests=active_requests,
-            config=config,
-        )
-        decision = _endpoint_scale_kind(desired, current)
+        desired = plan.desired_containers
+        reason = plan.reason
+        decision = plan.decision
         if not active:
             desired = 0
             reason = "deployment inactive"
-            decision = (
-                EndpointScaleDecisionKind.ScaleDown
-                if current > 0
-                else EndpointScaleDecisionKind.Hold
-            )
+            decision = scale_kind(desired, current)
         elif failure_threshold_reached:
             desired = 0
             reason = "failed container threshold reached"
-            decision = (
-                EndpointScaleDecisionKind.ScaleDown
-                if current > 0
-                else EndpointScaleDecisionKind.Hold
-            )
+            decision = scale_kind(desired, current)
         guardrail = AutoscalerGuardrailPlan()
-        if active and desired > current and decision is EndpointScaleDecisionKind.ScaleUp:
+        if active and plan.valid and desired > current:
             guardrail = plan_autoscaler_start_guardrails(
                 self.redis,
                 stub=stub,
@@ -514,44 +334,306 @@ class EndpointAutoscalingService:
             if guardrail.limited:
                 desired = guardrail.desired_count
                 reason = guardrail.reason
-                decision = _endpoint_scale_kind(desired, current)
-        actions: list[EndpointAutoscaleAction] = []
+                decision = scale_kind(desired, current)
         delta = desired - current
-        if delta > 0:
-            actions.extend(self._scale_up(stub, delta))
+        if delta > 0 and active and plan.valid:
+            actions.extend(self.workload.scale_up(stub, delta))
         elif delta < 0:
-            workspace_id = stub.workspace_id
             actions.extend(
-                self._scale_down(
+                self.workload.scale_down(
                     stub,
-                    workspace_id,
-                    containers,
+                    holding,
                     -delta,
-                    keep_warm_seconds=(
-                        0 if stub.kind is StubKind.Sandbox else config.keep_warm_seconds
-                    ),
+                    keep_warm_seconds=plan.keep_warm_seconds,
+                    active_instance=active and not failure_threshold_reached,
                     now=current_time,
                 )
             )
-        result = EndpointAutoscaleResult(
+        result = AutoscaleResult(
+            kind=identity.kind,
             stub_id=stub.id,
             workspace_id=stub.workspace_id,
-            active_requests=active_requests,
+            signal_name=identity.signal_name,
+            signal_value=signal,
             current_containers=current,
             pending_containers=pending,
             desired_containers=desired,
             decision=decision,
             reason=reason,
             active=active,
+            valid=plan.valid,
             failed_containers=failed_containers,
             actions=actions,
             guardrails=guardrail.payload(),
         )
-        self._emit_scale_event(stub, result, config)
+        self._record(stub, result, plan)
         return result
 
-    def _scale_up(self, stub: StubRecord, count: int) -> list[EndpointAutoscaleAction]:
-        actions: list[EndpointAutoscaleAction] = []
+    def _record(self, stub: StubRecord, result: AutoscaleResult, plan: ScalePlan) -> None:
+        identity = self.workload.identity
+        action_payloads = _autoscale_action_payloads(result.actions)
+        if _should_persist_scale_event(
+            self.services,
+            target_kind=identity.kind,
+            stub=stub,
+            decision=result.decision.value,
+            desired_count=result.desired_containers,
+            reason=result.reason,
+            valid=result.valid,
+            actions_taken=bool(result.actions),
+        ):
+            event_data: dict[str, JsonValue] = {
+                "source": identity.source,
+                "stub_id": stub.id,
+                "workspace_id": stub.workspace_id,
+                "kind": stub.kind.value,
+                "current_containers": result.current_containers,
+                "pending_containers": result.pending_containers,
+                "desired_containers": result.desired_containers,
+                "signal_name": result.signal_name,
+                "signal_value": result.signal_value,
+                "failed_containers": list(result.failed_containers),
+                "decision": result.decision.value,
+                "reason": result.reason,
+                "valid": result.valid,
+                "max_containers": plan.max_containers,
+                "min_containers": plan.min_containers,
+                "tasks_per_container": plan.tasks_per_container,
+                "guardrails": result.guardrails,
+                "actions": _autoscale_action_json_values(result.actions),
+            }
+            self.services.events.emit(
+                identity.scale_decision_action,
+                resource_type="stub",
+                resource_id=stub.id,
+                message=f"{identity.kind.value} autoscaler selected desired container count",
+                data=event_data,
+                workspace_id=stub.workspace_id,
+            )
+        _record_autoscaler_metrics(
+            self.services,
+            source=identity.source,
+            stub=stub,
+            kind=stub.kind.value,
+            current_containers=result.current_containers,
+            pending_containers=result.pending_containers,
+            desired_containers=result.desired_containers,
+            signal_name=result.signal_name,
+            signal_value=result.signal_value,
+            max_containers=plan.max_containers,
+            pressure_saturated=plan.saturated,
+            failed_container_count=len(result.failed_containers),
+            decision=result.decision.value,
+            reason=result.reason,
+            guardrails=result.guardrails,
+            actions=action_payloads,
+        )
+        _record_autoscaler_state(
+            self.services,
+            source=identity.source,
+            target_kind=identity.kind,
+            stub=stub,
+            current_count=result.current_containers,
+            desired_count=result.desired_containers,
+            signal_name=result.signal_name,
+            signal_value=result.signal_value,
+            decision=result.decision.value,
+            reason=result.reason,
+            active=result.active,
+            valid=result.valid,
+            lock_acquired=result.lock_acquired,
+            owner_lock_key=self._lock_key(stub),
+            failed_container_count=len(result.failed_containers),
+            last_sample={
+                result.signal_name: result.signal_value,
+                "current_containers": result.current_containers,
+                "pending_containers": result.pending_containers,
+                "guardrails": result.guardrails,
+            },
+            last_actions=action_payloads,
+        )
+
+    def _record_lock_contention(self, stub: StubRecord, lock_key: str) -> AutoscaleResult:
+        """A tick that found the lock held is still a tick that looked.
+
+        Left unrecorded it reads as an autoscaler that never ran, which is the
+        one reading that sends somebody looking at the wrong process.
+        """
+
+        identity = self.workload.identity
+        result = AutoscaleResult(
+            kind=identity.kind,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            signal_name=identity.signal_name,
+            decision=ScaleDecisionKind.Hold,
+            reason="autoscaler lock already held",
+            lock_acquired=False,
+        )
+        _record_autoscaler_state(
+            self.services,
+            source=identity.source,
+            target_kind=identity.kind,
+            stub=stub,
+            current_count=result.current_containers,
+            desired_count=result.desired_containers,
+            signal_name=result.signal_name,
+            decision=result.decision.value,
+            reason=result.reason,
+            active=result.active,
+            valid=result.valid,
+            lock_acquired=result.lock_acquired,
+            owner_lock_key=lock_key,
+        )
+        return result
+
+    def _lock_key(self, stub: StubRecord) -> str:
+        return self.redis.key(
+            "autoscaling",
+            self.workload.identity.lock_namespace,
+            stub.workspace_id,
+            stub.id,
+            "lock",
+        )
+
+    def _acquire_lock(self, key: str, token: str) -> bool:
+        return bool(self.redis.set(key, token, nx=True, ex=AUTOSCALER_LOCK_TTL_SECONDS))
+
+    def _release_lock(self, key: str, token: str) -> None:
+        if _redis_text(self.redis.get(key)) == token:
+            self.redis.delete(key)
+
+
+@dataclass(slots=True)
+class FunctionAutoscaler:
+    """Give a function's backlog enough containers to be worked through.
+
+    The only thing that provisions a function past its first container. An
+    invocation may bring an idle stub up so a cold call does not wait for a
+    tick, and stops there; everything about depth is decided here, from the
+    whole backlog, once per tick per stub.
+
+    Scaling down is deliberately not done: a function container ends itself when
+    its keep-warm window passes with no work, so the way to have fewer is to
+    stop giving them any. Stopping one from outside risks taking an invocation
+    with it.
+    """
+
+    services: SchedulerServices
+    functions: FunctionAutoscaleControl
+
+    @property
+    def identity(self) -> AutoscalerIdentity:
+        return FUNCTION_AUTOSCALER
+
+    def selects(self, stub: StubRecord) -> bool:
+        return stub.kind is StubKind.Function
+
+    def partition(
+        self,
+        containers: list[ContainerRecord],
+    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
+        return _active_containers(containers), []
+
+    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]:
+        del stale
+        return []
+
+    def sample(self, stub: StubRecord) -> int:
+        return self.functions.unclaimed_task_count(stub.id)
+
+    def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan:
+        config = _function_autoscaler_config(stub.config)
+        decision = decide_backlog_scale(
+            BacklogAutoscalerSample(
+                queue_length=signal,
+                running_tasks=0,
+                current_containers=current,
+            ),
+            config,
+        )
+        return ScalePlan(
+            desired_containers=decision.desired_containers,
+            reason=decision.reason.value,
+            decision=decision.decision,
+            valid=decision.valid,
+            max_containers=config.effective_max_containers,
+            tasks_per_container=config.tasks_per_container,
+            saturated=_backlog_pressure_saturated(signal, config),
+        )
+
+    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
+        actions: list[AutoscaleAction] = []
+        for _ in range(count):
+            try:
+                started = self.functions.start_function_container(stub.id)
+            except DomainError as exc:
+                actions.append(AutoscaleAction(action="scale-up-failed", reason=exc.message))
+                break
+            if not started:
+                break
+            actions.append(AutoscaleAction(action="scale-up"))
+        return actions
+
+    def scale_down(
+        self,
+        stub: StubRecord,
+        containers: list[ContainerRecord],
+        count: int,
+        *,
+        keep_warm_seconds: int,
+        active_instance: bool,
+        now: datetime,
+    ) -> list[AutoscaleAction]:
+        del stub, containers, count, keep_warm_seconds, active_instance, now
+        return []
+
+
+@dataclass(slots=True)
+class EndpointAutoscaler:
+    """Scale an endpoint on the dispatches it is already serving."""
+
+    services: SchedulerServices
+    redis: RedisClient
+    endpoints: EndpointAutoscaleControl
+    dispatches: EndpointAutoscalingDispatchReader
+
+    @property
+    def identity(self) -> AutoscalerIdentity:
+        return ENDPOINT_AUTOSCALER
+
+    def selects(self, stub: StubRecord) -> bool:
+        return stub.kind in {StubKind.Endpoint, StubKind.Asgi} and bool(stub.deployment_id)
+
+    def partition(
+        self,
+        containers: list[ContainerRecord],
+    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
+        return _active_containers(containers), []
+
+    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]:
+        del stale
+        return []
+
+    def sample(self, stub: StubRecord) -> int:
+        return self.dispatches.active_count(stub.id)
+
+    def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan:
+        config = _endpoint_autoscaler_config(stub.config)
+        desired, reason = _endpoint_desired_containers(active_requests=signal, config=config)
+        return ScalePlan(
+            desired_containers=desired,
+            reason=reason,
+            decision=scale_kind(desired, current),
+            max_containers=config.max_containers,
+            min_containers=config.min_containers,
+            tasks_per_container=config.tasks_per_container,
+            keep_warm_seconds=config.keep_warm_seconds,
+            saturated=_endpoint_pressure_saturated(signal, config),
+        )
+
+    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
+        actions: list[AutoscaleAction] = []
         timeout = _endpoint_timeout_seconds(stub.config)
         for _ in range(count):
             try:
@@ -559,16 +641,10 @@ class EndpointAutoscalingService:
                     StartEndpointServeRequest(stub_id=stub.id, timeout=timeout)
                 )
             except DomainError as exc:
-                actions.append(
-                    EndpointAutoscaleAction(
-                        container_id="",
-                        action="scale-up-failed",
-                        reason=exc.message,
-                    )
-                )
+                actions.append(AutoscaleAction(action="scale-up-failed", reason=exc.message))
                 break
             actions.append(
-                EndpointAutoscaleAction(
+                AutoscaleAction(
                     container_id=response.container_id,
                     action="start",
                     reason="endpoint request pressure requires more containers",
@@ -576,17 +652,18 @@ class EndpointAutoscalingService:
             )
         return actions
 
-    def _scale_down(
+    def scale_down(
         self,
         stub: StubRecord,
-        workspace_id: str,
         containers: list[ContainerRecord],
         count: int,
         *,
         keep_warm_seconds: int,
+        active_instance: bool,
         now: datetime,
-    ) -> list[EndpointAutoscaleAction]:
-        actions: list[EndpointAutoscaleAction] = []
+    ) -> list[AutoscaleAction]:
+        del active_instance
+        actions: list[AutoscaleAction] = []
         for container in _stoppable_endpoint_containers(
             self.dispatches,
             self.redis,
@@ -597,9 +674,12 @@ class EndpointAutoscalingService:
         ):
             if len(actions) >= count:
                 break
-            stopped = self.services.containers.stop(container.id)
+            stopped = self.services.containers.stop(
+                container.id,
+                reason=StopContainerReason.Scheduler,
+            )
             actions.append(
-                EndpointAutoscaleAction(
+                AutoscaleAction(
                     container_id=stopped.id,
                     action="stop",
                     reason="endpoint request pressure no longer requires container",
@@ -607,273 +687,40 @@ class EndpointAutoscalingService:
             )
         return actions
 
-    def _emit_scale_event(
-        self,
-        stub: StubRecord,
-        result: EndpointAutoscaleResult,
-        config: EndpointAutoscalerConfig,
-    ) -> None:
-        if _should_persist_scale_event(
-            self.services,
-            target_kind=AutoscalerTargetKind.Endpoint,
-            stub=stub,
-            decision=result.decision.value,
-            desired_count=result.desired_containers,
-            reason=result.reason,
-            valid=result.valid,
-            actions_taken=bool(result.actions),
-        ):
-            event_data: dict[str, JsonValue] = {
-                "source": ENDPOINT_AUTOSCALER_SOURCE,
-                "stub_id": stub.id,
-                "workspace_id": stub.workspace_id,
-                "kind": stub.kind.value,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "desired_containers": result.desired_containers,
-                "active_requests": result.active_requests,
-                "failed_containers": list(result.failed_containers),
-                "decision": result.decision.value,
-                "reason": result.reason,
-                "valid": result.valid,
-                "max_containers": config.max_containers,
-                "min_containers": config.min_containers,
-                "tasks_per_container": config.tasks_per_container,
-                "guardrails": result.guardrails,
-                "actions": _autoscale_action_json_values(result.actions),
-            }
-            self.services.events.emit(
-                ENDPOINT_SCALE_DECISION_ACTION,
-                resource_type="stub",
-                resource_id=stub.id,
-                message="endpoint autoscaler selected desired container count",
-                data=event_data,
-                workspace_id=stub.workspace_id,
-            )
-        _record_autoscaler_metrics(
-            self.services,
-            source=ENDPOINT_AUTOSCALER_SOURCE,
-            stub=stub,
-            kind=stub.kind.value,
-            current_containers=result.current_containers,
-            pending_containers=result.pending_containers,
-            desired_containers=result.desired_containers,
-            signal_name="active_requests",
-            signal_value=result.active_requests,
-            max_containers=config.max_containers,
-            pressure_saturated=_endpoint_pressure_saturated(result.active_requests, config),
-            failed_container_count=len(result.failed_containers),
-            decision=result.decision.value,
-            reason=result.reason,
-            guardrails=result.guardrails,
-            actions=_autoscale_action_payloads(result.actions),
-        )
-        _record_autoscaler_state(
-            self.services,
-            source=ENDPOINT_AUTOSCALER_SOURCE,
-            target_kind=AutoscalerTargetKind.Endpoint,
-            stub=stub,
-            current_count=result.current_containers,
-            desired_count=result.desired_containers,
-            signal_name="active_requests",
-            signal_value=result.active_requests,
-            decision=result.decision.value,
-            reason=result.reason,
-            active=result.active,
-            valid=result.valid,
-            lock_acquired=result.lock_acquired,
-            owner_lock_key=self._lock_key(stub),
-            failed_container_count=len(result.failed_containers),
-            last_sample={
-                "active_requests": result.active_requests,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "guardrails": result.guardrails,
-            },
-            last_actions=_autoscale_action_payloads(result.actions),
-        )
-
-    def _lock_key(self, stub: StubRecord) -> str:
-        return self.redis.key("autoscaling", "endpoints", stub.workspace_id, stub.id, "lock")
-
-    def _acquire_lock(self, key: str, token: str) -> bool:
-        return bool(
-            self.redis.set(
-                key,
-                token,
-                nx=True,
-                ex=ENDPOINT_AUTOSCALER_LOCK_TTL_SECONDS,
-            )
-        )
-
-    def _release_lock(self, key: str, token: str) -> None:
-        if _redis_text(self.redis.get(key)) == token:
-            self.redis.delete(key)
-
 
 @dataclass(slots=True)
-class PodAutoscalingService:
+class PodAutoscaler:
+    """Scale a pod deployment on the connections held against it."""
+
     services: SchedulerServices
     redis: RedisClient
     pods: PodControl
     container_states: PodContainerStateReader | None = None
 
-    def reconcile(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[PodAutoscaleResult]:
-        current_time = now or utc_now()
-        stubs = [
-            stub
-            for stub in self.services.scheduler_workloads.list_stubs()
-            if stub.kind in {StubKind.Pod, StubKind.Sandbox}
-            and (stub.kind is StubKind.Sandbox or bool(stub.deployment_id))
-            and _pod_autoscaling_enabled(stub)
-        ]
-        results: list[PodAutoscaleResult] = []
-        for stub in stubs[: max(limit, 0)]:
-            token = token_urlsafe(16)
-            lock_key = self._lock_key(stub)
-            if not self._acquire_lock(lock_key, token):
-                result = PodAutoscaleResult(
-                    stub_id=stub.id,
-                    workspace_id=stub.workspace_id,
-                    decision=PodScaleDecisionKind.Hold,
-                    reason="autoscaler lock already held",
-                    lock_acquired=False,
-                )
-                _record_autoscaler_state(
-                    self.services,
-                    source=POD_AUTOSCALER_SOURCE,
-                    target_kind=AutoscalerTargetKind.Pod,
-                    stub=stub,
-                    current_count=result.current_containers,
-                    desired_count=result.desired_containers,
-                    decision=result.decision.value,
-                    reason=result.reason,
-                    active=result.active,
-                    valid=result.valid,
-                    lock_acquired=result.lock_acquired,
-                    owner_lock_key=lock_key,
-                )
-                results.append(result)
-                continue
-            try:
-                results.append(self.reconcile_stub(stub, now=current_time))
-            finally:
-                self._release_lock(lock_key, token)
-        return results
+    @property
+    def identity(self) -> AutoscalerIdentity:
+        return POD_AUTOSCALER
 
-    def reconcile_stub(
-        self,
-        stub: StubRecord,
-        *,
-        now: datetime | None = None,
-    ) -> PodAutoscaleResult:
-        current_time = now or utc_now()
-        active = _deployment_active(self.services, stub)
-        workspace_id = stub.workspace_id
-        containers = _containers_for_stub(self.services, stub)
-        active_containers, stale_containers = _pod_active_containers(
-            containers,
-            self.container_states,
+    def selects(self, stub: StubRecord) -> bool:
+        return stub.kind in {StubKind.Pod, StubKind.Sandbox} and (
+            stub.kind is StubKind.Sandbox or bool(stub.deployment_id)
         )
-        stale_actions = self._stop_stale_containers(stale_containers)
-        current = len(active_containers)
-        pending = _pending_container_count(containers)
-        total_connections = _pod_total_connections(self.redis, workspace_id, stub.id)
-        config = _pod_autoscaler_config(stub)
-        failed_containers = _recent_failed_container_ids(
-            containers,
-            now=current_time,
-            window_seconds=_pod_failed_container_window_seconds(stub.config),
-        )
-        failure_threshold = _pod_failed_container_threshold(stub.config)
-        failure_threshold_reached = (
-            failure_threshold > 0 and len(failed_containers) >= failure_threshold
-        )
-        decision = decide_pod_scale(
-            PodAutoscalerSample(
-                current_containers=current,
-                total_connections=total_connections,
-            ),
-            config,
-        )
-        desired = decision.desired_containers
-        reason = decision.reason.value
-        decision_kind = decision.decision
-        if not active:
-            desired = 0
-            reason = "deployment inactive"
-            decision_kind = (
-                PodScaleDecisionKind.ScaleDown if current > 0 else PodScaleDecisionKind.Hold
-            )
-        elif failure_threshold_reached:
-            desired = 0
-            reason = "failed container threshold reached"
-            decision_kind = (
-                PodScaleDecisionKind.ScaleDown if current > 0 else PodScaleDecisionKind.Hold
-            )
 
-        guardrail = AutoscalerGuardrailPlan()
-        if active and decision.valid and desired > current:
-            guardrail = plan_autoscaler_start_guardrails(
-                self.redis,
-                stub=stub,
-                current_count=current,
-                desired_count=desired,
-            )
-            if guardrail.limited:
-                desired = guardrail.desired_count
-                reason = guardrail.reason
-                decision_kind = _pod_scale_kind(desired, current)
-        actions: list[PodAutoscaleAction] = list(stale_actions)
-        delta = desired - current
-        if delta > 0:
-            actions.extend(self._scale_up(stub, delta))
-        elif delta < 0:
-            actions.extend(
-                self._scale_down(
-                    stub,
-                    workspace_id,
-                    active_containers,
-                    -delta,
-                    keep_warm_seconds=(
-                        0 if stub.kind is StubKind.Sandbox else config.keep_warm_seconds
-                    ),
-                    active_instance=active and not failure_threshold_reached,
-                    now=current_time,
-                )
-            )
-        result = PodAutoscaleResult(
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            total_connections=total_connections,
-            current_containers=current,
-            pending_containers=pending,
-            desired_containers=desired,
-            decision=decision_kind,
-            reason=reason,
-            active=active,
-            valid=decision.valid,
-            failed_containers=failed_containers,
-            actions=actions,
-            guardrails=guardrail.payload(),
-        )
-        self._emit_scale_event(stub, result, config)
-        return result
-
-    def _stop_stale_containers(
+    def partition(
         self,
         containers: list[ContainerRecord],
-    ) -> list[PodAutoscaleAction]:
-        actions: list[PodAutoscaleAction] = []
-        for container in containers:
-            stopped = self.services.containers.stop(container.id)
+    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
+        return _pod_active_containers(containers, self.container_states)
+
+    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]:
+        actions: list[AutoscaleAction] = []
+        for container in stale:
+            stopped = self.services.containers.stop(
+                container.id,
+                reason=StopContainerReason.Scheduler,
+            )
             actions.append(
-                PodAutoscaleAction(
+                AutoscaleAction(
                     container_id=stopped.id,
                     action="recover-stale",
                     reason="scheduler state missing for running pod",
@@ -881,31 +728,44 @@ class PodAutoscalingService:
             )
         return actions
 
-    def _scale_up(self, stub: StubRecord, count: int) -> list[PodAutoscaleAction]:
-        actions: list[PodAutoscaleAction] = []
+    def sample(self, stub: StubRecord) -> int:
+        return _pod_total_connections(self.redis, stub.workspace_id, stub.id)
+
+    def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan:
+        config = _pod_autoscaler_config(stub)
+        decision = decide_pod_scale(
+            PodAutoscalerSample(current_containers=current, total_connections=signal),
+            config,
+        )
+        return ScalePlan(
+            desired_containers=decision.desired_containers,
+            reason=decision.reason.value,
+            decision=decision.decision,
+            valid=decision.valid,
+            max_containers=config.max_containers,
+            min_containers=config.min_containers,
+            keep_warm_seconds=(0 if stub.kind is StubKind.Sandbox else config.keep_warm_seconds),
+            saturated=_pod_pressure_saturated(signal, config),
+        )
+
+    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
+        actions: list[AutoscaleAction] = []
         for _ in range(count):
             try:
                 response = self.pods.create_pod(CreatePodRequest(stub_id=stub.id))
             except DomainError as exc:
-                actions.append(
-                    PodAutoscaleAction(
-                        container_id="",
-                        action="scale-up-failed",
-                        reason=str(exc),
-                    )
-                )
+                actions.append(AutoscaleAction(action="scale-up-failed", reason=str(exc)))
                 break
             if not response.container_id:
                 actions.append(
-                    PodAutoscaleAction(
-                        container_id="",
+                    AutoscaleAction(
                         action="scale-up-failed",
                         reason="pod create returned no container id",
                     )
                 )
                 break
             actions.append(
-                PodAutoscaleAction(
+                AutoscaleAction(
                     container_id=response.container_id,
                     action="start",
                     reason="pod deployment desired capacity requires more containers",
@@ -913,23 +773,18 @@ class PodAutoscalingService:
             )
         return actions
 
-    def _scale_down(
+    def scale_down(
         self,
         stub: StubRecord,
-        workspace_id: str,
         containers: list[ContainerRecord],
         count: int,
         *,
         keep_warm_seconds: int,
         active_instance: bool,
         now: datetime,
-    ) -> list[PodAutoscaleAction]:
-        states = _pod_container_states(
-            self.redis,
-            workspace_id,
-            stub,
-            containers,
-        )
+    ) -> list[AutoscaleAction]:
+        workspace_id = stub.workspace_id
+        states = _pod_container_states(self.redis, workspace_id, stub, containers)
         stop_plan = select_stoppable_pod_containers(
             states,
             active_instance=active_instance,
@@ -937,14 +792,17 @@ class PodAutoscalingService:
             keep_warm_lock_authoritative=stub.kind is StubKind.Sandbox,
             now_seconds=int(now.timestamp()),
         )
-        actions: list[PodAutoscaleAction] = []
+        actions: list[AutoscaleAction] = []
         for container_id in stop_plan.stoppable_container_ids[:count]:
-            stopped = self.services.containers.stop(container_id)
+            stopped = self.services.containers.stop(
+                container_id,
+                reason=StopContainerReason.Scheduler,
+            )
             self.redis.delete(
                 self.redis.key(pod_keep_warm_lock_key(workspace_id, stub.id, container_id))
             )
             actions.append(
-                PodAutoscaleAction(
+                AutoscaleAction(
                     container_id=stopped.id,
                     action="stop",
                     reason="pod deployment desired capacity no longer requires container",
@@ -952,107 +810,23 @@ class PodAutoscalingService:
             )
         return actions
 
-    def _emit_scale_event(
-        self,
-        stub: StubRecord,
-        result: PodAutoscaleResult,
-        config: PodAutoscalerConfig,
-    ) -> None:
-        if _should_persist_scale_event(
-            self.services,
-            target_kind=AutoscalerTargetKind.Pod,
-            stub=stub,
-            decision=result.decision.value,
-            desired_count=result.desired_containers,
-            reason=result.reason,
-            valid=result.valid,
-            actions_taken=bool(result.actions),
-        ):
-            event_data: dict[str, JsonValue] = {
-                "source": POD_AUTOSCALER_SOURCE,
-                "stub_id": stub.id,
-                "workspace_id": stub.workspace_id,
-                "kind": stub.kind.value,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "desired_containers": result.desired_containers,
-                "total_connections": result.total_connections,
-                "failed_containers": list(result.failed_containers),
-                "decision": result.decision.value,
-                "reason": result.reason,
-                "valid": result.valid,
-                "max_containers": config.max_containers,
-                "min_containers": config.min_containers,
-                "guardrails": result.guardrails,
-                "actions": _autoscale_action_json_values(result.actions),
-            }
-            self.services.events.emit(
-                POD_SCALE_DECISION_ACTION,
-                resource_type="stub",
-                resource_id=stub.id,
-                message="pod autoscaler selected desired container count",
-                data=event_data,
-                workspace_id=stub.workspace_id,
-            )
-        _record_autoscaler_metrics(
-            self.services,
-            source=POD_AUTOSCALER_SOURCE,
-            stub=stub,
-            kind=stub.kind.value,
-            current_containers=result.current_containers,
-            pending_containers=result.pending_containers,
-            desired_containers=result.desired_containers,
-            signal_name="total_connections",
-            signal_value=result.total_connections,
-            max_containers=config.max_containers,
-            pressure_saturated=_pod_pressure_saturated(result.total_connections, config),
-            failed_container_count=len(result.failed_containers),
-            decision=result.decision.value,
-            reason=result.reason,
-            guardrails=result.guardrails,
-            actions=_autoscale_action_payloads(result.actions),
-        )
-        _record_autoscaler_state(
-            self.services,
-            source=POD_AUTOSCALER_SOURCE,
-            target_kind=AutoscalerTargetKind.Pod,
-            stub=stub,
-            current_count=result.current_containers,
-            desired_count=result.desired_containers,
-            signal_name="total_connections",
-            signal_value=result.total_connections,
-            decision=result.decision.value,
-            reason=result.reason,
-            active=result.active,
-            valid=result.valid,
-            lock_acquired=result.lock_acquired,
-            owner_lock_key=self._lock_key(stub),
-            failed_container_count=len(result.failed_containers),
-            last_sample={
-                "total_connections": result.total_connections,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "guardrails": result.guardrails,
-            },
-            last_actions=_autoscale_action_payloads(result.actions),
-        )
 
-    def _lock_key(self, stub: StubRecord) -> str:
-        return self.redis.key("autoscaling", "pods", stub.workspace_id, stub.id, "lock")
+def _autoscaling_enabled(stub: StubRecord) -> bool:
+    raw = stub.config.metadata.get("autoscaling_enabled", True)
+    return raw is not False
 
-    def _acquire_lock(self, key: str, token: str) -> bool:
-        return bool(
-            self.redis.set(
-                key,
-                token,
-                nx=True,
-                ex=POD_AUTOSCALER_LOCK_TTL_SECONDS,
-            )
-        )
 
-    def _release_lock(self, key: str, token: str) -> None:
-        if _redis_text(self.redis.get(key)) == token:
-            self.redis.delete(key)
+def _function_autoscaler_config(config: StubConfig) -> BacklogAutoscalerConfig:
+    autoscaler = config.autoscaler
+    return BacklogAutoscalerConfig(
+        tasks_per_container=autoscaler.tasks_per_container,
+        max_containers=function_container_ceiling(autoscaler.max_containers),
+    )
+
+
+def _backlog_pressure_saturated(queue_length: int, config: BacklogAutoscalerConfig) -> bool:
+    servable = max(config.effective_max_containers, 0) * max(config.tasks_per_container, 1)
+    return servable > 0 and queue_length > servable
 
 
 class EndpointAutoscalerConfig(ContractModel):
@@ -1060,16 +834,6 @@ class EndpointAutoscalerConfig(ContractModel):
     max_containers: int = 1
     tasks_per_container: int = 1
     keep_warm_seconds: int = 0
-
-
-def _endpoint_autoscaling_enabled(stub: StubRecord) -> bool:
-    raw = stub.config.metadata.get("autoscaling_enabled", True)
-    return raw is not False
-
-
-def _pod_autoscaling_enabled(stub: StubRecord) -> bool:
-    raw = stub.config.metadata.get("autoscaling_enabled", True)
-    return raw is not False
 
 
 def _record_autoscaler_metrics(
@@ -1568,36 +1332,6 @@ def _endpoint_desired_containers(
     return desired, reason
 
 
-def _backlog_scale_kind(desired: int, current: int) -> BacklogScaleDecisionKind:
-    if current < 0 or desired < 0:
-        return BacklogScaleDecisionKind.Invalid
-    if desired > current:
-        return BacklogScaleDecisionKind.ScaleUp
-    if desired < current:
-        return BacklogScaleDecisionKind.ScaleDown
-    return BacklogScaleDecisionKind.Hold
-
-
-def _endpoint_scale_kind(desired: int, current: int) -> EndpointScaleDecisionKind:
-    if current < 0 or desired < 0:
-        return EndpointScaleDecisionKind.Invalid
-    if desired > current:
-        return EndpointScaleDecisionKind.ScaleUp
-    if desired < current:
-        return EndpointScaleDecisionKind.ScaleDown
-    return EndpointScaleDecisionKind.Hold
-
-
-def _pod_scale_kind(desired: int, current: int) -> PodScaleDecisionKind:
-    if current < 0 or desired < 0:
-        return PodScaleDecisionKind.Invalid
-    if desired > current:
-        return PodScaleDecisionKind.ScaleUp
-    if desired < current:
-        return PodScaleDecisionKind.ScaleDown
-    return PodScaleDecisionKind.Hold
-
-
 def _failed_container_threshold(config: StubConfig) -> int:
     return _first_configured_non_negative(
         config.autoscaler.failed_container_threshold,
@@ -1612,40 +1346,6 @@ def _failed_container_window_seconds(config: StubConfig) -> int:
         config.autoscaler.failed_container_window_seconds,
         config.autoscaler.failure_window_seconds,
         default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
-    )
-
-
-def _endpoint_failed_container_threshold(config: StubConfig) -> int:
-    return _first_configured_non_negative(
-        config.autoscaler.failed_container_threshold,
-        config.autoscaler.max_failed_containers,
-        config.autoscaler.failure_threshold,
-        default=ENDPOINT_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD,
-    )
-
-
-def _endpoint_failed_container_window_seconds(config: StubConfig) -> int:
-    return _first_configured_non_negative(
-        config.autoscaler.failed_container_window_seconds,
-        config.autoscaler.failure_window_seconds,
-        default=ENDPOINT_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
-    )
-
-
-def _pod_failed_container_threshold(config: StubConfig) -> int:
-    return _first_configured_non_negative(
-        config.autoscaler.failed_container_threshold,
-        config.autoscaler.max_failed_containers,
-        config.autoscaler.failure_threshold,
-        default=POD_AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD,
-    )
-
-
-def _pod_failed_container_window_seconds(config: StubConfig) -> int:
-    return _first_configured_non_negative(
-        config.autoscaler.failed_container_window_seconds,
-        config.autoscaler.failure_window_seconds,
-        default=POD_AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
     )
 
 
@@ -1694,11 +1394,14 @@ def _redis_non_negative_int(value: object) -> int:
 
 
 __all__ = [
-    "EndpointAutoscaleAction",
-    "EndpointAutoscaleResult",
-    "EndpointAutoscalingService",
-    "PodAutoscaleAction",
-    "PodAutoscaleResult",
-    "PodAutoscalingService",
+    "AutoscaleAction",
+    "AutoscaleResult",
+    "AutoscalerIdentity",
+    "AutoscalingDriver",
+    "EndpointAutoscaler",
+    "FunctionAutoscaler",
+    "PodAutoscaler",
+    "ScalePlan",
     "SchedulerServices",
+    "WorkloadAutoscaler",
 ]

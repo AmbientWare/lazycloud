@@ -23,7 +23,7 @@ from execution.pods.service import PodControlService
 from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from scheduler.agent_pool import AgentPoolConfig
-from scheduler.autoscaling import PodAutoscalingService
+from scheduler.autoscaling import AutoscalingDriver, PodAutoscaler
 from scheduler.capacity_reservations import (
     CapacityReservationService,
     RedisCapacityReservationRepository,
@@ -2257,11 +2257,15 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=recording_scheduler),
     )
-    result = PodAutoscalingService(
+    result = AutoscalingDriver(
         isolated_services,
         redis=redis,
-        pods=PodControlService(isolated_services, redis=redis),
-        container_states=container_repo,
+        workload=PodAutoscaler(
+            isolated_services,
+            redis=redis,
+            pods=PodControlService(isolated_services, redis=redis),
+            container_states=container_repo,
+        ),
     ).reconcile(now=now + timedelta(seconds=62))[0]
 
     assert result.current_containers == 0

@@ -44,7 +44,16 @@ class PodStubType(StringEnum):
     Sandbox = "sandbox"
 
 
-class PodScaleDecisionKind(StringEnum):
+class ScaleDecisionKind(StringEnum):
+    """What an autoscaler concluded about one workload, whatever kind it is.
+
+    One enum for all three because the conclusion is the same conclusion: a
+    count is above, below, or equal to what is wanted, or the sample it was read
+    from could not be trusted. Written per kind it was three identical copies
+    with identical wire values, which reads as three vocabularies an operator
+    has to learn and gives three places for one of them to drift.
+    """
+
     ScaleUp = "scale-up"
     ScaleDown = "scale-down"
     Hold = "hold"
@@ -93,7 +102,7 @@ class PodAutoscalerConfig(ContractModel):
 
 
 class PodScaleDecision(ContractModel):
-    decision: PodScaleDecisionKind
+    decision: ScaleDecisionKind
     reason: PodScaleReason
     desired_containers: int = Field(default=0, ge=0)
     valid: bool = True
@@ -124,13 +133,6 @@ class PodContainerStopSkip(ContractModel):
 class PodStopPlan(ContractModel):
     stoppable_container_ids: list[str]
     skipped: list[PodContainerStopSkip] = Field(default_factory=list)
-
-
-class BacklogScaleDecisionKind(StringEnum):
-    ScaleUp = "scale-up"
-    ScaleDown = "scale-down"
-    Hold = "hold"
-    Invalid = "invalid"
 
 
 class BacklogScaleReason(StringEnum):
@@ -179,7 +181,7 @@ class BacklogAutoscalerConfig(ContractModel):
 
 
 class BacklogScaleDecision(ContractModel):
-    decision: BacklogScaleDecisionKind
+    decision: ScaleDecisionKind
     reason: BacklogScaleReason
     desired_containers: int = Field(default=0, ge=0)
     valid: bool = True
@@ -194,7 +196,7 @@ def decide_pod_scale(
     autoscaler_config = config or PodAutoscalerConfig()
     if not sample.valid:
         return PodScaleDecision(
-            decision=PodScaleDecisionKind.Invalid,
+            decision=ScaleDecisionKind.Invalid,
             reason=PodScaleReason.InvalidSample,
             desired_containers=0,
             valid=False,
@@ -217,7 +219,7 @@ def decide_pod_scale(
         desired = autoscaler_config.max_containers
         reason = PodScaleReason.DeploymentConnectionsActive
     return PodScaleDecision(
-        decision=_pod_scale_kind(desired, sample.current_containers),
+        decision=scale_kind(desired, sample.current_containers),
         reason=reason,
         desired_containers=desired,
         sample=sample,
@@ -256,7 +258,7 @@ def decide_backlog_scale(
     autoscaler_config = config or BacklogAutoscalerConfig()
     if not sample.valid:
         return BacklogScaleDecision(
-            decision=BacklogScaleDecisionKind.Invalid,
+            decision=ScaleDecisionKind.Invalid,
             reason=BacklogScaleReason.InvalidSample,
             desired_containers=0,
             valid=False,
@@ -277,7 +279,7 @@ def decide_backlog_scale(
             else BacklogScaleReason.QueuePending
         )
     return BacklogScaleDecision(
-        decision=_backlog_scale_kind(desired, sample.current_containers),
+        decision=scale_kind(desired, sample.current_containers),
         reason=reason,
         desired_containers=desired,
         sample=sample,
@@ -285,20 +287,21 @@ def decide_backlog_scale(
     )
 
 
-def _pod_scale_kind(desired: int, current: int) -> PodScaleDecisionKind:
-    if desired > current:
-        return PodScaleDecisionKind.ScaleUp
-    if desired < current:
-        return PodScaleDecisionKind.ScaleDown
-    return PodScaleDecisionKind.Hold
+def scale_kind(desired: int, current: int) -> ScaleDecisionKind:
+    """Name the gap between what is running and what is wanted.
 
+    A negative count is not a small count: it is the marker a sample uses to say
+    it could not be read, and comparing it would report a confident scale-up
+    from a number nobody measured.
+    """
 
-def _backlog_scale_kind(desired: int, current: int) -> BacklogScaleDecisionKind:
+    if current < 0 or desired < 0:
+        return ScaleDecisionKind.Invalid
     if desired > current:
-        return BacklogScaleDecisionKind.ScaleUp
+        return ScaleDecisionKind.ScaleUp
     if desired < current:
-        return BacklogScaleDecisionKind.ScaleDown
-    return BacklogScaleDecisionKind.Hold
+        return ScaleDecisionKind.ScaleDown
+    return ScaleDecisionKind.Hold
 
 
 def _pod_stop_skip_reason(
@@ -334,7 +337,6 @@ __all__ = [
     "BacklogAutoscalerConfig",
     "BacklogAutoscalerSample",
     "BacklogScaleDecision",
-    "BacklogScaleDecisionKind",
     "BacklogScaleReason",
     "PodAutoscalerConfig",
     "PodAutoscalerSample",
@@ -342,13 +344,14 @@ __all__ = [
     "PodContainerState",
     "PodContainerStopSkip",
     "PodScaleDecision",
-    "PodScaleDecisionKind",
     "PodScaleReason",
     "PodStopPlan",
     "PodStubType",
     "QueueDepthAutoscaler",
+    "ScaleDecisionKind",
     "decide_backlog_scale",
     "decide_pod_scale",
     "function_container_ceiling",
+    "scale_kind",
     "select_stoppable_pod_containers",
 ]

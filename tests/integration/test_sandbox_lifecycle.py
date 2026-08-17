@@ -11,7 +11,7 @@ from database.repositories.orchestration import ContainerRepository
 from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
-from scheduler.autoscaling import PodAutoscalingService
+from scheduler.autoscaling import AutoscalingDriver, PodAutoscaler
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.state import SchedulerWorkerRequest
 from shared.container_requests import WorkerContainerRequestPayload
@@ -103,7 +103,11 @@ def test_scheduler_expires_prepared_sandbox_without_a_deployment(
     with services.context.database.session() as session:
         ContainerRepository(session).upsert(container)
 
-    autoscaler = PodAutoscalingService(services, redis=redis, pods=pod_service)
+    autoscaler = AutoscalingDriver(
+        services,
+        redis=redis,
+        workload=PodAutoscaler(services, redis=redis, pods=pod_service),
+    )
     held = autoscaler.reconcile(now=utc_now())
 
     assert len(held) == 1
