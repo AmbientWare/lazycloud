@@ -37,7 +37,6 @@ WORKER_RESOLV_CONF_PATH = "/etc/lazycloud/worker-resolv.conf"
 DEFAULT_WORKER_PYTHON_EXECUTABLE = "python3.12"
 ENDPOINT_RUNNER_MODULE = "runner.serve"
 FUNCTION_RUNNER_MODULE = "runner.function"
-TASK_QUEUE_RUNNER_MODULE = "runner.taskqueue"
 
 type JsonObject = dict[str, JsonValue]
 
@@ -470,8 +469,6 @@ def fallback_runner_module(kind: WorkerStartupKind) -> str:
         return ENDPOINT_RUNNER_MODULE
     if kind is WorkerStartupKind.Function:
         return FUNCTION_RUNNER_MODULE
-    if kind is WorkerStartupKind.TaskQueue:
-        return TASK_QUEUE_RUNNER_MODULE
     return ""
 
 

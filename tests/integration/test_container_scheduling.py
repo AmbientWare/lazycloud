@@ -6,10 +6,8 @@ from datetime import datetime
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
-from coordination.redis_client import RedisClient
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
-from execution.taskqueues.service import TaskQueueControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from runner.invocation import cloudpickle_bytes
@@ -40,13 +38,11 @@ from shared.http.functions import (
     FunctionInvokeBody,
     FunctionSetResultBody,
 )
-from shared.http.taskqueues import StartTaskQueueServeRequest
 from shared.identity import WorkspaceStorageConfig
 from shared.tasks import TaskStatus
 from shared.usage import UsageMetric
 from shared.usage_query import UsageQuery
 from tests.real_redis import RealRedisActors
-from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
 
 
@@ -403,24 +399,34 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
     assert upstream.task_id in downstream_task.error
 
 
-def test_checkpoint_task_queue_runner_receives_checkpoint_barrier_env(
+def test_checkpoint_function_runner_receives_checkpoint_barrier_env(
     isolated_services: ApiServices,
 ) -> None:
+    """A pooled function container is the workload checkpointing now serves.
+
+    Its process is long-lived and its startup hook is the expensive part, which
+    is exactly what a checkpoint amortises. The runner half already waits on the
+    barrier; what this covers is that the control plane still asks for it.
+    """
+
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
     stub = ControlPlaneService(isolated_services.context).create_stub(
-        "checkpoint-queue",
-        kind=StubKind.TaskQueue,
+        "checkpoint-function",
+        kind=StubKind.Function,
+        handler="pkg.jobs:handler",
         config={
-            "image": {"image_id": "img_checkpoint_queue"},
+            "image": {"image_id": "img_checkpoint_function"},
             "runtime": {"checkpoint_enabled": True},
         },
     )
 
-    TaskQueueControlService(
-        isolated_services,
-        redis=RedisClient(FakeRedis(), key_prefix="test"),
-    ).start_task_queue_serve(StartTaskQueueServeRequest(stub_id=stub.id, timeout=30))
+    FunctionControlService(isolated_services).function_invoke(
+        FunctionInvokeBody(
+            stub_id=stub.id,
+            invocation=FunctionCloudpickleInvocation.from_bytes(b"{}"),
+        )
+    )
 
     payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
     assert payload.checkpoint_enabled is True

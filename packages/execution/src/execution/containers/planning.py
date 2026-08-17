@@ -100,7 +100,6 @@ def validate_checkpoint_request(
         WorkerStartupKind.Endpoint,
         WorkerStartupKind.Asgi,
         WorkerStartupKind.Function,
-        WorkerStartupKind.TaskQueue,
         WorkerStartupKind.Pod,
         WorkerStartupKind.PodRun,
         WorkerStartupKind.Sandbox,

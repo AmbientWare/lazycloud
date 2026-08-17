@@ -7,7 +7,6 @@ from typing import Protocol
 
 from control.service import ControlPlaneService
 from database.repositories.execution import TaskDependencyRepository
-from shared.deployments import StubKind
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.functions import (
     FunctionCallDependency,
@@ -53,9 +52,6 @@ class TaskRerunService:
             raise NotFoundError(str(exc)) from exc
         if stub.kind in FUNCTION_LIKE_STUB_KINDS:
             return self._rerun_function_task(stub.id, source)
-        if stub.kind is StubKind.TaskQueue:
-            msg = "task-queue tasks cannot be re-run: the payload is not retained on the task"
-            raise InvalidInputError(msg)
         msg = f"tasks of kind {stub.kind.value} cannot be re-run"
         raise InvalidInputError(msg)
 

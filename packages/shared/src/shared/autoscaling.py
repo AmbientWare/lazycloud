@@ -126,24 +126,21 @@ class PodStopPlan(ContractModel):
     skipped: list[PodContainerStopSkip] = Field(default_factory=list)
 
 
-class TaskQueueScaleDecisionKind(StringEnum):
+class BacklogScaleDecisionKind(StringEnum):
     ScaleUp = "scale-up"
     ScaleDown = "scale-down"
     Hold = "hold"
     Invalid = "invalid"
 
 
-class TaskQueueScaleReason(StringEnum):
+class BacklogScaleReason(StringEnum):
     InvalidSample = "invalid-sample"
     QueueEmpty = "queue-empty"
     QueuePending = "queue-pending"
     ReplicaLimit = "replica-limit"
-    ServeLockPresent = "serve-lock-present"
-    ServeLockMissing = "serve-lock-missing"
-    ServeLockUnknown = "serve-lock-unknown"
 
 
-class TaskQueueAutoscalerSample(ContractModel):
+class BacklogAutoscalerSample(ContractModel):
     queue_length: int = 0
     running_tasks: int = 0
     current_containers: int = 0
@@ -153,7 +150,7 @@ class TaskQueueAutoscalerSample(ContractModel):
     @classmethod
     def allow_unknown_or_non_negative(cls, value: int | float) -> int | float:
         if value < -1:
-            msg = "task queue autoscaler sample values must be -1 for unknown or non-negative"
+            msg = "backlog autoscaler sample values must be -1 for unknown or non-negative"
             raise ValueError(msg)
         return value
 
@@ -168,7 +165,7 @@ class TaskQueueAutoscalerSample(ContractModel):
         )
 
 
-class TaskQueueAutoscalerConfig(ContractModel):
+class BacklogAutoscalerConfig(ContractModel):
     tasks_per_container: int = Field(default=1, ge=1)
     max_containers: int = Field(default=1, ge=0)
     gateway_max_replicas: int | None = Field(default=None, ge=0)
@@ -181,12 +178,12 @@ class TaskQueueAutoscalerConfig(ContractModel):
         return min(self.max_containers, self.gateway_max_replicas)
 
 
-class TaskQueueScaleDecision(ContractModel):
-    decision: TaskQueueScaleDecisionKind
-    reason: TaskQueueScaleReason
+class BacklogScaleDecision(ContractModel):
+    decision: BacklogScaleDecisionKind
+    reason: BacklogScaleReason
     desired_containers: int = Field(default=0, ge=0)
     valid: bool = True
-    sample: TaskQueueAutoscalerSample
+    sample: BacklogAutoscalerSample
     effective_max_containers: int | None = None
 
 
@@ -252,15 +249,15 @@ def select_stoppable_pod_containers(
     return PodStopPlan(stoppable_container_ids=stoppable, skipped=skipped)
 
 
-def decide_task_queue_scale(
-    sample: TaskQueueAutoscalerSample,
-    config: TaskQueueAutoscalerConfig | None = None,
-) -> TaskQueueScaleDecision:
-    autoscaler_config = config or TaskQueueAutoscalerConfig()
+def decide_backlog_scale(
+    sample: BacklogAutoscalerSample,
+    config: BacklogAutoscalerConfig | None = None,
+) -> BacklogScaleDecision:
+    autoscaler_config = config or BacklogAutoscalerConfig()
     if not sample.valid:
-        return TaskQueueScaleDecision(
-            decision=TaskQueueScaleDecisionKind.Invalid,
-            reason=TaskQueueScaleReason.InvalidSample,
+        return BacklogScaleDecision(
+            decision=BacklogScaleDecisionKind.Invalid,
+            reason=BacklogScaleReason.InvalidSample,
             desired_containers=0,
             valid=False,
             sample=sample,
@@ -268,19 +265,19 @@ def decide_task_queue_scale(
         )
     if sample.queue_length == 0:
         desired = 0
-        reason = TaskQueueScaleReason.QueueEmpty
+        reason = BacklogScaleReason.QueueEmpty
     else:
         required = (sample.queue_length + autoscaler_config.tasks_per_container - 1) // (
             autoscaler_config.tasks_per_container
         )
         desired = min(required, autoscaler_config.effective_max_containers)
         reason = (
-            TaskQueueScaleReason.ReplicaLimit
+            BacklogScaleReason.ReplicaLimit
             if desired < required
-            else TaskQueueScaleReason.QueuePending
+            else BacklogScaleReason.QueuePending
         )
-    return TaskQueueScaleDecision(
-        decision=_task_queue_scale_kind(desired, sample.current_containers),
+    return BacklogScaleDecision(
+        decision=_backlog_scale_kind(desired, sample.current_containers),
         reason=reason,
         desired_containers=desired,
         sample=sample,
@@ -296,12 +293,12 @@ def _pod_scale_kind(desired: int, current: int) -> PodScaleDecisionKind:
     return PodScaleDecisionKind.Hold
 
 
-def _task_queue_scale_kind(desired: int, current: int) -> TaskQueueScaleDecisionKind:
+def _backlog_scale_kind(desired: int, current: int) -> BacklogScaleDecisionKind:
     if desired > current:
-        return TaskQueueScaleDecisionKind.ScaleUp
+        return BacklogScaleDecisionKind.ScaleUp
     if desired < current:
-        return TaskQueueScaleDecisionKind.ScaleDown
-    return TaskQueueScaleDecisionKind.Hold
+        return BacklogScaleDecisionKind.ScaleDown
+    return BacklogScaleDecisionKind.Hold
 
 
 def _pod_stop_skip_reason(
@@ -334,6 +331,11 @@ def _pod_stop_skip_reason(
 
 
 __all__ = [
+    "BacklogAutoscalerConfig",
+    "BacklogAutoscalerSample",
+    "BacklogScaleDecision",
+    "BacklogScaleDecisionKind",
+    "BacklogScaleReason",
     "PodAutoscalerConfig",
     "PodAutoscalerSample",
     "PodContainerSkipReason",
@@ -345,13 +347,8 @@ __all__ = [
     "PodStopPlan",
     "PodStubType",
     "QueueDepthAutoscaler",
-    "TaskQueueAutoscalerConfig",
-    "TaskQueueAutoscalerSample",
-    "TaskQueueScaleDecision",
-    "TaskQueueScaleDecisionKind",
-    "TaskQueueScaleReason",
+    "decide_backlog_scale",
     "decide_pod_scale",
-    "decide_task_queue_scale",
     "function_container_ceiling",
     "select_stoppable_pod_containers",
 ]

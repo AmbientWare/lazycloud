@@ -58,6 +58,7 @@ from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskDependency, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
 
+from execution.checkpoints import latest_available_checkpoint
 from execution.config import env_sequence_mapping
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
@@ -423,6 +424,7 @@ class FunctionControlService:
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
                 image_id=config.effective_image_id,
+                checkpoint_enabled=config.runtime.checkpoint_enabled,
                 env=_function_runtime_env(config.env_list, self.gateway_http_url()),
                 secret_env=[],
                 lifecycle_hooks=config.lifecycle_hooks,
@@ -455,6 +457,15 @@ class FunctionControlService:
             container_id=container.id,
             volumes=config.volume_inputs,
         )
+        checkpoint = (
+            latest_available_checkpoint(
+                self.services.context,
+                stub_id=stub.id,
+                workspace_id=stub.workspace_id,
+            )
+            if config.runtime.checkpoint_enabled
+            else None
+        )
         scheduled = self.services.containers.submit_scheduler_request(
             container,
             ContainerSchedulingOptions(
@@ -467,6 +478,11 @@ class FunctionControlService:
                 image_id=container_plan.image_id or FUNCTION_IMAGE,
                 app_id=stub.app_id or "",
                 deployment_id=stub.deployment_id or "",
+                checkpoint_exposed_ports=(
+                    checkpoint.exposed_ports if checkpoint is not None else []
+                ),
+                checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else "",
+                checkpoint_enabled=config.runtime.checkpoint_enabled,
                 cpu_millicores=container_plan.cpu_millicores,
                 memory_mib=container_plan.memory_mib,
                 disk_mib=container_plan.disk_mib,

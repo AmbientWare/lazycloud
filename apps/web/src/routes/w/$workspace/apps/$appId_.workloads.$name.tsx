@@ -33,7 +33,7 @@ export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name
   errorComponent: RouteErrorFallback,
 });
 
-const OBSERVABLE_KINDS = new Set(["function", "endpoint", "asgi", "task-queue"]);
+const OBSERVABLE_KINDS = new Set(["function", "endpoint", "asgi"]);
 
 function WorkloadDetailRoute() {
   return (
@@ -306,7 +306,6 @@ function kindLabel(kind: string): string {
     function: "Function",
     endpoint: "Endpoint",
     asgi: "ASGI",
-    "task-queue": "Task queue",
     "cron-job": "Cron job",
     pod: "Pod",
   };
@@ -316,7 +315,6 @@ function kindLabel(kind: string): string {
 function operationTitle(kind: string): string {
   if (kind === "cron-job") return "Schedule";
   if (kind === "pod") return "Pod configuration";
-  if (kind === "task-queue") return "Queue configuration";
   if (kind === "endpoint" || kind === "asgi") return "HTTP configuration";
   return "Function configuration";
 }

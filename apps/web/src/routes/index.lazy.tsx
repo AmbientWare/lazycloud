@@ -52,11 +52,11 @@ app = App("test_suite")
 def run_test_shard(shard: int, total: int) -> dict:
     return run_tests(shard=shard, total=total)`;
 
-const taskQueueExample = `from lazycloud import App, QueueDepthAutoscaler
+const backgroundWorkExample = `from lazycloud import App, QueueDepthAutoscaler
 
 app = App("release_checks")
 
-@app.task_queue(
+@app.function(
     retries=3,
     autoscaler=QueueDepthAutoscaler(
         min_containers=0,
@@ -64,7 +64,11 @@ app = App("release_checks")
     ),
 )
 def evaluate_build(commit_sha: str) -> dict[str, bool]:
-    return run_checks(commit_sha)`;
+    return run_checks(commit_sha)
+
+
+for sha in commits:
+    evaluate_build.spawn(sha)`;
 
 const sandboxExample = `from lazycloud import App
 
@@ -115,9 +119,9 @@ const heroStories = [
     status: "deployed",
   },
   {
-    key: "queues",
-    label: "Task queues",
-    code: taskQueueExample,
+    key: "background",
+    label: "Background work",
+    code: backgroundWorkExample,
     command: "lazycloud deploy application.py:app",
     status: "deployed",
   },

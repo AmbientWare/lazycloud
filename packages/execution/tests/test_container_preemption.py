@@ -1,32 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.preemption import PreemptedContainerService
-from execution.taskqueues.service import TaskQueuePreemptedResult
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployments import StubKind
 from shared.tasks import RetryPolicy, Task, TaskStatus
 from shared.timestamps import utc_now
-
-
-@dataclass(frozen=True, slots=True)
-class UnusedTaskQueueControl:
-    def task_queue_preempted(
-        self,
-        *,
-        stub_id: str,
-        task_id: str,
-        container_id: str,
-        exit_code: int | None = None,
-        error: str = "task queue container was preempted",
-    ) -> TaskQueuePreemptedResult:
-        del stub_id, task_id, container_id, exit_code, error
-        raise AssertionError("non-task-queue preemption must not enter task queue control")
 
 
 def _running_task(
@@ -84,7 +66,6 @@ def test_function_preemption_uses_explicit_retry_policy(
     service = PreemptedContainerService(
         services=isolated_services,
         stubs=isolated_services.control_plane_service,
-        task_queues=UnusedTaskQueueControl(),
     )
 
     result = service.preempted(container, exit_code=562)
@@ -132,7 +113,6 @@ def test_unsettled_preemption_recovers_once_after_a_crash(
     service = PreemptedContainerService(
         services=isolated_services,
         stubs=isolated_services.control_plane_service,
-        task_queues=UnusedTaskQueueControl(),
     )
 
     recovered = service.recover_unsettled()
@@ -154,7 +134,6 @@ def test_endpoint_preemption_fails_without_blind_replay(
     service = PreemptedContainerService(
         services=isolated_services,
         stubs=isolated_services.control_plane_service,
-        task_queues=UnusedTaskQueueControl(),
     )
 
     result = service.preempted(container, exit_code=562)

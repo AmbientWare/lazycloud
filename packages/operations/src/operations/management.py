@@ -23,7 +23,6 @@ from database.records.apps import AppRecord
 from database.repositories.apps import AppSummaryRepository, DeploymentRepository
 from database.repositories.execution import (
     LogRepository,
-    QueueRepository,
     RelatedTaskRecord,
     TaskRepository,
 )
@@ -659,19 +658,8 @@ class ManagementService:
 
     def delete_deployment(self, workspace: str, deployment_id_or_name: str) -> Deployment:
         deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        task_queue_stub_ids = self._task_queue_stub_ids(
-            workspace,
-            deployment_id=deployment.id,
-        )
         self._stop_deployment_containers(workspace, deployment)
-        deleted = self.services.deployments.delete(deployment.id)
-        workspace_id = self.control_plane.get_workspace(workspace).id
-        self._cancel_task_queue_work(
-            workspace_id,
-            task_queue_stub_ids,
-            reason="owning deployment deleted",
-        )
-        return deleted
+        return self.services.deployments.delete(deployment.id)
 
     def stop_all_active_deployments(self, workspace: str) -> tuple[Deployment, ...]:
         active = [
@@ -723,44 +711,6 @@ class ManagementService:
                 and container.status in active_statuses
             ):
                 self.services.containers.stop(container.id)
-
-    def _task_queue_stub_ids(
-        self,
-        workspace: str,
-        *,
-        app_id: str | None = None,
-        deployment_id: str | None = None,
-    ) -> set[str]:
-        workspace_id = self.control_plane.get_workspace(workspace).id
-        return {
-            stub.id
-            for stub in self.control_plane.list_stubs(workspace=workspace_id)
-            if stub.kind is StubKind.TaskQueue
-            and (app_id is None or stub.app_id == app_id)
-            and (deployment_id is None or stub.deployment_id == deployment_id)
-        }
-
-    def _cancel_task_queue_work(
-        self,
-        workspace_id: str,
-        stub_ids: set[str],
-        *,
-        reason: str,
-    ) -> None:
-        if not stub_ids:
-            return
-        with self.services.context.database.session() as session:
-            tasks = TaskRepository(session).list_inflight_for_stubs(
-                workspace_id=workspace_id,
-                stub_ids=stub_ids,
-            )
-        for task in tasks:
-            self.services.tasks.transition(task, TaskStatus.Cancelled, error=reason)
-        with self.services.context.database.session() as session:
-            QueueRepository(session).delete_messages_for_queues(
-                workspace_id=workspace_id,
-                queues={f"taskqueue:{stub_id}" for stub_id in stub_ids},
-            )
 
     def _scale_pod_deployment_stubs(
         self,

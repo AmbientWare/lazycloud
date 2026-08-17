@@ -4,7 +4,7 @@ description: "Build a complete FastAPI upload UI with durable OCR Tasks, signed 
 ---
 
 This example is a complete FastAPI application rather than a single handler.
-It accepts a streamed raw upload, submits OCR to a durable task queue, polls the
+It accepts a streamed raw upload, spawns OCR on a durable Function, polls the
 Task through a signed capability token, and stores files in a LazyCloud Volume.
 The included browser UI uses the same HTTP endpoints documented below.
 
@@ -19,7 +19,7 @@ The public ASGI deployment and private OCR queue share one Volume:
 1. `PUT /api/documents/{filename}` streams a PDF, JPEG, or PNG to an atomic
    temporary file and enforces a 10 MiB limit.
 2. The ASGI app submits the generated document ID and validated suffix to the
-   deployed `ocr-worker` task queue.
+   deployed `ocr-worker` function.
 3. The response returns an HMAC-signed, 24-hour job token. The browser keeps it
    in memory and sends it in `X-Job-Token`; it is never placed in a URL.
 4. Status comes from the durable LazyCloud Task record. The API cannot select
@@ -69,13 +69,13 @@ image = (
     ])
 )
 
-@app.task_queue(
+@app.function(
     name="ocr-worker",
     image=image,
-    timeout=600,
+    timeout_seconds=600,
     retries=0,
+    max_pending_tasks=50,
     volumes=[data],
-    authorized=True,
 )
 def ocr_document(document_id: str, suffix: str) -> dict[str, object]:
     ...
@@ -175,7 +175,7 @@ lazycloud ls document-processing-data/results
 
 `document-api` deliberately sets `authorized=False` so the static browser UI
 can upload and poll without receiving a LazyCloud access token. The private
-task queue still requires authenticated internal submission. Signed job tokens
+OCR function still requires authenticated internal submission. Signed job tokens
 provide per-job access, but they are not user authentication.
 
 Before exposing this pattern to the internet, put the ASGI service behind your

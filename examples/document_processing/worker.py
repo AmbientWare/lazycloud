@@ -1,4 +1,4 @@
-"""Durable OCR task queue worker backed by Tesseract and Poppler."""
+"""Durable OCR worker backed by Tesseract and Poppler."""
 
 from __future__ import annotations
 
@@ -103,18 +103,15 @@ def _read_page(page: Path) -> str:
     return completed.stdout
 
 
-@app.task_queue(
+@app.function(
     name="ocr-worker",
     image=runtime_image,
     cpu=2.0,
     memory="4Gi",
-    timeout=600,
+    timeout_seconds=600,
     retries=0,
-    workers=1,
-    keep_warm_seconds=0,
     max_pending_tasks=50,
     volumes=[data_volume],
-    authorized=True,
 )
 def ocr_document(document_id: str, suffix: str) -> OcrTaskResult:
     return process_document(document_id, suffix, DATA_ROOT)

@@ -37,7 +37,6 @@ CLIENT_MANIFEST_DEPLOYMENT_KINDS = frozenset(
     {
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
-        DeploymentKind.TaskQueue,
     }
 )
 
@@ -46,7 +45,6 @@ INVOKABLE_DEPLOYMENT_KINDS = frozenset(
         DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
-        DeploymentKind.TaskQueue,
     }
 )
 

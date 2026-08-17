@@ -25,7 +25,6 @@ MANAGED_RUNTIME_MODULES = frozenset(
     {
         "runner.function",
         "runner.serve",
-        "runner.taskqueue",
     }
 )
 MANAGED_RUNTIME_STARTUP_KINDS = frozenset(
@@ -33,7 +32,6 @@ MANAGED_RUNTIME_STARTUP_KINDS = frozenset(
         WorkerStartupKind.Function,
         WorkerStartupKind.Endpoint,
         WorkerStartupKind.Asgi,
-        WorkerStartupKind.TaskQueue,
     }
 )
 
@@ -111,7 +109,7 @@ def _managed_runtime_command(command: Sequence[str]) -> list[str]:
     if len(values) < 3 or values[1] != "-m" or values[2] not in MANAGED_RUNTIME_MODULES:
         raise RuntimeError(
             "managed workload entrypoint must be a target Python interpreter followed by "
-            "-m runner.function, runner.serve, or runner.taskqueue"
+            "-m runner.function or runner.serve"
         )
     return [values[0], MANAGED_RUNTIME_LAUNCHER_PATH, values[2], *values[3:]]
 

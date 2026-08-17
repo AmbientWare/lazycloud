@@ -21,7 +21,6 @@ from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
     pod_total_connections_key,
-    task_queue_keep_warm_lock_key,
 )
 
 # Clearing the container's own counter has to move the stub total by the same
@@ -67,14 +66,13 @@ class RedisContainerRuntimeStateRepository:
     def release(self, *, workspace_id: str, stub_id: str, container_id: str) -> None:
         """Drop everything this container held, whatever kind of workload it was.
 
-        Both keep-warm shapes are deleted rather than looked up. A container id
-        appears in exactly one of them, deleting a key that does not exist costs
-        nothing, and asking which kind it was would mean a stub read on every
-        terminal transition to answer a question the delete does not need.
+        The keep-warm key is deleted rather than looked up: deleting one that
+        does not exist costs nothing, and asking which kind of workload this was
+        would mean a stub read on every terminal transition to answer a question
+        the delete does not need.
         """
         self.redis.delete(
             self.redis.key(pod_keep_warm_lock_key(workspace_id, stub_id, container_id)),
-            self.redis.key(task_queue_keep_warm_lock_key(workspace_id, stub_id, container_id)),
         )
         self.redis.eval_int(
             _RELEASE_CONTAINER_CONNECTIONS,

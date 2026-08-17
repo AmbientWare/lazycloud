@@ -24,7 +24,6 @@ class WorkerStartupKind(StringEnum):
     Function = "function"
     Endpoint = "endpoint"
     Asgi = "asgi"
-    TaskQueue = "taskqueue"
     Pod = "pod"
     PodRun = "pod-run"
     Sandbox = "sandbox"

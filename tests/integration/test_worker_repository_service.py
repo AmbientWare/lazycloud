@@ -46,7 +46,6 @@ from database.repositories.orchestration import (
     ContainerRepository,
 )
 from execution.containers.preemption import PreemptedContainerService
-from execution.taskqueues.service import TaskQueueControlService
 from fastapi.testclient import TestClient
 from foundation.network import worker_network_prefix
 from gateway.http import (
@@ -2073,15 +2072,15 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
         workspace_id = isolated_services.context.default_workspace_id(session)
         container = ContainerRepository(session).records.create(
             {
-                "name": "preview-taskqueue",
+                "name": "preview-function",
                 "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.taskqueue"],
+                "command": ["python", "-m", "runner.function"],
                 "workspace_id": workspace_id,
                 "task_id": task.id,
                 "status": ContainerStatus.Running.value,
             },
             workspace_id=workspace_id,
-            name="preview-taskqueue",
+            name="preview-function",
             status=ContainerStatus.Running.value,
         )
     containers = RedisSchedulerContainerRepository(redis)
@@ -2643,7 +2642,6 @@ def _worker_repository_service(
             preempted_containers=PreemptedContainerService(
                 services=isolated_services,
                 stubs=isolated_services.control_plane_service,
-                task_queues=TaskQueueControlService(isolated_services, redis=redis),
             ),
         ),
         redis=redis,

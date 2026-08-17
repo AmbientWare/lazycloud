@@ -15,7 +15,7 @@ import { useReducedMotion } from "./useReducedMotion";
 
    GeneratedPackagePanel replays what the generator writes: the content-hash
    version directory, the lock file, the `py.typed` markers, and the exported
-   symbols for an endpoint and a task queue.
+   symbols for an endpoint and a function.
 
    TypedImportPanel replays the consuming side in an editor: a member popup on
    the generated handle, the accepted completion, and the resolved return type.
@@ -25,7 +25,7 @@ import { useReducedMotion } from "./useReducedMotion";
    characters of a sha256 over the manifest, each package writes `py.typed`,
    the root writes `lazycloud-clients.lock.json`, endpoints export
    `request`/`async_request` plus public aliases for their response models, and
-   task queues export `put`/`async_put` returning a generated task or `False`.
+   functions export `remote`/`async_remote` returning the decoded result.
 
    The section owns activation. Each entry mounts a clock at zero, each exit
    discards it, and reduced-motion viewers receive the completed static frame.
@@ -328,14 +328,14 @@ const GENERATED_SYMBOLS: GeneratedSymbol[] = [
     ],
   },
   {
-    symbol: "run_checks.put",
-    kind: "task queue",
+    symbol: "run_checks.remote",
+    kind: "function",
     signature: [
       ["punc", "("],
       ["attr", "commit_sha: "],
       ["type", "str"],
       ["punc", ") -> "],
-      ["type", "_RunChecksTask | bool"],
+      ["type", "dict[str, bool]"],
     ],
   },
 ];

@@ -8,6 +8,7 @@ from shared.contracts import ContractModel
 from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
+    CHECKPOINT_ENABLED_ENV,
     CONTAINER_ID_ENV,
     FUNCTION_CONCURRENCY_ENV,
     GATEWAY_TOKEN_ENV,
@@ -60,6 +61,7 @@ class FunctionContainerEnvVar(StrEnum):
     WorkspaceName = WORKSPACE_NAME_ENV
     AppId = APP_ID_ENV
     LifecycleHooks = LIFECYCLE_HOOKS_ENV
+    CheckpointEnabled = CHECKPOINT_ENABLED_ENV
 
 
 class FunctionContainerStartRequest(ContractModel):
@@ -81,6 +83,7 @@ class FunctionContainerStartRequest(ContractModel):
     gpu_count: int = Field(default=0, ge=0)
     gpu_request: list[str] = Field(default_factory=list)
     image_id: str = ""
+    checkpoint_enabled: bool = False
     env: list[str] = Field(default_factory=list)
     secret_env: list[str] = Field(default_factory=list)
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
@@ -281,6 +284,10 @@ def plan_function_container_start(
             f"{FunctionContainerEnvVar.WorkspaceName.value}={request.workspace_name}",
             f"{FunctionContainerEnvVar.AppId.value}={request.app_id}",
             f"{FunctionContainerEnvVar.LifecycleHooks.value}={lifecycle_hooks_json}",
+            (
+                f"{FunctionContainerEnvVar.CheckpointEnabled.value}="
+                f"{str(request.checkpoint_enabled).lower()}"
+            ),
         ],
         cpu_millicores=request.cpu_millicores or DEFAULT_FUNCTION_CONTAINER_CPU_MILLICORES,
         memory_mib=request.memory_mib or DEFAULT_FUNCTION_CONTAINER_MEMORY_MIB,

@@ -7,7 +7,6 @@ const KIND_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
   command: { icon: Terminal, label: "Command" },
   endpoint: { icon: Globe, label: "Endpoint" },
   asgi: { icon: Globe, label: "ASGI endpoint" },
-  "task-queue": { icon: Layers, label: "Task queue" },
   "cron-job": { icon: Clock, label: "Schedule" },
   pod: { icon: Layers, label: "Pod" },
   sandbox: { icon: Terminal, label: "Sandbox" },

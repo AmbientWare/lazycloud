@@ -31,7 +31,6 @@ from api.server.services import (
     ApiTailnetRuntime,
     EndpointApiService,
     FunctionApiService,
-    TaskQueueApiService,
 )
 from api.server.worker_repository_service import (
     WorkerRepositoryService,
@@ -154,12 +153,6 @@ def tailnet_runtime_service(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> ApiTailnetRuntime | None:
     return services.tailnet_runtime
-
-
-def taskqueue_service(
-    services: Annotated[ApiServices, Depends(api_services)],
-) -> TaskQueueApiService:
-    return services.taskqueue_service
 
 
 def task_rerun_service(

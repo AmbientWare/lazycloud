@@ -99,7 +99,7 @@ async def upload_document(filename: str, request: Request) -> UploadAccepted:
     try:
         await write_bounded_upload(request.stream(), destination, max_bytes=MAX_UPLOAD_BYTES)
         task = await asyncio.to_thread(
-            ocr_document.target("deployed").put,
+            ocr_document.spawn,
             document_id,
             suffix,
         )

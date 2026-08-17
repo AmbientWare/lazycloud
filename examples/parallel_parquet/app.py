@@ -411,17 +411,15 @@ def list_partitions() -> list[str]:
     return keys
 
 
-@app.task_queue(
+@app.function(
     name="process-partition",
     image=parquet_image,
     cpu=1.0,
     memory="1Gi",
-    timeout=900,
+    timeout_seconds=900,
     retries=1,
-    retry_for=[RuntimeError],
     retry_delay_seconds=2,
-    workers=4,
-    keep_warm_seconds=0,
+    concurrency=4,
     max_pending_tasks=100,
     env=WORKLOAD_ENV,
     volumes=[data_bucket],
@@ -507,11 +505,13 @@ def run_batch(
         raise RuntimeError("no Parquet partitions were selected")
     validated_keys = [validate_partition_key(CONFIG.input_prefix, key) for key in partition_keys]
 
-    batch = process_partition.target("deployed").put_many(validated_keys)
-    task_ids = [handle.task_id for handle in batch]
+    calls = process_partition.spawn_map(validated_keys)
+    task_ids = [call.task_id for call in calls]
     if len(task_ids) != len(validated_keys):
-        raise RuntimeError("partition batch returned an incomplete Task handle set")
-    results = batch.wait(timeout_seconds=1800, poll_interval_seconds=1)
+        raise RuntimeError("partition fan-out returned an incomplete call handle set")
+    results = [
+        call.result(wait=True, timeout_seconds=1800, poll_interval_seconds=1) for call in calls
+    ]
     failures = [
         f"{result.id} ({result.status.value}): {result.error or 'no error detail'}"
         for result in results
@@ -519,10 +519,10 @@ def run_batch(
     ]
     if failures:
         raise RuntimeError(
-            "partition batch failed; summary was not written: " + "; ".join(failures)
+            "partition fan-out failed; summary was not written: " + "; ".join(failures)
         )
     if len(results) != len(validated_keys):
-        raise RuntimeError("partition batch returned an incomplete result set")
+        raise RuntimeError("partition fan-out returned an incomplete result set")
 
     partitions: list[PartitionResult] = []
     for expected_key, result in zip(validated_keys, results, strict=True):

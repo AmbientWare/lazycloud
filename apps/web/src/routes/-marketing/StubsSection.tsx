@@ -30,7 +30,7 @@ class Review(BaseModel):
 def review_patch(diff: str) -> Review:
     return analyze(diff)
 
-@app.task_queue(retries=3)
+@app.function(retries=3)
 def run_checks(commit_sha: str) -> dict[str, bool]:
     return check_release(commit_sha)`;
 
@@ -74,7 +74,7 @@ function StubsStory({ active }: { active: boolean }) {
               Deployments you can <em>import.</em>
             </>
           }
-          body="Generate a pinned, typed client for each app, giving developers and agents a stable way to discover, import, and call deployed endpoints and task queues without hand-written integration code."
+          body="Generate a pinned, typed client for each app, giving developers and agents a stable way to discover, import, and call deployed functions and endpoints without hand-written integration code."
         />
       </div>
 

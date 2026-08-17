@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { CronJob, Deployment, Stub } from "@/lib/api/schemas";
 import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
 import { cronJobsQueryOptions } from "@/lib/queries/cron";
-import { taskQueueStateQueryOptions } from "@/lib/queries/stubs";
 import { formatDuration, relativeTime } from "@/lib/format";
 
 import type { WorkloadGroup } from "./grouping";
@@ -28,7 +27,7 @@ export function WorkloadOperation({
   runningContainers: number;
 }) {
   const kind = group.kind;
-  const isInvokable = ["function", "endpoint", "asgi", "task-queue"].includes(kind);
+  const isInvokable = ["function", "endpoint", "asgi"].includes(kind);
 
   return (
     <div className="grid grid-cols-1 divide-y divide-border/80 lg:grid-cols-[minmax(0,1fr)_minmax(24rem,1.35fr)] lg:divide-x lg:divide-y-0">
@@ -42,9 +41,6 @@ export function WorkloadOperation({
         ) : null}
         {kind === "cron-job" ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
         {kind === "pod" ? <PodFacts deployment={deployment} /> : null}
-        {kind === "task-queue" && stub ? (
-          <QueueFacts workspaceId={workspaceId} stubId={stub.id} />
-        ) : null}
         {(kind === "endpoint" || kind === "asgi") && (
           <HttpFacts deployment={deployment} isPublic={isPublic} />
         )}
@@ -155,30 +151,6 @@ function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic:
         mono
       />
       <Fact label="Authentication" value={isPublic ? "Public" : "Bearer token"} />
-    </div>
-  );
-}
-
-function QueueFacts({ workspaceId, stubId }: { workspaceId: string; stubId: string }) {
-  const state = useQuery(taskQueueStateQueryOptions(workspaceId, stubId));
-  if (state.isPending) return <Skeleton className="h-24 w-full" />;
-  if (state.isError) {
-    return <div className="text-sm text-destructive">{state.error.message}</div>;
-  }
-
-  const consumers = state.data.active_consumers;
-  return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4">
-      <Fact label="Queue depth" value={Intl.NumberFormat().format(state.data.queue_depth)} />
-      <Fact
-        label="Oldest pending"
-        value={state.data.oldest_pending_at ? relativeTime(state.data.oldest_pending_at) : "None"}
-      />
-      <Fact label="Consumers" value={`${Intl.NumberFormat().format(consumers)} active`} />
-      <Fact
-        label="Availability"
-        value={`${Intl.NumberFormat().format(state.data.available_consumers)} available / ${Intl.NumberFormat().format(state.data.busy_consumers)} busy`}
-      />
     </div>
   );
 }

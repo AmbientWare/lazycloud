@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pickle
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -15,9 +14,7 @@ from database.repositories.apps import (
     AppContainerShutdownIntentRepository,
     DeploymentRepository,
 )
-from database.repositories.execution import QueueRepository
 from database.repositories.orchestration import ContainerRepository
-from execution.taskqueues.service import TaskQueueControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
@@ -32,7 +29,6 @@ from shared.containers import ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
-from shared.http.taskqueues import TaskQueueInvocationEnvelope
 from shared.http.workspace_changes import (
     WorkspaceChangeEvent,
     WorkspaceChangeTopic,
@@ -196,88 +192,6 @@ def test_app_pause_resume_preserves_explicitly_stopped_deployments_and_delete_cl
             )
             assert deployment is not None
             assert deployment.deleted_at is not None
-
-
-def test_task_queue_deployment_stop_preserves_work_and_delete_cancels_it(
-    isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = isolated_services.apps.create("task_queue_deployment_lifecycle")
-    deployment = isolated_services.deployments.deploy(
-        DeploymentSpec(
-            name="jobs",
-            kind=DeploymentKind.TaskQueue,
-            handler="pkg:jobs",
-            metadata={"app": app.name, "app_id": app.id},
-        )
-    )
-    assert deployment.stub_id is not None
-    task_id = _put_task_queue_run(isolated_services, deployment.stub_id)
-    management = ManagementService(isolated_services)
-
-    management.set_deployment_active(app.workspace_id, deployment.id, active=False)
-
-    assert isolated_services.tasks.get(task_id).status.value == "pending"
-    assert _task_queue_message_count(isolated_services, deployment.stub_id) == 1
-    with pytest.raises(ConflictError, match="not active"):
-        _put_task_queue_run(isolated_services, deployment.stub_id)
-
-    original_cleanup = ManagementService._cancel_task_queue_work
-
-    def cleanup_after_deleted_state(
-        service: ManagementService,
-        workspace_id: str,
-        stub_ids: set[str],
-        *,
-        reason: str,
-    ) -> None:
-        with pytest.raises(ConflictError, match="deleted"):
-            _put_task_queue_run(isolated_services, deployment.stub_id or "")
-        original_cleanup(
-            service,
-            workspace_id,
-            stub_ids,
-            reason=reason,
-        )
-
-    monkeypatch.setattr(
-        ManagementService,
-        "_cancel_task_queue_work",
-        cleanup_after_deleted_state,
-    )
-    management.delete_deployment(app.workspace_id, deployment.id)
-
-    cancelled = isolated_services.tasks.get(task_id)
-    assert cancelled.status.value == "cancelled"
-    assert cancelled.error == "owning deployment deleted"
-    assert cancelled.finished_at is not None
-    assert _task_queue_message_count(isolated_services, deployment.stub_id) == 0
-    with pytest.raises(ConflictError, match="deleted"):
-        _put_task_queue_run(isolated_services, deployment.stub_id)
-
-
-def test_app_delete_cancels_task_queue_work_and_removes_messages(
-    isolated_services: ApiServices,
-) -> None:
-    app = isolated_services.apps.create("task_queue_app_lifecycle")
-    deployment = isolated_services.deployments.deploy(
-        DeploymentSpec(
-            name="jobs",
-            kind=DeploymentKind.TaskQueue,
-            handler="pkg:jobs",
-            metadata={"app": app.name, "app_id": app.id},
-        )
-    )
-    assert deployment.stub_id is not None
-    task_id = _put_task_queue_run(isolated_services, deployment.stub_id)
-
-    isolated_services.apps.delete(app.id, workspace=app.workspace_id)
-
-    cancelled = isolated_services.tasks.get(task_id)
-    assert cancelled.status.value == "cancelled"
-    assert cancelled.error == "owning app deleted"
-    assert cancelled.finished_at is not None
-    assert _task_queue_message_count(isolated_services, deployment.stub_id) == 0
 
 
 @pytest.mark.parametrize("failure_point", ["before-stream", "after-stream"])
@@ -771,25 +685,6 @@ def test_app_and_deployment_http_actions_follow_authorization_and_lifecycle_stat
     ]
 
 
-def _put_task_queue_run(services: ApiServices, stub_id: str) -> str:
-    payload = pickle.dumps(TaskQueueInvocationEnvelope(args=(42,), kwargs={}))
-    return (
-        TaskQueueControlService(services, redis=services.redis())
-        .task_queue_put(stub_id, payload)
-        .task_id
-    )
-
-
-def _task_queue_message_count(services: ApiServices, stub_id: str) -> int:
-    queue = f"taskqueue:{stub_id}"
-    with services.context.database.session() as session:
-        return sum(
-            1
-            for message in QueueRepository(session).messages.list_across_workspaces()
-            if message.queue == queue
-        )
-
-
 def _deploy_execution_kinds(
     services: ApiServices,
     app_id: str,
@@ -805,7 +700,6 @@ def _deploy_execution_kinds(
             )
         )
         for kind in (
-            DeploymentKind.TaskQueue,
             DeploymentKind.Endpoint,
             DeploymentKind.Pod,
         )
@@ -824,23 +718,7 @@ def _execution_redis_keys(
     for deployment in deployments:
         assert deployment.stub_id is not None
         stub_id = deployment.stub_id
-        if deployment.kind is DeploymentKind.TaskQueue:
-            root = redis.key("taskqueue", workspace_id, stub_id)
-            keys.update(
-                {
-                    root,
-                    f"{root}:processing_lock:container",
-                    redis.key("scheduler", "serve", "lock", workspace_id, stub_id),
-                    redis.key(
-                        "autoscaling",
-                        "taskqueues",
-                        workspace_id,
-                        stub_id,
-                        "lock",
-                    ),
-                }
-            )
-        elif deployment.kind is DeploymentKind.Endpoint:
+        if deployment.kind is DeploymentKind.Endpoint:
             root = redis.key("endpoint", workspace_id, stub_id)
             keys.update(
                 {

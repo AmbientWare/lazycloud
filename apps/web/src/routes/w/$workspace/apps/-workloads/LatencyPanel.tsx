@@ -79,15 +79,11 @@ export function LatencyPanel({
         />
         <dl className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
           <LatencyFact label={volumeLabel(kind)} value={Intl.NumberFormat().format(tasks)} />
-          {kind === "task-queue" ? (
-            <LatencyFact label="Average throughput" value={`${(tasks / 24).toFixed(1)}/hr`} />
-          ) : (
-            <LatencyFact
-              label={kind === "endpoint" || kind === "asgi" ? "Errors (24h)" : "Failed tasks"}
-              value={Intl.NumberFormat().format(failures)}
-              danger={failures > 0}
-            />
-          )}
+          <LatencyFact
+            label={kind === "endpoint" || kind === "asgi" ? "Errors (24h)" : "Failed tasks"}
+            value={Intl.NumberFormat().format(failures)}
+            danger={failures > 0}
+          />
           <LatencyFact label="Cold starts" value={Intl.NumberFormat().format(coldStarts)} />
         </dl>
       </div>
@@ -215,7 +211,6 @@ function LatencyFact({
 
 function volumeLabel(kind: string): string {
   if (kind === "endpoint" || kind === "asgi") return "Requests (24h)";
-  if (kind === "task-queue") return "Processed (24h)";
   return "Tasks (24h)";
 }
 

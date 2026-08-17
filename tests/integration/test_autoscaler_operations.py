@@ -12,17 +12,15 @@ from coordination.redis_client import RedisClient
 from execution.endpoints.service import EndpointControlService, EndpointDispatchStateRepository
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
-from execution.taskqueues.service import TaskQueueControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaling import (
-    TASK_QUEUE_AUTOSCALER_SOURCE,
+    ENDPOINT_AUTOSCALER_SOURCE,
     EndpointAutoscalingService,
     FunctionAutoscalingService,
     PodAutoscalingService,
-    TaskQueueAutoscalingService,
 )
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.autoscaler_state import (
@@ -84,13 +82,13 @@ def test_autoscaler_cli_controls_real_api_and_persists_owner_state(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stub = _create_task_queue_stub(isolated_services)
+    stub = _create_endpoint_stub(isolated_services)
     _record_state(isolated_services, stub)
     isolated_services.events.emit(
-        "taskqueue.autoscaler.scale_decision",
+        "endpoint.autoscaler.scale_decision",
         resource_type="stub",
         resource_id=stub.id,
-        message="scaled queue consumers",
+        message="scaled endpoint replicas",
         workspace_id=stub.workspace_id,
         data={"desired_containers": 2},
     )
@@ -152,7 +150,7 @@ def test_autoscaler_cli_controls_real_api_and_persists_owner_state(
     assert resumed.exit_code == 0, resumed.output
     assert _AutoscalerCliControl.model_validate_json(resumed.output).autoscaling_enabled
     assert persisted_metadata == {"autoscaling_enabled": True}
-    assert history_actions == ["taskqueue.autoscaler.scale_decision"]
+    assert history_actions == ["endpoint.autoscaler.scale_decision"]
 
 
 def _redis() -> RedisClient:
@@ -165,20 +163,10 @@ def _autoscaler_operations(
     *,
     gateway_http_url: str = "http://gateway.internal:9000",
 ) -> AutoscalerOperationsService:
-    task_queues = TaskQueueControlService(
-        services,
-        redis=redis,
-        gateway_http_url=lambda: gateway_http_url,
-    )
     endpoints = EndpointControlService(services, gateway_http_url=lambda: gateway_http_url)
     pods = PodControlService(services, redis=redis)
     return AutoscalerOperationsService(
         services,
-        task_queue_autoscaler=TaskQueueAutoscalingService(
-            services,
-            redis=redis,
-            task_queues=task_queues,
-        ),
         function_autoscaler=FunctionAutoscalingService(
             services,
             redis=redis,
@@ -201,18 +189,18 @@ def _autoscaler_operations(
     )
 
 
-def _create_task_queue_stub(
+def _create_endpoint_stub(
     services: ApiServices,
     *,
     config: dict[str, JsonValue] | None = None,
 ) -> StubRecord:
     return ControlPlaneService(services.context).create_stub(
-        "queue-autoscale",
-        kind=StubKind.TaskQueue,
-        handler="pkg.queue:handler",
+        "endpoint-autoscale",
+        kind=StubKind.Endpoint,
+        handler="pkg.endpoint:handler",
         config=config
         or {
-            "image": {"image_id": "img-taskqueue"},
+            "image": {"image_id": "img-endpoint"},
             "autoscaler": {"max_containers": 2, "tasks_per_container": 1},
         },
     )
@@ -220,16 +208,16 @@ def _create_task_queue_stub(
 
 def _record_state(services: ApiServices, stub: StubRecord) -> AutoscalerStateRecord:
     state = AutoscalerStateRecord(
-        name=autoscaler_state_name(AutoscalerTargetKind.TaskQueue, stub.id),
+        name=autoscaler_state_name(AutoscalerTargetKind.Endpoint, stub.id),
         workspace_id=stub.workspace_id,
-        source=TASK_QUEUE_AUTOSCALER_SOURCE,
-        target_kind=AutoscalerTargetKind.TaskQueue,
+        source=ENDPOINT_AUTOSCALER_SOURCE,
+        target_kind=AutoscalerTargetKind.Endpoint,
         target_id=stub.id,
         deployment_id=stub.deployment_id or "",
         app_id=stub.app_id or "",
         current_count=1,
         desired_count=2,
-        signal_name="queue_length",
+        signal_name="active_dispatches",
         signal_value=4,
         decision="scale-up",
         reason="queue-pending",

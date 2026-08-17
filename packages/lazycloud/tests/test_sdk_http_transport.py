@@ -53,9 +53,6 @@ class _TransportHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v1/functions/invoke/stream":
             self._respond(200, b'{"task_id": []}\n', content_type="application/x-ndjson")
             return
-        if parsed.path == "/api/v1/taskqueues/put":
-            self._respond(200, b'{"task_id": []}', content_type="application/json")
-            return
         if parsed.path.startswith("/status/"):
             status = int(parsed.path.rsplit("/", maxsplit=1)[-1])
             body = json.dumps({"detail": f"status {status}"}).encode()

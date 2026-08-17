@@ -100,23 +100,6 @@ def test_rerun_copies_declared_dependency_edges(isolated_services: ApiServices) 
     assert [edge.upstream_task_id for edge in edges] == [upstream.id]
 
 
-def test_rerun_rejects_task_queue_tasks(isolated_services: ApiServices) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub("rerun-queue", kind=StubKind.TaskQueue)
-    task = isolated_services.tasks.create(
-        f"taskqueue-{stub.id}",
-        workspace_id=stub.workspace_id,
-        stub_id=stub.id,
-    )
-    source = isolated_services.tasks.transition(task, TaskStatus.Complete)
-
-    with pytest.raises(InvalidInputError):
-        isolated_services.task_rerun_service.rerun(
-            workspace_id=stub.workspace_id,
-            task_id=source.id,
-        )
-
-
 def test_rerun_rejects_live_tasks(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(isolated_services.context)
     stub = control.create_stub("rerun-live", kind=StubKind.Function)

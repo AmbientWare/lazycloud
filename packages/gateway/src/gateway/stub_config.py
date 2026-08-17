@@ -38,8 +38,6 @@ STUB_KIND_ALIASES: dict[str, StubKind] = {
     "endpoint": StubKind.Endpoint,
     "http": StubKind.Endpoint,
     "asgi": StubKind.Asgi,
-    "taskqueue": StubKind.TaskQueue,
-    "task-queue": StubKind.TaskQueue,
     "pod": StubKind.Pod,
     "shell": StubKind.Shell,
     "sandbox": StubKind.Sandbox,
@@ -52,7 +50,6 @@ DEPLOYABLE_STUB_KINDS: dict[StubKind, DeploymentKind] = {
     StubKind.Function: DeploymentKind.Function,
     StubKind.Endpoint: DeploymentKind.Endpoint,
     StubKind.Asgi: DeploymentKind.Asgi,
-    StubKind.TaskQueue: DeploymentKind.TaskQueue,
     StubKind.Pod: DeploymentKind.Pod,
     StubKind.Sandbox: DeploymentKind.Sandbox,
     StubKind.Command: DeploymentKind.Command,
@@ -295,8 +292,6 @@ def _default_tasks_per_container(
 ) -> int:
     if kind in {StubKind.Endpoint, StubKind.Asgi}:
         return max(request.workers, 1) * request.concurrent_requests
-    if kind is StubKind.TaskQueue:
-        return request.concurrent_requests
     return 1
 
 

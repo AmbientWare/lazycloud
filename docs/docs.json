@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
   "name": "LazyCloud",
-  "description": "Documentation for LazyCloud, a Python-first serverless compute platform for functions, endpoints, task queues, pods, and sandboxes.",
+  "description": "Documentation for LazyCloud, a Python-first serverless compute platform for functions, endpoints, pods, and sandboxes.",
   "colors": {
     "primary": "#006b9a",
     "light": "#66cbff",
@@ -41,7 +41,6 @@
           "concepts/apps",
           "concepts/functions",
           "concepts/endpoints",
-          "concepts/task-queues",
           "concepts/cron",
           "concepts/pods",
           "concepts/sandboxes",

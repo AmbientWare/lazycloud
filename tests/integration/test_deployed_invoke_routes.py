@@ -7,7 +7,6 @@ from contextlib import ExitStack
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
-import cloudpickle
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
@@ -36,19 +35,6 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
-)
-from shared.http.taskqueues import (
-    StartTaskQueueServeRequest,
-    StartTaskQueueServeResponse,
-    TaskQueueCompleteBody,
-    TaskQueueCompleteResponse,
-    TaskQueueInvocationEnvelope,
-    TaskQueueMonitorRequest,
-    TaskQueueMonitorResponse,
-    TaskQueuePopRequest,
-    TaskQueuePopResponse,
-    TaskQueuePutResponse,
-    TaskQueueStateResponse,
 )
 from starlette.routing import BaseRoute, Mount, Route
 from tests.service_fixtures import owned_workspace
@@ -107,7 +93,6 @@ class RecordingFunctionService:
     ) -> Iterable[FunctionInvokeResponse]:
         _ = poll_interval_seconds, keepalive_interval_seconds
         yield self.function_invoke(request)
-
 
     def function_set_result(
         self,
@@ -234,43 +219,6 @@ class StaticEndpointResponseStream:
 
     def close(self) -> None:
         return
-
-
-class RecordingTaskQueueService:
-    def __init__(self) -> None:
-        self.put_requests: list[tuple[str, bytes]] = []
-        self.serve_requests: list[StartTaskQueueServeRequest] = []
-
-    def task_queue_put(self, stub_id: str, payload: bytes) -> TaskQueuePutResponse:
-        self.put_requests.append((stub_id, payload))
-        return TaskQueuePutResponse(task_id=f"queue-{len(self.put_requests)}")
-
-    def start_task_queue_serve(
-        self,
-        request: StartTaskQueueServeRequest,
-    ) -> StartTaskQueueServeResponse:
-        self.serve_requests.append(request)
-        return StartTaskQueueServeResponse(
-            container_id=f"taskqueue-{len(self.serve_requests)}",
-        )
-
-    def task_queue_pop(self, request: TaskQueuePopRequest) -> TaskQueuePopResponse:
-        raise AssertionError(f"unexpected task_queue_pop call: {request}")
-
-    def task_queue_monitor(
-        self,
-        request: TaskQueueMonitorRequest,
-    ) -> TaskQueueMonitorResponse:
-        raise AssertionError(f"unexpected task_queue_monitor call: {request}")
-
-    def task_queue_complete(
-        self,
-        request: TaskQueueCompleteBody,
-    ) -> TaskQueueCompleteResponse:
-        raise AssertionError(f"unexpected task_queue_complete call: {request}")
-
-    def task_queue_state(self, stub_id: str) -> TaskQueueStateResponse:
-        raise AssertionError(f"unexpected task_queue_state call: {stub_id}")
 
 
 def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
@@ -529,89 +477,6 @@ def test_generated_asgi_urls_forward_subpaths_and_warmup(
         public_stub.id,
     ]
     assert [request.stub_id for request in service.serve_requests] == [stub.id]
-
-
-def test_generated_task_queue_urls_forward_to_put_and_warmup(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
-) -> None:
-    deployment, stub = _deploy(isolated_services, "jobs", DeploymentKind.TaskQueue)
-    _public_deployment, public_stub = _deploy(
-        isolated_services,
-        "public-jobs",
-        DeploymentKind.TaskQueue,
-        route="/public-jobs",
-        public=True,
-    )
-    service = RecordingTaskQueueService()
-    client = client_stack.enter_context(
-        TestClient(create_app(isolated_services, taskqueue_service=service))
-    )
-    headers = _auth_headers(isolated_services)
-
-    id_path = f"/api/v1/taskqueues/id/{stub.id}"
-    deployment_path = f"/api/v1/taskqueues/{deployment.name}/v{deployment.version}"
-    public_path = f"/api/v1/taskqueues/public/{public_stub.id}"
-
-    id_response = client.post(
-        id_path,
-        headers=headers,
-        json={"args": ["clip.mp4"], "priority": 1},
-        params={"count": "2"},
-    )
-    deployment_response = client.post(
-        deployment_path,
-        headers=headers,
-        json={"kwargs": {"source": "deployment"}},
-    )
-    warmup_response = client.post(f"{deployment_path}/warmup", headers=headers)
-    public_response = client.post(public_path, json={"value": "public"})
-    assert id_response.status_code == 200
-    assert deployment_response.status_code == 200
-    assert warmup_response.status_code == 200
-    assert public_response.status_code == 200
-    assert [stub_id for stub_id, _payload in service.put_requests] == [
-        stub.id,
-        stub.id,
-        public_stub.id,
-    ]
-    assert [request.stub_id for request in service.serve_requests] == [stub.id]
-    assert cloudpickle.loads(service.put_requests[0][1]) == TaskQueueInvocationEnvelope(
-        args=("clip.mp4",),
-        kwargs={"priority": 1, "count": 2.0},
-    )
-
-
-def test_private_task_queue_deployed_routes_use_token_workspace(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
-) -> None:
-    deployment, stub = _deploy(
-        isolated_services,
-        "owner-queue",
-        DeploymentKind.TaskQueue,
-        workspace="queue-owner",
-    )
-    service = RecordingTaskQueueService()
-    client = client_stack.enter_context(
-        TestClient(create_app(isolated_services, taskqueue_service=service))
-    )
-    other_headers = _auth_headers(isolated_services, workspace="queue-other")
-
-    private_paths = [
-        f"/api/v1/taskqueues/id/{stub.id}",
-        f"/api/v1/taskqueues/{deployment.name}/latest",
-        f"/api/v1/taskqueues/{deployment.name}/v{deployment.version}",
-        f"/api/v1/taskqueues/id/{stub.id}/warmup",
-        f"/api/v1/taskqueues/{deployment.name}/latest/warmup",
-        f"/api/v1/taskqueues/{deployment.name}/v{deployment.version}/warmup",
-    ]
-    for path in private_paths:
-        response = client.post(path, headers=other_headers, json={"value": "blocked"})
-        assert response.status_code == 404
-
-    assert service.put_requests == []
-    assert service.serve_requests == []
 
 
 def _deploy(

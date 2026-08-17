@@ -35,11 +35,6 @@ DEFAULT_MAX_PENDING_TASKS = 100
 DEFAULT_POD_CPU = 1.0
 DEFAULT_POD_MEMORY = "128Mi"
 DEFAULT_POD_KEEP_WARM_SECONDS = 600
-DEFAULT_TASK_QUEUE_CPU = 1.0
-DEFAULT_TASK_QUEUE_KEEP_WARM_SECONDS = 10
-DEFAULT_TASK_QUEUE_MEMORY = "128Mi"
-DEFAULT_TASK_QUEUE_RETRIES = 3
-DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS = 3600
 
 
 class Resources(ContractModel):
@@ -112,8 +107,6 @@ def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
         return DEFAULT_HTTP_KEEP_WARM_SECONDS
     if deployment_kind is DeploymentKind.Pod:
         return DEFAULT_POD_KEEP_WARM_SECONDS
-    if deployment_kind is DeploymentKind.TaskQueue:
-        return DEFAULT_TASK_QUEUE_KEEP_WARM_SECONDS
     if deployment_kind is DeploymentKind.Function:
         return DEFAULT_FUNCTION_KEEP_WARM_SECONDS
     return 0
@@ -135,8 +128,6 @@ def resolve_cpu(kind: DeploymentKind | str, value: int | float | None) -> float 
         return DEFAULT_HTTP_CPU
     if deployment_kind is DeploymentKind.Pod:
         return DEFAULT_POD_CPU
-    if deployment_kind is DeploymentKind.TaskQueue:
-        return DEFAULT_TASK_QUEUE_CPU
     return None
 
 
@@ -150,8 +141,6 @@ def resolve_memory(kind: DeploymentKind | str, value: str | int | None) -> str |
         return DEFAULT_HTTP_MEMORY
     if deployment_kind is DeploymentKind.Pod:
         return DEFAULT_POD_MEMORY
-    if deployment_kind is DeploymentKind.TaskQueue:
-        return DEFAULT_TASK_QUEUE_MEMORY
     return None
 
 
@@ -174,8 +163,6 @@ def resolve_timeout_seconds(kind: DeploymentKind | str, value: int | None) -> in
         return DEFAULT_FUNCTION_TIMEOUT_SECONDS
     if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
         return DEFAULT_HTTP_TIMEOUT_SECONDS
-    if deployment_kind is DeploymentKind.TaskQueue:
-        return DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS
     return None
 
 
@@ -191,8 +178,6 @@ def resolve_retries(kind: DeploymentKind | str, value: int | None) -> int:
     deployment_kind = _deployment_kind(kind)
     if deployment_kind is DeploymentKind.Function:
         return DEFAULT_FUNCTION_RETRIES
-    if deployment_kind is DeploymentKind.TaskQueue:
-        return DEFAULT_TASK_QUEUE_RETRIES
     return 0
 
 
@@ -203,7 +188,6 @@ def resolve_max_pending_tasks(kind: DeploymentKind | str, value: int | None) -> 
         DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
-        DeploymentKind.TaskQueue,
     }:
         return DEFAULT_MAX_PENDING_TASKS
     return None
@@ -216,7 +200,6 @@ def resolve_authorized(kind: DeploymentKind | str, value: bool | None) -> bool:
         DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
-        DeploymentKind.TaskQueue,
     }
 
 
@@ -340,11 +323,6 @@ __all__ = [
     "DEFAULT_POD_CPU",
     "DEFAULT_POD_KEEP_WARM_SECONDS",
     "DEFAULT_POD_MEMORY",
-    "DEFAULT_TASK_QUEUE_CPU",
-    "DEFAULT_TASK_QUEUE_KEEP_WARM_SECONDS",
-    "DEFAULT_TASK_QUEUE_MEMORY",
-    "DEFAULT_TASK_QUEUE_RETRIES",
-    "DEFAULT_TASK_QUEUE_TIMEOUT_SECONDS",
     "Deployment",
     "DeploymentSpec",
     "Resources",

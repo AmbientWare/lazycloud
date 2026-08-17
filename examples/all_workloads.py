@@ -120,21 +120,19 @@ async def service(
     await send({"type": "http.response.body", "body": body})
 
 
-@app.task_queue(
+@app.function(
     name="jobs",
     image=image,
     cpu=0.25,
     memory="128Mi",
-    workers=1,
-    keep_warm_seconds=0,
+    concurrency=1,
     retries=1,
-    retry_for=[RuntimeError],
 )
 def jobs(value: int = 5, fail: bool = False, delay_seconds: float = 0) -> JobResult:
     if delay_seconds > 0:
         time.sleep(delay_seconds)
     if fail:
-        raise RuntimeError(f"intentional task queue failure for {value}")
+        raise RuntimeError(f"intentional background job failure for {value}")
     print(json.dumps({"event": "job-complete", "value": value}), flush=True)
     return {"accepted": True, "value": value}
 
@@ -231,8 +229,8 @@ def run_nested_function(value: int = 6) -> dict[str, JsonValue]:
     return {"task_id": submission.task_id, "result": result.task.result}
 
 
-def run_task_queue(value: int = 5, delay_seconds: float = 0) -> dict[str, JsonValue]:
-    handle = jobs.target("deployed").put(value, delay_seconds=delay_seconds)
+def run_background_job(value: int = 5, delay_seconds: float = 0) -> dict[str, JsonValue]:
+    handle = jobs.spawn(value, delay_seconds=delay_seconds)
     result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
     return {
         "task_id": handle.task_id,
@@ -242,11 +240,11 @@ def run_task_queue(value: int = 5, delay_seconds: float = 0) -> dict[str, JsonVa
     }
 
 
-def run_task_queue_failure(value: int = 17) -> dict[str, JsonValue]:
-    handle = jobs.target("deployed").put(value, fail=True)
+def run_background_job_failure(value: int = 17) -> dict[str, JsonValue]:
+    handle = jobs.spawn(value, fail=True)
     result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
     if result.ok:
-        raise RuntimeError("intentional task queue failure completed successfully")
+        raise RuntimeError("intentional background job failure completed successfully")
     return {
         "task_id": handle.task_id,
         "status": result.status.value,
@@ -256,13 +254,13 @@ def run_task_queue_failure(value: int = 17) -> dict[str, JsonValue]:
 
 
 def exercise_runs(value: int = 7) -> dict[str, JsonValue]:
-    """Create successful, failed, nested, and task-queue Runs."""
+    """Create successful, failed, nested, and spawned background Runs."""
     return {
         "function": run_function(value),
         "failure": run_function_failure(value),
         "nested": run_nested_function(value),
-        "task_queue": run_task_queue(value),
-        "task_queue_failure": run_task_queue_failure(value),
+        "background_job": run_background_job(value),
+        "background_job_failure": run_background_job_failure(value),
     }
 
 
@@ -298,12 +296,12 @@ __all__ = [
     "nested_calculation",
     "predict",
     "run_asgi",
+    "run_background_job",
+    "run_background_job_failure",
     "run_endpoint",
     "run_function",
     "run_function_failure",
     "run_nested_function",
-    "run_task_queue",
-    "run_task_queue_failure",
     "sandbox",
     "service",
     "web",

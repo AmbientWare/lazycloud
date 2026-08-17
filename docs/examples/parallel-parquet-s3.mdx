@@ -1,10 +1,10 @@
 ---
 title: "Parallel Parquet processing on S3"
-description: "Fan Parquet partitions out through a TaskQueue, aggregate real results, and write a JSON summary to an S3-compatible bucket."
+description: "Fan Parquet partitions out through a Function, aggregate real results, and write a JSON summary to an S3-compatible bucket."
 ---
 
 This example reads Parquet partitions directly from a bucket you own. A typed
-TaskQueue processes the partitions in parallel, the local coordinator rejects
+A pooled Function processes the partitions in parallel, the local coordinator rejects
 the whole batch if any Task fails, and a final remote Function writes the
 aggregate JSON document through the same CloudBucket mount.
 
@@ -126,31 +126,34 @@ data_bucket = CloudBucket(
 )
 ```
 
-The TaskQueue accepts one validated partition key and returns JSON-safe
+The partition Function accepts one validated partition key and returns JSON-safe
 statistics:
 
 ```python
-@app.task_queue(
+@app.function(
     name="process-partition",
     image=parquet_image,
-    workers=4,
+    concurrency=4,
     retries=1,
-    retry_for=[RuntimeError],
+    max_pending_tasks=100,
     volumes=[data_bucket],
 )
 def process_partition(key: str) -> PartitionResult:
     ...
 ```
 
-The coordinator uses the production Task APIs. `put_many` creates one durable
-Task per key, and `wait` returns their terminal results in input order:
+The coordinator uses the production Task APIs. `spawn_map` creates one durable
+Task per key, and each call's `result(wait=True)` returns its terminal result:
 
 ```python
-batch = process_partition.target("deployed").put_many(partition_keys)
-results = batch.wait(timeout_seconds=1800, poll_interval_seconds=1)
+calls = process_partition.spawn_map(partition_keys)
+results = [
+    call.result(wait=True, timeout_seconds=1800, poll_interval_seconds=1)
+    for call in calls
+]
 
 if any(not result.ok for result in results):
-    raise RuntimeError("partition batch failed; summary was not written")
+    raise RuntimeError("partition fan-out failed; summary was not written")
 
 summary = write_summary.remote(partitions, task_ids)
 ```
@@ -228,8 +231,8 @@ bypass; every remote read and write goes through the production CloudBucket moun
 Task records and logs follow the workspace's normal retention policy. Input
 partitions and the JSON summary remain in your bucket until you remove them,
 so bucket storage and request charges continue independently of LazyCloud
-deployments. TaskQueue workers consume compute while processing and can fan
-out up to the configured worker count.
+deployments. Function containers consume compute while processing and scale
+out to the backlog, up to the configured container ceiling.
 
 First list the app's deployments, then delete all four by the exact IDs shown:
 

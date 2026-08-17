@@ -4,7 +4,7 @@ description: "An App owns the deployable resources registered under one applicat
 ---
 
 An `App` is the unit of organization. Every workload — functions, endpoints,
-ASGI apps, task queues, cron jobs, pods, and sandboxes — is registered under an
+ASGI apps, cron jobs, pods, and sandboxes — is registered under an
 app slug, which is the stable production identity used by deploy, serve, the
 dashboard, and generated client handles.
 
@@ -27,7 +27,6 @@ digits, and underscores (up to 63 characters) — for example `"billing"` or
 | `@app.endpoint(...)` | An HTTP [endpoint](/concepts/endpoints) |
 | `@app.asgi(...)` | An ASGI application |
 | `@app.realtime(...)` | A realtime WebSocket-style handler |
-| `@app.task_queue(...)` | A background [task queue](/concepts/task-queues) |
 | `app.pod(...)` | A long-running [pod](/concepts/pods) |
 | `app.sandbox(...)` | An on-demand [sandbox](/concepts/sandboxes) |
 
@@ -50,7 +49,7 @@ result = app.deploy()
 
 `App.deploy` accepts a `resource` selector to deploy a single resource. Pass
 the resource name, or `"kind:name"` when names overlap across kinds — for
-example `"endpoint:api"` or `"task-queue:summarize"`:
+example `"endpoint:api"` or `"asgi:site"`:
 
 ```python
 app.deploy(resource="endpoint:api")
@@ -62,10 +61,10 @@ The same selector is available on the CLI as `lazycloud deploy <handler> --resou
 
 ## Serving an app
 
-`App.serve` (or `lazycloud serve`) previews one endpoint, ASGI app, or task queue
+`App.serve` (or `lazycloud serve`) previews one endpoint or ASGI app
 resource on remote compute with live logs. When an app has more than one
 serveable resource, select one:
 
 ```python
-app.serve(resource="task-queue:summarize")
+app.serve(resource="endpoint:api")
 ```

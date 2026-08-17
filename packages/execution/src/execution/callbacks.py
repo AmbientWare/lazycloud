@@ -34,7 +34,6 @@ CALLBACK_SUPPORTED_STUB_KINDS: frozenset[StubKind] = frozenset(
         StubKind.CronJob,
         StubKind.Endpoint,
         StubKind.Asgi,
-        StubKind.TaskQueue,
     }
 )
 
