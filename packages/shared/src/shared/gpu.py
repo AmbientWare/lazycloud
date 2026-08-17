@@ -32,6 +32,7 @@ class GpuType(StringEnum):
     L4 = "L4"
     L40 = "L40"
     L40S = "L40S"
+    RTX3090 = "RTX3090"
     RTX4000Ada = "RTX4000Ada"
     RTX4090 = "RTX4090"
     RTX5090 = "RTX5090"
@@ -76,6 +77,7 @@ _GPU_ALIASES: tuple[tuple[str, str], ...] = (
     ("RTX6000", "RTX6000"),
     ("RTX5090", "RTX5090"),
     ("RTX4090", "RTX4090"),
+    ("RTX3090", "RTX3090"),
     ("V10032G", "V100-32"),
     ("V10032", "V100-32"),
     ("V100", "V100"),
