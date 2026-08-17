@@ -39,6 +39,7 @@ from shared.function_payloads import (
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
+    FunctionClaimRequest,
     FunctionGetArgsRequest,
     FunctionInvokeBody,
     FunctionSetResultBody,
@@ -174,6 +175,17 @@ def test_function_dependency_waits_then_schedules_materialized_args(
     assert downstream_task.parent_task_id == upstream.task_id
     assert downstream_task.root_task_id == upstream.task_id
 
+    # The container takes the invocation before it can report on it. Ownership
+    # is the claim now, not something scheduling handed out in advance.
+    claimed = service.function_claim(
+        FunctionClaimRequest(
+            stub_id=stub.id,
+            container_id=scheduler.requests[0].container_id,
+        )
+    )
+    assert claimed.task is not None
+    assert claimed.task.task_id == upstream.task_id
+
     cloudpickle_result = FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(5))
     service.function_set_result(
         FunctionSetResultBody(
@@ -183,12 +195,15 @@ def test_function_dependency_waits_then_schedules_materialized_args(
         )
     )
 
-    assert len(scheduler.requests) == 2
+    # Still one container. The upstream's is warm and free, so the released
+    # downstream becomes claimable against it rather than starting a second.
+    assert len(scheduler.requests) == 1
     persisted_upstream = isolated_services.tasks.get(upstream.task_id)
     assert persisted_upstream.function_result == cloudpickle_result
     assert isinstance(persisted_upstream.function_result, FunctionCloudpickleResult)
     downstream_task = isolated_services.tasks.get(downstream.task_id)
-    assert downstream_task.container_id == scheduler.requests[1].container_id
+    assert downstream_task.claimable_at is not None
+    assert downstream_task.container_id is None
     assert persisted_upstream.function_result.bytes_value() == cloudpickle_bytes(5)
     assert len(downstream_task.dependency_bindings) == 1
     binding = downstream_task.dependency_bindings[0]
@@ -285,6 +300,11 @@ def test_function_args_require_running_current_container_across_retry_replacemen
     )
     invoked = service.function_invoke(FunctionInvokeBody(stub_id=stub.id, invocation=invocation))
     first_container = scheduler.requests[0].container_id
+    claimed = service.function_claim(
+        FunctionClaimRequest(stub_id=stub.id, container_id=first_container)
+    )
+    assert claimed.task is not None
+    assert claimed.task.task_id == invoked.task_id
 
     with pytest.raises(ConflictError, match="pending"):
         service.function_get_args(
@@ -331,6 +351,11 @@ def test_function_args_require_running_current_container_across_retry_replacemen
     assert len(scheduler.requests) == 2
     replacement_container = scheduler.requests[1].container_id
     assert replacement_container != first_container
+    reclaimed = service.function_claim(
+        FunctionClaimRequest(stub_id=stub.id, container_id=replacement_container)
+    )
+    assert reclaimed.task is not None
+    assert reclaimed.task.task_id == running.id
     replacement = isolated_services.tasks.transition(
         isolated_services.tasks.get(running.id),
         TaskStatus.Running,
@@ -382,6 +407,13 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             ),
         )
     )
+    claimed = service.function_claim(
+        FunctionClaimRequest(
+            stub_id=stub.id,
+            container_id=scheduler.requests[0].container_id,
+        )
+    )
+    assert claimed.task is not None
     task = services.tasks.transition(
         services.tasks.get(invoked.task_id),
         TaskStatus.Running,

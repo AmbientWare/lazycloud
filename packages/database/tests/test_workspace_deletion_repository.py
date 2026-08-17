@@ -11,8 +11,8 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import AutoscalerStateRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.tables.apps import StubTable
-from database.tables.orchestration import ContainerTable
 from database.tables.identity import WorkspaceTable
+from database.tables.orchestration import ContainerTable
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,

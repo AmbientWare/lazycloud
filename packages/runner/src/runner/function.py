@@ -18,8 +18,10 @@ from shared.env import (
     CONTAINER_ID_ENV,
     GATEWAY_HTTP_URL_ENV,
     GATEWAY_TOKEN_ENV,
+    KEEP_WARM_SECONDS_ENV,
     LIFECYCLE_HOOKS_ENV,
     ROOT_TASK_ID_ENV,
+    TASK_ID_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
@@ -36,8 +38,9 @@ from shared.function_payloads import (
 from shared.http.errors import HttpApiError
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
-    FunctionGetArgsRequest,
-    FunctionGetArgsResponse,
+    FunctionClaimedTask,
+    FunctionClaimRequest,
+    FunctionClaimResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -68,22 +71,45 @@ from runner.runtime import (
     required_env,
 )
 
+# How often an idle container asks for work. Short enough that a call arriving
+# at a warm container is served promptly, which is the whole point of holding
+# one open.
+DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
+
 
 @dataclass(frozen=True, slots=True)
 class FunctionRunnerConfig:
-    task_id: str
+    """What a function container is, independent of any call it serves.
+
+    There is no task here. The container is started for the stub and finds out
+    which invocation it is running by claiming one, so everything that varies per
+    call lives in `ClaimedTask` instead.
+    """
+
     stub_id: str
     handler_ref: str
     endpoint: str = DEFAULT_GATEWAY_ENDPOINT
     token: str = ""
     container_id: str = ""
     container_hostname: str = ""
-    root_task_id: str = ""
     workspace_id: str = ""
     workspace_name: str = ""
     app_id: str = ""
     lifecycle_hooks: LifecycleHooks = field(default_factory=LifecycleHooks)
     timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS
+    keep_warm_seconds: int = 0
+    poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedTask:
+    """One invocation this container has taken ownership of."""
+
+    task_id: str
+    root_task_id: str
+    attempt_number: int
+    max_attempts: int
+    invocation: FunctionInvocation
 
 
 class FunctionInvocation(BaseModel):
@@ -103,13 +129,15 @@ class FunctionControlChannel(Protocol):
 
 
 class FunctionTaskLogSink(Protocol):
-    def append_task_log(self, stream: str, message: str) -> None: ...
+    def append_task_log(self, task_id: str, stream: str, message: str) -> None: ...
 
 
 @dataclass(slots=True)
 class FunctionRunner:
     config: FunctionRunnerConfig
     channel: FunctionControlChannel | None = None
+    _handler: Any = field(default=None, init=False)
+    _startup_hooks_ran: bool = field(default=False, init=False)
 
     @property
     def control(self) -> FunctionControlChannel:
@@ -122,22 +150,86 @@ class FunctionRunner:
         return self.channel
 
     def run(self) -> int:
-        started = time.perf_counter()
+        """Serve invocations for this stub until the container goes idle.
+
+        A failing invocation is reported and the loop continues — it is one
+        caller's error, not this container's. Startup failing is the opposite: a
+        container whose `on_start` did not finish cannot serve anything, so it
+        stops rather than answering claims it will fail.
+        """
+
         try:
-            self.start_task()
-            self.run_startup_hooks()
-            invocation = decode_function_invocation(self.get_args())
-            self.run_task_hooks(LifecycleHookName.Running, TaskStatus.Running)
-            result = self.execute_with_log_capture(invocation)
-            self.set_result(_serialize_function_result(result, invocation))
+            self.run_startup_hooks_once()
+        except BaseException:
+            print(traceback.format_exc(), file=sys.stderr)
+            return 1
+        idle_since = time.monotonic()
+        while True:
+            task = self.claim()
+            if task is None:
+                if self.keep_warm_expired(idle_since):
+                    return 0
+                time.sleep(self.config.poll_interval_seconds)
+                continue
+            self.run_task(task)
+            idle_since = time.monotonic()
+
+    def keep_warm_expired(self, idle_since: float) -> bool:
+        if self.config.keep_warm_seconds < 0:
+            return False
+        return time.monotonic() - idle_since >= self.config.keep_warm_seconds
+
+    def claim(self) -> ClaimedTask | None:
+        try:
+            response = FunctionClaimResponse.model_validate(
+                self.control.post(
+                    "/api/v1/functions/claim",
+                    FunctionClaimRequest(
+                        stub_id=self.config.stub_id,
+                        container_id=self.config.container_id,
+                    ).model_dump(mode="json"),
+                )
+            )
+        except Exception as exc:
+            # A control plane that cannot be reached is not an empty queue. Say so
+            # on the container's own stream — there is no task to attribute it to.
+            print(f"function claim failed: {exc}", file=sys.stderr, flush=True)
+            time.sleep(self.config.poll_interval_seconds)
+            return None
+        if response.task is None:
+            return None
+        claimed = response.task
+        return ClaimedTask(
+            task_id=claimed.task_id,
+            root_task_id=claimed.root_task_id or claimed.task_id,
+            attempt_number=claimed.attempt_number,
+            max_attempts=claimed.max_attempts,
+            invocation=decode_function_invocation(claimed),
+        )
+
+    def run_task(self, task: ClaimedTask) -> None:
+        started = time.perf_counter()
+        # The SDK reads its own task identity from the environment, so a pooled
+        # container has to restate it per call rather than inherit it at start.
+        # One task runs at a time in this process, which is what makes a process
+        # global safe to use here.
+        os.environ[TASK_ID_ENV] = task.task_id
+        os.environ[ROOT_TASK_ID_ENV] = task.root_task_id
+        try:
+            self.start_task(task)
+            self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
+            result = self.execute_with_log_capture(task)
+            self.set_result(task, _serialize_function_result(result, task.invocation))
             duration = time.perf_counter() - started
             self.run_task_hooks(
+                task,
                 LifecycleHookName.Success,
                 TaskStatus.Complete,
                 duration_seconds=duration,
                 result_available=True,
             )
             self.run_task_hooks(
+                task,
                 LifecycleHookName.Finish,
                 TaskStatus.Complete,
                 duration_seconds=duration,
@@ -147,74 +239,79 @@ class FunctionRunner:
             duration = time.perf_counter() - started
             formatted = traceback.format_exc()
             with contextlib.suppress(Exception):
-                self.append_task_log("stderr", formatted)
+                self.append_task_log(task.task_id, "stderr", formatted)
             print(formatted, file=sys.stderr)
-            self.run_error_hooks(exc, duration_seconds=duration)
-            response = self.end_failed_task(exc, duration_seconds=duration)
-            self.run_final_failure_hooks(exc, response, duration_seconds=duration)
-            return 1
-        return 0
+            self.run_error_hooks(task, exc, duration_seconds=duration)
+            response = self.end_failed_task(task, exc, duration_seconds=duration)
+            self.run_final_failure_hooks(task, exc, response, duration_seconds=duration)
 
-    def execute_with_log_capture(self, invocation: FunctionInvocation) -> Any:
-        stdout = TaskLogStream(self, "stdout", sys.stdout)
-        stderr = TaskLogStream(self, "stderr", sys.stderr)
+    def handler(self) -> Any:
+        if self._handler is None:
+            self._handler = load_callable(self.config.handler_ref)
+        return self._handler
+
+    def execute_with_log_capture(self, task: ClaimedTask) -> Any:
+        stdout = TaskLogStream(self, task.task_id, "stdout", sys.stdout)
+        stderr = TaskLogStream(self, task.task_id, "stderr", sys.stderr)
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
-                return execute_handler(self.config.handler_ref, invocation)
+                return invoke_handler(
+                    self.handler(),
+                    *task.invocation.args,
+                    **task.invocation.kwargs,
+                )
             finally:
                 stdout.flush_log()
                 stderr.flush_log()
 
-    def start_task(self) -> None:
+    def start_task(self, task: ClaimedTask) -> None:
         StartTaskResponse.model_validate(
             self.control.post(
                 "/gateway/tasks/start",
                 StartTaskRequest(
-                    task_id=self.config.task_id,
+                    task_id=task.task_id,
                     container_id=self.config.container_id,
                 ).model_dump(mode="json"),
             )
         )
 
-    def get_args(self) -> FunctionGetArgsResponse:
-        return FunctionGetArgsResponse.model_validate(
-            self.control.post(
-                "/api/v1/functions/get-args",
-                FunctionGetArgsRequest(
-                    task_id=self.config.task_id,
-                    container_id=self.config.container_id,
-                ).model_dump(mode="json"),
-            )
-        )
-
-    def set_result(self, result: FunctionResultPayload) -> None:
+    def set_result(self, task: ClaimedTask, result: FunctionResultPayload) -> None:
         FunctionSetResultResponse.model_validate(
             self.control.post(
                 "/api/v1/functions/set-result",
                 FunctionSetResultBody(
-                    task_id=self.config.task_id,
+                    task_id=task.task_id,
                     container_id=self.config.container_id,
                     result=result,
                 ).model_dump(mode="json"),
             )
         )
 
-    def append_task_log(self, stream: str, message: str) -> None:
+    def append_task_log(self, task_id: str, stream: str, message: str) -> None:
         if not message:
             return
         AppendTaskLogResponse.model_validate(
             self.control.post(
                 "/gateway/tasks/log",
                 AppendTaskLogRequest(
-                    task_id=self.config.task_id,
+                    task_id=task_id,
                     stream=stream,
                     message=message,
                 ).model_dump(mode="json"),
             )
         )
 
+    def append_container_log(self, stream: str, message: str) -> None:
+        """Write to the container's own stream, for output no task owns."""
+
+        if stream == "stderr":
+            print(message, file=sys.stderr, end="", flush=True)
+        else:
+            print(message, end="", flush=True)
+
     def end_failed_task(
         self,
+        task: ClaimedTask,
         exc: BaseException,
         *,
         duration_seconds: float,
@@ -224,7 +321,7 @@ class FunctionRunner:
                 self.control.post(
                     "/gateway/tasks/end",
                     EndTaskRequest(
-                        task_id=self.config.task_id,
+                        task_id=task.task_id,
                         task_duration=duration_seconds,
                         task_status=TaskStatus.Failed,
                         container_id=self.config.container_id,
@@ -240,7 +337,24 @@ class FunctionRunner:
             )
             return None
 
-    def run_startup_hooks(self) -> None:
+    def run_startup_hooks_once(self) -> None:
+        """Prepare this container to serve, exactly once.
+
+        Importing the handler happens here rather than at the first invocation,
+        so the import cost is paid by the container's startup instead of by
+        whichever call happened to arrive first. `on_start` runs after it, which
+        is the ordering the hook was always documented to have and never had
+        while a process served exactly one call.
+
+        Startup output goes to the container's stream, not to a task's log: the
+        first task to arrive did not cause this work and must not be the record
+        of it.
+        """
+
+        if self._startup_hooks_ran:
+            return
+        self._startup_hooks_ran = True
+        self.handler()
         context = LifecycleStartupContext(
             stub_id=self.config.stub_id,
             workspace_id=self.config.workspace_id,
@@ -255,11 +369,19 @@ class FunctionRunner:
             self.config.lifecycle_hooks,
             LifecycleHookName.Start,
             context,
-            log=self.append_task_log,
+            log=self.append_container_log,
+            capture_output=False,
         )
 
-    def run_error_hooks(self, exc: BaseException, *, duration_seconds: float) -> None:
+    def run_error_hooks(
+        self,
+        task: ClaimedTask,
+        exc: BaseException,
+        *,
+        duration_seconds: float,
+    ) -> None:
         self.run_task_hooks(
+            task,
             LifecycleHookName.Error,
             TaskStatus.Failed,
             duration_seconds=duration_seconds,
@@ -269,6 +391,7 @@ class FunctionRunner:
 
     def run_final_failure_hooks(
         self,
+        task: ClaimedTask,
         exc: BaseException,
         response: EndTaskResponse | None,
         *,
@@ -281,6 +404,7 @@ class FunctionRunner:
         max_attempts = response.max_attempts if response is not None else 0
         hook = LifecycleHookName.Retry if retry_scheduled else LifecycleHookName.Failure
         self.run_task_hooks(
+            task,
             hook,
             final_status,
             duration_seconds=duration_seconds,
@@ -291,6 +415,7 @@ class FunctionRunner:
             max_attempts=max_attempts,
         )
         self.run_task_hooks(
+            task,
             LifecycleHookName.Finish,
             final_status,
             duration_seconds=duration_seconds,
@@ -303,6 +428,7 @@ class FunctionRunner:
 
     def run_task_hooks(
         self,
+        task: ClaimedTask,
         hook: LifecycleHookName,
         status: TaskStatus,
         *,
@@ -316,10 +442,10 @@ class FunctionRunner:
     ) -> None:
         context = LifecycleTaskContext(
             hook=hook,
-            task_id=self.config.task_id,
+            task_id=task.task_id,
             status=status,
             stub_id=self.config.stub_id,
-            root_task_id=self.config.root_task_id or self.config.task_id,
+            root_task_id=task.root_task_id,
             workspace_id=self.config.workspace_id,
             workspace_name=self.config.workspace_name,
             app_id=self.config.app_id,
@@ -327,8 +453,8 @@ class FunctionRunner:
             container_hostname=self.config.container_hostname,
             handler=self.config.handler_ref,
             resource_kind=DeploymentKind.Function,
-            attempt_number=attempt_number,
-            max_attempts=max_attempts,
+            attempt_number=attempt_number or task.attempt_number,
+            max_attempts=max_attempts or task.max_attempts,
             duration_seconds=duration_seconds,
             error_type=error_type,
             error_message=error_message,
@@ -339,20 +465,27 @@ class FunctionRunner:
             self.config.lifecycle_hooks,
             hook,
             context,
-            log=self.append_task_log,
+            log=lambda stream, message: self.append_task_log(task.task_id, stream, message),
         )
 
 
 class TaskLogStream(RunnerTaskLogStream):
-    def __init__(self, runner: FunctionTaskLogSink, stream: str, wrapped: TextIO) -> None:
+    def __init__(
+        self,
+        runner: FunctionTaskLogSink,
+        task_id: str,
+        stream: str,
+        wrapped: TextIO,
+    ) -> None:
         super().__init__(stream, wrapped)
         self.runner = runner
+        self.task_id = task_id
 
     def append_log(self, value: str) -> None:
-        self.runner.append_task_log(self.stream, value)
+        self.runner.append_task_log(self.task_id, self.stream, value)
 
 
-def decode_function_invocation(response: FunctionGetArgsResponse) -> FunctionInvocation:
+def decode_function_invocation(response: FunctionClaimedTask) -> FunctionInvocation:
     if isinstance(response.invocation, FunctionJsonInvocation):
         invocation = FunctionInvocation(
             args=tuple(response.invocation.args),
@@ -503,21 +636,29 @@ def execute_handler(handler_ref: str, invocation: FunctionInvocation) -> Any:
 
 def config_from_env(env: dict[str, str] | None = None) -> FunctionRunnerConfig:
     source = env or os.environ
-    task_id = required_env(source, "TASK_ID")
     return FunctionRunnerConfig(
-        task_id=task_id,
         stub_id=required_env(source, "STUB_ID"),
         handler_ref=required_env(source, "HANDLER"),
         endpoint=source.get(GATEWAY_HTTP_URL_ENV) or DEFAULT_GATEWAY_ENDPOINT,
         token=source.get(GATEWAY_TOKEN_ENV, ""),
         container_id=source.get(CONTAINER_ID_ENV) or socket.gethostname(),
         container_hostname=socket.gethostname(),
-        root_task_id=source.get(ROOT_TASK_ID_ENV, ""),
         workspace_id=source.get(WORKSPACE_ID_ENV, ""),
         workspace_name=source.get(WORKSPACE_NAME_ENV, ""),
         app_id=source.get(APP_ID_ENV, ""),
         lifecycle_hooks=lifecycle_hooks_from_env(source.get(LIFECYCLE_HOOKS_ENV)),
+        keep_warm_seconds=_keep_warm_seconds(source.get(KEEP_WARM_SECONDS_ENV)),
+        poll_interval_seconds=DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS,
     )
+
+
+def _keep_warm_seconds(value: str | None) -> int:
+    if not value:
+        return 0
+    try:
+        return int(value)
+    except ValueError:
+        return 0
 
 
 def main() -> int:

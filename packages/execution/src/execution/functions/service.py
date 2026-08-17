@@ -9,7 +9,6 @@ from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind
 from database.repositories.execution import (
-    TaskAttemptRepository,
     TaskDependencyRepository,
     TaskRepository,
 )
@@ -42,6 +41,9 @@ from shared.function_payloads import (
 from shared.http.functions import (
     FunctionCallGraphNode,
     FunctionCallGraphResponse,
+    FunctionClaimedTask,
+    FunctionClaimRequest,
+    FunctionClaimResponse,
     FunctionCronRequest,
     FunctionCronResponse,
     FunctionGetArgsRequest,
@@ -369,6 +371,12 @@ class FunctionControlService:
             )
             return None
 
+        if not self._needs_another_container(stub.id):
+            # Somebody is already able to take this. Starting a container anyway
+            # is what made every call a cold start, and it is the one thing this
+            # whole arrangement exists to stop doing.
+            return None
+
         container_id = str(uuid4())
         container_plan = plan_function_container_start(
             FunctionContainerStartRequest(
@@ -376,10 +384,9 @@ class FunctionControlService:
                 workspace_id=stub.workspace_id,
                 app_id=stub.app_id or "",
                 stub_id=stub.id,
-                task_id=task.id,
-                root_task_id=task.root_task_id or task.id,
                 handler=stub.handler or "",
                 container_id=container_id,
+                keep_warm_seconds=config.runtime.keep_warm,
                 python_executable=config.image.python_executable,
                 cpu_millicores=config.runtime.requested_cpu_millicores,
                 memory_mib=config.runtime.requested_memory_mib,
@@ -392,7 +399,7 @@ class FunctionControlService:
                 lifecycle_hooks=config.lifecycle_hooks,
             )
         )
-        reservation = self._reserve_function_container(
+        container = self._reserve_function_container(
             task,
             container_plan=container_plan,
             stub_name=stub.name,
@@ -400,13 +407,8 @@ class FunctionControlService:
             stub_app_id=stub.app_id,
             eligible_at=eligible_at,
         )
-        if reservation is None:
+        if container is None:
             return None
-        task, container = reservation
-        self.services.tasks.publish_lifecycle_change(
-            task,
-            WorkspaceChangeType.Updated,
-        )
         self.services.containers.publish_lifecycle_change(
             container,
             WorkspaceChangeType.Created,
@@ -479,6 +481,27 @@ class FunctionControlService:
             )
             self.release_dependents(updated)
         return scheduled
+
+    def _needs_another_container(self, stub_id: str) -> bool:
+        """Whether this stub has more runnable work than containers free to take it.
+
+        Idle capacity is live containers minus the work they are already holding.
+        A container counts as free the moment it exists, before it has claimed
+        anything, which is deliberate: two calls arriving together must not each
+        start a container for work one of them is about to pick up.
+
+        The read is not serialized against concurrent starts, so a burst can
+        briefly under-provision — several tasks each seeing the same idle
+        container and waiting on it. That queues rather than loses work, and
+        provisioning for depth is the autoscaler's job, not this decision's.
+        """
+
+        with self.services.context.database.session() as session:
+            live = ContainerRepository(session).count_live_for_stub(stub_id)
+            tasks = TaskRepository(session)
+            held = tasks.count_claimed_inflight_for_stub(stub_id)
+            unclaimed = tasks.count_unclaimed_for_stub(stub_id)
+        return unclaimed > max(live - held, 0)
 
     def _cron_execution_allowed(self, task: Task, *, stub_kind: StubKind) -> bool:
         if stub_kind is not StubKind.CronJob:
@@ -576,8 +599,18 @@ class FunctionControlService:
                 stub = self.control_plane.get_stub(task.stub_id)
                 if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
                     continue
+            if task.next_retry_at is not None and current < task.next_retry_at:
+                continue
+            # A retry is work that is runnable again, so it goes back into the
+            # population a claim reads: still ready, owned by nobody. Left in
+            # `retry` holding the failed attempt's container it would be visible
+            # to no claim and picked up by nothing.
+            with self.services.context.database.session() as session:
+                released = TaskRepository(session).release_claim(task.id)
+            if released is None:
+                continue
             try:
-                result = self._schedule_function_task(task, eligible_at=current)
+                result = self._schedule_function_task(released, eligible_at=current)
             except DomainError:
                 # One task's refusal is its own. This sweep runs inside the
                 # scheduler's pass, so an account that cannot be scheduled would
@@ -585,6 +618,45 @@ class FunctionControlService:
                 # that is the only thing able to make that account schedulable
                 # again.
                 LOGGER.exception("scheduling retry for task %s failed", task.id)
+                continue
+            if result is not None:
+                scheduled.append(self.services.tasks.get(task.id))
+        scheduled.extend(self._schedule_unservable_claimable_work(limit=limit, at=current))
+        return scheduled
+
+    def _schedule_unservable_claimable_work(
+        self,
+        *,
+        limit: int,
+        at: datetime,
+    ) -> list[Task]:
+        """Start capacity for runnable work that has nothing coming to take it.
+
+        Releasing a claim and having somewhere to run are separate events, and a
+        container that dies between them strands the task: it is claimable, owned
+        by nobody, and every container that would have asked for it is gone. The
+        row says runnable forever and the caller waits forever.
+
+        One container per stub, not one per task. What the depth of the backlog
+        should cost in containers is the autoscaler's decision; this only refuses
+        to let work sit with no way to run at all.
+        """
+
+        scheduled: list[Task] = []
+        with self.services.context.database.session() as session:
+            candidates = TaskRepository(session).list_unclaimed_claimable(limit=limit)
+        served: set[str] = set()
+        for task in candidates:
+            if not task.stub_id or task.stub_id in served:
+                continue
+            served.add(task.stub_id)
+            try:
+                stub = self.control_plane.get_stub(task.stub_id)
+                if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+                    continue
+                result = self._schedule_function_task(task, eligible_at=at)
+            except DomainError:
+                LOGGER.exception("scheduling claimable task %s failed", task.id)
                 continue
             if result is not None:
                 scheduled.append(self.services.tasks.get(task.id))
@@ -599,9 +671,16 @@ class FunctionControlService:
         stub_workspace_id: str,
         stub_app_id: str | None,
         eligible_at: datetime | None,
-    ) -> tuple[Task, ContainerRecord] | None:
+    ) -> ContainerRecord | None:
+        """Reserve a container for this stub, prompted by `task` but not bound to it.
+
+        The task is read to decide whether starting anything is warranted at all —
+        a finished or not-yet-due task warrants nothing — but the container that
+        results serves the stub. Which invocation it runs is settled later, by the
+        claim, and may well be a different one that arrived while it was starting.
+        """
+
         rejected: Task | None = None
-        reserved: Task | None = None
         container: ContainerRecord | None = None
         with self.services.context.database.session() as session:
             task_repository = TaskRepository(session)
@@ -610,21 +689,6 @@ class FunctionControlService:
                 return None
             if current.status not in {TaskStatus.Pending, TaskStatus.Retry}:
                 return None
-            if current.container_id:
-                return None
-            if current.status is TaskStatus.Retry:
-                latest_attempt = TaskAttemptRepository(session).latest_for_task(current.id)
-                if latest_attempt is None or latest_attempt.container_id is None:
-                    return None
-                previous_container = ContainerRepository(session).get_across_workspaces(
-                    latest_attempt.container_id
-                )
-                if previous_container is None or previous_container.status not in {
-                    ContainerStatus.Exited,
-                    ContainerStatus.Failed,
-                    ContainerStatus.Stopped,
-                }:
-                    return None
             if (
                 current.status is TaskStatus.Retry
                 and current.next_retry_at is not None
@@ -642,7 +706,6 @@ class FunctionControlService:
                         workspace_id=stub_workspace_id,
                         stub_id=current.stub_id,
                         app_id=stub_app_id,
-                        task_id=current.id,
                         env=env_sequence_mapping(container_plan.env),
                     ),
                 )
@@ -651,19 +714,15 @@ class FunctionControlService:
                 current.error = "owning app is not active"
                 current.finished_at = datetime.now(UTC)
                 rejected = task_repository.upsert(current)
-            else:
-                current.container_id = container.id
-                current.next_retry_at = None
-                reserved = task_repository.upsert(current)
         if rejected is not None:
             self.services.tasks.publish_lifecycle_change(
                 rejected,
                 WorkspaceChangeType.Updated,
             )
             return None
-        if reserved is None or container is None:
+        if container is None:
             raise RuntimeError("function container reservation did not produce a durable result")
-        return reserved, container
+        return container
 
     def release_dependents(self, task: Task, *, seen: set[str] | None = None) -> None:
         if not is_terminal_task_status(task.status):
@@ -846,6 +905,48 @@ class FunctionControlService:
                 invocation=task.invocation,
                 dependencies=task.dependency_bindings,
             )
+
+    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
+        """Give a container asking for work one invocation to run, if there is one.
+
+        Empty is the ordinary answer, not a failure: a warm container asks
+        repeatedly while nothing is arriving, and every one of those asks that
+        finds nothing is the pooling working as intended.
+        """
+
+        with self.services.context.database.session() as session:
+            claimed = TaskRepository(session).claim_for_stub(
+                request.stub_id,
+                container_id=request.container_id,
+                limit=1,
+            )
+        if not claimed:
+            return FunctionClaimResponse()
+        task = claimed[0]
+        if task.invocation is None:
+            # Failed rather than raised. The claim already happened, so raising
+            # would leave a task owned by a container that was told nothing about
+            # it — invisible to the next claim and waited on forever by its caller.
+            updated = self.services.tasks.transition(
+                task,
+                TaskStatus.Failed,
+                error="function task is missing its invocation payload",
+                exit_code=1,
+            )
+            self.release_dependents(updated)
+            return FunctionClaimResponse()
+        validate_function_dependency_bindings(task.dependency_bindings)
+        self.services.tasks.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
+        return FunctionClaimResponse(
+            task=FunctionClaimedTask(
+                task_id=task.id,
+                root_task_id=task.root_task_id or task.id,
+                attempt_number=task.attempt_number,
+                max_attempts=task.max_attempts,
+                invocation=task.invocation,
+                dependencies=task.dependency_bindings,
+            )
+        )
 
     def function_set_result(
         self,

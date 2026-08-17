@@ -42,6 +42,7 @@ from shared.tasks import (
     TaskAttempt,
     TaskDependency,
     TaskStatus,
+    is_terminal_task_status,
 )
 from shared.worker_events import CONTAINER_EVENT_RESOURCE_TYPE, TASK_EVENT_RESOURCE_TYPE
 from sqlalchemy import (
@@ -197,6 +198,89 @@ class TaskRepository:
             task.container_id = container_id
             claimed.append(self.upsert(task))
         return claimed
+
+    def release_claim(self, task_id: str) -> Task | None:
+        """Give a claimed task back, so some container can take it again.
+
+        The inverse of `claim_for_stub`, and the reason a container may be
+        stopped without losing the invocation it was holding. `claimable_at`
+        stays: readiness was established once and releasing does not unmake it,
+        which is what lets the row go straight back to being claimable rather
+        than waiting on its dependencies a second time.
+
+        Returns `None` when the task has already finished. A container stopping
+        after its task completed must not drag a terminal task back to pending —
+        that would run somebody's function twice and deliver the second answer.
+        """
+
+        row = self.session.scalars(
+            select(TaskTable).where(TaskTable.id == task_id).with_for_update()
+        ).first()
+        if row is None:
+            return None
+        task = Task.model_validate(row.payload)
+        if is_terminal_task_status(task.status):
+            return None
+        task.container_id = None
+        task.status = TaskStatus.Pending
+        task.started_at = None
+        return self.upsert(task)
+
+    def list_unclaimed_claimable(self, *, limit: int) -> list[Task]:
+        """Runnable work nobody has taken, oldest first, across every workspace.
+
+        Read by the sweep that has to notice work with nowhere to run: a claim
+        makes a task somebody's responsibility, and until one happens the task is
+        only as alive as the container that was expected to ask for it.
+        """
+
+        rows = self.session.scalars(
+            select(TaskTable)
+            .where(
+                TaskTable.status == TaskStatus.Pending.value,
+                TaskTable.container_id.is_(None),
+                TaskTable.claimable_at.is_not(None),
+            )
+            .order_by(TaskTable.claimable_at, TaskTable.id)
+            .limit(limit)
+        )
+        return [Task.model_validate(row.payload) for row in rows]
+
+    def count_unclaimed_for_stub(self, stub_id: str) -> int:
+        """Runnable work for this stub that no container has taken.
+
+        The same three predicates the claim uses, so what this counts is exactly
+        what a claim would find. Anything else would decide capacity from a
+        different population than the one being served.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(TaskTable.id)).where(
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.status == TaskStatus.Pending.value,
+                    TaskTable.container_id.is_(None),
+                    TaskTable.claimable_at.is_not(None),
+                )
+            )
+            or 0
+        )
+
+    def count_claimed_inflight_for_stub(self, stub_id: str) -> int:
+        """Work for this stub a container has taken and not yet finished."""
+
+        return int(
+            self.session.scalar(
+                select(func.count(TaskTable.id)).where(
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.container_id.is_not(None),
+                    TaskTable.status.in_(
+                        [TaskStatus.Pending.value, TaskStatus.Running.value],
+                    ),
+                )
+            )
+            or 0
+        )
 
     def list(
         self,

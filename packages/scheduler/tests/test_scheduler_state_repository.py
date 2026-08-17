@@ -91,6 +91,7 @@ from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment, DeploymentSpec, Resources
 from shared.deployments import DeploymentKind, StubKind
 from shared.errors import ConflictError, NotFoundError
+from shared.http.functions import FunctionClaimRequest
 from shared.image_building.authoring import ImageSpec
 from shared.realtime.contracts import (
     CloudEventRecord,
@@ -451,6 +452,16 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     functions = FunctionControlService(isolated_services)
 
     initial = isolated_services.tasks.get(task_id)
+    # A cron container is started for the stub like any other, so it takes its
+    # run by claiming it rather than being addressed by it.
+    assert initial.stub_id is not None
+    assert functions.function_claim(
+        FunctionClaimRequest(
+            stub_id=initial.stub_id,
+            container_id=container_scheduler.requests[0].container_id,
+        )
+    ).task is not None
+    initial = isolated_services.tasks.get(task_id)
     assert initial.container_id is not None
     first = isolated_services.tasks.start(
         task_id,
@@ -505,6 +516,14 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
         assert functions.schedule_due_retries(now=datetime.now(UTC) + timedelta(days=1)) == []
     assert len(container_scheduler.requests) == 2
 
+    retry_task = isolated_services.tasks.get(task_id)
+    assert retry_task.stub_id is not None
+    assert functions.function_claim(
+        FunctionClaimRequest(
+            stub_id=retry_task.stub_id,
+            container_id=container_scheduler.requests[1].container_id,
+        )
+    ).task is not None
     retry_task = isolated_services.tasks.get(task_id)
     assert retry_task.container_id == container_scheduler.requests[1].container_id
     with pytest.raises(ConflictError, match="is assigned to container"):
@@ -579,6 +598,16 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     assert runs[0].task_id is not None
     task_id = runs[0].task_id
     functions = FunctionControlService(isolated_services)
+    initial = isolated_services.tasks.get(task_id)
+    # A cron container is started for the stub like any other, so it takes its
+    # run by claiming it rather than being addressed by it.
+    assert initial.stub_id is not None
+    assert functions.function_claim(
+        FunctionClaimRequest(
+            stub_id=initial.stub_id,
+            container_id=container_scheduler.requests[0].container_id,
+        )
+    ).task is not None
     initial = isolated_services.tasks.get(task_id)
     assert initial.container_id is not None
     started = isolated_services.tasks.start(task_id, container_id=initial.container_id)

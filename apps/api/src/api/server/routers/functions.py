@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import (
+    FunctionClaimRequest,
+    FunctionClaimResponse,
     FunctionCronRequest,
     FunctionCronResponse,
     FunctionGetArgsRequest,
@@ -76,6 +78,17 @@ def function_get_args(
 ) -> FunctionGetArgsResponse:
     require_task_workspace(services, request.task_id, workspace_id)
     return service.function_get_args(request)
+
+
+@router.post("/claim", response_model=FunctionClaimResponse)
+def function_claim(
+    request: FunctionClaimRequest,
+    workspace_id: write_workspace,
+    service: FunctionApiService = Depends(function_service),
+    control_plane: ControlPlaneService = Depends(control_plane_service),
+) -> FunctionClaimResponse:
+    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
+    return service.function_claim(request)
 
 
 @router.post("/set-result", response_model=FunctionSetResultResponse)

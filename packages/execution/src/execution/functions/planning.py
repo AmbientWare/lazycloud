@@ -12,10 +12,9 @@ from shared.env import (
     CONTAINER_ID_ENV,
     GATEWAY_TOKEN_ENV,
     INPUTS_ENV,
+    KEEP_WARM_SECONDS_ENV,
     LIFECYCLE_HOOKS_ENV,
     OUTPUTS_ENV,
-    ROOT_TASK_ID_ENV,
-    TASK_ID_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
@@ -53,8 +52,7 @@ class FunctionInvokePlan(ContractModel):
 
 
 class FunctionContainerEnvVar(StrEnum):
-    TaskId = TASK_ID_ENV
-    RootTaskId = ROOT_TASK_ID_ENV
+    KeepWarmSeconds = KEEP_WARM_SECONDS_ENV
     Handler = "HANDLER"
     GatewayToken = GATEWAY_TOKEN_ENV
     StubId = "STUB_ID"
@@ -73,9 +71,8 @@ class FunctionContainerStartRequest(ContractModel):
     workspace_id: str = ""
     app_id: str = ""
     stub_id: str
-    task_id: str
-    root_task_id: str = ""
     handler: str
+    keep_warm_seconds: int = 0
     gateway_token: str = ""
     callback_url: str = ""
     stub_kind: DeploymentKind = DeploymentKind.Function
@@ -237,7 +234,7 @@ def plan_function_container_start(
 ) -> FunctionContainerStartPlan:
     container_id = request.container_id or function_container_id(
         request.stub_kind,
-        request.task_id,
+        request.stub_id,
         request.container_id_suffix,
     )
     inputs_json = json.dumps(request.inputs, sort_keys=True)
@@ -249,8 +246,10 @@ def plan_function_container_start(
         env=[
             *request.secret_env,
             *request.env,
-            f"{FunctionContainerEnvVar.TaskId.value}={request.task_id}",
-            f"{FunctionContainerEnvVar.RootTaskId.value}={request.root_task_id or request.task_id}",
+            # No task id. The container is started for the stub and learns which
+            # invocation it is running when it claims one, so a task named here
+            # would be a guess that the claim then contradicts.
+            f"{FunctionContainerEnvVar.KeepWarmSeconds.value}={request.keep_warm_seconds}",
             f"{FunctionContainerEnvVar.Handler.value}={request.handler}",
             f"{FunctionContainerEnvVar.GatewayToken.value}={request.gateway_token}",
             f"{FunctionContainerEnvVar.StubId.value}={request.stub_id}",

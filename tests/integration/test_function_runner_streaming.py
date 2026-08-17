@@ -32,8 +32,8 @@ from shared.function_payloads import (
     FunctionPayloadEncoding,
 )
 from shared.http.functions import (
-    FunctionGetArgsRequest,
-    FunctionGetArgsResponse,
+    FunctionClaimedTask,
+    FunctionClaimRequest,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionSetResultBody,
@@ -123,10 +123,11 @@ def function_runtime(
 def test_function_runner_rejects_untyped_invocation_envelopes() -> None:
     with pytest.raises(ValueError, match="invalid function invocation envelope"):
         decode_function_invocation(
-            FunctionGetArgsResponse(
+            FunctionClaimedTask(
+                task_id="task-1",
                 invocation=FunctionCloudpickleInvocation.from_bytes(
                     cloudpickle_bytes(["not", "an", "envelope"])
-                )
+                ),
             )
         )
 
@@ -165,7 +166,7 @@ def fail_value():
 
 def test_task_log_stream_flush_publishes_partial_line_once() -> None:
     runner = _RecordingRunner()
-    stream = TaskLogStream(runner, "stdout", io.StringIO())
+    stream = TaskLogStream(runner, "task-1", "stdout", io.StringIO())
 
     assert stream.write("partial") == len("partial")
     assert runner.logs == []
@@ -219,12 +220,12 @@ def _invoke_and_run(
     assert scheduler.requests
     runner = FunctionRunner(
         config=FunctionRunnerConfig(
-            task_id=responses[0].task_id,
             stub_id=stub.id,
             handler_ref=handler_ref,
             container_id=scheduler.requests[0].container_id,
             container_hostname="test-host",
             lifecycle_hooks=lifecycle_hooks or LifecycleHooks(),
+            keep_warm_seconds=0,
         ),
         channel=_FunctionRunnerServiceChannel(function_service, gateway_service),
     )
@@ -289,9 +290,9 @@ class _FunctionRunnerServiceChannel:
                 workspace_id=self._task_workspace_id(payload),
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
-        if path == "/api/v1/functions/get-args":
-            response = self.function_service.function_get_args(
-                FunctionGetArgsRequest.model_validate(payload)
+        if path == "/api/v1/functions/claim":
+            response = self.function_service.function_claim(
+                FunctionClaimRequest.model_validate(payload)
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/api/v1/functions/set-result":
@@ -337,5 +338,5 @@ class _RecordingRunner:
     def __init__(self) -> None:
         self.logs: list[tuple[str, str]] = []
 
-    def append_task_log(self, stream: str, message: str) -> None:
+    def append_task_log(self, task_id: str, stream: str, message: str) -> None:
         self.logs.append((stream, message))
