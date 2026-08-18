@@ -8,7 +8,6 @@ import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import {
   Select,
   SelectContent,
@@ -17,10 +16,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Container, Deployment } from "@/lib/api/schemas";
-import { exactTime, relativeTime } from "@/lib/format";
+import { countLabel, exactTime, formatKind, relativeTime } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
-import { formatKind } from "./app-detail-format";
 
 export function AppWorkloadsSection({
   workspaceName,

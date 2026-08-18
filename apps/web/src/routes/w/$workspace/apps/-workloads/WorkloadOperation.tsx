@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
+import { PanelError } from "@/components/shared/PanelError";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { CronJob, Deployment } from "@/lib/api/schemas";
 import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
@@ -67,13 +68,7 @@ function InvokeTarget({
   const query = useQuery(deploymentUrlQueryOptions(workspaceId, deploymentId));
 
   if (query.isPending) return <Skeleton className="h-14 w-full" />;
-  if (query.isError) {
-    return (
-      <p className="text-sm text-destructive" role="alert">
-        {query.error.message}
-      </p>
-    );
-  }
+  if (query.isError) return <PanelError message={query.error.message} />;
 
   return (
     <div className="min-w-0">
@@ -129,13 +124,7 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
   );
 
   if (cronJobs.isPending) return <Skeleton className="h-12 w-full" />;
-  if (cronJobs.isError) {
-    return (
-      <p className="text-sm text-destructive" role="alert">
-        {cronJobs.error.message}
-      </p>
-    );
-  }
+  if (cronJobs.isError) return <PanelError message={cronJobs.error.message} />;
 
   return (
     <FactGrid columns={4} className="max-w-3xl">

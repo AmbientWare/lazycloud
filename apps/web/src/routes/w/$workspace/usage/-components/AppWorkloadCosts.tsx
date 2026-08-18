@@ -6,12 +6,12 @@ import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import type { LedgerComponent, UsageCostRow } from "@/lib/api/schemas";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, shareLabel } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import { accountCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 
-import { ShareBar, shareLabel } from "./ShareBar";
+import { RowFigures } from "./RowFigures";
 
 const COMPONENT_LABELS: Record<LedgerComponent, string> = {
   container_time: "Container",
@@ -63,50 +63,49 @@ export function AppWorkloadCosts({
   return (
     <div className="flex min-h-0 flex-col">
       <ul className="divide-y divide-border/40">
-        {rows.map((row) => (
-          <li key={rowKey(row)} className="flex min-w-0 flex-col gap-1.5 py-2.5 pl-10 pr-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <StubKindIcon kind={row.workload_kind} className="size-3.5 shrink-0" />
-              <span
-                className="mono min-w-0 flex-1 truncate text-xs text-foreground"
-                title={row.workload_id}
-              >
-                {row.workload_name || (row.workload_id ? "Workload removed" : "Unattributed")}
-              </span>
-              <span className="mono w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-                {runtime(row)}
-              </span>
-              <ShareBar
-                share={appCostNanos > 0 ? row.cost_nanos / appCostNanos : 0}
-                label={`${shareLabel(appCostNanos > 0 ? row.cost_nanos / appCostNanos : 0)} of this app's spend`}
-                className="hidden w-24 shrink-0 sm:block lg:w-40"
-              />
-              <span className="mono w-10 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-                {shareLabel(appCostNanos > 0 ? row.cost_nanos / appCostNanos : 0)}
-              </span>
-              <span className="readout w-24 shrink-0 text-right text-xs text-foreground">
-                {formatCostNanos(row.cost_nanos, currency)}
-              </span>
-            </div>
-            {/* What the row was charged for, straight from the ledger. A
-                component priced at zero is kept where something was measured —
-                egress at $0.00 says the traffic was counted and is free — and
-                dropped where nothing was: a GPU line on a workload that asked
-                for none is a resource named, not a resource measured. */}
-            <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-              {row.components
-                .filter((component) => component.quantity > 0)
-                .map((component) => (
-                  <li key={component.component}>
-                    {COMPONENT_LABELS[component.component]}{" "}
-                    <span className="mono tabular-nums text-foreground">
-                      {formatCostNanos(component.cost_nanos, currency)}
-                    </span>
-                  </li>
-                ))}
-            </ul>
-          </li>
-        ))}
+        {rows.map((row) => {
+          const share = appCostNanos > 0 ? row.cost_nanos / appCostNanos : 0;
+          return (
+            <li key={rowKey(row)} className="flex min-w-0 flex-col gap-1.5 py-2.5 pl-10 pr-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <StubKindIcon kind={row.workload_kind} className="size-3.5 shrink-0" />
+                <span
+                  className="mono min-w-0 flex-1 truncate text-xs text-foreground"
+                  title={row.workload_id}
+                >
+                  {row.workload_name || (row.workload_id ? "Workload removed" : "Unattributed")}
+                </span>
+                <span className="mono w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+                  {runtime(row)}
+                </span>
+                <RowFigures
+                  share={share}
+                  label={`${shareLabel(share)} of this app's spend`}
+                  costNanos={row.cost_nanos}
+                  currency={currency}
+                  compact
+                />
+              </div>
+              {/* What the row was charged for, straight from the ledger. A
+                  component priced at zero is kept where something was measured —
+                  egress at $0.00 says the traffic was counted and is free — and
+                  dropped where nothing was: a GPU line on a workload that asked
+                  for none is a resource named, not a resource measured. */}
+              <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                {row.components
+                  .filter((component) => component.quantity > 0)
+                  .map((component) => (
+                    <li key={component.component}>
+                      {COMPONENT_LABELS[component.component]}{" "}
+                      <span className="mono tabular-nums text-foreground">
+                        {formatCostNanos(component.cost_nanos, currency)}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </li>
+          );
+        })}
       </ul>
       <InfiniteScrollBoundary
         nextCursor={nextCursor}

@@ -352,7 +352,6 @@ def _endpoint_autoscaler(
         redis=redis,
         workload=EndpointAutoscaler(
             services,
-            redis=redis,
             endpoints=EndpointControlService(
                 services,
                 gateway_http_url=lambda: "http://gateway.internal:9000",

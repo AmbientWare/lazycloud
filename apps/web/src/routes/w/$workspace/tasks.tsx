@@ -8,7 +8,6 @@ import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBounda
 import { PanelError } from "@/components/shared/PanelError";
 import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { countLabel } from "@/lib/format";
 import { taskStatuses, workloadKinds } from "@/lib/api/schemas";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import {

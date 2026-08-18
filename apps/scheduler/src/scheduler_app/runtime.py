@@ -237,7 +237,6 @@ class SchedulerRuntime:
                     redis=redis_client,
                     workload=EndpointAutoscaler(
                         scheduler_services,
-                        redis=redis_client,
                         endpoints=endpoint_control,
                         dispatches=endpoint_dispatches,
                     ),

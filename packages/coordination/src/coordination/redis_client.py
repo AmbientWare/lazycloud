@@ -138,8 +138,6 @@ class RedisTransport(Protocol):
         first_list: str,
         second_list: str,
         timeout: int,
-        src: str = "LEFT",
-        dest: str = "RIGHT",
     ) -> RedisCommandResponse: ...
 
     def lrange(self, name: str, start: int, end: int) -> RedisCommandResponse: ...

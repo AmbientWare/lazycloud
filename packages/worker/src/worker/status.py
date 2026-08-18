@@ -42,12 +42,22 @@ class WorkerStatusHeartbeatAction(StrEnum):
     Error = "error"
 
 
-class WorkerDeliveredRequestAction(StrEnum):
+class WorkerSchedulerRequestAction(StrEnum):
+    """What the worker did with one pass over its request queue.
+
+    One enum for the whole pass rather than one for the plan and one for the
+    outcome: the plan names the subset that follows from the container's state,
+    and a second copy of those members is a translation table between two names
+    for the same decision.
+    """
+
+    Idle = "idle"
     Execute = "execute"
     DropMissingState = "drop-missing-state"
     DropStoppingState = "drop-stopping-state"
     DropFinishedState = "drop-finished-state"
     SkipStartedContainer = "skip-started-container"
+    ReconcileDelivery = "reconcile-delivery"
 
 
 class WorkerSpindownAction(StrEnum):
@@ -73,11 +83,36 @@ class WorkerStatusHeartbeatPlan(ContractModel):
 
 
 class WorkerDeliveredRequestPlan(ContractModel):
-    action: WorkerDeliveredRequestAction
-    drop: bool
-    delete_state: bool = False
-    release_capacity: bool = False
+    """What follows from the action `plan_delivered_container_request` chose.
+
+    Everything but the action and the reason is that action read back, so nothing
+    can be constructed holding a consequence its action does not have.
+    """
+
+    action: WorkerSchedulerRequestAction
     reason: str = ""
+
+    @property
+    def drop(self) -> bool:
+        return self.action is not WorkerSchedulerRequestAction.Execute
+
+    @property
+    def delete_state(self) -> bool:
+        return self.action is WorkerSchedulerRequestAction.DropStoppingState
+
+    @property
+    def release_capacity(self) -> bool:
+        """Whether this path hands the container's reservation back.
+
+        Only where nothing ever held it. A container that is running or has
+        finished had its reservation released by the execution that held it, and
+        releasing again here would hand the worker capacity it never got back.
+        """
+
+        return self.action in {
+            WorkerSchedulerRequestAction.DropMissingState,
+            WorkerSchedulerRequestAction.DropStoppingState,
+        }
 
 
 class WorkerSpindownPlan(ContractModel):
@@ -206,36 +241,28 @@ def plan_delivered_container_request(
 
     if state_missing:
         return WorkerDeliveredRequestPlan(
-            action=WorkerDeliveredRequestAction.DropMissingState,
-            drop=True,
-            release_capacity=True,
+            action=WorkerSchedulerRequestAction.DropMissingState,
             reason="container state is missing",
         )
     if state_status is SchedulerContainerStatus.Stopping:
         return WorkerDeliveredRequestPlan(
-            action=WorkerDeliveredRequestAction.DropStoppingState,
-            drop=True,
-            delete_state=True,
-            release_capacity=True,
+            action=WorkerSchedulerRequestAction.DropStoppingState,
             reason="container state is already stopping",
         )
     if state_status is SchedulerContainerStatus.Running:
         return WorkerDeliveredRequestPlan(
-            action=WorkerDeliveredRequestAction.SkipStartedContainer,
-            drop=True,
+            action=WorkerSchedulerRequestAction.SkipStartedContainer,
             reason="container has already been started by this worker",
         )
     if state_status is SchedulerContainerStatus.Complete or (
         state_status is SchedulerContainerStatus.Failed
     ):
         return WorkerDeliveredRequestPlan(
-            action=WorkerDeliveredRequestAction.DropFinishedState,
-            drop=True,
+            action=WorkerSchedulerRequestAction.DropFinishedState,
             reason=f"container has already finished as {state_status.value}",
         )
     return WorkerDeliveredRequestPlan(
-        action=WorkerDeliveredRequestAction.Execute,
-        drop=False,
+        action=WorkerSchedulerRequestAction.Execute,
         reason="container request should run",
     )
 

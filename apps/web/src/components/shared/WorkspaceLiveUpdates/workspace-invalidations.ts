@@ -98,11 +98,11 @@ export function workspaceInvalidationTargets(
       return compactTargets([
         { queryKey: workspaceQueryKeys.storage.volumes(workspaceId) },
         event.change === "deleted"
-          ? { queryKey: workspaceQueryKeys.usage.root(workspaceId), expensive: true }
+          ? { queryKey: accountQueryKeys.usage.root(), expensive: true }
           : null,
       ]);
     case "usage":
-      return [{ queryKey: workspaceQueryKeys.usage.root(workspaceId), expensive: true }];
+      return [{ queryKey: accountQueryKeys.usage.root(), expensive: true }];
     case "settings.concurrency":
       return [{ queryKey: workspaceQueryKeys.settings.concurrency(workspaceId) }];
   }

@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, withWorkspace } from "@/lib/api/client";
+import { apiRequest } from "@/lib/api/client";
 import {
   usageCostListSchema,
   usageCostSeriesSchema,
@@ -8,7 +8,7 @@ import {
   type UsageCostGroupKey,
 } from "@/lib/api/schemas";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { accountQueryKeys } from "./workspace-keys";
 
 export type UsageCostWindow = {
   start: string;
@@ -18,55 +18,8 @@ export type UsageCostWindow = {
 export type UsageCostScope = {
   groupBy: UsageCostGroupKey;
   appId?: string;
-  workloadId?: string;
   limit?: number;
 };
-
-/**
- * A workspace's cost over one window, grouped at one level of the product model.
- *
- * Paged rather than fetched whole: rows come back most expensive first, so the
- * first page already answers what somebody opened the page to ask, and the rest
- * continues in its own scroll region.
- */
-export function usageCostsQueryOptions(
-  workspaceId: string,
-  window: UsageCostWindow,
-  scope: UsageCostScope,
-) {
-  const { groupBy, appId, workloadId, limit = 50 } = scope;
-  return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.usage.costs(workspaceId, {
-      start: window.start,
-      end: window.end,
-      groupBy,
-      appId: appId ?? null,
-      workloadId: workloadId ?? null,
-    }),
-    initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({
-        start: window.start,
-        end: window.end,
-        group_by: groupBy,
-        limit: String(limit),
-      });
-      // An empty id is a filter rather than an absent one: usage that reached no
-      // app carries an empty `app_id`, and dropping the parameter would answer
-      // with every app instead of with that row's own workloads.
-      if (appId !== undefined) params.set("app_id", appId);
-      if (workloadId !== undefined) params.set("workload_id", workloadId);
-      if (pageParam) params.set("cursor", pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/usage/costs?${params.toString()}`, workspaceId),
-        usageCostListSchema,
-      );
-    },
-    getNextPageParam: (page) => page.next || undefined,
-    staleTime: 30_000,
-    meta: workspaceLiveQueryMeta(true),
-  });
-}
 
 /**
  * Every workspace this account is invoiced for, over one window.
@@ -78,11 +31,12 @@ export function usageCostsQueryOptions(
 export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCostScope) {
   const { groupBy, appId, limit = 50 } = scope;
   return infiniteQueryOptions({
-    queryKey: [
-      "account",
-      "costs",
-      { start: window.start, end: window.end, groupBy, appId: appId ?? null },
-    ] as const,
+    queryKey: accountQueryKeys.usage.costs({
+      start: window.start,
+      end: window.end,
+      groupBy,
+      appId: appId ?? null,
+    }),
     initialPageParam: "",
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({
@@ -111,7 +65,7 @@ export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCo
  */
 export function accountCostSeriesQueryOptions(window: UsageCostWindow, bucket: UsageCostBucket) {
   return queryOptions({
-    queryKey: ["account", "cost-series", { start: window.start, end: window.end, bucket }] as const,
+    queryKey: accountQueryKeys.usage.series({ start: window.start, end: window.end, bucket }),
     queryFn: () => {
       const params = new URLSearchParams({
         start: window.start,

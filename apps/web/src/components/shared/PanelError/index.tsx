@@ -9,6 +9,11 @@ import { cn } from "@/lib/utils";
  * `layout="framed"` draws the panel itself, for a region whose whole content is
  * the failure and which nothing else frames. Inside a `Panel` it would be a card
  * within a card, so the default stays unframed.
+ *
+ * `layout="centered"` fills the region it replaces and centres in it, by both
+ * routes a region reserves height: `flex-1` where the parent is a flex column,
+ * and `h-full` where it is a block of a settled height. A flex basis of zero
+ * wins over a percentage height on the main axis, so the two never contend.
  */
 export function PanelError({
   message,
@@ -22,7 +27,7 @@ export function PanelError({
       role="alert"
       className={cn(
         "p-4 text-sm text-destructive",
-        layout === "centered" && "flex min-h-0 flex-1 items-center justify-center",
+        layout === "centered" && "flex h-full min-h-0 flex-1 items-center justify-center",
         layout === "framed" && "panel flex min-h-48 items-center justify-center rounded-md",
       )}
     >

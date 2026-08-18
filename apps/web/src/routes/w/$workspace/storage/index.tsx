@@ -6,7 +6,6 @@ import { Plus } from "lucide-react";
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Button } from "@/components/ui/button";
 import { CollectionAccordion } from "./-components/CollectionAccordion";
@@ -14,6 +13,7 @@ import { SecretsTab } from "./-components/SecretsTab";
 import { VolumesTab } from "./-components/VolumesTab";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { collectionResources } from "@/lib/api/resources";
+import { countLabel } from "@/lib/format";
 import { secretsQueryOptions, volumesQueryOptions } from "@/lib/queries/storage";
 import { useWorkspace } from "@/lib/workspace-context";
 

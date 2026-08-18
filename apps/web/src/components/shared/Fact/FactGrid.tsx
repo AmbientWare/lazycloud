@@ -3,14 +3,13 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Five readings need more room to stay legible than three do, so the wide
- * layouts hold two columns until `lg` while the narrow ones break at `sm`.
+ * Two columns on a narrow display whatever the grid holds, because a reading
+ * squeezed into a quarter of a phone's width truncates to its first word.
  */
 const COLUMN_CLASSES = {
   2: "grid-cols-2",
   3: "grid-cols-2 sm:grid-cols-3",
   4: "grid-cols-2 sm:grid-cols-4",
-  5: "grid-cols-2 lg:grid-cols-5",
 } as const;
 
 /**

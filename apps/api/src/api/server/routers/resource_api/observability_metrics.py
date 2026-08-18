@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated
 
-from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import APIRouter, Depends, Query
 from observability.container_metrics import container_metrics_timeseries
 from observability.stream_state import RedisEventStreamRepository
-from shared.errors import InvalidInputError
 from shared.http.observability import (
     AccountActivityMeasure,
     AccountActivityResponse,
@@ -21,7 +18,7 @@ from shared.realtime.streams import EventHistoryQuery
 from api.server.auth import read_user, read_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
-from api.server.routers.resource_api.common import _management
+from api.server.routers.resource_api.common import _management, _parsed_time, member_workspaces
 from api.server.services import ApiServices
 
 router = APIRouter()
@@ -48,8 +45,8 @@ def api_v1_task_latency_timeseries(
             stub_ids=tuple(value.strip() for value in stub_id if value.strip()),
             deployment_id=deployment_id,
             window_seconds=window_seconds,
-            start=_parse_time(start),
-            end=_parse_time(end),
+            start=_parsed_time(start),
+            end=_parsed_time(end),
         )
     )
 
@@ -73,7 +70,7 @@ def api_v1_account_container_counts(
 
     return AccountContainerCountsResponse.model_validate(
         _management(services).account_container_counts(
-            workspace_ids=list(_member_workspaces(services, user_id))
+            workspace_ids=list(member_workspaces(services, user_id))
         )
     )
 
@@ -103,11 +100,11 @@ def api_v1_account_activity(
 
     return AccountActivityResponse.model_validate(
         _management(services).account_activity(
-            workspaces=_member_workspaces(services, user_id),
+            workspaces=member_workspaces(services, user_id),
             measure=measure,
             window_seconds=window_seconds,
-            start=_parse_time(start),
-            end=_parse_time(end),
+            start=_parsed_time(start),
+            end=_parsed_time(end),
             limit=limit,
         )
     )
@@ -135,28 +132,3 @@ def api_v1_container_metrics_timeseries(
     )
     records = RedisEventStreamRepository(services.redis()).read_event_history(query)
     return container_metrics_timeseries(container_id, records)
-
-
-def _member_workspaces(services: ApiServices, user_id: str) -> dict[str, str]:
-    """Every workspace this person reaches, and what each is called.
-
-    Names come off the same membership read that decides the scope: a series
-    names the workspace its app belongs to, and looking those names up separately
-    would be a second answer to which workspaces the reading covers.
-    """
-
-    with services.context.database.session() as session:
-        return {
-            workspace.id: workspace.name
-            for workspace in WorkspaceMemberRepository(session).workspaces_for_user(user_id)
-        }
-
-
-def _parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        msg = f"invalid timestamp: {value}"
-        raise InvalidInputError(msg) from exc

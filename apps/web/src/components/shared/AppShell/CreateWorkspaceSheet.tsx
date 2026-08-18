@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
@@ -39,12 +40,12 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
         >
           <label className="block text-xs font-medium text-muted-foreground">
             Name
-            <input
+            <Input
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="workspace-name"
-              className="mono mt-1 h-9 w-full rounded-md border border-input bg-muted px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mono mt-1"
             />
           </label>
           <div className="flex items-center gap-2">

@@ -98,7 +98,6 @@ class GetNextContainerRequestRequest(ContractModel):
     worker_id: str
     cache_generation_id: str
     cache_session_fence: int = Field(ge=1)
-    max_responses: int = 0
 
 
 class GetNextContainerRequestResponse(WorkerRepositoryResponse):

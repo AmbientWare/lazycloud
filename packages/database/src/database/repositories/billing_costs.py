@@ -4,7 +4,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from types import MappingProxyType
 
+from database.repositories.common import bucket_index, names_by_id
 from database.tables.apps import AppTable, StubTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.identity import WorkspaceTable
@@ -12,11 +14,8 @@ from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
 from sqlalchemy import (
-    BigInteger,
     ColumnElement,
     and_,
-    cast,
-    extract,
     func,
     or_,
     select,
@@ -201,15 +200,8 @@ class BillingLedgerCostRepository:
         start: datetime,
         end: datetime,
         width_seconds: int,
-        app_id: str | None = None,
-        workload_id: str | None = None,
     ) -> tuple[LedgerCostBucketTotal, ...]:
         """What each interval of a window cost, per invoice line.
-
-        Placed into intervals by whole seconds elapsed from `start`, never by
-        `date_trunc` or `func.date`: those read the session `TimeZone`, which
-        nothing here sets, so the day a bar belonged to would depend on which
-        connection answered the request.
 
         Grouped by dimension as well as by interval because that is the
         granularity an invoice line has, and it costs the same read — the rows
@@ -218,14 +210,11 @@ class BillingLedgerCostRepository:
 
         if width_seconds < 1:
             raise InvalidInputError("a cost interval must be at least one second wide")
-        # Seconds against seconds, rather than an interval between two instants:
-        # the elapsed span is what both engines compute the same way, where
-        # subtracting one timestamp column from another is a `- interval` overload
-        # on one and string arithmetic on the other.
-        elapsed = extract("epoch", BillingLedgerSegmentTable.segment_started_at) - int(
-            start.timestamp()
+        index = bucket_index(
+            BillingLedgerSegmentTable.segment_started_at,
+            start=start,
+            width_seconds=width_seconds,
         )
-        index = cast(func.floor(elapsed / width_seconds), BigInteger)
         found = self.session.execute(
             select(
                 index,
@@ -237,8 +226,8 @@ class BillingLedgerCostRepository:
                     workspace_ids=workspace_ids,
                     start=start,
                     end=end,
-                    app_id=app_id,
-                    workload_id=workload_id,
+                    app_id=None,
+                    workload_id=None,
                 )
             )
             .group_by(index, BillingLedgerSegmentTable.dimension)
@@ -272,23 +261,17 @@ class BillingLedgerCostRepository:
         capacity a placement held plus whatever it burnt above that. Filtering to
         one basis would report a container that never sent a measurement as
         holding nothing.
-
-        Placed into intervals by whole seconds elapsed from `start`, never by
-        `date_trunc` or `func.date`: those read the session `TimeZone`, which
-        nothing here sets, so the interval a segment belonged to would depend on
-        which connection answered the request.
         """
 
         if width_seconds < 1:
             raise InvalidInputError("a resource interval must be at least one second wide")
         if not workspace_ids:
             return ()
-        # Seconds against seconds, for the reason `bucket_totals` gives: the
-        # elapsed span is what both engines compute the same way.
-        elapsed = extract("epoch", BillingLedgerSegmentTable.segment_started_at) - int(
-            start.timestamp()
+        index = bucket_index(
+            BillingLedgerSegmentTable.segment_started_at,
+            start=start,
+            width_seconds=width_seconds,
         )
-        index = cast(func.floor(elapsed / width_seconds), BigInteger)
         found = self.session.execute(
             select(
                 BillingLedgerSegmentTable.workspace_id,
@@ -359,6 +342,7 @@ class BillingLedgerCostRepository:
         end: datetime,
         group_by: UsageCostGroupKey,
         limit: int,
+        workspace_names: Mapping[str, str] = MappingProxyType({}),
         app_id: str | None = None,
         workload_id: str | None = None,
         cursor: LedgerCostCursor | None = None,
@@ -399,7 +383,7 @@ class BillingLedgerCostRepository:
             app_id=app_id,
             workload_id=workload_id,
         )
-        names = self._names(keys)
+        names = self._names(keys, workspace_names=workspace_names)
         rows = tuple(
             _cost_row(
                 key=key,
@@ -481,7 +465,12 @@ class BillingLedgerCostRepository:
             )
         return {key: tuple(values) for key, values in totals.items()}
 
-    def _names(self, keys: Sequence[tuple[str, ...]]) -> _ResolvedNames:
+    def _names(
+        self,
+        keys: Sequence[tuple[str, ...]],
+        *,
+        workspace_names: Mapping[str, str],
+    ) -> _ResolvedNames:
         """Human names for the ids the page carries.
 
         Resolved here rather than in the browser: a customer surface speaks in
@@ -489,33 +478,28 @@ class BillingLedgerCostRepository:
         up labelled with the wrong app. Absent where the app or workload has since
         been deleted — the cost stays, and the row says so by carrying an id and
         no name rather than inventing one.
+
+        `workspace_names` carries the ones a caller already read. An account-wide
+        page resolved its scope from the membership rows naming the workspaces,
+        so asking for those same names again would be a second answer to which
+        workspaces the page covers.
         """
 
         workspace_ids = {key[0] for key in keys if key[0]}
         app_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
         workload_ids = {key[2] for key in keys if len(key) > 2 and key[2]}
-        workspaces = (
-            {
-                str(row[0]): str(row[1])
-                for row in self.session.execute(
-                    select(WorkspaceTable.id, WorkspaceTable.name).where(
-                        WorkspaceTable.id.in_(workspace_ids)
-                    )
-                ).all()
-            }
-            if workspace_ids
-            else {}
+        workspaces = {
+            workspace_id: workspace_names[workspace_id]
+            for workspace_id in workspace_ids
+            if workspace_id in workspace_names
+        }
+        workspaces |= names_by_id(
+            self.session,
+            WorkspaceTable.id,
+            WorkspaceTable.name,
+            workspace_ids - set(workspaces),
         )
-        apps = (
-            {
-                str(row[0]): str(row[1])
-                for row in self.session.execute(
-                    select(AppTable.id, AppTable.name).where(AppTable.id.in_(app_ids))
-                ).all()
-            }
-            if app_ids
-            else {}
-        )
+        apps = names_by_id(self.session, AppTable.id, AppTable.name, app_ids)
         workloads = (
             {
                 str(row[0]): (str(row[1]), str(row[2]))

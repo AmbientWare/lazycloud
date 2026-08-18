@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatBytes, formatDuration } from "@/lib/format";
+import { countLabel, formatBytes, formatDuration } from "@/lib/format";
 import {
   mapCountQueryOptions,
   mapKeysQueryOptions,
@@ -168,8 +168,7 @@ function InspectorHeader({
     <div className="flex min-w-0 items-center justify-between gap-3">
       <p className="micro-label truncate">{label}</p>
       <p className="shrink-0 text-[11px] text-muted-foreground">
-        <span className="mono tabular-nums text-foreground">{count.toLocaleString()}</span>{" "}
-        {count === 1 ? singular : `${singular}s`} · live
+        {countLabel(count, singular)} · live
       </p>
     </div>
   );

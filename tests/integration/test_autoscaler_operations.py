@@ -182,7 +182,6 @@ def _autoscaler_operations(
             redis=redis,
             workload=EndpointAutoscaler(
                 services,
-                redis=redis,
                 endpoints=endpoints,
                 dispatches=ApiEndpointDispatchAutoscalingReader(
                     EndpointDispatchStateRepository(services)

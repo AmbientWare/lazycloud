@@ -2,6 +2,7 @@ import { format, parseISO } from "date-fns";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
+import { PanelError } from "@/components/shared/PanelError";
 import {
   ChartContainer,
   ChartTooltip,
@@ -43,11 +44,7 @@ export function LatencyPanel({
     return <LatencySkeleton />;
   }
   if (error) {
-    return (
-      <p className="flex h-full items-center text-sm text-destructive" role="alert">
-        {error.message}
-      </p>
-    );
+    return <PanelError message={error.message} layout="centered" />;
   }
 
   const tasks = buckets.reduce((total, bucket) => total + bucket.count, 0);

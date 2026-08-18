@@ -20,6 +20,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { formatKind } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
 import { stubsQueryOptions } from "@/lib/queries/stubs";
@@ -223,11 +224,4 @@ export function GlobalSearch({
       </CommandList>
     </CommandDialog>
   );
-}
-
-function formatKind(kind: string): string {
-  return kind
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }

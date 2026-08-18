@@ -965,7 +965,6 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
             "worker_id": "worker-1",
             "cache_generation_id": _test_cache_generation_id("worker-1"),
             "cache_session_fence": 1,
-            "max_responses": 1,
         },
     )
     authenticated = client.post(
@@ -974,7 +973,6 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
             "worker_id": "worker-1",
             "cache_generation_id": _test_cache_generation_id("worker-1"),
             "cache_session_fence": 1,
-            "max_responses": 1,
         },
         headers=headers,
     )
@@ -1121,7 +1119,6 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
             worker_id=worker_id,
             cache_generation_id=cache_session.generation_id,
             cache_session_fence=cache_session.session_fence,
-            max_responses=1,
         ),
         principal=principal,
     )
@@ -1260,7 +1257,6 @@ def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
             worker_id=worker_id,
             cache_generation_id=cache_session.generation_id,
             cache_session_fence=cache_session.session_fence,
-            max_responses=1,
         ),
         principal=principal,
     )

@@ -25,6 +25,36 @@ export function exactTime(value: string): string {
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }
 
+/** `12 apps`, `1 app` — the count first, because that is what is being scanned. */
+export function countLabel(value: number, singular: string, plural = `${singular}s`): string {
+  return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;
+}
+
+/** A hyphenated wire token — a workload kind, a status — as the words a reader sees. */
+export function formatKind(kind: string): string {
+  return kind
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+/**
+ * A fraction of a whole, in words.
+ *
+ * One rule everywhere a share is printed, because the same figure appearing as
+ * `<1%` beside one bar and `0.3%` beside another reads as two different
+ * measurements. Sub-percent shares keep a digit rather than collapsing to `0%`:
+ * a row that cost something, or a failure rate over a busy window, is a reading
+ * the reader acts on, and rounding it to nothing states the opposite.
+ */
+export function shareLabel(share: number): string {
+  if (!Number.isFinite(share) || share <= 0) return "0%";
+  const percent = share * 100;
+  if (percent < 0.1) return "<0.1%";
+  if (percent < 10) return `${percent.toFixed(1)}%`;
+  return `${Math.round(percent)}%`;
+}
+
 export type StatusTone = "success" | "warning" | "danger" | "muted";
 
 /**

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
@@ -6,6 +6,7 @@ import type { BarShapeProps } from "recharts";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { ShareBar } from "@/components/shared/ShareBar";
 import {
   ChartContainer,
   ChartTooltip,
@@ -29,7 +30,7 @@ import type {
   AccountActivitySeries,
   AccountActivityUnit,
 } from "@/lib/api/schemas";
-import { exactTime } from "@/lib/format";
+import { exactTime, shareLabel } from "@/lib/format";
 import {
   accountActivityQueryOptions,
   accountActivityRanges,
@@ -154,6 +155,8 @@ function ActivityReading({
   measure: AccountActivityMeasure;
   range: AccountActivityRange;
 }) {
+  const labels = useMemo(() => activitySeriesLabels(activity.series), [activity.series]);
+
   /* Emptiness is about whether anything was measured, never about whether the
      figures are zero: an account that holds no GPU has an answer to "how many
      GPUs", and the plot draws it against a real scale rather than blanking and
@@ -168,7 +171,6 @@ function ActivityReading({
     );
   }
 
-  const labels = activitySeriesLabels(activity.series);
   return (
     <>
       <ActivityChart activity={activity} measure={measure} labels={labels} />
@@ -188,35 +190,44 @@ function ActivityChart({
   measure: AccountActivityMeasure;
   labels: string[];
 }) {
-  const { theme } = useTheme();
-  const spine = activity.series[0]?.buckets ?? [];
-  const keys = activity.series.map((_series, index) => activitySeriesKey(index));
-  const config: ChartConfig = Object.fromEntries(
-    activity.series.map((series, index) => [
-      keys[index] ?? "",
-      { label: labels[index], theme: activitySeriesColor(series, index) },
-    ]),
+  const series = activity.series;
+  const windowSeconds = activity.window_seconds;
+  const keys = useMemo(() => series.map((_entry, index) => activitySeriesKey(index)), [series]);
+  const config = useMemo<ChartConfig>(
+    () =>
+      Object.fromEntries(
+        series.map((entry, index) => [
+          activitySeriesKey(index),
+          { label: labels[index], theme: activitySeriesColor(entry, index) },
+        ]),
+      ),
+    [series, labels],
   );
-  const swatches: Record<string, string> = Object.fromEntries(
-    activity.series.map((series, index) => [
-      keys[index] ?? "",
-      activitySeriesColor(series, index)[theme],
-    ]),
+  const rows = useMemo<ChartRow[]>(() => {
+    const spine = series[0]?.buckets ?? [];
+    return spine.map((bucket, bucketIndex) => {
+      const row: ChartRow = {
+        label: formatBucket(bucket.timestamp, windowSeconds),
+        full: exactTime(bucket.timestamp),
+      };
+      for (const [index, entry] of series.entries()) {
+        row[activitySeriesKey(index)] = entry.buckets[bucketIndex]?.value ?? 0;
+      }
+      return row;
+    });
+  }, [series, windowSeconds]);
+  const peak = useMemo(
+    () =>
+      Math.max(
+        0,
+        ...rows.map((row) => keys.reduce((stacked, key) => stacked + Number(row[key] ?? 0), 0)),
+      ),
+    [rows, keys],
   );
-  const rows: ChartRow[] = spine.map((bucket, bucketIndex) => {
-    const row: ChartRow = {
-      label: formatBucket(bucket.timestamp, activity.window_seconds),
-      full: exactTime(bucket.timestamp),
-    };
-    for (const [index, series] of activity.series.entries()) {
-      row[keys[index] ?? ""] = series.buckets[bucketIndex]?.value ?? 0;
-    }
-    return row;
-  });
-  const peak = Math.max(
-    0,
-    ...rows.map((row) => keys.reduce((stacked, key) => stacked + Number(row[key] ?? 0), 0)),
-  );
+  /* One shape per band, held across renders: recharts compares this prop by
+     identity, and a fresh closure on every render redraws every column of every
+     band whenever anything above this changes. */
+  const shapes = useMemo(() => keys.map((key) => activitySegment(key, keys)), [keys]);
 
   return (
     <div className="px-3 pb-2 pt-3">
@@ -266,7 +277,7 @@ function ActivityChart({
                   formatter={(value, name, item) => (
                     <TooltipReading
                       name={String(name)}
-                      color={swatches[String(item.dataKey ?? "")] ?? "var(--muted-foreground)"}
+                      color={item.color ?? "var(--muted-foreground)"}
                       value={Number(value) || 0}
                       unit={activity.unit}
                     />
@@ -286,7 +297,7 @@ function ActivityChart({
                  own. */
               <ReferenceLine y={1} ifOverflow="extendDomain" stroke="transparent" />
             )}
-            {activity.series.map((series, index) => (
+            {series.map((_entry, index) => (
               <Bar
                 key={keys[index]}
                 /* A column, because a reading belongs to a whole interval and
@@ -304,7 +315,7 @@ function ActivityChart({
                 name={labels[index]}
                 fill={`var(--color-${keys[index]})`}
                 maxBarSize={20}
-                shape={activitySegment(keys[index] ?? "", keys)}
+                shape={shapes[index]}
                 isAnimationActive={false}
               />
             ))}
@@ -477,20 +488,12 @@ function BreakdownRow({
           figure beside it already states, and the width it costs is the width
           that decides whether two apps named by the same tool can be told
           apart. */}
-      <span className="hidden h-1 w-32 shrink-0 rounded-full bg-muted sm:block" aria-hidden="true">
-        <span
-          className="block h-1 rounded-full"
-          style={{
-            width: `${Math.max(share * 100, share > 0 ? 4 : 0)}%`,
-            background: color,
-          }}
-        />
-      </span>
+      <ShareBar share={share} color={color} className="hidden w-32 shrink-0 sm:block" />
       <span className="mono w-24 shrink-0 text-right text-[13px] tabular-nums text-foreground">
         {formatReading(series.total, unit)}
       </span>
       <span className="mono w-10 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-        {formatShare(share)}
+        {shareLabel(share)}
       </span>
     </div>
   );
@@ -511,7 +514,7 @@ function ActivitySkeleton() {
           <div key={slot} className="flex items-center gap-3 border-t border-border/60 px-3 py-2">
             <Skeleton className="size-2 shrink-0 rounded-[2px]" />
             <Skeleton className="h-3.5 flex-1" />
-            <Skeleton className="hidden h-1 w-32 shrink-0 sm:block" />
+            <Skeleton className="hidden h-1.5 w-32 shrink-0 sm:block" />
             <Skeleton className="h-3.5 w-24 shrink-0" />
           </div>
         ))}
@@ -538,9 +541,4 @@ function bucketTooltipLabel(payload: readonly { payload?: unknown }[] | undefine
     return row.full;
   }
   return "";
-}
-
-function formatShare(share: number): string {
-  if (share > 0 && share < 0.01) return "<1%";
-  return `${Math.round(share * 100)}%`;
 }

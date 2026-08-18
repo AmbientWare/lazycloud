@@ -6,6 +6,7 @@ import { CopyId } from "@/components/shared/CopyId";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { PanelError } from "@/components/shared/PanelError";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Panel } from "@/components/shared/Panel";
@@ -51,11 +52,7 @@ function SandboxDetailPage() {
 
   if (container.isPending) return <SandboxSkeleton />;
   if (container.isError) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-destructive">
-        {container.error.message}
-      </div>
-    );
+    return <PanelError message={container.error.message} layout="centered" />;
   }
 
   const record = container.data;
@@ -244,7 +241,7 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
     return <Skeleton className="h-24 w-full" />;
   }
   if (urls.isError) {
-    return <p className="text-sm text-destructive">{urls.error.message}</p>;
+    return <PanelError message={urls.error.message} />;
   }
   const exposed = Object.entries(urls.data.urls).sort(([a], [b]) => Number(a) - Number(b));
   return (

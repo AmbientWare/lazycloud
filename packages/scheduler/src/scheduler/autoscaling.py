@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
@@ -34,7 +34,7 @@ from shared.contracts import ContractModel
 from shared.errors import DomainError, InvalidInputError, NotFoundError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
-from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
+from shared.scheduling import SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.worker_events import (
     ENDPOINT_SCALE_DECISION_ACTION,
@@ -48,7 +48,6 @@ from shared.workload_keys import (
     pod_total_connections_key,
 )
 
-from coordination import redis_serialization
 from scheduler.autoscaling_guardrails import (
     AutoscalerGuardrailPlan,
     plan_autoscaler_start_guardrails,
@@ -93,7 +92,10 @@ class PodControl(Protocol):
 
 
 class SchedulerContainerStateReader(Protocol):
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+    def container_statuses(
+        self,
+        container_ids: Sequence[str],
+    ) -> dict[str, SchedulerContainerStatus]: ...
 
 
 class ContainerRequestReader(Protocol):
@@ -268,6 +270,7 @@ class WorkloadAutoscaler(Protocol):
         containers: list[ContainerRecord],
         count: int,
         *,
+        scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]: ...
@@ -325,9 +328,12 @@ class AutoscalingDriver:
         identity = self.workload.identity
         active = _deployment_active(self.services, stub)
         containers = _containers_for_stub(self.services, stub)
+        scheduler_statuses = self.container_states.container_statuses(
+            [container.id for container in _active_containers(containers)]
+        )
         holding, stale = _partition_backed_containers(
             containers,
-            self.container_states,
+            scheduler_statuses,
             self.container_requests,
             now=current_time,
         )
@@ -383,6 +389,7 @@ class AutoscalingDriver:
                     stub,
                     holding,
                     -delta,
+                    scheduler_statuses=scheduler_statuses,
                     active_instance=active and not failure_threshold_reached,
                     now=current_time,
                 )
@@ -661,6 +668,7 @@ class FunctionAutoscaler:
         containers: list[ContainerRecord],
         count: int,
         *,
+        scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
@@ -677,7 +685,7 @@ class FunctionAutoscaler:
         run is, and a handler that is not idempotent would run it twice.
         """
 
-        del active_instance, now
+        del scheduler_statuses, active_instance, now
         if stub.config.runtime.keep_warm >= 0:
             return []
         # Every container the excess was counted from, starting ones included.
@@ -709,7 +717,6 @@ class EndpointAutoscaler:
     """Scale an endpoint on the dispatches it is already serving."""
 
     services: SchedulerServices
-    redis: RedisClient
     endpoints: EndpointAutoscaleControl
     dispatches: EndpointAutoscalingDispatchReader
 
@@ -750,6 +757,7 @@ class EndpointAutoscaler:
         containers: list[ContainerRecord],
         count: int,
         *,
+        scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
@@ -757,9 +765,9 @@ class EndpointAutoscaler:
         actions: list[AutoscaleAction] = []
         for container in _stoppable_endpoint_containers(
             self.dispatches,
-            self.redis,
             stub,
             containers,
+            scheduler_statuses,
             keep_warm_seconds=_endpoint_autoscaler_config(stub.config).keep_warm_seconds,
             now=now,
         ):
@@ -828,9 +836,11 @@ class PodAutoscaler:
         containers: list[ContainerRecord],
         count: int,
         *,
+        scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
+        del scheduler_statuses
         workspace_id = stub.workspace_id
         # A sandbox is held by its lock rather than by a window, which is the
         # same distinction `keep_warm_lock_authoritative` states below.
@@ -1175,7 +1185,7 @@ def _active_containers(containers: list[ContainerRecord]) -> list[ContainerRecor
 
 def _partition_backed_containers(
     containers: list[ContainerRecord],
-    states: SchedulerContainerStateReader,
+    scheduler_statuses: Mapping[str, SchedulerContainerStatus],
     requests: ContainerRequestReader,
     *,
     now: datetime,
@@ -1194,7 +1204,7 @@ def _partition_backed_containers(
     for container in _active_containers(containers):
         reason = _stale_reason(
             container,
-            states.get_container_state(container.id),
+            scheduler_statuses.get(container.id),
             requests,
             now=now,
         )
@@ -1207,7 +1217,7 @@ def _partition_backed_containers(
 
 def _stale_reason(
     container: ContainerRecord,
-    state: SchedulerContainerState | None,
+    scheduler_status: SchedulerContainerStatus | None,
     requests: ContainerRequestReader,
     *,
     now: datetime,
@@ -1231,14 +1241,14 @@ def _stale_reason(
     what the deadline covers and the only thing it covers.
     """
 
-    if state is not None and state.status not in {
+    if scheduler_status is not None and scheduler_status not in {
         SchedulerContainerStatus.Pending,
         SchedulerContainerStatus.Running,
     }:
-        return f"scheduler state is {state.status.value}"
+        return f"scheduler state is {scheduler_status.value}"
     if container.status is ContainerStatus.Running:
-        return "scheduler state missing for running container" if state is None else ""
-    if state is not None and state.status is SchedulerContainerStatus.Running:
+        return "scheduler state missing for running container" if scheduler_status is None else ""
+    if scheduler_status is SchedulerContainerStatus.Running:
         # Started, and only the durable row has yet to catch up.
         return ""
     if requests.has_recoverable_container_request(
@@ -1253,22 +1263,6 @@ def _stale_reason(
 
 def _pending_container_count(containers: list[ContainerRecord]) -> int:
     return sum(1 for container in containers if container.status is ContainerStatus.Pending)
-
-
-def _scheduler_status(
-    redis: RedisClient,
-    container_id: str,
-) -> SchedulerContainerStatus | None:
-    key = redis.key("scheduler", "containers", container_id, "state")
-    raw = redis.hash_get_all(key).get("status")
-    if raw is None:
-        return None
-    try:
-        # The hash holds JSON per field, so the raw value carries its quotes and
-        # reading it as text matched no status at all.
-        return SchedulerContainerStatus(str(redis_serialization.loads_field(raw)))
-    except ValueError:
-        return None
 
 
 def _recent_failed_container_ids(
@@ -1295,9 +1289,9 @@ def _recent_failed_container_ids(
 
 def _stoppable_endpoint_containers(
     dispatches: EndpointAutoscalingDispatchReader,
-    redis: RedisClient,
     stub: StubRecord,
     containers: list[ContainerRecord],
+    scheduler_statuses: Mapping[str, SchedulerContainerStatus],
     *,
     keep_warm_seconds: int,
     now: datetime,
@@ -1307,7 +1301,7 @@ def _stoppable_endpoint_containers(
         container
         for container in containers
         if container.status is ContainerStatus.Running
-        and _scheduler_status(redis, container.id) is not SchedulerContainerStatus.Stopping
+        and scheduler_statuses.get(container.id) is not SchedulerContainerStatus.Stopping
         and not _endpoint_container_has_active_dispatch(dispatch_records, container.id)
         and _endpoint_container_keep_warm_elapsed(
             dispatch_records,

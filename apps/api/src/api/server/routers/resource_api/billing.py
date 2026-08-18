@@ -10,7 +10,6 @@ from billing.costs import (
     UsageCostSeries,
     UsageCostService,
 )
-from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan
 from shared.errors import InvalidInputError
@@ -35,7 +34,7 @@ from shared.timestamps import utc_now
 
 from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
-from api.server.routers.resource_api.common import usage_cost_list_response
+from api.server.routers.resource_api.common import member_workspaces, usage_cost_list_response
 from api.server.services import ApiServices
 from billing import BillingAccountService, BillingPlanChangeService, owned_workspace_id
 
@@ -97,13 +96,11 @@ def account_costs(
     app at all.
     """
 
+    workspaces = member_workspaces(services, user_id)
     with services.context.database.session() as session:
-        workspace_ids = [
-            workspace.id
-            for workspace in WorkspaceMemberRepository(session).workspaces_for_user(user_id)
-        ]
         page = UsageCostService(session).costs(
-            workspace_ids=workspace_ids,
+            workspace_ids=list(workspaces),
+            workspace_names=workspaces,
             start=start,
             end=end,
             group_by=group_by,
@@ -147,11 +144,8 @@ def account_cost_series(
     supplied would be the shape of whatever it asked for.
     """
 
+    workspace_ids = list(member_workspaces(services, user_id))
     with services.context.database.session() as session:
-        workspace_ids = [
-            workspace.id
-            for workspace in WorkspaceMemberRepository(session).workspaces_for_user(user_id)
-        ]
         series = UsageCostService(session).series(
             workspace_ids=workspace_ids,
             start=start,

@@ -1,8 +1,7 @@
 import { StatusChip } from "@/components/shared/StatusChip";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
-import type { App, Deployment } from "@/lib/api/schemas";
-import { exactTime, relativeTime } from "@/lib/format";
+import type { Deployment } from "@/lib/api/schemas";
+import { countLabel, exactTime, relativeTime } from "@/lib/format";
 
 /**
  * What an app is, under its name.
@@ -41,15 +40,12 @@ export function AppDetailFacts({
 }
 
 export function AppDetailStatus({
-  app,
   latestDeployment,
   activeWorkloads,
 }: {
-  app: App | undefined;
   latestDeployment: Deployment | undefined;
   activeWorkloads: number;
 }) {
-  if (!app) return null;
   return (
     <StatusChip
       status={activeWorkloads > 0 ? "deployed" : latestDeployment ? "inactive" : "not deployed"}

@@ -6,8 +6,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import type { SandboxRow } from "@/lib/api/schemas";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
-import { exactTime, formatDuration, relativeTime } from "@/lib/format";
+import { countLabel, exactTime, formatDuration, relativeTime } from "@/lib/format";
 
 export function AppSandboxesSection({
   workspaceName,

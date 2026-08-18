@@ -16,7 +16,12 @@ from database.records.apps import (
     AppRecord,
     StubRecord,
 )
-from database.repositories.common import TableRepositoryConfig, WorkspaceTableRepository
+from database.repositories.common import (
+    TableRepositoryConfig,
+    WorkspaceTableRepository,
+    bucket_index,
+    names_by_id,
+)
 from database.repositories.identity import WorkspaceRepository
 from database.tables.apps import (
     AppContainerShutdownIntentTable,
@@ -42,7 +47,7 @@ from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
-from sqlalchemy import Integer, and_, case, cast, delete, extract, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
@@ -138,17 +143,10 @@ class AppRepository:
         """What each of these apps is called, deleted ones included.
 
         A deleted app keeps its name here because the work it did still happened
-        and still has to be labelled; a caller that finds an id missing from this
-        map has an id whose row is gone entirely, which is a different fact and
-        reads differently.
+        and still has to be labelled.
         """
 
-        if not app_ids:
-            return {}
-        rows = self.session.execute(
-            select(AppTable.id, AppTable.name).where(AppTable.id.in_(set(app_ids)))
-        ).all()
-        return {str(row[0]): str(row[1]) for row in rows}
+        return names_by_id(self.session, AppTable.id, AppTable.name, app_ids)
 
     def get_across_workspaces(
         self,
@@ -426,7 +424,6 @@ class AppSummaryRepository:
         bucket_count: int = 24,
     ) -> dict[str, AppExecutionSummary]:
         """Aggregate all app run and live-container facts with constant query count."""
-        first_bucket = int(start.timestamp()) // bucket_seconds
         summaries: dict[str, AppExecutionSummary] = {}
 
         running_statement = (
@@ -447,9 +444,10 @@ class AppSummaryRepository:
             summary.running_containers = row.running
             summaries[summary.app_id] = summary
 
-        bucket = cast(
-            extract("epoch", TaskTable.created_at) / bucket_seconds,
-            Integer,
+        bucket = bucket_index(
+            TaskTable.created_at,
+            start=start,
+            width_seconds=bucket_seconds,
         ).label("bucket")
         failed = func.sum(
             case(
@@ -485,7 +483,7 @@ class AppSummaryRepository:
             row = AppTaskBucketResult.model_validate(raw)
             key = row.app_id
             summary = summaries.setdefault(key, _app_execution_summary(key, bucket_count))
-            index = row.bucket - first_bucket
+            index = row.bucket
             if 0 <= index < bucket_count:
                 run_count = row.runs
                 failure_count = row.failed or 0
@@ -506,11 +504,6 @@ class AppSummaryRepository:
     ) -> tuple[AppActivityCountResult, ...]:
         """How many things these workspaces started per app, per interval.
 
-        Placed into intervals by whole seconds elapsed from `start`, never by
-        `date_trunc` or `func.date`: those read the session `TimeZone`, which
-        nothing here sets, so the interval a start belonged to would depend on
-        which connection answered the request.
-
         Both sources are counted by `created_at` — the instant the work was asked
         for — so a long-running container is one start in the interval it began,
         not a smear across every interval it survived.
@@ -525,8 +518,9 @@ class AppSummaryRepository:
         table: type[ContainerTable] | type[TaskTable] = (
             ContainerTable if source is ActivityStartSource.Containers else TaskTable
         )
-        elapsed = extract("epoch", table.created_at) - int(start.timestamp())
-        index = cast(func.floor(elapsed / window_seconds), Integer).label("index")
+        index = bucket_index(table.created_at, start=start, width_seconds=window_seconds).label(
+            "index"
+        )
         rows = self.session.execute(
             select(
                 table.workspace_id.label("workspace_id"),

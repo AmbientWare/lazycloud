@@ -6,6 +6,7 @@ import { CopyId } from "@/components/shared/CopyId";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, ContainerMetricsPoint, Task } from "@/lib/api/schemas";
@@ -148,7 +149,7 @@ function ContainerDetails({
             </div>
           </>
         ) : metrics.isError ? (
-          <div className="py-8 text-sm text-destructive">{metrics.error.message}</div>
+          <PanelError message={metrics.error.message} />
         ) : (
           <>
             <ContainerCapacity sample={latest} />

@@ -40,8 +40,8 @@ from worker.image_build_execution import (
 from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
 from worker.monitoring import WorkerUsageWindowRecorder
 from worker.status import (
-    WorkerDeliveredRequestAction,
     WorkerDeliveredRequestPlan,
+    WorkerSchedulerRequestAction,
     plan_delivered_container_request,
 )
 
@@ -59,15 +59,18 @@ delivering a request for it, so the retrying has to end well inside that window
 however fast this worker polls.
 """
 
+WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_SECONDS = 1.0
+WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_MAX_SECONDS = 15.0
+"""How long an acknowledgement waits before it is attempted again.
 
-class WorkerSchedulerRequestAction(StrEnum):
-    Idle = "idle"
-    DropMissingState = "drop-missing-state"
-    DropStoppingState = "drop-stopping-state"
-    DropFinishedState = "drop-finished-state"
-    SkipStartedContainer = "skip-started-container"
-    ReconcileDelivery = "reconcile-delivery"
-    Execute = "execute"
+The poll loop runs many times a second and every pass retries what is still
+unacknowledged, so an unreachable control plane would otherwise be answered with
+one request and one warning per pass — thousands of them per worker per outage,
+each one delaying the poll for work this worker could actually do. Doubling from
+a second and capped, which turns the whole retry bound below into a handful of
+attempts rather than a flood, and still acknowledges within a second of the
+control plane coming back.
+"""
 
 
 class WorkerSchedulerRequestStatus(StrEnum):
@@ -148,11 +151,13 @@ class _Delivery:
     the same work, not a second container to start.
     """
 
-    request: SchedulerWorkerRequest
     first_attempt_at: float = field(default_factory=monotonic)
     attempts: int = 0
     held: bool = False
     committed: bool = False
+    acknowledge_attempts: int = 0
+    acknowledge_failed_at: float = 0.0
+    acknowledge_after: float = 0.0
 
 
 @dataclass(slots=True)
@@ -277,9 +282,8 @@ class WorkerSchedulerRequestProcessor:
             if delivery is not None and (delivery.held or delivery.committed):
                 return False
             if delivery is None:
-                delivery = _Delivery(request=request)
+                delivery = _Delivery()
                 self._deliveries[request.container_id] = delivery
-            delivery.request = request
             delivery.attempts += 1
             delivery.held = True
             return True
@@ -348,27 +352,63 @@ class WorkerSchedulerRequestProcessor:
         try:
             self.workers.acknowledge_worker_request(self.worker_id, container_id)
         except Exception as exc:
-            # The control plane is what is unreachable, so the request is still in
-            # flight and will be handed back. Keeping it here is what makes that
-            # redelivery a no-op instead of a second container.
-            LOGGER.warning(
-                "container request acknowledgement failed; will retry",
-                extra={
-                    "worker_id": self.worker_id,
-                    "container_id": container_id,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-            )
+            self._defer_acknowledgement(container_id, exc)
             return
         with self._delivery_lock:
             self._deliveries.pop(container_id, None)
 
+    def _defer_acknowledgement(self, container_id: str, error: Exception) -> None:
+        """Schedule the next attempt at an acknowledgement, or stop making them.
+
+        The control plane is what is unreachable, so the request is still in
+        flight and will be handed back. Holding the delivery here is what makes
+        that redelivery a no-op instead of a second container — but only for as
+        long as the same outage can be believed, which is the bound the
+        uncommitted path is held to and for the same reason.
+
+        Past it the delivery is let go rather than retried forever: a redelivery
+        that arrives after this worker has forgotten it is still reconciled
+        against the container's own state, which already says the container is
+        running or has run, so what it costs is a dropped request rather than a
+        second container. Keeping the entry instead would grow this map for every
+        container the worker ever ran.
+        """
+
+        now = monotonic()
+        with self._delivery_lock:
+            delivery = self._deliveries.get(container_id)
+            if delivery is None:
+                return
+            if delivery.acknowledge_attempts == 0:
+                delivery.acknowledge_failed_at = now
+            delivery.acknowledge_attempts += 1
+            attempts = delivery.acknowledge_attempts
+            abandoned = (
+                now - delivery.acknowledge_failed_at
+            ) >= WORKER_REQUEST_DELIVERY_RETRY_SECONDS
+            if abandoned:
+                del self._deliveries[container_id]
+            else:
+                delivery.acknowledge_after = now + _acknowledgement_backoff(attempts)
+        LOGGER.warning(
+            "container request acknowledgement failed; giving up"
+            if abandoned
+            else "container request acknowledgement failed; will retry",
+            extra={
+                "worker_id": self.worker_id,
+                "container_id": container_id,
+                "attempts": attempts,
+                "error": f"{type(error).__name__}: {error}",
+            },
+        )
+
     def _retry_acknowledgements(self) -> None:
+        now = monotonic()
         with self._delivery_lock:
             pending = [
                 container_id
                 for container_id, delivery in self._deliveries.items()
-                if delivery.committed and not delivery.held
+                if delivery.committed and not delivery.held and delivery.acknowledge_after <= now
             ]
         for container_id in pending:
             self._acknowledge(container_id)
@@ -641,12 +681,12 @@ class WorkerSchedulerRequestProcessor:
                 WorkerSchedulerRequestStatus.Reconciled
                 if delivery.action
                 in {
-                    WorkerDeliveredRequestAction.DropFinishedState,
-                    WorkerDeliveredRequestAction.SkipStartedContainer,
+                    WorkerSchedulerRequestAction.DropFinishedState,
+                    WorkerSchedulerRequestAction.SkipStartedContainer,
                 }
                 else WorkerSchedulerRequestStatus.Dropped
             ),
-            action=_DROP_ACTIONS[delivery.action],
+            action=delivery.action,
             container_id=request.container_id,
             request=request,
             delivery=delivery,
@@ -680,18 +720,10 @@ class WorkerSchedulerRequestProcessor:
         return result.model_copy(update={"capacity_released": True})
 
 
-_DROP_ACTIONS: dict[WorkerDeliveredRequestAction, WorkerSchedulerRequestAction] = {
-    WorkerDeliveredRequestAction.DropMissingState: (WorkerSchedulerRequestAction.DropMissingState),
-    WorkerDeliveredRequestAction.DropStoppingState: (
-        WorkerSchedulerRequestAction.DropStoppingState
-    ),
-    WorkerDeliveredRequestAction.DropFinishedState: (
-        WorkerSchedulerRequestAction.DropFinishedState
-    ),
-    WorkerDeliveredRequestAction.SkipStartedContainer: (
-        WorkerSchedulerRequestAction.SkipStartedContainer
-    ),
-}
+def _acknowledgement_backoff(attempts: int) -> float:
+    steps = min(max(attempts - 1, 0), 16)
+    doubled = WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_SECONDS * 2**steps
+    return min(doubled, WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_MAX_SECONDS)
 
 
 def _billable_gpu(*, gpu_count: int, worker_gpu_type: str) -> str:
