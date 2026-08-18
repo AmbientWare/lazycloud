@@ -13,7 +13,7 @@ export type TaskListKeyParts = {
   rootOnly: boolean;
 };
 
-export type WorkspaceActivityKeyParts = {
+export type AccountActivityKeyParts = {
   measure: string;
   range: string;
   limit: number;
@@ -140,13 +140,6 @@ export const workspaceQueryKeys = {
     urls: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "sandboxes", "urls", containerId] as const,
   },
-  metrics: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "metrics"] as const,
-    containerCounts: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "metrics", "container-counts"] as const,
-    activity: (workspaceId: string, scope: WorkspaceActivityKeyParts) =>
-      [...workspaceRoot(workspaceId), "metrics", "activity", scope] as const,
-  },
   storage: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,
     secrets: (workspaceId: string) =>
@@ -220,6 +213,12 @@ export const accountQueryKeys = {
     machines: () => [...accountRoot, "compute", "machines"] as const,
   },
   billing: () => [...accountRoot, "billing"] as const,
+  metrics: {
+    root: () => [...accountRoot, "metrics"] as const,
+    containerCounts: () => [...accountRoot, "metrics", "container-counts"] as const,
+    activity: (scope: AccountActivityKeyParts) =>
+      [...accountRoot, "metrics", "activity", scope] as const,
+  },
   domains: () => [...accountRoot, "custom-domains"] as const,
   tokens: () => [...accountRoot, "tokens"] as const,
 } as const;

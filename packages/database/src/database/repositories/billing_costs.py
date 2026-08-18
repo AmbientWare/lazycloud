@@ -124,13 +124,36 @@ class LedgerCostBucketTotal:
 
 
 @dataclass(frozen=True, slots=True)
-class BillingLedgerCostRepository:
-    """What frozen costs add up to, for the dashboard and for reconciliation.
+class LedgerComponentBucketQuantity:
+    """How much of one resource one app held inside one interval of a window.
 
-    Two questions, one owner: what a workspace spent, broken down the way a
-    customer reads it, and what a payer spent over a window, keyed the way an
-    invoice is. They are the same rows summed on different columns, and summing
-    them anywhere else would be a second answer to what something cost.
+    `index` counts whole interval widths from the window's start, so the span it
+    stands for is arithmetic on the start the caller supplied rather than a
+    timestamp this query decided. Only the intervals a workspace metered
+    something in come back; the intervals between them are the caller's to fill,
+    which is the one place the width and the start are both already known.
+
+    Keyed by workspace and app together for the reason the cost grouping is: an
+    account reads several workspaces at once, and an app id is unique while an
+    absent one is the same empty key in every workspace.
+    """
+
+    workspace_id: str
+    app_id: str
+    index: int
+    quantity: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class BillingLedgerCostRepository:
+    """What the frozen ledger adds up to, for the dashboard and for reconciliation.
+
+    Three questions, one owner: what a workspace spent, broken down the way a
+    customer reads it; what a payer spent over a window, keyed the way an invoice
+    is; and how much of one resource an app held over a window, which is the same
+    rows summed on `quantity` instead of on `cost_nanos`. They are the same rows
+    summed on different columns, and summing them anywhere else would be a second
+    answer to what something cost or used.
 
     Reads `billing_ledger_segments` and nothing else. The ledger is append-only
     and already carries the attribution, the component and the quantity each
@@ -226,6 +249,75 @@ class BillingLedgerCostRepository:
                 index=int(row[0]),
                 dimension=BilledDimension(row[1]),
                 cost_nanos=int(row[2]),
+            )
+            for row in found
+        )
+
+    def component_bucket_quantities(
+        self,
+        *,
+        workspace_ids: Sequence[str],
+        component: LedgerComponent,
+        start: datetime,
+        end: datetime,
+        width_seconds: int,
+    ) -> tuple[LedgerComponentBucketQuantity, ...]:
+        """How much of one resource each app held, interval by interval.
+
+        One component and nothing else, because `quantity` means a different unit
+        in every one of them: processor-seconds, gibibyte-seconds and card-seconds
+        summed together are a figure in no unit at all.
+
+        Both bases are summed, matching what a customer is charged and shown: the
+        capacity a placement held plus whatever it burnt above that. Filtering to
+        one basis would report a container that never sent a measurement as
+        holding nothing.
+
+        Placed into intervals by whole seconds elapsed from `start`, never by
+        `date_trunc` or `func.date`: those read the session `TimeZone`, which
+        nothing here sets, so the interval a segment belonged to would depend on
+        which connection answered the request.
+        """
+
+        if width_seconds < 1:
+            raise InvalidInputError("a resource interval must be at least one second wide")
+        if not workspace_ids:
+            return ()
+        # Seconds against seconds, for the reason `bucket_totals` gives: the
+        # elapsed span is what both engines compute the same way.
+        elapsed = extract("epoch", BillingLedgerSegmentTable.segment_started_at) - int(
+            start.timestamp()
+        )
+        index = cast(func.floor(elapsed / width_seconds), BigInteger)
+        found = self.session.execute(
+            select(
+                BillingLedgerSegmentTable.workspace_id,
+                BillingLedgerSegmentTable.app_id,
+                index,
+                func.coalesce(func.sum(BillingLedgerSegmentTable.quantity), 0),
+            )
+            .where(
+                *_window(
+                    workspace_ids=workspace_ids,
+                    start=start,
+                    end=end,
+                    app_id=None,
+                    workload_id=None,
+                ),
+                BillingLedgerSegmentTable.component == component.value,
+            )
+            .group_by(
+                BillingLedgerSegmentTable.workspace_id,
+                BillingLedgerSegmentTable.app_id,
+                index,
+            )
+        ).all()
+        return tuple(
+            LedgerComponentBucketQuantity(
+                workspace_id=str(row[0]),
+                app_id=str(row[1]),
+                index=int(row[2]),
+                quantity=Decimal(row[3]),
             )
             for row in found
         )
@@ -514,6 +606,7 @@ def _cost_row(
 
 __all__ = [
     "BillingLedgerCostRepository",
+    "LedgerComponentBucketQuantity",
     "LedgerComponentTotal",
     "LedgerCostBucketTotal",
     "LedgerCostCursor",

@@ -95,51 +95,64 @@ export const taskLatencyTimeseriesSchema = z.object({
 export type TaskLatencyTimeseries = z.infer<typeof taskLatencyTimeseriesSchema>;
 
 // Synced to packages/shared/src/shared/http/observability.py
-// (WorkspaceContainerCountsResponse, WorkspaceActivityResponse).
-export const workspaceActivityMeasures = ["containers", "tasks"] as const;
-export type WorkspaceActivityMeasure = (typeof workspaceActivityMeasures)[number];
+// (AccountContainerCountsResponse, AccountActivityResponse).
+export const accountActivityMeasures = ["containers", "tasks", "cpu", "memory", "gpu"] as const;
+export type AccountActivityMeasure = (typeof accountActivityMeasures)[number];
 
-export const workspaceActivitySeriesKinds = ["app", "unassigned", "other"] as const;
-export type WorkspaceActivitySeriesKind = (typeof workspaceActivitySeriesKinds)[number];
+/**
+ * What a reading is denominated in. `starts` counts events inside an interval;
+ * the rest are capacity held across it, averaged over the seconds that interval
+ * actually covers.
+ */
+export const accountActivityUnits = ["starts", "cores", "gibibytes", "gpus"] as const;
+export type AccountActivityUnit = (typeof accountActivityUnits)[number];
 
-/** Only the live statuses: what the workspace occupies now, not what it has run. */
-export const workspaceContainerCountsSchema = z.object({
-  workspace_id: z.string(),
+export const accountActivitySeriesKinds = ["app", "unassigned", "other"] as const;
+export type AccountActivitySeriesKind = (typeof accountActivitySeriesKinds)[number];
+
+/** Only the live statuses: what the account occupies now, not what it has run. */
+export const accountContainerCountsSchema = z.object({
   pending: z.number().int().nonnegative().default(0),
   running: z.number().int().nonnegative().default(0),
 });
-export type WorkspaceContainerCounts = z.infer<typeof workspaceContainerCountsSchema>;
+export type AccountContainerCounts = z.infer<typeof accountContainerCountsSchema>;
 
-const workspaceActivityBucketSchema = z.object({
+const accountActivityBucketSchema = z.object({
   timestamp: z.string(),
-  count: z.number().int().nonnegative().default(0),
+  value: z.number().nonnegative().default(0),
 });
-export type WorkspaceActivityBucket = z.infer<typeof workspaceActivityBucketSchema>;
+export type AccountActivityBucket = z.infer<typeof accountActivityBucketSchema>;
 
 /**
+ * A series is one app in one workspace. `workspace_id` leads the identity
+ * because an account reads several workspaces at once and two of them may hold
+ * apps of the same name.
+ *
  * `app_name` is empty where the app has since been deleted, and for the
  * `unassigned` and `other` rows, which stand for no single app.
  */
-const workspaceActivitySeriesSchema = z.object({
-  kind: z.enum(workspaceActivitySeriesKinds),
+const accountActivitySeriesSchema = z.object({
+  kind: z.enum(accountActivitySeriesKinds),
+  workspace_id: z.string().default(""),
+  workspace_name: z.string().default(""),
   app_id: z.string().default(""),
   app_name: z.string().default(""),
-  total: z.number().int().nonnegative().default(0),
-  buckets: z.array(workspaceActivityBucketSchema).default([]),
+  total: z.number().nonnegative().default(0),
+  buckets: z.array(accountActivityBucketSchema).default([]),
 });
-export type WorkspaceActivitySeries = z.infer<typeof workspaceActivitySeriesSchema>;
+export type AccountActivitySeries = z.infer<typeof accountActivitySeriesSchema>;
 
 /**
- * `total` is the whole window's count rather than the sum of the series shown;
- * the two differ exactly when apps past the cap were folded into `other`.
+ * `total` reads the whole window in the same unit every bucket is in, so a
+ * series total is comparable against it and the shares add up.
  */
-export const workspaceActivitySchema = z.object({
-  workspace_id: z.string(),
-  measure: z.enum(workspaceActivityMeasures),
+export const accountActivitySchema = z.object({
+  measure: z.enum(accountActivityMeasures),
+  unit: z.enum(accountActivityUnits),
   window_seconds: z.number().int().positive(),
   start: z.string(),
   end: z.string(),
-  total: z.number().int().nonnegative().default(0),
-  series: z.array(workspaceActivitySeriesSchema).default([]),
+  total: z.number().nonnegative().default(0),
+  series: z.array(accountActivitySeriesSchema).default([]),
 });
-export type WorkspaceActivity = z.infer<typeof workspaceActivitySchema>;
+export type AccountActivity = z.infer<typeof accountActivitySchema>;

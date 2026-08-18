@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { taskMetricsQueryOptions } from "@/lib/queries/tasks";
-import { workspaceContainerCountsQueryOptions } from "@/lib/queries/workspace-metrics";
+import { accountContainerCountsQueryOptions } from "@/lib/queries/account-metrics";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
@@ -16,36 +16,35 @@ import { ActivityPanel } from "./ActivityPanel";
 const TASK_METRICS_HOURS = 24;
 
 /**
- * The workspace's instruments: what it is holding now, and what has moved
- * through it.
+ * The account's instruments: what it is holding now, and what has moved through
+ * it.
  *
  * A drawer rather than a page because these are readings taken while doing
- * something else — the question is "is this workspace healthy right now", asked
+ * something else — the question is "is this account healthy right now", asked
  * without leaving whatever answered it.
+ *
+ * Account-scoped rather than workspace-scoped because that is the scope the
+ * figures are compared against: the concurrency ceiling is a term of a plan and
+ * a plan belongs to a payer, so somebody running dev, staging and prod reads one
+ * set of readings rather than adding up their own.
  */
-export function WorkspaceMetricsDrawer({ onClose }: { onClose: () => void }) {
-  const { workspace } = useWorkspace();
+export function AccountMetricsDrawer({ onClose }: { onClose: () => void }) {
   return (
     <Sheet open onOpenChange={(open) => (open ? undefined : onClose())}>
       <SheetContent
         aria-describedby={undefined}
-        aria-label="Workspace metrics"
+        aria-label="Account metrics"
         className="gap-0 bg-background max-sm:left-0 max-sm:right-0 max-sm:max-w-none max-sm:border-l-0 sm:max-w-2xl xl:max-w-3xl"
       >
         <DrawerHeader>
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
-            <SheetTitle className="min-w-0 truncate">Workspace metrics</SheetTitle>
-            <span className="mono min-w-0 truncate text-xs text-muted-foreground">
-              {workspace.name}
-            </span>
-          </div>
+          <SheetTitle className="min-w-0 truncate">Account metrics</SheetTitle>
         </DrawerHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
           <PanelErrorBoundary title="Readings could not be displayed">
-            <ReadingStrip workspaceId={workspace.id} />
+            <ReadingStrip />
           </PanelErrorBoundary>
-          <PanelErrorBoundary key={workspace.id} title="Workspace activity could not be displayed">
-            <ActivityPanel workspaceId={workspace.id} />
+          <PanelErrorBoundary title="Account activity could not be displayed">
+            <ActivityPanel />
           </PanelErrorBoundary>
         </div>
       </SheetContent>
@@ -59,18 +58,25 @@ export function WorkspaceMetricsDrawer({ onClose }: { onClose: () => void }) {
  * One strip rather than four cards: these are read together, and hairlines
  * between cells carry the separation that four floating surfaces would spend a
  * whole row of chrome on.
+ *
+ * Unqualified cells read the account. The two task cells name a workspace
+ * because that is the scope their reading has — the task summary is the same one
+ * the app surfaces read, and a cell that quietly answered for one workspace
+ * inside a strip labelled for the account would be the kind of figure somebody
+ * makes a decision on and is wrong about.
  */
-function ReadingStrip({ workspaceId }: { workspaceId: string }) {
-  const held = useQuery(workspaceContainerCountsQueryOptions(workspaceId));
+function ReadingStrip() {
+  const { workspace } = useWorkspace();
+  const held = useQuery(accountContainerCountsQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
-  const tasks = useQuery(taskMetricsQueryOptions(workspaceId, TASK_METRICS_HOURS));
+  const tasks = useQuery(taskMetricsQueryOptions(workspace.id, TASK_METRICS_HOURS));
 
   const ceiling = billing.data?.max_concurrent_containers ?? 0;
   const accountLive = billing.data?.live_container_count ?? 0;
 
   return (
     <section
-      aria-label="Workspace readings"
+      aria-label="Account readings"
       className="panel grid shrink-0 grid-cols-2 overflow-hidden rounded-md sm:grid-cols-4"
     >
       <Reading
@@ -90,7 +96,7 @@ function ReadingStrip({ workspaceId }: { workspaceId: string }) {
         query={billing}
         value={accountLive}
         formatted={`${accountLive.toLocaleString()} / ${ceiling.toLocaleString()}`}
-        detail="Across the account"
+        detail="Ceiling on your plan"
         meter={billing.data ? { used: accountLive, limit: ceiling } : undefined}
       />
       <Reading
@@ -98,7 +104,11 @@ function ReadingStrip({ workspaceId }: { workspaceId: string }) {
         className="border-r border-border"
         query={tasks}
         value={tasks.data?.total}
-        detail={tasks.data ? `${tasks.data.completed.toLocaleString()} completed` : undefined}
+        detail={
+          tasks.data
+            ? `${tasks.data.completed.toLocaleString()} completed in ${workspace.name}`
+            : undefined
+        }
       />
       <Reading
         label="Failures · 24h"
@@ -106,7 +116,9 @@ function ReadingStrip({ workspaceId }: { workspaceId: string }) {
         value={tasks.data?.failed}
         tone={tasks.data && tasks.data.failed > 0 ? "danger" : "neutral"}
         detail={
-          tasks.data ? `${formatPercent(tasks.data.failure_rate)} of tasks failed` : undefined
+          tasks.data
+            ? `${formatPercent(tasks.data.failure_rate)} of tasks in ${workspace.name}`
+            : undefined
         }
       />
     </section>

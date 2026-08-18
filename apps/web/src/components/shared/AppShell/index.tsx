@@ -4,10 +4,10 @@ import {
   Activity,
   ChartNoAxesCombined,
   Database,
+  Gauge,
   LayoutGrid,
   LogOut,
   Menu,
-  PanelRightOpen,
   Search,
   Settings,
 } from "lucide-react";
@@ -58,9 +58,9 @@ const GlobalSearch = lazy(() =>
 
 /* Loaded when the drawer is first opened: its charts pull recharts in, which
    nothing else in the shell needs to render navigation. */
-const WorkspaceMetricsDrawer = lazy(() =>
-  import("@/components/shared/AppShell/WorkspaceMetrics").then((module) => ({
-    default: module.WorkspaceMetricsDrawer,
+const AccountMetricsDrawer = lazy(() =>
+  import("@/components/shared/AppShell/AccountMetrics").then((module) => ({
+    default: module.AccountMetricsDrawer,
   })),
 );
 
@@ -203,20 +203,23 @@ function DesktopRail({
         </Link>
       </div>
 
+      {/* Search leads, and the readings sit beside it: both are things done to
+          the account from wherever you already are, where the workspace below
+          them is what the whole rail underneath is scoped to. */}
       <div className="px-3 pb-3">
         <div className="flex items-center gap-1">
-          <WorkspaceSwitcher className="min-w-0 flex-1" />
-          <WorkspaceMetricsControl />
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Search className="size-3.5" aria-hidden="true" />
+            <span className="flex-1">Search</span>
+            <kbd className="mono text-[10px] text-muted-foreground">⌘K</kbd>
+          </button>
+          <AccountMetricsControl />
         </div>
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          className="mt-2 flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Search className="size-3.5" aria-hidden="true" />
-          <span className="flex-1">Search</span>
-          <kbd className="mono text-[10px] text-muted-foreground">⌘K</kbd>
-        </button>
+        <WorkspaceSwitcher className="mt-2 w-full" />
       </div>
 
       <nav aria-label="Main navigation" className="space-y-0.5 px-3">
@@ -295,7 +298,6 @@ function MobileHeader({
         <img src="/lazycloud.png" alt="" className="size-8" />
       </Link>
       <WorkspaceSwitcher className="min-w-0 flex-1" compact />
-      <WorkspaceMetricsControl />
       <Button
         variant="ghost"
         size="icon"
@@ -305,6 +307,7 @@ function MobileHeader({
       >
         <Search className="size-4" />
       </Button>
+      <AccountMetricsControl />
       <MobileMenu onLogout={onLogout} onOpenSettings={onOpenSettings} />
     </header>
   );
@@ -411,24 +414,31 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
   );
 }
 
-/** Opens the workspace's readings beside whatever the rail is currently showing. */
-function WorkspaceMetricsControl() {
+/**
+ * Opens the account's readings beside whatever the rail is currently showing.
+ *
+ * A gauge rather than a chart glyph: the rail already spends one on Usage, and a
+ * second beside it would read as a second page of charts. What this opens leads
+ * with instruments — a live count, a figure against the ceiling it is refused
+ * at — which is what a dial says and a bar chart does not.
+ */
+function AccountMetricsControl() {
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button
         variant="ghost"
         size="icon"
-        aria-label="Workspace metrics"
-        title="Workspace metrics"
+        aria-label="Account metrics"
+        title="Account metrics"
         className="size-8 text-muted-foreground"
         onClick={() => setOpen(true)}
       >
-        <PanelRightOpen className="size-3.5" />
+        <Gauge className="size-3.5" />
       </Button>
       {open ? (
         <Suspense fallback={null}>
-          <WorkspaceMetricsDrawer onClose={() => setOpen(false)} />
+          <AccountMetricsDrawer onClose={() => setOpen(false)} />
         </Suspense>
       ) : null}
     </>
