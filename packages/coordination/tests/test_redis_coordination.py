@@ -165,9 +165,10 @@ class _TokenLockRedis(FakeRedis):
         value: str | bytes | int | float | bool,
         *,
         ex: int | None = None,
+        px: int | None = None,
         nx: bool = False,
     ) -> bool:
-        del name, value, ex, nx
+        del name, value, ex, px, nx
         return True
 
     def eval(

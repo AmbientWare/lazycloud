@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from execution.config import (
     ContainerResourceConfig,
@@ -27,6 +27,23 @@ class PodRuntimeConfig(ContainerResourceConfig):
     checkpoint_readiness_interval_seconds: float = Field(default=1.0, gt=0)
     health_check_path: str = ""
     health_check_port: int = Field(default=0, ge=0, le=65535)
+
+    @field_validator("health_check_path")
+    @classmethod
+    def health_check_path_is_absolute(cls, value: str) -> str:
+        """Also enforced here, on the model the pod proxy reads.
+
+        The write model validates what the SDK and deploy path send; a persisted
+        config that reached storage any other way is read through this one, and a
+        relative path makes every container permanently unready while the proxy
+        can only report having nothing to route to.
+        """
+
+        if value and not value.startswith("/"):
+            msg = "health_check_path must be absolute"
+            raise ValueError(msg)
+        return value
+
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)
 

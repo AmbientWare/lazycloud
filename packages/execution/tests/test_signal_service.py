@@ -72,6 +72,7 @@ class _FailingRedis(FakeRedis):
         value: str | bytes | int | float,
         *,
         ex: int | None = None,
+        px: int | None = None,
         nx: bool = False,
     ) -> bool:
         raise RuntimeError("redis down")

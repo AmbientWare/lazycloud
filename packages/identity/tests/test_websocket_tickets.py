@@ -228,9 +228,10 @@ def test_ticket_mint_removes_uncertain_write_and_hides_store_details(
             value: RedisWireScalar,
             *,
             ex: int | None = None,
+            px: int | None = None,
             nx: bool = False,
         ) -> bool:
-            super().set(name, value, ex=ex, nx=nx)
+            super().set(name, value, ex=ex, px=px, nx=nx)
             raise OSError("private redis endpoint")
 
     _raw_token, token = AuthService(isolated_services.context).create_token(

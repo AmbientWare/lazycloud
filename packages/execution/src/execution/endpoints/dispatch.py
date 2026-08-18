@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import socket
+import sys
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -37,6 +38,9 @@ DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS = 175.0
 DEFAULT_ENDPOINT_QUEUE_TIMEOUT_SECONDS = 600.0
 DEFAULT_ENDPOINT_REQUEST_BUFFER_SIZE = DEFAULT_MAX_PENDING_TASKS
 DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY = 1
+# For a caller that runs no handler, so a container already serving its
+# limit can still answer. Larger than any load the dispatcher records.
+UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY = sys.maxsize
 ENDPOINT_DISPATCH_TASK_KEY = "__endpoint_dispatch"
 
 
@@ -356,7 +360,7 @@ class EndpointInstanceDispatcher:
         targets = self._ordered_targets(
             stub_id,
             container_loads=None,
-            max_inflight_per_container=0,
+            max_inflight_per_container=UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY,
         )
         return targets[0] if targets else None
 
@@ -401,12 +405,13 @@ class EndpointInstanceDispatcher:
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ) -> list[EndpointDispatchTarget]:
-        targets = self._ordered_targets(
-            stub_id,
-            container_loads=container_loads,
-            max_inflight_per_container=max_inflight_per_container,
+        return list(
+            self._candidate_targets(
+                stub_id,
+                container_loads=container_loads,
+                max_inflight_per_container=max_inflight_per_container,
+            )
         )
-        return [target for target in targets if self._is_ready(target, stub_id)]
 
     def _candidate_targets(
         self,

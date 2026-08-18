@@ -234,8 +234,8 @@ class Pod(ControlClientConfigMixin):
                 "checkpoint_enabled Pods require checkpoint_readiness_path and "
                 "checkpoint_readiness_port"
             )
-        if bool(self.health_check_path) != bool(self.health_check_port):
-            raise ValueError("health_check_path and health_check_port are set together")
+        if self.health_check_port and not self.health_check_path:
+            raise ValueError("health_check_port needs a health_check_path to request")
         if self.health_check_path and not self.health_check_path.startswith("/"):
             raise ValueError("health_check_path must be absolute")
 

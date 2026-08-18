@@ -590,9 +590,10 @@ async def _health_probe_response(
 ) -> Response | None:
     """The probe path, which answers without opening an invocation.
 
-    Both endpoint kinds share it, and neither can serve it the ordinary way: the
-    ASGI path returns a stream it would have to metre, and the function path a
-    task the caller never asked to run.
+    ASGI only, because only ASGI routes a subpath: a function endpoint is invoked
+    at `/` with a payload and has nowhere to put `/health`. Its runner serves the
+    route all the same, so reaching it is a matter of publishing a URL rather than
+    of the probe working.
     """
 
     if forwarded.path != CONTAINER_HEALTH_PATH:
@@ -611,9 +612,6 @@ async def _forward_endpoint_request(
     subpath: str = "",
 ) -> Response:
     forwarded = await _forwarded_request(stub, request, subpath)
-    probe = await _health_probe_response(service, forwarded)
-    if probe is not None:
-        return probe
     result = await run_in_threadpool(service.forward_endpoint_request, forwarded)
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body

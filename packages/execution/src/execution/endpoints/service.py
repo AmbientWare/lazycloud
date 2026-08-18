@@ -297,7 +297,9 @@ class EndpointControlService:
         Every other path here creates a task and meters it, which is right for a
         request the workload runs and wrong for one asking whether it could. An
         uptime check left pointing at this path would otherwise accrue task rows
-        and billable usage for work nobody asked for.
+        and billable usage for work nobody asked for. Admission control still
+        applies: the request reaches the workload either way, and the public URL
+        that carries it needs no token.
 
         No ready container is reported as unavailable rather than waited out: the
         caller asked for the current answer, and a probe that blocks until
@@ -312,8 +314,18 @@ class EndpointControlService:
 
         try:
             stub = self.control_plane.get_stub(request.stub_id)
-            if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
-                return error_response(404, f"stub is not an endpoint: {stub.id}")
+            if stub.kind is not StubKind.Asgi:
+                return error_response(404, f"stub is not an ASGI endpoint: {stub.id}")
+            config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
+            if not self._request_capacity_available(stub, _dispatch_settings(config)):
+                # A probe opens no invocation, so it is not metered — but it does
+                # occupy a forwarding thread and reach the workload, and a public
+                # ASGI URL needs no token to say so.
+                self._record_request_rejected(stub)
+                return error_response(
+                    ENDPOINT_BACKPRESSURE_STATUS_CODE,
+                    ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE,
+                )
             dispatcher = self.dispatcher
             if dispatcher is None:
                 return error_response(503, "endpoint dispatcher is not configured")
