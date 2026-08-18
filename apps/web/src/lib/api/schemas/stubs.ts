@@ -11,7 +11,6 @@ export const stubKinds = [
   "shell",
   "sandbox",
   "command",
-  "cron-job",
 ] as const;
 export type StubKind = (typeof stubKinds)[number];
 

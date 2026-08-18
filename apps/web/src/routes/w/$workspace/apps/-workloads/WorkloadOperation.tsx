@@ -28,6 +28,8 @@ export function WorkloadOperation({
 }) {
   const kind = group.kind;
   const isInvokable = ["function", "endpoint", "asgi"].includes(kind);
+  // A schedule is a property of the workload, not a kind of it.
+  const isScheduled = Boolean(group.latest.spec?.cron);
 
   return (
     <div className="grid grid-cols-1 divide-y divide-border/80 lg:grid-cols-[minmax(0,1fr)_minmax(24rem,1.35fr)] lg:divide-x lg:divide-y-0">
@@ -39,7 +41,7 @@ export function WorkloadOperation({
             This version is stopped and is not accepting requests.
           </div>
         ) : null}
-        {kind === "cron-job" ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
+        {isScheduled ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
         {kind === "pod" ? <PodFacts deployment={deployment} /> : null}
         {(kind === "endpoint" || kind === "asgi") && (
           <HttpFacts deployment={deployment} isPublic={isPublic} />

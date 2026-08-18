@@ -69,3 +69,22 @@ alternative was a cancel that did not cancel.
 Per-invocation cancellation is what would make it cheap, and it is reachable —
 outside `in_process`, every invocation already has its own process. It needs a
 control-plane-to-container signal that does not exist yet.
+
+## A schedule is a property, not a kind
+
+`@app.function(cron=...)` is the only way to declare one, and a scheduled
+function is a function in every other respect: the same stub kind, the same
+invoke path, the same claim, the same retries. What a schedule changes is that
+something other than a caller starts the work.
+
+Two consequences follow from that and nothing else does. Its containers keep no
+idle window by default, because the next run is usually further away than any
+window worth paying for. And a run that has already fired can outlive the
+deployment that scheduled it, so it is cancelled when that deployment has been
+stopped or deleted — every other invocation has a caller, and a caller cannot
+invoke something that is gone.
+
+There used to be a `CronJob` kind alongside `Function`. Fifteen places had to
+remember to name both, one of them an authorization set, and the autoscaler
+forgot — a schedule was the one function-shaped workload nothing would
+provision for.

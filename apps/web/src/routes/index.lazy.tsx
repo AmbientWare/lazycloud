@@ -81,7 +81,7 @@ const cronExample = `from lazycloud import App
 
 app = App("maintenance")
 
-@app.cron("0 2 * * *", retries=2)
+@app.function(cron="0 2 * * *", retries=2)
 def nightly_evals() -> dict:
     return evaluate_latest_release()`;
 

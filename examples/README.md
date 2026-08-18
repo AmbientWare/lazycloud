@@ -30,7 +30,7 @@ example directory.
 ## All Workloads
 
 `examples.all_workloads` is one app that makes every currently deployable
-workload kind visible in the dashboard: function, endpoint, ASGI, cron, and
+workload kind visible in the dashboard: function, endpoint, ASGI, and
 pod. It also creates an on-demand sandbox through the public SDK;
 sandboxes are not deployments.
 
@@ -64,7 +64,7 @@ uv run lazycloud run examples.all_workloads:run_endpoint 7 true
 uv run lazycloud run examples.all_workloads:run_asgi
 ```
 
-The cron runs once per minute after deployment. The pod is maintained by its
+The scheduled function runs once per minute after deployment. The pod is maintained by its
 deployment. The following commands create additional on-demand pod and sandbox
 containers when those inventory states are useful:
 
@@ -80,7 +80,7 @@ container bridge addresses.
 
 ## Cron Failure Acceptance
 
-`examples.cron_failure` is a disposable App for verifying Cron retry,
+`examples.cron_failure` is a disposable App for verifying scheduled-run retry,
 terminal failure, and deployment lifecycle behavior without adding a
 permanently failing schedule to the All Workloads App.
 
