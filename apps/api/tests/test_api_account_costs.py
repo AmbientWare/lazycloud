@@ -114,8 +114,7 @@ def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
     )
     assert body["workspace_id"] == "", "an account-wide page named one of its workspaces"
     assert [(row["workspace_id"], row["cost_nanos"]) for row in body["data"]] == [(held, 300)], (
-        "an account page's rows no longer name the workspace each cost arose in: "
-        f"{body['data']}"
+        f"an account page's rows no longer name the workspace each cost arose in: {body['data']}"
     )
 
 
