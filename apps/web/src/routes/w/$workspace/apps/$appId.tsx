@@ -58,13 +58,13 @@ function AppDetailPage() {
       <WorkspacePage
         title={app.data ? app.data.name : <Skeleton className="h-6 w-48" aria-hidden="true" />}
         description={
-          app.isError ? null : (
+          app.data && deployments.data ? (
             <AppDetailFacts
               latestDeployment={latestDeployment}
               workloadCount={workloadGroups.length}
               activeWorkloads={activeWorkloads}
             />
-          )
+          ) : null
         }
         actions={
           app.data ? (

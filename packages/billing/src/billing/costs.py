@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from types import MappingProxyType
 
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import (
@@ -16,6 +15,7 @@ from database.repositories.billing_costs import (
     BillingLedgerCostRepository,
     LedgerCostCursor,
     LedgerCostRow,
+    LedgerCostScope,
 )
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.orchestration import ContainerRepository
@@ -33,7 +33,8 @@ MAX_COST_PAGE = 200
 MAX_COST_WINDOW_DAYS = 400
 """The longest window a single request may total.
 
-A cost window is scanned over an index on `(workspace_id, segment_started_at)`,
+A cost window is scanned over an index leading with the scope it was asked at —
+`(workspace_id, segment_started_at)` or `(owner_user_id, segment_started_at)` —
 so an unbounded one is a full-table read somebody can ask for by editing a URL.
 Just over a year, which covers every period anybody has a reason to look at.
 """
@@ -224,11 +225,11 @@ class UsageCostService:
     segments already carry the frozen cost, the quantity and the components, so
     the dashboard and the invoice are summing the same rows.
 
-    Scoped by a set of workspaces rather than one, because the same question is
-    asked at two levels: a workspace looking at its own spend, and an account
-    looking at every workspace it is invoiced for together. One query answers
-    both, so the total on the billing page and the total on a workspace page
-    cannot drift into two calculations that have to agree.
+    Takes a scope rather than a workspace, because the same question is asked at
+    two levels: a workspace looking at what was spent in it, and an account
+    looking at what it is invoiced for. One query answers both, so the total on
+    the billing page and the total on a workspace page cannot drift into two
+    calculations that have to agree.
     """
 
     session: Session
@@ -236,21 +237,20 @@ class UsageCostService:
     def costs(
         self,
         *,
-        workspace_ids: Sequence[str],
+        scope: LedgerCostScope,
         start: datetime,
         end: datetime,
         group_by: UsageCostGroupKey,
         limit: int,
-        workspace_names: Mapping[str, str] = MappingProxyType({}),
         app_id: str | None = None,
         workload_id: str | None = None,
         cursor: str | None = None,
     ) -> UsageCostPage:
-        """One page of what these workspaces spent, and what the whole window cost.
+        """One page of what this scope spent, and what the whole window cost.
 
-        `workspace_names` is what the caller already knows each workspace is
-        called, so a scope resolved from membership rows is not looked up a
-        second time to label the rows it produced.
+        Rows carry the workspace they were incurred in whatever the scope was, so
+        an account page groups and labels by workspace without the scope having
+        enumerated any.
         """
 
         _checked_window(start, end)
@@ -258,19 +258,18 @@ class UsageCostService:
             raise InvalidInputError(f"a cost page holds between 1 and {MAX_COST_PAGE} rows")
         repository = BillingLedgerCostRepository(self.session)
         page = repository.page(
-            workspace_ids=workspace_ids,
+            scope=scope,
             start=start,
             end=end,
             group_by=group_by,
             limit=limit,
-            workspace_names=workspace_names,
             app_id=app_id,
             workload_id=workload_id,
             cursor=_decode_cursor(cursor),
         )
         return UsageCostPage(
             cost_nanos=repository.window_cost_nanos(
-                workspace_ids=workspace_ids,
+                scope=scope,
                 start=start,
                 end=end,
                 app_id=app_id,
@@ -283,7 +282,7 @@ class UsageCostService:
     def series(
         self,
         *,
-        workspace_ids: Sequence[str],
+        scope: LedgerCostScope,
         start: datetime,
         end: datetime,
         bucket: UsageCostBucket,
@@ -311,7 +310,7 @@ class UsageCostService:
             )
         totals: dict[int, list[UsageCostDimensionTotal]] = {}
         for row in BillingLedgerCostRepository(self.session).bucket_totals(
-            workspace_ids=workspace_ids,
+            scope=scope,
             start=start,
             end=end,
             width_seconds=int(width.total_seconds()),

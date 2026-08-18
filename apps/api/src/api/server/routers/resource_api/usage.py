@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from billing.costs import MAX_COST_PAGE, UsageCostService
+from database.repositories.billing_costs import WorkspaceCostScope
 from fastapi import APIRouter, Depends, Query
 from shared.http.usage import (
     UsageAggregationResponse,
@@ -45,11 +46,18 @@ def usage_costs(
     Read from the priced ledger, which is the same set of rows the provider is
     metered from — so the figure here and the figure on an invoice are one
     total summed twice rather than two calculations that have to agree.
+
+    Scoped by where the cost arose and not by who is invoiced for it, which is
+    the opposite of the account total under `/api/v1/billing`. A workspace costs
+    what it costs to everyone who reaches it, and the token that reaches this
+    names a workspace rather than a person — filtering it by payer would answer
+    a member asking what this workspace spent with what they personally owe for
+    it, which is nothing.
     """
 
     with services.context.database.session() as session:
         page = UsageCostService(session).costs(
-            workspace_ids=[workspace_id],
+            scope=WorkspaceCostScope((workspace_id,)),
             start=start,
             end=end,
             group_by=group_by,

@@ -4,7 +4,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from types import MappingProxyType
 
 from database.repositories.common import bucket_index, names_by_id
 from database.tables.apps import AppTable, StubTable
@@ -48,6 +47,35 @@ Workspace leads every level because a page may cover several. Grouped by app
 alone, usage that reached no app carries an empty `app_id` — real, and the same
 empty key in every workspace, so two accounts' unattributed spend would sum into
 one row that names neither."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceCostScope:
+    """The cost incurred in these workspaces, whoever is invoiced for it."""
+
+    workspace_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PayerCostScope:
+    """The cost one account is invoiced for, wherever it was incurred.
+
+    `owner_user_id` is on the row to answer exactly this. Reaching the same
+    question through workspace membership instead puts the spend of every
+    workspace a person was added to onto their own reading of their bill, and
+    drops the workspaces they pay for but no longer belong to.
+    """
+
+    owner_user_id: str
+
+
+type LedgerCostScope = WorkspaceCostScope | PayerCostScope
+"""Which rows an answer covers.
+
+The two are alternatives rather than filters that combine: where the cost arose
+and who is invoiced for it are separate facts, and an account's total is not the
+total of the workspaces it can reach.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +182,10 @@ class BillingLedgerCostRepository:
     summed on different columns, and summing them anywhere else would be a second
     answer to what something cost or used.
 
+    The first two differ only in their scope, and `LedgerCostScope` is where that
+    difference is stated once: a workspace surface asks what a place cost, and an
+    account surface asks what a payer owes.
+
     Reads `billing_ledger_segments` and nothing else. The ledger is append-only
     and already carries the attribution, the component and the quantity each
     segment was priced from, so answering "which app cost what" needs no join and
@@ -174,7 +206,7 @@ class BillingLedgerCostRepository:
     def window_cost_nanos(
         self,
         *,
-        workspace_ids: Sequence[str],
+        scope: LedgerCostScope,
         start: datetime,
         end: datetime,
         app_id: str | None = None,
@@ -183,7 +215,7 @@ class BillingLedgerCostRepository:
         total = self.session.scalars(
             select(func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0)).where(
                 *_window(
-                    workspace_ids=workspace_ids,
+                    scope=scope,
                     start=start,
                     end=end,
                     app_id=app_id,
@@ -196,7 +228,7 @@ class BillingLedgerCostRepository:
     def bucket_totals(
         self,
         *,
-        workspace_ids: Sequence[str],
+        scope: LedgerCostScope,
         start: datetime,
         end: datetime,
         width_seconds: int,
@@ -223,7 +255,7 @@ class BillingLedgerCostRepository:
             )
             .where(
                 *_window(
-                    workspace_ids=workspace_ids,
+                    scope=scope,
                     start=start,
                     end=end,
                     app_id=None,
@@ -281,7 +313,7 @@ class BillingLedgerCostRepository:
             )
             .where(
                 *_window(
-                    workspace_ids=workspace_ids,
+                    scope=WorkspaceCostScope(tuple(workspace_ids)),
                     start=start,
                     end=end,
                     app_id=None,
@@ -337,12 +369,11 @@ class BillingLedgerCostRepository:
     def page(
         self,
         *,
-        workspace_ids: Sequence[str],
+        scope: LedgerCostScope,
         start: datetime,
         end: datetime,
         group_by: UsageCostGroupKey,
         limit: int,
-        workspace_names: Mapping[str, str] = MappingProxyType({}),
         app_id: str | None = None,
         workload_id: str | None = None,
         cursor: LedgerCostCursor | None = None,
@@ -356,7 +387,7 @@ class BillingLedgerCostRepository:
             )
             .where(
                 *_window(
-                    workspace_ids=workspace_ids,
+                    scope=scope,
                     start=start,
                     end=end,
                     app_id=app_id,
@@ -375,7 +406,7 @@ class BillingLedgerCostRepository:
         found = self.session.execute(statement).all()
         keys = [tuple(str(value) for value in row[: len(columns)]) for row in found[:limit]]
         components = self._components(
-            workspace_ids=workspace_ids,
+            scope=scope,
             start=start,
             end=end,
             columns=columns,
@@ -383,7 +414,7 @@ class BillingLedgerCostRepository:
             app_id=app_id,
             workload_id=workload_id,
         )
-        names = self._names(keys, workspace_names=workspace_names)
+        names = self._names(keys)
         rows = tuple(
             _cost_row(
                 key=key,
@@ -405,7 +436,7 @@ class BillingLedgerCostRepository:
     def _components(
         self,
         *,
-        workspace_ids: Sequence[str],
+        scope: LedgerCostScope,
         start: datetime,
         end: datetime,
         columns: tuple[InstrumentedAttribute[str], ...],
@@ -434,7 +465,7 @@ class BillingLedgerCostRepository:
             )
             .where(
                 *_window(
-                    workspace_ids=workspace_ids,
+                    scope=scope,
                     start=start,
                     end=end,
                     app_id=app_id,
@@ -465,12 +496,7 @@ class BillingLedgerCostRepository:
             )
         return {key: tuple(values) for key, values in totals.items()}
 
-    def _names(
-        self,
-        keys: Sequence[tuple[str, ...]],
-        *,
-        workspace_names: Mapping[str, str],
-    ) -> _ResolvedNames:
+    def _names(self, keys: Sequence[tuple[str, ...]]) -> _ResolvedNames:
         """Human names for the ids the page carries.
 
         Resolved here rather than in the browser: a customer surface speaks in
@@ -479,25 +505,20 @@ class BillingLedgerCostRepository:
         been deleted — the cost stays, and the row says so by carrying an id and
         no name rather than inventing one.
 
-        `workspace_names` carries the ones a caller already read. An account-wide
-        page resolved its scope from the membership rows naming the workspaces,
-        so asking for those same names again would be a second answer to which
-        workspaces the page covers.
+        Workspace names come from the rows the page produced rather than from
+        anything the scope enumerated: a page scoped to a payer names no
+        workspaces at all, and one workspace it covers may be one nobody
+        belongs to any more.
         """
 
         workspace_ids = {key[0] for key in keys if key[0]}
         app_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
         workload_ids = {key[2] for key in keys if len(key) > 2 and key[2]}
-        workspaces = {
-            workspace_id: workspace_names[workspace_id]
-            for workspace_id in workspace_ids
-            if workspace_id in workspace_names
-        }
-        workspaces |= names_by_id(
+        workspaces = names_by_id(
             self.session,
             WorkspaceTable.id,
             WorkspaceTable.name,
-            workspace_ids - set(workspaces),
+            workspace_ids,
         )
         apps = names_by_id(self.session, AppTable.id, AppTable.name, app_ids)
         workloads = (
@@ -545,14 +566,14 @@ def _after(
 
 def _window(
     *,
-    workspace_ids: Sequence[str],
+    scope: LedgerCostScope,
     start: datetime,
     end: datetime,
     app_id: str | None,
     workload_id: str | None,
 ) -> tuple[ColumnElement[bool], ...]:
     predicates: tuple[ColumnElement[bool], ...] = (
-        BillingLedgerSegmentTable.workspace_id.in_(workspace_ids),
+        _scope(scope),
         BillingLedgerSegmentTable.segment_started_at >= start,
         BillingLedgerSegmentTable.segment_started_at < end,
     )
@@ -561,6 +582,12 @@ def _window(
     if workload_id is not None:
         predicates = (*predicates, BillingLedgerSegmentTable.workload_id == workload_id)
     return predicates
+
+
+def _scope(scope: LedgerCostScope) -> ColumnElement[bool]:
+    if isinstance(scope, PayerCostScope):
+        return BillingLedgerSegmentTable.owner_user_id == scope.owner_user_id
+    return BillingLedgerSegmentTable.workspace_id.in_(scope.workspace_ids)
 
 
 def _cost_row(
@@ -596,4 +623,7 @@ __all__ = [
     "LedgerCostCursor",
     "LedgerCostPage",
     "LedgerCostRow",
+    "LedgerCostScope",
+    "PayerCostScope",
+    "WorkspaceCostScope",
 ]

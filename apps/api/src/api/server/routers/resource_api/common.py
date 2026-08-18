@@ -33,10 +33,15 @@ def _management(services: ApiServices) -> ManagementService:
 def member_workspaces(services: ApiServices, user_id: str) -> dict[str, str]:
     """Every workspace this person reaches, and what each is called.
 
-    The whole scope of an account-wide answer, resolved from the membership rows
-    naming the workspaces rather than from anything a request supplied: a total
-    or a reading assembled from ids a caller named would be a total of whatever
-    it asked for. Ids are `list(mapping)`.
+    The scope of an account-wide *reading*, resolved from the membership rows
+    naming the workspaces rather than from anything a request supplied: a
+    reading assembled from ids a caller named would be a reading of whatever it
+    asked for. Ids are `list(mapping)`.
+
+    Membership because the question these answer is what somebody is allowed to
+    watch, which is not what they are billed for. An account's money is scoped
+    by the payer on the ledger row instead, and the two scopes are deliberately
+    different sets.
 
     Names come off the same read that decides the scope, because a row names the
     workspace it belongs to and looking those names up separately would be a
@@ -67,8 +72,8 @@ def usage_cost_list_response(
     """One page of priced ledger rows, as the wire shape.
 
     Shared because the same page is asked for at two scopes — one workspace, and
-    every workspace an account is invoiced for — and a second copy of this
-    mapping is how one scope quietly stops carrying a field the other gained.
+    one payer's whole account — and a second copy of this mapping is how one
+    scope quietly stops carrying a field the other gained.
     """
 
     return UsageCostListResponse(

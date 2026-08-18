@@ -40,11 +40,14 @@ export function LatencyPanel({
   error: Error | null;
   kind: string;
 }) {
-  if (pending || !buckets) {
-    return <LatencySkeleton />;
-  }
+  // The failure is read before the absence it causes: the caller keeps this
+  // panel mounted on error and has no buckets to pass, so a skeleton checked
+  // first is a load that never finishes in place of the reason it did not.
   if (error) {
     return <PanelError message={error.message} layout="centered" />;
+  }
+  if (pending || !buckets) {
+    return <LatencySkeleton />;
   }
 
   const tasks = buckets.reduce((total, bucket) => total + bucket.count, 0);

@@ -125,7 +125,7 @@ function WorkloadDetailPage() {
               v{current.version}
             </span>,
             isPublic ? "Public" : "Token required",
-            countLabel(runningContainers.length, "running", "running"),
+            containers.data ? countLabel(runningContainers.length, "running", "running") : null,
           ]}
         />
       }

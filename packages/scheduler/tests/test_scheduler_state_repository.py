@@ -812,14 +812,20 @@ def test_scheduler_worker_repository_requeues_expired_worker_requests(
     assert requeued.retry_count == 1
 
 
-def test_expired_worker_requeues_delivered_requests_but_not_started_containers(
+def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_on(
     real_redis_actors: _RealRedisActors,
 ) -> None:
     """A gone worker's in-flight requests come back, except the ones it already ran.
 
-    Reclaim is bound to the worker's keepalive rather than a clock of its own, and
-    a delivered request whose container reads `running` was acted on: requeueing
-    it would start a second container for one durable row.
+    Reclaim is bound to the worker's keepalive rather than a clock of its own,
+    and a delivered request whose container has left `pending` was acted on:
+    requeueing it would start a second container for one durable row.
+
+    A container that has already finished counts exactly as much as one still
+    running. A worker whose acknowledgements fail long enough gives up on them
+    while the work runs to completion, so the request stays recorded in flight
+    and its container reaches a terminal status — the state that reads as
+    "never started" if only `running` is checked, and runs the work twice.
     """
 
     redis = real_redis_actors.client()
@@ -863,13 +869,14 @@ def test_expired_worker_requeues_delivered_requests_but_not_started_containers(
         )
         assert workers.get_next_container_request("worker-1") == request
         assert workers.acknowledge_worker_request("worker-1", request.container_id)
-    # Both are delivered again; only the second reaches a container.
+    # Both are delivered again; only the first is handed out, and its container
+    # runs to completion while the acknowledgement never lands.
     for request in delivered:
         workers.enqueue_worker_request("worker-1", request)
     assert workers.get_next_container_request("worker-1") == delivered[0]
     containers.update_container_status(
         "container-1",
-        SchedulerContainerStatus.Running,
+        SchedulerContainerStatus.Complete,
     )
 
     redis.delete(workers.keys.worker_state("worker-1"))

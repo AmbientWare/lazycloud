@@ -294,7 +294,12 @@ for index = 1, request_count do
     redis.call("LREM", KEYS[7], 0, request_id)
     redis.call("HDEL", KEYS[3], request_id)
     local cancelled = redis.call("EXISTS", KEYS[7 + index]) == 1
-    local started = redis.call("HGET", KEYS[7 + request_count + index], "status") == ARGV[11]
+    -- Any status but pending: a worker acted on this request, and whether the
+    -- container is still running or has already finished, requeueing it now
+    -- would run the work a second time. A missing hash is a request nothing
+    -- acted on, which `false` reports as not started.
+    local status = redis.call("HGET", KEYS[7 + request_count + index], "status")
+    local started = status and status ~= ARGV[11]
     if not cancelled and not started then
         redis.call("HSET", KEYS[5], request_id, payload)
         redis.call("ZADD", KEYS[4], ARGV[9], request_id)
@@ -1012,7 +1017,7 @@ class RedisSchedulerWorkerRepository:
                     current_worker_fields["machine_id"] if operation.machine_id else "",
                     now.timestamp(),
                     DEFAULT_CONTAINER_CANCELLATION_TTL_SECONDS,
-                    redis_serialization.dumps_field(SchedulerContainerStatus.Running.value),
+                    redis_serialization.dumps_field(SchedulerContainerStatus.Pending.value),
                     *request_args,
                 )
             )
@@ -1630,11 +1635,11 @@ class RedisSchedulerWorkerRepository:
         """Return a gone worker's requests to the ready queue.
 
         A queued request was never handed out, so it is requeued outright. A
-        delivered one may already have become a container: the worker is the only
-        party that writes `running`, and a dispatch resets the state to `pending`
-        before the request is queued, so a delivered request whose container reads
-        `running` was acted on. Requeueing that would start a second container for
-        one durable row, and the row is already the orphan reconciler's.
+        delivered one may already have become a container: a dispatch resets the
+        state to `pending` before the request is queued, and only a worker moves
+        it off that, so a delivered request whose container has left `pending`
+        was acted on. Requeueing that would start a second container for one
+        durable row, and the row is already the orphan reconciler's.
         """
 
         request_ids: list[str] = []
@@ -1650,10 +1655,20 @@ class RedisSchedulerWorkerRepository:
         return request_ids
 
     def _container_started(self, container_id: str) -> bool:
+        """Whether a worker has acted on this request.
+
+        Every status but `pending` counts, terminal ones included. A worker whose
+        acknowledgements failed long enough to be abandoned leaves a container
+        that ran to completion behind a request still recorded in flight, and
+        reading only `running` as started requeues that one and runs its work
+        again. A container state that has expired or was never written is a
+        request nothing acted on.
+        """
+
         raw = self.redis.hash_get(self.keys.container_state(container_id), "status")
         if raw is None:
             return False
-        return redis_serialization.loads_field(raw) == SchedulerContainerStatus.Running.value
+        return redis_serialization.loads_field(raw) != SchedulerContainerStatus.Pending.value
 
     def is_container_cancelled(self, container_id: str) -> bool:
         return bool(self.redis.exists(self.keys.container_cancellation(container_id)))

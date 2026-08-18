@@ -5,7 +5,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from database.repositories.billing_costs import BillingLedgerCostRepository, LedgerCostCursor
+from database.repositories.billing_costs import (
+    BillingLedgerCostRepository,
+    LedgerCostCursor,
+    WorkspaceCostScope,
+)
 from database.repositories.billing_rates import PlatformRateRepository
 from shared.http.usage import UsageCostGroupKey
 from shared.timestamps import utc_now
@@ -73,7 +77,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     while True:
         with isolated_services.context.database.session() as session:
             page = BillingLedgerCostRepository(session).page(
-                workspace_ids=[workspace_id],
+                scope=WorkspaceCostScope((workspace_id,)),
                 start=started_at - _WINDOW,
                 end=ended_at + _WINDOW,
                 group_by=UsageCostGroupKey.Task,
