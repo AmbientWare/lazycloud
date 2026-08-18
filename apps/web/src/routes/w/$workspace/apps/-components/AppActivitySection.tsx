@@ -1,4 +1,5 @@
 import { Panel } from "@/components/shared/Panel";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { TaskTimeWindowBucket } from "@/lib/api/schemas";
 import { cn } from "@/lib/utils";
@@ -8,10 +9,12 @@ import { appRunActivity } from "./app-activity-buckets";
 
 export function AppActivitySection({
   buckets,
+  runningContainers,
   pending,
   error,
 }: {
   buckets: TaskTimeWindowBucket[] | undefined;
+  runningContainers: number;
   pending: boolean;
   error: string | undefined;
 }) {
@@ -55,11 +58,16 @@ export function AppActivitySection({
               <span className="text-xs text-muted-foreground">Tasks</span>
               <span
                 className={cn(
-                  "ml-auto text-xs",
+                  "text-xs",
                   activity.failed > 0 ? "text-destructive" : "text-muted-foreground",
                 )}
               >
                 {activity.failed.toLocaleString()} failed
+              </span>
+              {/* Counted now, not over the window the figures beside it cover —
+                  labelled "running" rather than given the same 24-hour framing. */}
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                {countLabel(runningContainers, "container")} running
               </span>
             </div>
             <ActivitySparkline
