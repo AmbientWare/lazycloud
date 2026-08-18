@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -342,22 +343,30 @@ class ContainerRepository:
             or 0
         )
 
-    def live_counts_for_workspace(self, *, workspace_id: str) -> dict[ContainerStatus, int]:
-        """What this workspace is holding right now, per live status.
+    def live_counts_for_workspaces(
+        self, *, workspace_ids: Sequence[str]
+    ) -> dict[ContainerStatus, int]:
+        """What these workspaces are holding right now, per live status.
 
         Restricted to the live statuses so the partial workspace index answers
-        it. Counting every status instead would scan the workspace's whole
-        history to report a figure about the present, and get slower every day
-        the workspace is used.
+        it. Counting every status instead would scan their whole history to
+        report a figure about the present, and get slower every day they are
+        used.
 
-        A status the workspace holds none of is absent rather than zero; the
-        caller names the statuses it renders.
+        Summed across the set rather than reported per workspace: the reader is
+        an account, and which of its workspaces a running container sits in is a
+        question the app breakdown answers rather than this one.
+
+        A status none of them holds is absent rather than zero; the caller names
+        the statuses it renders.
         """
 
+        if not workspace_ids:
+            return {}
         rows = self.session.execute(
             select(ContainerTable.status, func.count(ContainerTable.id))
             .where(
-                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.workspace_id.in_(workspace_ids),
                 ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
             )
             .group_by(ContainerTable.status)

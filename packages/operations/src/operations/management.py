@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,10 +21,12 @@ from control.service import ControlPlaneService, StubKind, StubRecord
 from database.context import ServiceContext
 from database.records.apps import AppRecord
 from database.repositories.apps import (
-    AppActivityCountResult,
+    ActivityStartSource,
+    AppRepository,
     AppSummaryRepository,
     DeploymentRepository,
 )
+from database.repositories.billing_costs import BillingLedgerCostRepository
 from database.repositories.execution import (
     LogRepository,
     RelatedTaskRecord,
@@ -43,6 +45,7 @@ from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
 from pydantic import Field
+from shared.billing_quotes import LedgerComponent
 from shared.container_requests import ContainerShutdownTarget, WorkerStartupKind
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -51,12 +54,14 @@ from shared.deployments import DeploymentKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.client_manifests import INVOKABLE_DEPLOYMENT_KINDS, ClientManifestResource
 from shared.http.observability import (
+    ACTIVITY_MEASURE_UNITS,
+    AccountActivityMeasure,
+    AccountActivitySeriesKind,
+    AccountActivityUnit,
     EventQueryResponse,
     LogObjectType,
     LogQueryResponse,
     LogRecord,
-    WorkspaceActivityMeasure,
-    WorkspaceActivitySeriesKind,
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
@@ -183,33 +188,53 @@ nothing can draw and a query nothing can serve.
 """
 
 
-class WorkspaceContainerCounts(ContractModel):
-    workspace_id: str
+class AccountContainerCounts(ContractModel):
     pending: int = 0
     running: int = 0
 
 
-class WorkspaceActivityBucket(ContractModel):
+class AccountActivityBucket(ContractModel):
     timestamp: datetime
-    count: int = 0
+    value: float = 0.0
 
 
-class WorkspaceActivitySeries(ContractModel):
-    kind: WorkspaceActivitySeriesKind
+class AccountActivitySeries(ContractModel):
+    kind: AccountActivitySeriesKind
+    workspace_id: str = ""
+    workspace_name: str = ""
     app_id: str = ""
     app_name: str = ""
-    total: int = 0
-    buckets: tuple[WorkspaceActivityBucket, ...] = ()
+    total: float = 0.0
+    buckets: tuple[AccountActivityBucket, ...] = ()
 
 
-class WorkspaceActivity(ContractModel):
-    workspace_id: str
-    measure: WorkspaceActivityMeasure
+class AccountActivity(ContractModel):
+    measure: AccountActivityMeasure
+    unit: AccountActivityUnit
     window_seconds: int
     start: datetime
     end: datetime
-    total: int = 0
-    series: tuple[WorkspaceActivitySeries, ...] = ()
+    total: float = 0.0
+    series: tuple[AccountActivitySeries, ...] = ()
+
+
+_START_SOURCES: Mapping[AccountActivityMeasure, ActivityStartSource] = {
+    AccountActivityMeasure.Containers: ActivityStartSource.Containers,
+    AccountActivityMeasure.Tasks: ActivityStartSource.Tasks,
+}
+
+_HELD_COMPONENTS: Mapping[AccountActivityMeasure, LedgerComponent] = {
+    AccountActivityMeasure.Cpu: LedgerComponent.Cpu,
+    AccountActivityMeasure.Memory: LedgerComponent.Memory,
+    AccountActivityMeasure.Gpu: LedgerComponent.Gpu,
+}
+"""Which priced resource each held measure reads.
+
+The ledger is the only place a workspace's processor, memory and card capacity is
+recorded per app and per instant, and it is the record the customer is charged
+from — so a chart drawn from anything else would be a second answer to what an
+app used, differing from the invoice.
+"""
 
 
 class AppOperationalSummary(ContractModel):
@@ -385,85 +410,121 @@ def _local_package_path(path: str) -> Path | None:
 
 @dataclass(slots=True)
 class _ActivityGroup:
-    kind: WorkspaceActivitySeriesKind
+    kind: AccountActivitySeriesKind
+    workspace_id: str
     app_id: str
-    app_name: str
-    counts: list[int]
+    values: list[float]
 
 
-def _workspace_activity_series(
-    rows: tuple[AppActivityCountResult, ...],
+def _account_activity_series(
+    amounts: Mapping[tuple[str, str], list[float]],
     *,
+    workspace_names: Mapping[str, str],
+    app_names: Mapping[str, str],
     start: datetime,
     window_seconds: int,
-    bucket_count: int,
+    bucket_divisors: Sequence[float],
+    window_divisor: float,
     limit: int,
-) -> tuple[WorkspaceActivitySeries, ...]:
-    """Sparse per-app counts as dense series, capped at what a reader was asked for.
+) -> tuple[AccountActivitySeries, ...]:
+    """Dense per-app readings, capped at what a reader was asked for.
 
     Everything past the cap is summed into one `Other` series rather than
-    dropped, so the stacks a reader sees still add up to the window they are
-    told they are looking at.
+    dropped, so the stacks a reader sees still add up to the window they are told
+    they are looking at.
+
+    Amounts arrive undivided, and the window total divides their sum by the whole
+    span rather than adding up the intervals' own levels: a level already divided
+    once by the seconds its interval covers cannot be divided again, and averaging
+    the intervals as equals would weight the one in progress like a whole hour.
     """
 
-    groups: dict[str, _ActivityGroup] = {}
-    for row in rows:
-        if row.index < 0 or row.index >= bucket_count:
-            continue
-        app_id = row.app_id or ""
-        group = groups.get(app_id)
-        if group is None:
-            group = _ActivityGroup(
-                kind=(
-                    WorkspaceActivitySeriesKind.App
-                    if app_id
-                    else WorkspaceActivitySeriesKind.Unassigned
-                ),
-                app_id=app_id,
-                app_name=row.app_name or "",
-                counts=[0] * bucket_count,
-            )
-            groups[app_id] = group
-        group.counts[row.index] += row.count
-
+    groups = [
+        _ActivityGroup(
+            kind=(
+                AccountActivitySeriesKind.App if app_id else AccountActivitySeriesKind.Unassigned
+            ),
+            workspace_id=workspace_id,
+            app_id=app_id,
+            values=readings,
+        )
+        for (workspace_id, app_id), readings in amounts.items()
+    ]
     ordered = sorted(
-        groups.values(),
-        key=lambda group: (-sum(group.counts), group.app_name, group.app_id),
+        groups,
+        key=lambda group: (
+            -sum(group.values),
+            app_names.get(group.app_id, ""),
+            group.workspace_id,
+            group.app_id,
+        ),
     )
     series = [
-        WorkspaceActivitySeries(
+        AccountActivitySeries(
             kind=group.kind,
+            workspace_id=group.workspace_id,
+            workspace_name=workspace_names.get(group.workspace_id, ""),
             app_id=group.app_id,
-            app_name=group.app_name,
-            total=sum(group.counts),
-            buckets=_activity_buckets(group.counts, start, window_seconds),
+            app_name=app_names.get(group.app_id, ""),
+            total=sum(group.values) / window_divisor,
+            buckets=_activity_buckets(group.values, start, window_seconds, bucket_divisors),
         )
         for group in ordered[:limit]
     ]
     folded = ordered[limit:]
     if folded:
-        counts = [sum(values) for values in zip(*(group.counts for group in folded), strict=True)]
+        columns = zip(*(group.values for group in folded), strict=True)
+        summed = [sum(readings) for readings in columns]
         series.append(
-            WorkspaceActivitySeries(
-                kind=WorkspaceActivitySeriesKind.Other,
-                total=sum(counts),
-                buckets=_activity_buckets(counts, start, window_seconds),
+            AccountActivitySeries(
+                kind=AccountActivitySeriesKind.Other,
+                total=sum(summed) / window_divisor,
+                buckets=_activity_buckets(summed, start, window_seconds, bucket_divisors),
             )
         )
     return tuple(series)
 
 
 def _activity_buckets(
-    counts: list[int],
+    amounts: Sequence[float],
     start: datetime,
     window_seconds: int,
-) -> tuple[WorkspaceActivityBucket, ...]:
+    divisors: Sequence[float],
+) -> tuple[AccountActivityBucket, ...]:
+    """One reading per interval, each divided by the span it stands for.
+
+    A divisor of zero is an interval nothing can have happened in yet, so it
+    reads as zero rather than as an amount over no time at all.
+    """
+
     return tuple(
-        WorkspaceActivityBucket(
+        AccountActivityBucket(
             timestamp=start + timedelta(seconds=window_seconds * index),
-            count=count,
+            value=amount / divisors[index] if divisors[index] > 0 else 0.0,
         )
-        for index, count in enumerate(counts)
+        for index, amount in enumerate(amounts)
+    )
+
+
+def _covered_seconds(
+    *,
+    start: datetime,
+    measured_through: datetime,
+    window_seconds: int,
+    bucket_count: int,
+) -> tuple[float, ...]:
+    """How many seconds of each interval the window actually covers.
+
+    Every interval but the last covers its whole width. The last one is the
+    interval in progress: dividing a level by the width of an interval only part
+    of which has happened reads the newest point — the one somebody opens this to
+    look at — at a fraction of the level actually held.
+    """
+
+    measured = (measured_through - start).total_seconds()
+    return tuple(
+        min(max(measured - window_seconds * index, 0.0), float(window_seconds))
+        for index in range(bucket_count)
     )
 
 
@@ -1124,36 +1185,39 @@ class ManagementService:
             for timestamp, counter in sorted(buckets.items())
         )
 
-    def workspace_container_counts(self, workspace: str) -> WorkspaceContainerCounts:
-        """What this workspace is holding right now, per live status.
+    def account_container_counts(self, *, workspace_ids: Sequence[str]) -> AccountContainerCounts:
+        """What this account is holding right now, per live status.
 
-        Workspace-scoped on purpose. The concurrency ceiling an account is
-        refused against spans every workspace it owns, so that figure and this
-        one answer different questions and neither stands in for the other.
+        Account-scoped on purpose, and the caller resolves the set from
+        membership: the concurrency ceiling somebody is refused against spans an
+        account, so a figure covering one workspace would be read against a limit
+        it is not counted for.
         """
 
-        workspace_record = self.control_plane.get_workspace(workspace)
         with self.services.context.database.session() as session:
-            counts = ContainerRepository(session).live_counts_for_workspace(
-                workspace_id=workspace_record.id
+            counts = ContainerRepository(session).live_counts_for_workspaces(
+                workspace_ids=workspace_ids
             )
-        return WorkspaceContainerCounts(
-            workspace_id=workspace_record.id,
+        return AccountContainerCounts(
             pending=counts.get(ContainerStatus.Pending, 0),
             running=counts.get(ContainerStatus.Running, 0),
         )
 
-    def workspace_activity(
+    def account_activity(
         self,
-        workspace: str,
         *,
-        measure: WorkspaceActivityMeasure = WorkspaceActivityMeasure.Containers,
+        workspaces: Mapping[str, str],
+        measure: AccountActivityMeasure = AccountActivityMeasure.Containers,
         window_seconds: int = 3600,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 5,
-    ) -> WorkspaceActivity:
-        """A workspace's starts over a window, split by the app they belong to.
+    ) -> AccountActivity:
+        """An account's activity over a window, split by the app it belongs to.
+
+        `workspaces` maps every workspace the caller reaches to its name, and is
+        the whole scope of the answer — an account-wide reading assembled from
+        ids a request named would be a reading of whatever it asked for.
 
         Both ends are aligned to interval boundaries so the same wall-clock
         intervals come back on every read: unaligned, every refresh would slide
@@ -1161,9 +1225,14 @@ class ManagementService:
         not changed.
 
         Series are densified over the whole window here rather than in the
-        reader, because an interval a workspace started nothing in is a real
-        zero and a reader filling one in has no way to tell it from an interval
-        nobody measured.
+        reader, because an interval an account started nothing in is a real zero
+        and a reader filling one in has no way to tell it from an interval nobody
+        measured. A resource nothing was placed on reads the same way: a flat
+        zero band is the true answer, not an absent one.
+
+        A start is counted; a resource is a level, summed in the unit it was
+        priced in and divided by the seconds its interval covers. The two never
+        share a figure, and `unit` on the result is what says which one this is.
         """
 
         if window_seconds <= 0:
@@ -1172,9 +1241,8 @@ class ManagementService:
         if limit <= 0:
             msg = "limit must be greater than zero"
             raise InvalidInputError(msg)
-        aligned_end = _bucket_start(end or utc_now(), window_seconds) + timedelta(
-            seconds=window_seconds
-        )
+        now = utc_now()
+        aligned_end = _bucket_start(end or now, window_seconds) + timedelta(seconds=window_seconds)
         aligned_start = _bucket_start(
             start if start is not None else aligned_end - timedelta(seconds=window_seconds * 24),
             window_seconds,
@@ -1190,27 +1258,79 @@ class ManagementService:
             )
             raise InvalidInputError(msg)
 
-        workspace_record = self.control_plane.get_workspace(workspace)
-        with self.services.context.database.session() as session:
-            rows = AppSummaryRepository(session).activity_by_app(
-                workspace_id=workspace_record.id,
-                measure=measure,
+        unit = ACTIVITY_MEASURE_UNITS[measure]
+        counted = unit is AccountActivityUnit.Starts
+        workspace_ids = sorted(workspaces)
+        measured_through = min(aligned_end, now)
+        # A count belongs to its interval whole and is divided by nothing. A
+        # level is an amount over a span, so every reading of one is divided by
+        # the span it stands for: its interval, and for the window total the
+        # whole of it.
+        bucket_divisors = (
+            (1.0,) * bucket_count
+            if counted
+            else _covered_seconds(
                 start=aligned_start,
-                end=aligned_end,
+                measured_through=measured_through,
                 window_seconds=window_seconds,
+                bucket_count=bucket_count,
             )
-        return WorkspaceActivity(
-            workspace_id=workspace_record.id,
+        )
+        window_divisor = (
+            1.0 if counted else max((measured_through - aligned_start).total_seconds(), 1.0)
+        )
+
+        amounts: dict[tuple[str, str], list[float]] = {}
+        with self.services.context.database.session() as session:
+            # Two tables answer this, and which one is not a detail of the chart:
+            # a start is a row in the orchestration record, and a resource is a
+            # priced segment of the ledger. Both come back keyed by workspace and
+            # app together, because two workspaces may hold apps of the same name
+            # and neither may be merged into the other's band.
+            source = _START_SOURCES.get(measure)
+            readings: tuple[tuple[tuple[str, str], int, float], ...] = (
+                tuple(
+                    ((row.workspace_id, row.app_id or ""), row.index, float(row.count))
+                    for row in AppSummaryRepository(session).activity_by_app(
+                        workspace_ids=workspace_ids,
+                        source=source,
+                        start=aligned_start,
+                        end=aligned_end,
+                        window_seconds=window_seconds,
+                    )
+                )
+                if source is not None
+                else tuple(
+                    ((held.workspace_id, held.app_id), held.index, float(held.quantity))
+                    for held in BillingLedgerCostRepository(session).component_bucket_quantities(
+                        workspace_ids=workspace_ids,
+                        component=_HELD_COMPONENTS[measure],
+                        start=aligned_start,
+                        end=aligned_end,
+                        width_seconds=window_seconds,
+                    )
+                )
+            )
+            for key, index, amount in readings:
+                if index < 0 or index >= bucket_count:
+                    continue
+                amounts.setdefault(key, [0.0] * bucket_count)[index] += amount
+            app_names = AppRepository(session).names([app_id for _, app_id in amounts if app_id])
+        return AccountActivity(
             measure=measure,
+            unit=unit,
             window_seconds=window_seconds,
             start=aligned_start,
             end=aligned_end,
-            total=sum(row.count for row in rows),
-            series=_workspace_activity_series(
-                rows,
+            total=sum(sum(series) for series in amounts.values()) / window_divisor,
+            series=_account_activity_series(
+                amounts,
+                workspace_names=workspaces,
+                app_names=app_names,
                 start=aligned_start,
                 window_seconds=window_seconds,
-                bucket_count=bucket_count,
+                bucket_divisors=bucket_divisors,
+                window_divisor=window_divisor,
                 limit=limit,
             ),
         )

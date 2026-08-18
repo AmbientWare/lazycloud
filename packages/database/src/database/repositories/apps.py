@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -37,8 +38,8 @@ from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
+from shared.enums import StringEnum
 from shared.errors import ConflictError
-from shared.http.observability import WorkspaceActivityMeasure
 from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
 from sqlalchemy import Integer, and_, case, cast, delete, extract, func, or_, select
@@ -67,11 +68,28 @@ class AppTaskBucketResult(BaseModel):
     failed: int | None
 
 
-class AppActivityCountResult(BaseModel):
-    """One app's starts inside one interval of an activity window."""
+class ActivityStartSource(StringEnum):
+    """Which rows a start is counted from.
 
+    Owned here rather than taken from the HTTP measure a reader picked: only two
+    of those measures are starts at all, and a query that branched on the wider
+    enum would have to pick a table for a measure that names no table.
+    """
+
+    Containers = "containers"
+    Tasks = "tasks"
+
+
+class AppActivityCountResult(BaseModel):
+    """One app's starts inside one interval of an activity window.
+
+    Named by workspace and app together. An account reads several workspaces at
+    once and two of them may hold apps of the same name, and unattributed starts
+    carry no app id at all — the same absent key in every workspace.
+    """
+
+    workspace_id: str
     app_id: str | None = None
-    app_name: str | None = None
     index: int
     count: int
 
@@ -115,6 +133,22 @@ class AppRepository:
             statement = statement.where(AppTable.deleted_at.is_(None))
         row = self.session.scalars(statement).first()
         return app_record_from_table(row) if row is not None else None
+
+    def names(self, app_ids: Sequence[str]) -> dict[str, str]:
+        """What each of these apps is called, deleted ones included.
+
+        A deleted app keeps its name here because the work it did still happened
+        and still has to be labelled; a caller that finds an id missing from this
+        map has an id whose row is gone entirely, which is a different fact and
+        reads differently.
+        """
+
+        if not app_ids:
+            return {}
+        rows = self.session.execute(
+            select(AppTable.id, AppTable.name).where(AppTable.id.in_(set(app_ids)))
+        ).all()
+        return {str(row[0]): str(row[1]) for row in rows}
 
     def get_across_workspaces(
         self,
@@ -464,48 +498,48 @@ class AppSummaryRepository:
     def activity_by_app(
         self,
         *,
-        workspace_id: str,
-        measure: WorkspaceActivityMeasure,
+        workspace_ids: Sequence[str],
+        source: ActivityStartSource,
         start: datetime,
         end: datetime,
         window_seconds: int,
     ) -> tuple[AppActivityCountResult, ...]:
-        """How many things this workspace started per app, per interval.
+        """How many things these workspaces started per app, per interval.
 
         Placed into intervals by whole seconds elapsed from `start`, never by
         `date_trunc` or `func.date`: those read the session `TimeZone`, which
         nothing here sets, so the interval a start belonged to would depend on
         which connection answered the request.
 
-        Both measures are counted by `created_at` — the instant the workspace
-        asked for the work — so a long-running container is one start in the
-        interval it began, not a smear across every interval it survived.
+        Both sources are counted by `created_at` — the instant the work was asked
+        for — so a long-running container is one start in the interval it began,
+        not a smear across every interval it survived.
 
-        Rows come back sparse and unordered beyond the grouping; densifying the
-        window and deciding which apps a reader sees belong to the caller, not
-        to the query.
+        Rows come back sparse and unordered beyond the grouping, carrying ids and
+        no names; densifying the window, resolving what an id is called and
+        deciding which apps a reader sees belong to the caller, not to the query.
         """
 
-        source: type[ContainerTable] | type[TaskTable] = (
-            ContainerTable if measure is WorkspaceActivityMeasure.Containers else TaskTable
+        if not workspace_ids:
+            return ()
+        table: type[ContainerTable] | type[TaskTable] = (
+            ContainerTable if source is ActivityStartSource.Containers else TaskTable
         )
-        elapsed = extract("epoch", source.created_at) - int(start.timestamp())
+        elapsed = extract("epoch", table.created_at) - int(start.timestamp())
         index = cast(func.floor(elapsed / window_seconds), Integer).label("index")
         rows = self.session.execute(
             select(
-                source.app_id.label("app_id"),
-                AppTable.name.label("app_name"),
+                table.workspace_id.label("workspace_id"),
+                table.app_id.label("app_id"),
                 index,
-                func.count(source.id).label("count"),
+                func.count(table.id).label("count"),
             )
-            .select_from(source)
-            .outerjoin(AppTable, AppTable.id == source.app_id)
             .where(
-                source.workspace_id == workspace_id,
-                source.created_at >= start,
-                source.created_at < end,
+                table.workspace_id.in_(workspace_ids),
+                table.created_at >= start,
+                table.created_at < end,
             )
-            .group_by(source.app_id, AppTable.name, index)
+            .group_by(table.workspace_id, table.app_id, index)
         ).mappings()
         return tuple(AppActivityCountResult.model_validate(row) for row in rows)
 

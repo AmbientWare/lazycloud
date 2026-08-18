@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 
 from pydantic import Field, field_validator, model_validator
@@ -194,18 +195,58 @@ class ContainerMetricsTimeseriesResponse(HttpModel):
     points: tuple[ContainerMetricsPointResponse, ...] = ()
 
 
-class WorkspaceActivityMeasure(StringEnum):
-    """What one workspace activity series counts, one row per start."""
+class AccountActivityMeasure(StringEnum):
+    """What one account activity series reads.
+
+    Two questions in one list, distinguished by unit rather than by name. A start
+    is an event the account asked for and is counted; a resource is capacity the
+    account held over an interval and is read as a level. Nothing sums a start to
+    a core, which is why `AccountActivityUnit` travels beside the measure instead
+    of a reader keeping its own map of which is which.
+    """
 
     Containers = "containers"
     Tasks = "tasks"
+    Cpu = "cpu"
+    Memory = "memory"
+    Gpu = "gpu"
 
 
-class WorkspaceActivitySeriesKind(StringEnum):
-    """Which of a workspace's work a series stands for.
+class AccountActivityUnit(StringEnum):
+    """What one activity reading is denominated in.
 
-    `Unassigned` is work that belongs to no app — a sandbox opened outside one,
-    a shell — and is a real share of the workspace rather than a gap. `Other` is
+    `Starts` counts events inside an interval. The rest are capacity held across
+    it, averaged over the seconds the interval actually covers, so the interval
+    in progress reads at its true level rather than at the fraction of it that
+    has elapsed.
+    """
+
+    Starts = "starts"
+    Cores = "cores"
+    Gibibytes = "gibibytes"
+    Gpus = "gpus"
+
+
+ACTIVITY_MEASURE_UNITS: Mapping[AccountActivityMeasure, AccountActivityUnit] = {
+    AccountActivityMeasure.Containers: AccountActivityUnit.Starts,
+    AccountActivityMeasure.Tasks: AccountActivityUnit.Starts,
+    AccountActivityMeasure.Cpu: AccountActivityUnit.Cores,
+    AccountActivityMeasure.Memory: AccountActivityUnit.Gibibytes,
+    AccountActivityMeasure.Gpu: AccountActivityUnit.Gpus,
+}
+"""Which unit each measure answers in.
+
+Held here rather than at either end of the wire: the producer states the unit on
+every response and the consumer labels an axis with it, and two copies of this
+map are two chances for a chart to name a unit the figures are not in.
+"""
+
+
+class AccountActivitySeriesKind(StringEnum):
+    """Which of an account's work a series stands for.
+
+    `Unassigned` is work that belongs to no app — a sandbox opened outside one, a
+    shell — and is a real share of the account rather than a gap. `Other` is
     every app past the requested cap, summed, so a stacked reading still totals
     the window.
     """
@@ -215,53 +256,64 @@ class WorkspaceActivitySeriesKind(StringEnum):
     Other = "other"
 
 
-class WorkspaceContainerCountsResponse(HttpModel):
-    """What one workspace is holding right now, by live container status.
+class AccountContainerCountsResponse(HttpModel):
+    """What this account is holding right now, by live container status.
 
-    Only the live statuses, because these count what the workspace currently
-    occupies rather than what it has ever run.
+    Only the live statuses, because these count what the account currently
+    occupies rather than what it has ever run. Summed over every workspace the
+    caller belongs to, resolved from membership rather than named by the request.
     """
 
-    workspace_id: str
     pending: int = 0
     running: int = 0
 
 
-class WorkspaceActivityBucketResponse(HttpModel):
+class AccountActivityBucketResponse(HttpModel):
     timestamp: datetime
-    count: int = 0
+    value: float = 0.0
 
 
-class WorkspaceActivitySeriesResponse(HttpModel):
-    """One stack of a workspace activity chart.
+class AccountActivitySeriesResponse(HttpModel):
+    """One stack of an account activity chart.
 
-    Every series carries the same bucket timestamps over the whole window,
-    zeros included, so a reader never has to decide whether a missing interval
-    is quiet or unmeasured.
+    Identified by workspace and app together, because an account reads several
+    workspaces at once and two of them may hold apps of the same name — merged on
+    name alone, one band would carry two customers' worth of work under a label
+    naming neither.
+
+    Every series carries the same bucket timestamps over the whole window, zeros
+    included, so a reader never has to decide whether a missing interval is quiet
+    or unmeasured.
     """
 
-    kind: WorkspaceActivitySeriesKind
+    kind: AccountActivitySeriesKind
+    workspace_id: str = ""
+    workspace_name: str = ""
     app_id: str = ""
     app_name: str = ""
-    total: int = 0
-    buckets: tuple[WorkspaceActivityBucketResponse, ...] = ()
+    total: float = 0.0
+    buckets: tuple[AccountActivityBucketResponse, ...] = ()
 
 
-class WorkspaceActivityResponse(HttpModel):
-    """A workspace's starts over a window, split by the app they belong to.
+class AccountActivityResponse(HttpModel):
+    """An account's activity over a window, split by the app it belongs to.
 
-    `total` is the whole window's count and not the sum of the series shown:
-    the two agree only when nothing was folded into `Other`, and the figure a
-    reader is given for the window never depends on how many stacks fit.
+    `unit` says what every figure here is denominated in; `measure` says which
+    question was asked. `total` reads the whole window in that same unit — a
+    count of starts, or the level held averaged across the window — so a series
+    total is comparable against it and the shares still add up.
+
+    No workspace on the envelope: this covers an account, and naming one of its
+    workspaces would state a scope the response does not have.
     """
 
-    workspace_id: str
-    measure: WorkspaceActivityMeasure
+    measure: AccountActivityMeasure
+    unit: AccountActivityUnit
     window_seconds: int
     start: datetime
     end: datetime
-    total: int = 0
-    series: tuple[WorkspaceActivitySeriesResponse, ...] = ()
+    total: float = 0.0
+    series: tuple[AccountActivitySeriesResponse, ...] = ()
 
 
 class TaskLatencyBucketResponse(HttpModel):
@@ -282,6 +334,14 @@ class TaskLatencyTimeseriesResponse(HttpModel):
 
 
 __all__ = [
+    "ACTIVITY_MEASURE_UNITS",
+    "AccountActivityBucketResponse",
+    "AccountActivityMeasure",
+    "AccountActivityResponse",
+    "AccountActivitySeriesKind",
+    "AccountActivitySeriesResponse",
+    "AccountActivityUnit",
+    "AccountContainerCountsResponse",
     "ContainerMetricsPointResponse",
     "ContainerMetricsTimeseriesResponse",
     "EventHistoryRequest",
@@ -293,10 +353,4 @@ __all__ = [
     "LogRecord",
     "TaskLatencyBucketResponse",
     "TaskLatencyTimeseriesResponse",
-    "WorkspaceActivityBucketResponse",
-    "WorkspaceActivityMeasure",
-    "WorkspaceActivityResponse",
-    "WorkspaceActivitySeriesKind",
-    "WorkspaceActivitySeriesResponse",
-    "WorkspaceContainerCountsResponse",
 ]

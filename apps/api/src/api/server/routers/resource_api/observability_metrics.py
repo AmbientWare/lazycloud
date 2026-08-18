@@ -3,21 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
+from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import APIRouter, Depends, Query
 from observability.container_metrics import container_metrics_timeseries
 from observability.stream_state import RedisEventStreamRepository
 from shared.errors import InvalidInputError
 from shared.http.observability import (
+    AccountActivityMeasure,
+    AccountActivityResponse,
+    AccountContainerCountsResponse,
     ContainerMetricsTimeseriesResponse,
     TaskLatencyTimeseriesResponse,
-    WorkspaceActivityMeasure,
-    WorkspaceActivityResponse,
-    WorkspaceContainerCountsResponse,
 )
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery
 
-from api.server.auth import read_workspace
+from api.server.auth import read_user, read_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
 from api.server.routers.resource_api.common import _management
@@ -54,37 +55,55 @@ def api_v1_task_latency_timeseries(
 
 
 @router.get(
-    "/api/v1/metrics/workspace/containers",
-    response_model=WorkspaceContainerCountsResponse,
-    operation_id="get_workspace_container_counts",
+    "/api/v1/metrics/account/containers",
+    response_model=AccountContainerCountsResponse,
+    operation_id="get_account_container_counts",
 )
-def api_v1_workspace_container_counts(
-    workspace_id: read_workspace,
+def api_v1_account_container_counts(
+    user_id: read_user,
     services: ApiServices = Depends(current_services),
-) -> WorkspaceContainerCountsResponse:
-    return WorkspaceContainerCountsResponse.model_validate(
-        _management(services).workspace_container_counts(workspace_id)
+) -> AccountContainerCountsResponse:
+    """What the signed-in account is holding right now.
+
+    Account-scoped for the reason the billing summary is: the concurrency
+    ceiling is a term of a plan and a plan belongs to a payer, so somebody
+    running dev, staging and prod reads one figure against one limit rather than
+    adding up their own.
+    """
+
+    return AccountContainerCountsResponse.model_validate(
+        _management(services).account_container_counts(
+            workspace_ids=list(_member_workspaces(services, user_id))
+        )
     )
 
 
 @router.get(
-    "/api/v1/metrics/workspace/activity",
-    response_model=WorkspaceActivityResponse,
-    operation_id="get_workspace_activity",
+    "/api/v1/metrics/account/activity",
+    response_model=AccountActivityResponse,
+    operation_id="get_account_activity",
 )
-def api_v1_workspace_activity(
-    measure: WorkspaceActivityMeasure = WorkspaceActivityMeasure.Containers,
+def api_v1_account_activity(
+    measure: AccountActivityMeasure = AccountActivityMeasure.Containers,
     window_seconds: int = Query(default=3600, ge=60),
     start: str | None = None,
     end: str | None = None,
     limit: int = Query(default=5, ge=1, le=20),
     *,
-    workspace_id: read_workspace,
+    user_id: read_user,
     services: ApiServices = Depends(current_services),
-) -> WorkspaceActivityResponse:
-    return WorkspaceActivityResponse.model_validate(
-        _management(services).workspace_activity(
-            workspace_id,
+) -> AccountActivityResponse:
+    """What the account started, or held, over a window — split by app.
+
+    Scoped to the workspaces this person is a member of, resolved from the
+    membership rows naming them rather than from anything the request supplied:
+    an account-wide reading assembled from ids a caller named would be a reading
+    of whatever it asked for.
+    """
+
+    return AccountActivityResponse.model_validate(
+        _management(services).account_activity(
+            workspaces=_member_workspaces(services, user_id),
             measure=measure,
             window_seconds=window_seconds,
             start=_parse_time(start),
@@ -116,6 +135,21 @@ def api_v1_container_metrics_timeseries(
     )
     records = RedisEventStreamRepository(services.redis()).read_event_history(query)
     return container_metrics_timeseries(container_id, records)
+
+
+def _member_workspaces(services: ApiServices, user_id: str) -> dict[str, str]:
+    """Every workspace this person reaches, and what each is called.
+
+    Names come off the same membership read that decides the scope: a series
+    names the workspace its app belongs to, and looking those names up separately
+    would be a second answer to which workspaces the reading covers.
+    """
+
+    with services.context.database.session() as session:
+        return {
+            workspace.id: workspace.name
+            for workspace in WorkspaceMemberRepository(session).workspaces_for_user(user_id)
+        }
 
 
 def _parse_time(value: str | None) -> datetime | None:
