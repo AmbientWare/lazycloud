@@ -72,7 +72,7 @@ def test_task_result_human_presents_structured_json_value(
     value: dict[str, JsonValue] = {"status": "healthy", "details": ["ready", 2]}
     response = _task_response(
         FunctionJsonResult(value=value).model_dump(mode="json"),
-        kind=StubKind.CronJob,
+        kind=StubKind.Function,
     )
     monkeypatch.setattr(TASK_CLIENT_TARGET, _task_client_factory(response))
 

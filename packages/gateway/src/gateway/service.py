@@ -637,7 +637,7 @@ class GatewayControlService:
                 None if request.task_status is TaskStatus.Complete else request.task_status.value
             )
             stub = stub_for_task(self.control_plane, pending)
-            if stub is not None and stub.kind in {StubKind.Function, StubKind.CronJob}:
+            if stub is not None and stub.kind is StubKind.Function:
                 task = FunctionControlService(
                     self.services,
                     gateway_http_url=self.runtime_origin,
@@ -676,7 +676,7 @@ class GatewayControlService:
 
     def _release_function_dependents(self, task: Task) -> None:
         stub = stub_for_task(self.control_plane, task)
-        if stub is None or stub.kind not in {StubKind.Function, StubKind.CronJob}:
+        if stub is None or stub.kind is not StubKind.Function:
             return
         with suppress(Exception):
             FunctionControlService(

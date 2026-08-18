@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from control.service import ControlPlaneService
+from control.service import ControlPlaneService, StubKind
 from database.repositories.execution import TaskDependencyRepository
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.functions import (
@@ -15,7 +15,6 @@ from shared.http.functions import (
 )
 from shared.tasks import Task, is_terminal_task_status
 
-from execution.functions.service import FUNCTION_LIKE_STUB_KINDS
 from execution.services import ExecutionServices
 
 
@@ -50,7 +49,7 @@ class TaskRerunService:
             stub = self.control_plane.get_stub(source.stub_id or "")
         except NotFoundError as exc:
             raise NotFoundError(str(exc)) from exc
-        if stub.kind in FUNCTION_LIKE_STUB_KINDS:
+        if stub.kind is StubKind.Function:
             return self._rerun_function_task(stub.id, source)
         msg = f"tasks of kind {stub.kind.value} cannot be re-run"
         raise InvalidInputError(msg)

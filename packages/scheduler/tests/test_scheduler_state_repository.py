@@ -15,7 +15,7 @@ from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, redis_text
 from database.records.apps import StubRecord
-from database.repositories.apps import CronJobRepository, DeploymentRepository
+from database.repositories.apps import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
@@ -340,7 +340,7 @@ def _create_cron_function(
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="cron-fn",
-            kind=DeploymentKind.CronJob,
+            kind=DeploymentKind.Function,
             handler="module:func",
             image=ImageSpec(python_version="3.11"),
             cron="every 1m",
@@ -368,40 +368,6 @@ def _cron_scheduler(services: ApiServices, redis: RedisClient) -> Scheduler:
     )
 
 
-def test_scheduler_rejects_cron_payload_for_a_different_stub(
-    isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    container_scheduler = RecordingContainerScheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=container_scheduler),
-    )
-    _deployment, _stub, cron_job = _create_cron_function(isolated_services)
-    other_stub = ControlPlaneService(isolated_services.context).create_stub(
-        "other-cron",
-        kind=StubKind.Function,
-    )
-    cron_job.payload = {
-        "stub_id": other_stub.id,
-        "workspace_name": "default",
-        "deployment_id": cron_job.deployment_id,
-        "cron": "every 1m",
-    }
-    with isolated_services.context.database.session() as session:
-        CronJobRepository(session).upsert(cron_job, workspace_id=cron_job.workspace_id)
-    assert cron_job.next_run_at is not None
-
-    runs = _cron_scheduler(isolated_services, real_redis_actors.client()).tick(
-        now=cron_job.next_run_at
-    )
-
-    matching = next(run for run in runs if run.cron_job == cron_job.name)
-    assert not matching.enqueued
-    assert matching.reason == "cron job must reference its function-like deployment stub"
-    assert all(request.stub_id != other_stub.id for request in container_scheduler.requests)
-
-
 def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     isolated_services: ApiServices,
     real_redis_actors: _RealRedisActors,
@@ -414,7 +380,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     isolated_services.deployments.deploy(
         DeploymentSpec(
             name="retrying-cron",
-            kind=DeploymentKind.CronJob,
+            kind=DeploymentKind.Function,
             handler="module:func",
             cron="every 1m",
             retry_policy=RetryPolicy.from_retries(1),
@@ -557,7 +523,7 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="pausable-cron",
-            kind=DeploymentKind.CronJob,
+            kind=DeploymentKind.Function,
             handler="module:func",
             cron="every 1m",
             retry_policy=RetryPolicy.from_retries(1, delay_seconds=10),
@@ -673,7 +639,7 @@ def test_new_cron_version_takes_over_the_prior_schedule(
     second = isolated_services.deployments.deploy(
         DeploymentSpec(
             name=first.name,
-            kind=DeploymentKind.CronJob,
+            kind=DeploymentKind.Function,
             handler="module:func_v2",
             cron="0 * * * *",
         )

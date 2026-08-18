@@ -8,7 +8,6 @@ class DeploymentKind(StringEnum):
     Pod = "pod"
     Sandbox = "sandbox"
     Command = "command"
-    CronJob = "cron-job"
 
 
 class StubKind(StringEnum):
@@ -19,7 +18,6 @@ class StubKind(StringEnum):
     Shell = "shell"
     Sandbox = "sandbox"
     Command = "command"
-    CronJob = "cron-job"
 
 
 __all__ = ["DeploymentKind", "StubKind"]

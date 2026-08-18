@@ -31,7 +31,6 @@ CALLBACK_RESPONSE_BODY_LIMIT = 64 * 1024
 CALLBACK_SUPPORTED_STUB_KINDS: frozenset[StubKind] = frozenset(
     {
         StubKind.Function,
-        StubKind.CronJob,
         StubKind.Endpoint,
         StubKind.Asgi,
     }

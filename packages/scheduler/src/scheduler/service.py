@@ -25,7 +25,6 @@ from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord, CronJobRun, next_cron_run
 from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind
 from shared.events import EventLevel
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
@@ -77,7 +76,6 @@ POD_EXPIRY_LOCK_TTL_SECONDS = 30
 BILLING_ENFORCEMENT_LOCK_TTL_SECONDS = 30
 """Long enough for one bounded pass, short enough that a scheduler killed
 mid-sweep does not leave unfunded compute running for a minute."""
-CRON_JOB_DEPLOYMENT_KINDS = {DeploymentKind.Function, DeploymentKind.CronJob}
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
@@ -1534,9 +1532,9 @@ class Scheduler:
                     reason="deployment inactive",
                 )
             else:
-                stub_id = _cron_function_stub_id(cron_job, deployment)
+                stub_id = _scheduled_stub_id(cron_job, deployment)
                 if not stub_id:
-                    raise ValueError("cron job must reference its function-like deployment stub")
+                    raise ValueError("scheduled deployment published no stub to invoke")
                 run = self._run_cron_function(cron_job, stub_id)
         except Exception as exc:
             run = CronJobRunDraft(
@@ -1669,19 +1667,17 @@ class SchedulerRunResult(ContractModel):
     retention_failure_count: int = 0
 
 
-def _cron_function_stub_id(cron_job: CronJobRecord, deployment: Deployment) -> str:
-    if deployment.kind not in CRON_JOB_DEPLOYMENT_KINDS:
-        return ""
-    if not deployment.stub_id:
-        return ""
-    payload = cron_job.payload
-    if not isinstance(payload, dict):
-        return ""
-    stub_id = payload.get("stub_id")
-    if not isinstance(stub_id, str):
-        return ""
-    normalized = stub_id.strip()
-    return normalized if normalized == deployment.stub_id else ""
+def _scheduled_stub_id(cron_job: CronJobRecord, deployment: Deployment) -> str:
+    """The stub a fired schedule invokes.
+
+    Read from the deployment rather than trusted from the schedule's payload:
+    the payload was written when the schedule was created, and the deployment is
+    what the tick just resolved. They agree, and where they cannot the
+    deployment wins — it is the row a redeploy updates.
+    """
+
+    del cron_job
+    return deployment.stub_id or ""
 
 
 def _record_worker_pool_drain_observability(

@@ -42,8 +42,6 @@ STUB_KIND_ALIASES: dict[str, StubKind] = {
     "shell": StubKind.Shell,
     "sandbox": StubKind.Sandbox,
     "command": StubKind.Command,
-    "cron": StubKind.CronJob,
-    "cron-job": StubKind.CronJob,
 }
 
 DEPLOYABLE_STUB_KINDS: dict[StubKind, DeploymentKind] = {
@@ -53,7 +51,6 @@ DEPLOYABLE_STUB_KINDS: dict[StubKind, DeploymentKind] = {
     StubKind.Pod: DeploymentKind.Pod,
     StubKind.Sandbox: DeploymentKind.Sandbox,
     StubKind.Command: DeploymentKind.Command,
-    StubKind.CronJob: DeploymentKind.CronJob,
 }
 
 

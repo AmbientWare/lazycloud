@@ -113,7 +113,7 @@ class PreemptedContainerService:
         if not stub_id:
             raise ValueError("preempted task has no workload identity")
         stub = self.stubs.get_stub(stub_id)
-        retry_allowed = stub.kind in {StubKind.Function, StubKind.CronJob}
+        retry_allowed = stub.kind is StubKind.Function
         outcome = self.services.tasks.finish_with_retry(
             task.id,
             TaskStatus.Failed,

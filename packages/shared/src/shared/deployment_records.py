@@ -100,8 +100,8 @@ def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
     imported the handler and already run `on_start`. Short, because the window is
     also what an idle caller pays for.
 
-    Cron jobs keep zero. Their next run is scheduled rather than arriving, and it
-    is almost never within any window worth holding a container open for.
+    A schedule is answered by `resolve_keep_warm_seconds` rather than here: it is
+    a property of one deployment, not of a kind, and the value it wants is zero.
     """
     deployment_kind = _deployment_kind(kind)
     if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:

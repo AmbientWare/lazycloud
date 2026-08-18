@@ -9,7 +9,6 @@ from shared.tasks import Task
 
 from api.server.services import ApiServices
 
-FUNCTION_STUB_KINDS = frozenset({StubKind.Function, StubKind.CronJob})
 ENDPOINT_STUB_KINDS = frozenset({StubKind.Endpoint, StubKind.Asgi})
 POD_STUB_KINDS = frozenset({StubKind.Pod, StubKind.Sandbox})
 
@@ -43,7 +42,7 @@ def require_function_stub_workspace(
         stub_id,
         workspace_id,
         resource_name="function",
-        expected_kinds=FUNCTION_STUB_KINDS,
+        expected_kinds=frozenset({StubKind.Function}),
     )
 
 

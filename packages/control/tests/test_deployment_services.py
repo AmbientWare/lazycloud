@@ -392,7 +392,7 @@ def test_cron_schedule_follows_deployment_lifecycle(
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="hourly",
-            kind=DeploymentKind.CronJob,
+            kind=DeploymentKind.Function,
             handler="pkg:hourly",
             cron="0 * * * *",
         )
@@ -424,7 +424,7 @@ def test_cron_schedule_is_deleted_with_app(isolated_services: ApiServices) -> No
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="cleanup",
-            kind=DeploymentKind.CronJob,
+            kind=DeploymentKind.Function,
             handler="pkg:cleanup",
             cron="every 1m",
             metadata={"app": "cron_cleanup"},
