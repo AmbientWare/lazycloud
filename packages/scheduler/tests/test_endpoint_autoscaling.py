@@ -359,6 +359,8 @@ def _endpoint_autoscaler(
             ),
             dispatches=_EndpointDispatchReader(EndpointDispatchStateRepository(services)),
         ),
+        container_states=RedisSchedulerContainerRepository(redis),
+        container_requests=RedisSchedulerWorkerRepository(redis),
     )
 
 

@@ -64,6 +64,39 @@ deployment the tick just resolved rather than off anything the schedule row
 carries: the deployment is what a redeploy updates, so it is the only one of the
 two that cannot be stale.
 
+## A record the scheduler no longer backs
+
+Capacity is counted from the durable container rows, so a row that says
+`pending` or `running` while nothing is going to make it true is a ceiling slot
+held against a workload that cannot use it. At `max_containers = 1` that is not
+a degradation but a stop: desired equals current on every tick, and a scheduled
+function grows its backlog by one task per fire with nothing able to start.
+
+Which rows count is not a per-kind question, so the driver answers it and no
+workload can. It was a per-kind question once, and two of the three kinds
+answered it with "all of them" — the pod autoscaler dropped running records the
+scheduler had lost, and functions and endpoints classified nothing at all.
+
+A `running` row with no scheduler state has started, so nothing is coming back
+for it. A `pending` row has two legitimate reasons to still be pending, and both
+are read rather than guessed at. A request still queued for it is the
+dispatcher's, which bounds its own retrying and fails the request itself; that
+is read directly, so no clock has to allow for it. Otherwise a worker holds it
+and is starting it, and `CONTAINER_START_DEADLINE_SECONDS` bounds that and only
+that.
+
+Not the Redis TTL, which was the recovery before this and is the wrong owner
+twice over: the durable row stayed wrong until a cache key lapsed, and the key
+is re-armed by whoever holds the container, so a worker wedged part-way through
+a start refreshes it for as long as it stays up. The deadline is wall-clock on
+the durable row, which is created first and outlives every cache entry about it.
+
+Reclaiming stops the container with `StopContainerReason.Scheduler`, the same
+settlement every platform-owned stop takes, so an invocation the container had
+claimed is released back to the queue rather than reported to its caller as
+cancelled. The stub lock serializes ticks, and where two overlap anyway the
+second finds the row already terminal and settles nothing twice.
+
 ## A function's warm floor
 
 `min_containers` is held with nothing queued, and it is the only way to ask this

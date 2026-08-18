@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -147,34 +147,19 @@ def test_pod_autoscaler_replaces_running_records_without_live_scheduler_state(
         stub,
         "00000000-0000-4000-8000-000000000201",
         created_at=current_time - timedelta(seconds=60),
+        redis=redis,
+        state_status=None,
     )
     terminal = _record_container(
         isolated_services,
         stub,
         "00000000-0000-4000-8000-000000000202",
         created_at=current_time - timedelta(seconds=60),
-    )
-    states = _ContainerStateReader(
-        {
-            terminal.id: SchedulerContainerState(
-                container_id=terminal.id,
-                stub_id=stub.id,
-                workspace_id=stub.workspace_id,
-                status=SchedulerContainerStatus.Complete,
-            )
-        }
+        redis=redis,
+        state_status=SchedulerContainerStatus.Complete,
     )
 
-    result = AutoscalingDriver(
-        isolated_services,
-        redis=redis,
-        workload=PodAutoscaler(
-            isolated_services,
-            redis=redis,
-            pods=PodControlService(isolated_services, redis=redis),
-            container_states=states,
-        ),
-    ).reconcile(now=current_time)[0]
+    result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
     assert result.current_containers == 0
     assert result.desired_containers == 1
@@ -261,12 +246,14 @@ def test_always_on_pod_deployment_releases_containers_the_operator_scaled_away(
         stub,
         "00000000-0000-4000-8000-000000000407",
         created_at=current_time - timedelta(seconds=120),
+        redis=redis,
     )
     released = _record_container(
         isolated_services,
         stub,
         "00000000-0000-4000-8000-000000000408",
         created_at=current_time - timedelta(seconds=60),
+        redis=redis,
     )
     # An always-on pod holds its keep-warm lock with no expiry, so both
     # containers carry one for as long as they run.
@@ -323,24 +310,28 @@ def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
         stub,
         "00000000-0000-4000-8000-000000000401",
         created_at=current_time - timedelta(seconds=120),
+        redis=redis,
     )
     locked = _record_container(
         isolated_services,
         stub,
         "00000000-0000-4000-8000-000000000402",
         created_at=current_time - timedelta(seconds=120),
+        redis=redis,
     )
     warm = _record_container(
         isolated_services,
         stub,
         "00000000-0000-4000-8000-000000000403",
         created_at=current_time - timedelta(seconds=10),
+        redis=redis,
     )
     idle = _record_container(
         isolated_services,
         stub,
         "00000000-0000-4000-8000-000000000404",
         created_at=current_time - timedelta(seconds=120),
+        redis=redis,
     )
     workspace_id = stub.workspace_id
     redis.set(redis.key(pod_container_connections_key(workspace_id, stub.id, busy.id)), 2)
@@ -381,6 +372,7 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
         stub,
         "00000000-0000-4000-8000-000000000405",
         created_at=utc_now() - timedelta(seconds=60),
+        redis=redis,
     )
     connections = RedisPodProxyConnectionRepository(redis)
     service = PodControlService(
@@ -640,6 +632,8 @@ def _pod_autoscaler(services: ApiServices, redis: RedisClient) -> AutoscalingDri
             redis=redis,
             pods=PodControlService(services, redis=redis),
         ),
+        container_states=RedisSchedulerContainerRepository(redis),
+        container_requests=RedisSchedulerWorkerRepository(redis),
     )
 
 
@@ -654,7 +648,17 @@ def _record_container(
     container_id: str,
     *,
     created_at: datetime,
+    redis: RedisClient,
+    state_status: SchedulerContainerStatus | None = SchedulerContainerStatus.Running,
 ) -> ContainerRecord:
+    """A running container as the platform holds one: the row and the state.
+
+    Both, because the autoscaler counts capacity from the durable row and only
+    trusts it as far as the scheduler still backs it. A row written on its own is
+    the stranded record, not the healthy one, so `state_status=None` is how a
+    test asks for that.
+    """
+
     container = ContainerRecord(
         id=container_id,
         name=f"pod-{container_id}",
@@ -668,6 +672,15 @@ def _record_container(
         started_at=created_at,
         ports={"8080": 8080},
     )
+    if state_status is not None:
+        RedisSchedulerContainerRepository(redis).set_container_state(
+            SchedulerContainerState(
+                container_id=container_id,
+                stub_id=stub.id,
+                workspace_id=stub.workspace_id,
+                status=state_status,
+            )
+        )
     with services.context.database.session() as session:
         return ContainerRepository(session).upsert(container)
 
@@ -695,14 +708,6 @@ def _record_failed_container(
     )
     with services.context.database.session() as session:
         return ContainerRepository(session).upsert(container)
-
-
-@dataclass(frozen=True, slots=True)
-class _ContainerStateReader:
-    states: dict[str, SchedulerContainerState]
-
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
-        return self.states.get(container_id)
 
 
 class _Scheduler:

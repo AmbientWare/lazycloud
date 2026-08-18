@@ -10,26 +10,54 @@ control surface answers for two kinds of workload and silently omits the third.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta
+from typing import Protocol
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import RedisClient
-from database.repositories.orchestration import AutoscalerStateRepository
+from coordination.wake_signal import RedisWakeSignal
+from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
+from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
+from observability.stream_state import RedisEventStreamRepository
 from pydantic import JsonValue
-from scheduler.autoscaling import AutoscalingDriver, FunctionAutoscaler
+from scheduler.autoscaling import (
+    CONTAINER_START_DEADLINE_SECONDS,
+    AutoscalingDriver,
+    FunctionAutoscaler,
+)
 from scheduler.containers import (
+    CONTAINER_DISPATCH_WAKE_SCOPE,
+    SchedulerContainerRequestService,
     SchedulerContainerSubmitResult,
     SchedulerContainerSubmitStatus,
 )
-from scheduler.state import SchedulerWorkerRequest
+from scheduler.state import (
+    RedisSchedulerContainerRepository,
+    RedisSchedulerWorkerRepository,
+    SchedulerWorkerRequest,
+)
+from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.autoscaler_state import AutoscalerTargetKind
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec, Resources
 from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
+from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
+from shared.timestamps import utc_now
 from tests.metric_helpers import metric_value
 from tests.redis_fakes import FakeRedis
+
+
+class _RealRedisActors(Protocol):
+    def client(self) -> RedisClient: ...
+
+
+class _IdentityPlacement:
+    def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
+        return request
 
 
 class _Scheduler:
@@ -158,6 +186,72 @@ def test_function_autoscaler_records_what_it_decided(
     assert [event.action for event in history.events] == ["function.autoscaler.scale_decision"]
 
 
+def test_function_autoscaler_reclaims_a_container_that_never_started(
+    isolated_services: ApiServices,
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A pending record nothing will start must stop holding the ceiling.
+
+    This is the deadlock it exists for: `max_containers` is counted from the
+    durable rows, so one row stuck at `pending` is one permanent unit of
+    capacity, and at a ceiling of one the backlog grows a task per schedule fire
+    with nothing left able to start. Recovery did eventually arrive from the
+    container's scheduler state lapsing and its worker noticing, roughly sixteen
+    minutes on — owned by a cache expiry, and by a worker still being alive to
+    read it.
+
+    The container still starting is in the same case on purpose. It is what
+    makes the rule a deadline rather than a reflex: reaping one that is merely
+    pulling would free the ceiling, start a replacement, and reap that one at
+    the same age.
+    """
+
+    scheduler = _Scheduler()
+    redis = real_redis_actors.client()
+    services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=scheduler,
+            scheduler_cancellation=_scheduler_request_service(isolated_services, redis),
+        ),
+    )
+    stub = _create_function_stub(services, max_containers=2)
+    _enqueue_invocations(services, stub, count=3)
+    # Started by the invocation moments ago and not yet running anywhere: the
+    # container a shorter rule would throw away.
+    starting = _pending_containers(services, stub)
+    assert len(starting) == 1
+    current_time = utc_now()
+    stranded = _record_pending_container(
+        services,
+        stub,
+        created_at=current_time - timedelta(seconds=CONTAINER_START_DEADLINE_SECONDS + 1),
+    )
+    # Present, pending, and going nowhere — the state a half-alive worker
+    # re-arms indefinitely, so no expiry is coming to settle this row.
+    RedisSchedulerContainerRepository(redis).set_container_state(
+        SchedulerContainerState(
+            container_id=stranded.id,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            status=SchedulerContainerStatus.Pending,
+        )
+    )
+
+    result = _function_autoscaler(services, redis).reconcile(now=current_time)[0]
+
+    assert [
+        action.container_id for action in result.actions if action.action == "recover-stale"
+    ] == [stranded.id]
+    assert services.containers.get(stranded.id).status is ContainerStatus.Stopped
+    assert services.containers.get(starting[0].id).status is ContainerStatus.Pending
+    # The slot the stranded row held is the one the backlog gets.
+    assert result.current_containers == 1
+    assert result.desired_containers == 2
+    assert result.actions[-1].action == "start"
+
+
 def _create_function_stub(runtime: ApiServices, *, max_containers: int) -> StubRecord:
     deployment = runtime.deployments.deploy(
         DeploymentSpec(
@@ -208,4 +302,56 @@ def _function_autoscaler(services: ApiServices, redis: RedisClient) -> Autoscali
         services,
         redis=redis,
         workload=FunctionAutoscaler(services, functions=FunctionControlService(services)),
+        container_states=RedisSchedulerContainerRepository(redis),
+        container_requests=RedisSchedulerWorkerRepository(redis),
+    )
+
+
+def _pending_containers(services: ApiServices, stub: StubRecord) -> list[ContainerRecord]:
+    return [
+        container
+        for container in services.containers.list(workspace_id=stub.workspace_id)
+        if container.stub_id == stub.id and container.status is ContainerStatus.Pending
+    ]
+
+
+def _record_pending_container(
+    services: ApiServices,
+    stub: StubRecord,
+    *,
+    created_at: datetime,
+) -> ContainerRecord:
+    container = ContainerRecord(
+        id="00000000-0000-4000-8000-000000000901",
+        name="function-stranded",
+        image="img-function",
+        command=["python", "-m", "runner"],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        app_id=stub.app_id,
+        status=ContainerStatus.Pending,
+        created_at=created_at,
+    )
+    with services.context.database.session() as session:
+        return ContainerRepository(session).upsert(container)
+
+
+def _scheduler_request_service(
+    services: ApiServices,
+    redis: RedisClient,
+) -> SchedulerContainerRequestService:
+    persistence = ContainerSchedulingPersistenceService(
+        services.context,
+        services.events,
+        services.workspace_changes,
+    )
+    return SchedulerContainerRequestService(
+        RedisSchedulerWorkerRepository(redis),
+        RedisSchedulerContainerRepository(redis),
+        placement=_IdentityPlacement(),
+        failure_handler=persistence,
+        assignments=persistence,
+        dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
+        lifecycle_events=RedisEventStreamRepository(redis),
+        workspace_owners=DatabaseWorkspaceOwners(services.context),
     )
