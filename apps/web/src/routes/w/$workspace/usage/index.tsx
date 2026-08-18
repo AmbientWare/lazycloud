@@ -1,105 +1,98 @@
 import { useMemo } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
-import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Panel } from "@/components/shared/Panel";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { usageCostGroupKeys, type UsageCostGroupKey } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
-import { accountCostsQueryOptions, calendarMonthWindow } from "@/lib/queries/usage";
+import { accountCostSeriesQueryOptions } from "@/lib/queries/usage";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { AccountCeilingLine } from "./-components/AccountCeilingLine";
-import { CostBreakdownTable } from "./-components/CostBreakdownTable";
-
-const LEVEL_TITLES: Record<UsageCostGroupKey, string> = {
-  app: "By app",
-  workload: "By workload",
-  task: "By task",
-};
+import { AppCostAccordion } from "./-components/AppCostAccordion";
+import { usageRange, usageRangeKeys, type UsageRangeKey } from "./-components/ranges";
+import { SpendChart } from "./-components/SpendChart";
+import { UsageRangeControl } from "./-components/UsageRangeControl";
 
 type UsageSearch = {
-  view: UsageCostGroupKey;
+  range: UsageRangeKey;
 };
 
 export const Route = createFileRoute("/w/$workspace/usage/")({
   validateSearch: (search: Record<string, unknown>): UsageSearch => ({
-    view: usageCostGroupKeys.includes(search.view as UsageCostGroupKey)
-      ? (search.view as UsageCostGroupKey)
-      : "app",
+    range: usageRangeKeys.includes(search.range as UsageRangeKey)
+      ? (search.range as UsageRangeKey)
+      : "month",
   }),
   component: UsagePage,
   errorComponent: RouteErrorFallback,
 });
 
+/**
+ * What this account is spending, when it spent it, and which app it went to.
+ *
+ * Account-wide rather than scoped to the workspace in the sidebar: the provider
+ * invoices an account, so somebody running dev, staging and prod wants one
+ * figure covering the three. Every row therefore names the workspace it was
+ * incurred in.
+ *
+ * Two regions, one window. The chart answers when, the list answers who, and
+ * the range control above both is what keeps a total from sitting beside a
+ * shape it does not add up to.
+ */
 function UsagePage() {
   const { workspaces } = useWorkspace();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  // The window is the current UTC month, computed once per mount so paging and
-  // the total cannot straddle a boundary crossed mid-session.
-  const window = useMemo(() => calendarMonthWindow(new Date()), []);
-  const total = useInfiniteQuery(accountCostsQueryOptions(window, { groupBy: search.view }));
-  const first = total.data?.pages[0];
+  // Fixed at the range rather than at the clock, so paging through the list and
+  // the total above it cannot straddle a boundary crossed mid-session.
+  const range = useMemo(() => usageRange(search.range, new Date()), [search.range]);
+  const series = useQuery(accountCostSeriesQueryOptions(range.window, range.bucket));
 
   return (
     <WorkspacePage
       title="Usage"
       description={
-        first ? (
+        <>
           <PageFacts
             items={[
-              formatCostNanos(first.cost_nanos, first.currency),
+              series.data ? formatCostNanos(series.data.cost_nanos, series.data.currency) : null,
               countLabel(workspaces.length, "workspace"),
-              "this month",
+              range.caption,
             ]}
           />
-        ) : null
+          <AccountCeilingLine />
+        </>
       }
-      contentClassName="flex flex-col gap-4 overflow-y-auto pb-1"
+      actions={
+        <UsageRangeControl
+          value={range.key}
+          onChange={(next) => void navigate({ search: { range: next }, replace: true })}
+        />
+      }
+      contentClassName="flex min-h-0 flex-col gap-3 overflow-y-auto lg:overflow-hidden"
     >
-      <AccountCeilingLine />
       <Panel
-        title="Cost this period"
-        className="min-h-[24rem] flex-1"
-        contentClassName="flex flex-col"
-        action={
-          first ? (
-            <span className="font-mono text-sm" aria-label="Total cost this period">
-              {formatCostNanos(first.cost_nanos, first.currency)}
-            </span>
-          ) : null
-        }
+        title="Spend over time"
+        description={`${range.bucket === "hour" ? "Hourly" : "Daily"}, UTC`}
+        // The height belongs to the panel rather than to its content: the content
+        // is a flex child with a zero basis, so a height set on it contributes
+        // nothing to the panel's own size and the chart collapses to a strip.
+        className="h-60 shrink-0 sm:h-72"
+        contentClassName="overflow-hidden p-3"
       >
-        <Tabs
-          value={search.view}
-          onValueChange={(view) =>
-            void navigate({ search: { view: view as UsageCostGroupKey }, replace: true })
-          }
-          className="flex min-h-0 flex-1 flex-col overflow-hidden"
-        >
-          <LinearTabsList ariaLabel="Cost attribution level" listClassName="sm:flex-none">
-            {usageCostGroupKeys.map((level) => (
-              <LinearTab key={level} value={level}>
-                {LEVEL_TITLES[level]}
-              </LinearTab>
-            ))}
-          </LinearTabsList>
-          {usageCostGroupKeys.map((level) => (
-            <TabsContent
-              key={level}
-              value={level}
-              className="flex min-h-0 flex-1 flex-col overflow-hidden"
-            >
-              <CostBreakdownTable window={window} groupBy={level} />
-            </TabsContent>
-          ))}
-        </Tabs>
+        <SpendChart window={range.window} bucket={range.bucket} caption={range.caption} />
+      </Panel>
+      <Panel
+        title="Apps"
+        description="Open one for the workloads inside it"
+        className="min-h-[22rem] flex-1"
+        contentClassName="flex min-h-0 flex-col overflow-hidden"
+      >
+        <AppCostAccordion window={range.window} caption={range.caption} />
       </Panel>
     </WorkspacePage>
   );

@@ -116,3 +116,46 @@ export const usageCostListSchema = z.object({
   next: z.string().default(""),
 });
 export type UsageCostList = z.infer<typeof usageCostListSchema>;
+
+/** How wide one interval of a cost series is. */
+export const usageCostBuckets = ["hour", "day"] as const;
+export type UsageCostBucket = (typeof usageCostBuckets)[number];
+
+/**
+ * One invoice line's share of an interval.
+ *
+ * A dimension nothing was metered in is absent rather than zero: over an
+ * interval no ledger row was written at all, and a zero line would claim a
+ * measurement nobody took.
+ */
+export const usageCostDimensionTotalSchema = z.object({
+  dimension: z.enum(billedDimensions),
+  cost_nanos: z.number().int().nonnegative().default(0),
+});
+export type UsageCostDimensionTotal = z.infer<typeof usageCostDimensionTotalSchema>;
+
+/** What one interval of the window cost, with its end clipped to the window. */
+export const usageCostBucketSchema = z.object({
+  started_at: z.string(),
+  ended_at: z.string(),
+  cost_nanos: z.number().int().nonnegative().default(0),
+  dimensions: z.array(usageCostDimensionTotalSchema).default([]),
+});
+export type UsageCostBucketRow = z.infer<typeof usageCostBucketSchema>;
+
+/**
+ * An account's spend over a window, in the shape it took.
+ *
+ * Every interval the window covers is present, quiet ones included, so a chart
+ * drawn straight from `data` cannot render a fortnight of nothing as a
+ * fortnight of something. `cost_nanos` is those intervals summed.
+ */
+export const usageCostSeriesSchema = z.object({
+  start: z.string(),
+  end: z.string(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  bucket: z.enum(usageCostBuckets),
+  cost_nanos: z.number().int().nonnegative().default(0),
+  data: z.array(usageCostBucketSchema).default([]),
+});
+export type UsageCostSeries = z.infer<typeof usageCostSeriesSchema>;

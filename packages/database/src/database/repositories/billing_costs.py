@@ -11,7 +11,16 @@ from database.tables.identity import WorkspaceTable
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import (
+    BigInteger,
+    ColumnElement,
+    and_,
+    cast,
+    extract,
+    func,
+    or_,
+    select,
+)
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 _GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[InstrumentedAttribute[str], ...]] = {
@@ -99,6 +108,22 @@ class LedgerCostPage:
 
 
 @dataclass(frozen=True, slots=True)
+class LedgerCostBucketTotal:
+    """What one interval of a window cost, on one invoice line.
+
+    `index` counts whole bucket widths from the window's start, so the interval
+    it stands for is arithmetic on the start the caller supplied rather than a
+    timestamp this query decided. Only the intervals that carry cost come back;
+    the intervals between them are the caller's to fill, which is the one place
+    the width and the start are both already known.
+    """
+
+    index: int
+    dimension: BilledDimension
+    cost_nanos: int
+
+
+@dataclass(frozen=True, slots=True)
 class BillingLedgerCostRepository:
     """What frozen costs add up to, for the dashboard and for reconciliation.
 
@@ -145,6 +170,65 @@ class BillingLedgerCostRepository:
             )
         ).one()
         return int(total)
+
+    def bucket_totals(
+        self,
+        *,
+        workspace_ids: Sequence[str],
+        start: datetime,
+        end: datetime,
+        width_seconds: int,
+        app_id: str | None = None,
+        workload_id: str | None = None,
+    ) -> tuple[LedgerCostBucketTotal, ...]:
+        """What each interval of a window cost, per invoice line.
+
+        Placed into intervals by whole seconds elapsed from `start`, never by
+        `date_trunc` or `func.date`: those read the session `TimeZone`, which
+        nothing here sets, so the day a bar belonged to would depend on which
+        connection answered the request.
+
+        Grouped by dimension as well as by interval because that is the
+        granularity an invoice line has, and it costs the same read — the rows
+        are already being scanned to total them.
+        """
+
+        if width_seconds < 1:
+            raise InvalidInputError("a cost interval must be at least one second wide")
+        # Seconds against seconds, rather than an interval between two instants:
+        # the elapsed span is what both engines compute the same way, where
+        # subtracting one timestamp column from another is a `- interval` overload
+        # on one and string arithmetic on the other.
+        elapsed = extract("epoch", BillingLedgerSegmentTable.segment_started_at) - int(
+            start.timestamp()
+        )
+        index = cast(func.floor(elapsed / width_seconds), BigInteger)
+        found = self.session.execute(
+            select(
+                index,
+                BillingLedgerSegmentTable.dimension,
+                func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0),
+            )
+            .where(
+                *_window(
+                    workspace_ids=workspace_ids,
+                    start=start,
+                    end=end,
+                    app_id=app_id,
+                    workload_id=workload_id,
+                )
+            )
+            .group_by(index, BillingLedgerSegmentTable.dimension)
+            .order_by(index.asc(), BillingLedgerSegmentTable.dimension.asc())
+        ).all()
+        return tuple(
+            LedgerCostBucketTotal(
+                index=int(row[0]),
+                dimension=BilledDimension(row[1]),
+                cost_nanos=int(row[2]),
+            )
+            for row in found
+        )
 
     def account_dimension_totals(
         self, *, user_id: str, start: datetime, end: datetime
@@ -431,6 +515,7 @@ def _cost_row(
 __all__ = [
     "BillingLedgerCostRepository",
     "LedgerComponentTotal",
+    "LedgerCostBucketTotal",
     "LedgerCostCursor",
     "LedgerCostPage",
     "LedgerCostRow",

@@ -4,7 +4,7 @@ import base64
 import binascii
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import (
@@ -20,10 +20,12 @@ from database.repositories.billing_plan_changes import BillingPlanChangeIntentRe
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import account_terms
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
-from shared.http.usage import UsageCostGroupKey
+from shared.http.usage import UsageCostBucket, UsageCostGroupKey
+from shared.timestamps import to_utc
 from sqlalchemy.orm import Session
 
 MAX_COST_PAGE = 200
@@ -34,6 +36,20 @@ A cost window is scanned over an index on `(workspace_id, segment_started_at)`,
 so an unbounded one is a full-table read somebody can ask for by editing a URL.
 Just over a year, which covers every period anybody has a reason to look at.
 """
+
+MAX_COST_INTERVALS = 400
+"""The most intervals one series may be cut into.
+
+The window cap alone does not bound this: hourly intervals over the same year
+would be nine thousand of them, which is a response nobody can read and a chart
+nobody can draw. Matched to the window cap so a year of days is exactly reachable
+and an hourly request has to name a fortnight.
+"""
+
+_BUCKET_WIDTHS: dict[UsageCostBucket, timedelta] = {
+    UsageCostBucket.Hour: timedelta(hours=1),
+    UsageCostBucket.Day: timedelta(days=1),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +108,52 @@ class UsageCostPage:
     cost_nanos: int
     rows: tuple[LedgerCostRow, ...]
     next: str
+
+
+@dataclass(frozen=True, slots=True)
+class UsageCostDimensionTotal:
+    """One invoice line's share of an interval."""
+
+    dimension: BilledDimension
+    cost_nanos: int
+
+
+@dataclass(frozen=True, slots=True)
+class UsageCostInterval:
+    """What one interval of a window cost, and what it was charged under.
+
+    `ended_at` is clipped to the end of the window, so the last interval of a
+    period still running reports the span it actually covers.
+    """
+
+    started_at: datetime
+    ended_at: datetime
+    cost_nanos: int
+    dimensions: tuple[UsageCostDimensionTotal, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class UsageCostSeries:
+    """A window's spend, in the shape it took over time.
+
+    Every interval the window covers is present, quiet ones included: a chart
+    that skips them draws a fortnight of nothing as a fortnight of something.
+    `cost_nanos` is those intervals summed rather than a second total read
+    separately, so the figure and the bars it is drawn from cannot disagree.
+    """
+
+    bucket: UsageCostBucket
+    start: datetime
+    end: datetime
+    """The window as it was measured, in UTC.
+
+    Echoed rather than left to the caller because a request may name its window
+    without an offset, and a naive value read as local time here and as UTC by
+    the database would place the bars beside the wrong hours.
+    """
+
+    cost_nanos: int
+    intervals: tuple[UsageCostInterval, ...]
 
 
 class _CostCursorPayload(ContractModel):
@@ -182,10 +244,7 @@ class UsageCostService:
         workload_id: str | None = None,
         cursor: str | None = None,
     ) -> UsageCostPage:
-        if end <= start:
-            raise InvalidInputError("a cost window must end after it starts")
-        if (end - start).days > MAX_COST_WINDOW_DAYS:
-            raise InvalidInputError(f"a cost window may span at most {MAX_COST_WINDOW_DAYS} days")
+        _checked_window(start, end)
         if limit < 1 or limit > MAX_COST_PAGE:
             raise InvalidInputError(f"a cost page holds between 1 and {MAX_COST_PAGE} rows")
         repository = BillingLedgerCostRepository(self.session)
@@ -211,6 +270,81 @@ class UsageCostService:
             next=_encode_cursor(page.next),
         )
 
+    def series(
+        self,
+        *,
+        workspace_ids: Sequence[str],
+        start: datetime,
+        end: datetime,
+        bucket: UsageCostBucket,
+    ) -> UsageCostSeries:
+        """What the window cost, interval by interval.
+
+        One read for the whole window rather than one per interval: a chart of a
+        month is thirty-one questions with the same answer, and asking them
+        separately is thirty-one scans of the same index and thirty-one chances
+        for two of them to straddle a boundary.
+
+        Intervals are whole `bucket` widths measured from `start`, so a caller
+        that opens its window on a UTC boundary reads UTC days. Every interval
+        the window covers is returned, including the ones nothing ran in.
+        """
+
+        start, end = to_utc(start), to_utc(end)
+        _checked_window(start, end)
+        width = _BUCKET_WIDTHS[bucket]
+        count = -(-(end - start) // width)
+        if count > MAX_COST_INTERVALS:
+            raise InvalidInputError(
+                f"a cost series holds at most {MAX_COST_INTERVALS} intervals; "
+                f"this window is {count} of them"
+            )
+        totals: dict[int, list[UsageCostDimensionTotal]] = {}
+        for row in BillingLedgerCostRepository(self.session).bucket_totals(
+            workspace_ids=workspace_ids,
+            start=start,
+            end=end,
+            width_seconds=int(width.total_seconds()),
+        ):
+            totals.setdefault(row.index, []).append(
+                UsageCostDimensionTotal(dimension=row.dimension, cost_nanos=row.cost_nanos)
+            )
+        intervals = tuple(
+            _interval(start=start, end=end, width=width, index=index, totals=totals.get(index, ()))
+            for index in range(count)
+        )
+        return UsageCostSeries(
+            bucket=bucket,
+            start=start,
+            end=end,
+            cost_nanos=sum(interval.cost_nanos for interval in intervals),
+            intervals=intervals,
+        )
+
+
+def _checked_window(start: datetime, end: datetime) -> None:
+    if end <= start:
+        raise InvalidInputError("a cost window must end after it starts")
+    if (end - start).days > MAX_COST_WINDOW_DAYS:
+        raise InvalidInputError(f"a cost window may span at most {MAX_COST_WINDOW_DAYS} days")
+
+
+def _interval(
+    *,
+    start: datetime,
+    end: datetime,
+    width: timedelta,
+    index: int,
+    totals: Sequence[UsageCostDimensionTotal],
+) -> UsageCostInterval:
+    started_at = start + width * index
+    return UsageCostInterval(
+        started_at=started_at,
+        ended_at=min(started_at + width, end),
+        cost_nanos=sum(total.cost_nanos for total in totals),
+        dimensions=tuple(totals),
+    )
+
 
 def _encode_cursor(cursor: LedgerCostCursor | None) -> str:
     if cursor is None:
@@ -231,10 +365,14 @@ def _decode_cursor(cursor: str | None) -> LedgerCostCursor | None:
 
 
 __all__ = [
+    "MAX_COST_INTERVALS",
     "MAX_COST_PAGE",
     "MAX_COST_WINDOW_DAYS",
     "BillingStanding",
     "BillingStandingService",
+    "UsageCostDimensionTotal",
+    "UsageCostInterval",
     "UsageCostPage",
+    "UsageCostSeries",
     "UsageCostService",
 ]
