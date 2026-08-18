@@ -9,7 +9,7 @@ import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AppSummary } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
+import { exactTime, relativeTime } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -153,7 +153,7 @@ function AppCard({
                     item.failed_runs_24h > 0 ? "text-destructive" : "text-muted-foreground",
                   )}
                 >
-                  {formatCount(item.failed_runs_24h, "failed", "failed")}
+                  {countLabel(item.failed_runs_24h, "failed", "failed")}
                 </span>
               </div>
             </div>
@@ -167,9 +167,7 @@ function AppCard({
         </section>
 
         <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span>
-            {formatCount(item.running_containers, "running container", "running containers")}
-          </span>
+          <span>{countLabel(item.running_containers, "running container")}</span>
           <span aria-hidden="true">·</span>
           <span className="shrink-0" title={exactTime(lastDeployedAt)}>
             Deployed <time dateTime={lastDeployedAt}>{relativeTime(lastDeployedAt)}</time>
@@ -178,7 +176,7 @@ function AppCard({
 
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="micro-label shrink-0">
-            {formatCount(item.workload_count, "workload", "workloads")}
+            {countLabel(item.workload_count, "workload")}
           </span>
           {workloadKinds.map(([kind, count]) => (
             <span key={kind} className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -232,18 +230,9 @@ function normalizedActivity(values: number[]): number[] {
     : [...Array.from({ length: Math.max(24 - values.length, 0) }, () => 0), ...values].slice(-24);
 }
 
-function formatCount(value: number, singular: string, plural: string): string {
-  return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;
-}
-
 function formatKind(kind: string): string {
   return kind
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function exactTime(value: string): string {
-  const timestamp = new Date(value);
-  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }

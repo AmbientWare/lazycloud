@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { Link, type LinkProps } from "@tanstack/react-router";
 
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -13,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { Task } from "@/lib/api/schemas";
-import { durationBetween, relativeTime, startupBetween } from "@/lib/format";
+import { durationBetween, exactTime, relativeTime, startupBetween } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -37,21 +38,11 @@ export function TaskTable({
   const rows = tasks ?? [];
 
   if (!tasks) {
-    return (
-      <div className={cn("space-y-2 p-4", className)} aria-hidden="true">
-        {Array.from({ length: 5 }, (_, index) => (
-          <Skeleton key={index} className="h-6 w-full" />
-        ))}
-      </div>
-    );
+    return <RowsSkeleton rows={5} height="h-6" className={className} />;
   }
 
   if (rows.length === 0) {
-    return (
-      <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-        {emptyMessage}
-      </div>
-    );
+    return <PanelEmpty message={emptyMessage} className="h-40" />;
   }
 
   return (
@@ -155,9 +146,4 @@ export function TaskTable({
       {continuation}
     </div>
   );
-}
-
-function exactTime(value: string): string {
-  const timestamp = new Date(value);
-  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }

@@ -1,8 +1,10 @@
 import { useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Check, Copy, Download, Pause, Play, Search } from "lucide-react";
+import { Download, Pause, Play, Search } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { CopyButton } from "@/components/shared/CopyButton";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,7 +36,6 @@ export function LogViewer({
   const [follow, setFollow] = useState(initialFollow);
   const [filter, setFilter] = useState("");
   const [liveRecords, setLiveRecords] = useState<LogRecord[]>([]);
-  const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const history = useInfiniteQuery(logHistoryQueryOptions(workspaceId, scope));
@@ -115,21 +116,11 @@ export function LogViewer({
             {streamStatusLabel(streamStatus)}
           </span>
         ) : null}
-        <Button
-          variant="ghost"
-          size="icon"
+        <CopyButton
+          value={() => formatLogRecords(visible)}
+          label="visible logs"
           disabled={visible.length === 0}
-          aria-label="Copy visible logs"
-          title="Copy visible logs"
-          onClick={() => {
-            void navigator.clipboard.writeText(formatLogRecords(visible)).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1_500);
-            });
-          }}
-        >
-          {copied ? <Check className="size-3.5 text-positive" /> : <Copy className="size-3.5" />}
-        </Button>
+        />
         <Button
           variant="ghost"
           size="icon"
@@ -160,9 +151,7 @@ export function LogViewer({
             retrying={history.isFetching}
           />
         ) : visible.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-            No log lines
-          </div>
+          <PanelEmpty message="No log lines" className="h-32" />
         ) : (
           <div className="mono py-2 text-xs leading-5" role="list" aria-label="Log output">
             {visible.map((record, index) => (

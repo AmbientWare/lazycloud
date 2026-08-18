@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Copy } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/shared/CopyButton";
+import { Fact } from "@/components/shared/Fact";
+import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { CronJob, Deployment } from "@/lib/api/schemas";
 import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
@@ -65,17 +65,9 @@ function InvokeTarget({
   deploymentId: string;
 }) {
   const query = useQuery(deploymentUrlQueryOptions(workspaceId, deploymentId));
-  const [copied, setCopied] = useState(false);
 
   if (query.isPending) return <Skeleton className="h-8 w-full" />;
   if (query.isError) return <div className="text-sm text-destructive">{query.error.message}</div>;
-
-  const copy = () => {
-    void navigator.clipboard.writeText(query.data.url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1_500);
-    });
-  };
 
   return (
     <div>
@@ -84,9 +76,7 @@ function InvokeTarget({
         <code className="mono min-w-0 flex-1 truncate rounded bg-muted/60 px-2.5 py-1.5 text-xs">
           {query.data.url}
         </code>
-        <Button variant="ghost" size="icon" onClick={copy} aria-label="Copy invoke URL">
-          {copied ? <Check className="size-3.5 text-positive" /> : <Copy className="size-3.5" />}
-        </Button>
+        <CopyButton value={query.data.url} label="invoke URL" />
       </div>
     </div>
   );
@@ -109,7 +99,7 @@ function RuntimeFacts({
 }) {
   const resources = deployment.spec.resources;
   return (
-    <div className="grid grid-cols-2 content-start gap-x-4 gap-y-4 p-4 lg:grid-cols-5">
+    <FactGrid columns={5} className="content-start gap-x-4 p-4">
       <Fact label="Version" value={`v${deployment.version}`} />
       <Fact label="Pool" value={poolLabel(deployment)} />
       {showRunning ? (
@@ -131,7 +121,7 @@ function RuntimeFacts({
           value={`${resources.gpu}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
         />
       ) : null}
-    </div>
+    </FactGrid>
   );
 }
 
@@ -141,7 +131,7 @@ function poolLabel(deployment: Deployment): string {
 
 function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic: boolean }) {
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+    <FactGrid columns={2}>
       <Fact label="Route" value={deployment.spec.route || "/"} mono />
       <Fact
         label="Methods"
@@ -151,14 +141,14 @@ function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic:
         mono
       />
       <Fact label="Authentication" value={isPublic ? "Public" : "Bearer token"} />
-    </div>
+    </FactGrid>
   );
 }
 
 function PodFacts({ deployment }: { deployment: Deployment }) {
   const ports = Object.entries(deployment.spec.ports);
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+    <FactGrid columns={2}>
       <Fact
         label="Ports"
         value={ports.length ? ports.map(([name, port]) => `${name}:${port}`).join(", ") : "None"}
@@ -169,7 +159,7 @@ function PodFacts({ deployment }: { deployment: Deployment }) {
         value={deployment.spec.command.length ? deployment.spec.command.join(" ") : "Image default"}
         mono
       />
-    </div>
+    </FactGrid>
   );
 }
 
@@ -186,7 +176,7 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
   }
 
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+    <FactGrid columns={2} className="gap-y-5">
       <Fact label="Schedule" value={job?.cron ?? "Not registered"} mono />
       <Fact label="Timezone" value="UTC" />
       <Fact
@@ -200,18 +190,7 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
         }
       />
       <Fact label="Last run" value={job?.last_run_at ? relativeTime(job.last_run_at) : "-"} />
-    </div>
-  );
-}
-
-function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <div className="micro-label mb-1">{label}</div>
-      <div className={`${mono ? "mono" : ""} truncate text-sm`} title={value}>
-        {value}
-      </div>
-    </div>
+    </FactGrid>
   );
 }
 

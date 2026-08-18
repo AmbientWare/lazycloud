@@ -1,18 +1,8 @@
-import { useState } from "react";
-import { Check, Copy } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/shared/CopyButton";
 import { cn } from "@/lib/utils";
 
-/** Beam-style copyable CLI command hint for empty states and onboarding. */
+/** A CLI command an empty state offers, ready to take to a terminal. */
 export function CliHint({ command, className }: { command: string; className?: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
   return (
     <div
       className={cn(
@@ -21,17 +11,7 @@ export function CliHint({ command, className }: { command: string; className?: s
       )}
     >
       <code className="mono truncate text-xs text-muted-foreground">$ {command}</code>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={copy}
-        aria-label="Copy command"
-        title="Copy command"
-        className="size-7"
-      >
-        {copied ? <Check className="size-3.5 text-positive" /> : <Copy className="size-3.5" />}
-      </Button>
+      <CopyButton value={command} label="command" className="size-7" />
     </div>
   );
 }

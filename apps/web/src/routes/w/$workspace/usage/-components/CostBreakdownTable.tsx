@@ -1,8 +1,9 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -51,20 +52,15 @@ export function CostBreakdownTable({
   const currency = costs.data?.pages[0]?.currency ?? "USD";
 
   if (costs.isPending) {
-    return (
-      <div className="space-y-2 p-4" aria-hidden="true">
-        {Array.from({ length: 5 }, (_, index) => (
-          <Skeleton key={index} className="h-6 w-full" />
-        ))}
-      </div>
-    );
+    return <RowsSkeleton rows={5} height="h-6" />;
   }
 
   if (rows.length === 0) {
     return (
-      <div className="flex h-40 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-        Nothing ran in this period. Costs appear here as soon as a workload does.
-      </div>
+      <PanelEmpty
+        message="Nothing ran in this period. Costs appear here as soon as a workload does."
+        className="h-40 px-6"
+      />
     );
   }
 

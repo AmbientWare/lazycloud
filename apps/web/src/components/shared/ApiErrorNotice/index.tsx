@@ -5,6 +5,13 @@ import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
+/**
+ * The failure a region reports in place of the content it could not produce,
+ * whether that came back from the API or was thrown while rendering.
+ *
+ * `error` is `unknown` because a render throw is not required to be an `Error`,
+ * and a boundary that narrowed it would have to keep its own copy of this.
+ */
 export function ApiErrorNotice({
   error,
   title,
@@ -13,7 +20,7 @@ export function ApiErrorNotice({
   compact = false,
   className,
 }: {
-  error: Error;
+  error: unknown;
   title: string;
   onRetry?: () => void;
   retrying?: boolean;
@@ -21,6 +28,8 @@ export function ApiErrorNotice({
   className?: string;
 }) {
   const apiError = error instanceof ApiError ? error : null;
+  const message =
+    error instanceof Error && error.message ? error.message : "An unexpected error occurred.";
   const [now, setNow] = useState(() => Date.now());
   const waitSeconds = apiError?.retryAt
     ? Math.max(0, Math.ceil((apiError.retryAt - now) / 1_000))
@@ -44,7 +53,7 @@ export function ApiErrorNotice({
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">{title}</p>
-        <p className="mt-0.5 break-words text-muted-foreground">{error.message}</p>
+        <p className="mt-0.5 break-words text-muted-foreground">{message}</p>
         {apiError?.requestId || apiError?.status === 429 ? (
           <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {apiError.status === 429 ? (

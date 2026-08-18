@@ -1,60 +1,8 @@
 import { Component, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, type ErrorComponentProps } from "@tanstack/react-router";
-import { AlertTriangle, Loader2, RotateCcw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-
-function renderErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "An unexpected rendering error occurred.";
-}
-
-function RenderErrorNotice({
-  title,
-  error,
-  onRetry,
-  retrying = false,
-  compact = false,
-  className,
-}: {
-  title: string;
-  error: unknown;
-  onRetry?: () => void;
-  retrying?: boolean;
-  compact?: boolean;
-  className?: string;
-}) {
-  return (
-    <div
-      role="alert"
-      className={cn(
-        "flex min-w-0 items-start gap-3 text-sm",
-        compact ? "px-4 py-2.5" : "p-4",
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-      <div className="min-w-0 flex-1">
-        <p className="font-medium text-foreground">{title}</p>
-        <p className="mt-0.5 break-words text-muted-foreground">{renderErrorMessage(error)}</p>
-      </div>
-      {onRetry ? (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={retrying}
-          aria-busy={retrying}
-          onClick={onRetry}
-        >
-          {retrying ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-          {retrying ? "Retrying" : "Retry"}
-        </Button>
-      ) : null}
-    </div>
-  );
-}
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 
 /**
  * Contains a render-time throw to one panel: the surrounding page, shell, and
@@ -75,7 +23,7 @@ export class PanelErrorBoundary extends Component<
   render(): ReactNode {
     if (this.state.failed) {
       return (
-        <RenderErrorNotice
+        <ApiErrorNotice
           title={this.props.title}
           error={this.state.error}
           compact={this.props.compact}
@@ -112,7 +60,7 @@ export function RouteErrorFallback({ error, reset }: ErrorComponentProps) {
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center overflow-auto p-4">
       <section className="panel w-full max-w-md rounded-md">
-        <RenderErrorNotice
+        <ApiErrorNotice
           title="This page hit an unexpected error"
           error={error}
           retrying={retrying}

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 
 import { PanelError } from "@/components/shared/PanelError";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ResourceConfig, ResourceRow } from "@/lib/api/resources";
 import { displayValue } from "@/lib/format";
@@ -39,9 +40,7 @@ export function CollectionAccordion({
         ) : query.isError ? (
           <PanelError message={query.error.message} />
         ) : rows.length === 0 ? (
-          <p className="p-8 text-center text-sm text-muted-foreground">
-            No {config.title.toLowerCase()}
-          </p>
+          <PanelEmpty message={`No ${config.title.toLowerCase()}`} className="p-8" />
         ) : (
           <div className="divide-y divide-border/70">
             {rows.map((row) => {

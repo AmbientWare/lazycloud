@@ -3,6 +3,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Archive, Camera, Loader2, Square } from "lucide-react";
 
 import { CopyId } from "@/components/shared/CopyId";
+import { Fact } from "@/components/shared/Fact";
+import { FactGrid } from "@/components/shared/Fact/FactGrid";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Panel } from "@/components/shared/Panel";
@@ -108,8 +111,9 @@ function SandboxDetailPage() {
                 />
               </PanelErrorBoundary>
             ) : (
-              <EmptyOperation
+              <PanelEmpty
                 message={running ? "Shell access is unavailable" : "Sandbox is not running"}
+                className="h-56"
               />
             )}
           </TabsContent>
@@ -119,7 +123,7 @@ function SandboxDetailPage() {
                 <SandboxFileBrowser containerId={containerId} writable className="h-full" />
               </PanelErrorBoundary>
             ) : (
-              <EmptyOperation message="Sandbox is not running" />
+              <PanelEmpty message="Sandbox is not running" className="h-56" />
             )}
           </TabsContent>
           <TabsContent value="processes" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
@@ -128,7 +132,7 @@ function SandboxDetailPage() {
                 <SandboxProcessList containerId={containerId} writable className="h-full" />
               </PanelErrorBoundary>
             ) : (
-              <EmptyOperation message="Sandbox is not running" />
+              <PanelEmpty message="Sandbox is not running" className="h-56" />
             )}
           </TabsContent>
           <TabsContent value="network" className="m-0 min-h-0 flex-1 overflow-auto p-3">
@@ -209,7 +213,7 @@ function SandboxActions({
 
 function SandboxFacts({ record }: { record: ContainerDetail }) {
   return (
-    <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-xs">
+    <FactGrid columns={2} className="gap-x-5 gap-y-3 text-xs">
       <Fact label="Image" value={record.image} mono />
       <Fact
         label="Uptime"
@@ -225,24 +229,8 @@ function SandboxFacts({ record }: { record: ContainerDetail }) {
         mono
       />
       <Fact label="Created" value={relativeTime(record.created_at)} />
-      <div>
-        <dt className="micro-label mb-1">Container</dt>
-        <dd className="-ml-1.5">
-          <CopyId value={record.id} />
-        </dd>
-      </div>
-    </dl>
-  );
-}
-
-function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <dt className="micro-label mb-1">{label}</dt>
-      <dd className={mono ? "mono truncate" : "truncate tabular-nums"} title={value}>
-        {value}
-      </dd>
-    </div>
+      <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
+    </FactGrid>
   );
 }
 
@@ -251,7 +239,7 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
   const urls = useQuery(sandboxUrlsQueryOptions(workspaceId, record.id, running));
   const configuredPorts = [...new Set(Object.values(record.ports))].sort((a, b) => a - b);
 
-  if (!running) return <EmptyOperation message="Sandbox is not running" />;
+  if (!running) return <PanelEmpty message="Sandbox is not running" className="h-56" />;
   if (urls.isPending) {
     return <Skeleton className="h-24 w-full" />;
   }
@@ -293,16 +281,8 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
           </div>
         ))
       ) : (
-        <p className="p-4 text-sm text-muted-foreground">No exposed ports</p>
+        <PanelEmpty message="No exposed ports" className="p-4" />
       )}
-    </div>
-  );
-}
-
-function EmptyOperation({ message }: { message: string }) {
-  return (
-    <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
-      {message}
     </div>
   );
 }

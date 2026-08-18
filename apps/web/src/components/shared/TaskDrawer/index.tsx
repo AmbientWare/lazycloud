@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { postJson, withWorkspace } from "@/lib/api/client";
 import { isTerminalTaskStatus, taskSchema, type Task } from "@/lib/api/schemas";
-import { durationBetween, relativeTime, startupBetween } from "@/lib/format";
+import { durationBetween, exactTime, relativeTime, startupBetween } from "@/lib/format";
 import { rerunTask, taskQueryOptions } from "@/lib/queries/tasks";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
@@ -389,9 +389,4 @@ function TaskDrawerBody({
       </div>
     </div>
   );
-}
-
-function exactTime(value: string): string {
-  const timestamp = new Date(value);
-  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }

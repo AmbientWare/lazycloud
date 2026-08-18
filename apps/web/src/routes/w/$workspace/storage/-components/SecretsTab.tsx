@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
+import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelError } from "@/components/shared/PanelError";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -60,9 +62,10 @@ export function SecretsTab({
         ) : query.isError ? (
           <PanelError message={query.error.message} />
         ) : query.data.secrets.length === 0 && !creating ? (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            No secrets yet. Create one to inject it into a workload.
-          </p>
+          <PanelEmpty
+            message="No secrets yet. Create one to inject it into a workload."
+            className="p-6"
+          />
         ) : (
           query.data.secrets.map((secret) =>
             editing === secret.name ? (
@@ -126,7 +129,6 @@ function SecretRow({
   const [revealedValue, setRevealedValue] = useState<string | null>(null);
   const [revealing, setRevealing] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const remove = useMutation({
     mutationFn: () => deleteSecret(workspaceId, secret.name),
     onSuccess: () =>
@@ -139,12 +141,10 @@ function SecretRow({
     if (revealedValue !== null) {
       setRevealedValue(null);
       setRevealError(null);
-      setCopied(false);
       return;
     }
     setRevealing(true);
     setRevealError(null);
-    setCopied(false);
     try {
       setRevealedValue(await revealSecretValue(workspaceId, secret.name));
     } catch (error) {
@@ -154,15 +154,9 @@ function SecretRow({
     }
   };
 
-  const copyRevealedValue = () => {
-    if (revealedValue === null) return;
-    void navigator.clipboard.writeText(revealedValue).then(() => setCopied(true));
-  };
-
   const beginDelete = () => {
     setRevealedValue(null);
     setRevealError(null);
-    setCopied(false);
     setConfirming(true);
   };
 
@@ -193,18 +187,12 @@ function SecretRow({
         <code aria-live="polite" className="mono min-w-0 flex-1 truncate text-xs text-foreground">
           {revealedValue ?? "********"}
         </code>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={revealedValue === null ? "invisible size-7 shrink-0" : "size-7 shrink-0"}
+        <CopyButton
+          value={revealedValue ?? ""}
+          label={`secret ${secret.name}`}
           disabled={revealedValue === null}
-          tabIndex={revealedValue === null ? -1 : 0}
-          onClick={copyRevealedValue}
-          aria-label={`Copy secret ${secret.name}`}
-          title={copied ? "Copied" : "Copy secret"}
-        >
-          {copied ? <Check className="text-positive" /> : <Copy />}
-        </Button>
+          className={revealedValue === null ? "invisible size-7 shrink-0" : "size-7 shrink-0"}
+        />
         <Button
           variant="ghost"
           size="icon"

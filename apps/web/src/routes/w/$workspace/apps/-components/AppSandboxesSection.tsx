@@ -2,12 +2,12 @@ import { Link } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 
 import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { SandboxRow } from "@/lib/api/schemas";
-import { formatDuration, relativeTime } from "@/lib/format";
-
-import { exactTime, formatCount } from "./app-detail-format";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { exactTime, formatDuration, relativeTime } from "@/lib/format";
 
 export function AppSandboxesSection({
   workspaceName,
@@ -33,7 +33,8 @@ export function AppSandboxesSection({
         action={
           sandboxes ? (
             <span className="whitespace-nowrap text-[11px] text-muted-foreground">
-              {formatCount(running, "running")} · {formatCount(sandboxes.length, "recent")}
+              {countLabel(running, "running", "running")} ·{" "}
+              {countLabel(sandboxes.length, "recent", "recent")}
             </span>
           ) : null
         }
@@ -45,15 +46,9 @@ export function AppSandboxesSection({
             {error}
           </div>
         ) : pending ? (
-          <div className="space-y-2 p-4" aria-hidden="true">
-            {Array.from({ length: 3 }, (_, index) => (
-              <Skeleton key={index} className="h-12 w-full" />
-            ))}
-          </div>
+          <RowsSkeleton rows={3} height="h-12" />
         ) : (sandboxes?.length ?? 0) === 0 ? (
-          <div className="flex min-h-32 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-            No sandboxes for this app
-          </div>
+          <PanelEmpty message="No sandboxes for this app" className="min-h-32" />
         ) : (
           <div className="divide-y divide-border/80">
             {sandboxes?.map((sandbox, index) => {

@@ -1,6 +1,7 @@
 import { Area, CartesianGrid, ComposedChart, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import {
   ChartContainer,
   ChartLegend,
@@ -49,14 +50,10 @@ export function ContainerMetricsCharts({
 
   if (!data.length) {
     return (
-      <div
-        className={cn(
-          "flex items-center justify-center text-sm text-muted-foreground",
-          variant === "compact" ? "h-36" : "h-44",
-        )}
-      >
-        No compute samples
-      </div>
+      <PanelEmpty
+        message="No compute samples"
+        className={variant === "compact" ? "h-36" : "h-44"}
+      />
     );
   }
 

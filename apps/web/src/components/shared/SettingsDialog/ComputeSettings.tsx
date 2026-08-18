@@ -18,6 +18,8 @@ import {
 } from "./AwsConnectionDialog/lifecycle";
 import { Panel } from "@/components/shared/Panel";
 import { PanelError } from "@/components/shared/PanelError";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
@@ -135,14 +137,12 @@ function ConnectedCloudsPanel({
       contentClassName="overflow-y-auto"
     >
       {!connection ? (
-        <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
-          <CloudCog className="size-5 text-muted-foreground" aria-hidden="true" />
-          <p className="mt-3 text-sm font-medium">No connected clouds</p>
-          <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-            Connect an AWS account once. Capacity is then provisioned there only when a workload
-            requests AWS placement.
-          </p>
-        </div>
+        <PanelEmpty
+          icon={CloudCog}
+          message="No connected clouds"
+          detail="Connect an AWS account once. Capacity is then provisioned there only when a workload requests AWS placement."
+          className="min-h-64 px-6"
+        />
       ) : (
         <div>
           <CloudProviderRow
@@ -657,16 +657,11 @@ function SelfHostedPanel({
       contentClassName="overflow-y-auto"
     >
       {loading ? (
-        <div className="space-y-2 p-4">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </div>
+        <RowsSkeleton rows={2} height="h-10" />
       ) : error ? (
         <PanelError message={error.message} />
       ) : machines.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-          No self-hosted machines connected
-        </p>
+        <PanelEmpty message="No self-hosted machines connected" className="px-4 py-6" />
       ) : (
         <ul aria-label="Self-hosted machines" className="divide-y divide-border">
           {machines.map((machine) => (
