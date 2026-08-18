@@ -6,12 +6,10 @@ from shared.http.tasks import TaskResponse
 
 from lazycloud.function_results import FunctionResultDecodeError, parse_function_result
 
-_FUNCTION_RESULT_KINDS = frozenset({StubKind.Function, StubKind.CronJob})
-
 
 def task_result_human_value(task: TaskResponse) -> object:
     workload = task.workload
-    if task.result is None or workload is None or workload.kind not in _FUNCTION_RESULT_KINDS:
+    if task.result is None or workload is None or workload.kind is not StubKind.Function:
         return task.result
     try:
         payload = parse_function_result(task.result)

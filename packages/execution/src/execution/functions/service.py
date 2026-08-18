@@ -81,8 +81,6 @@ from execution.services import ExecutionServices, SchedulerSubmissionResult
 
 LOGGER = logging.getLogger(__name__)
 
-FUNCTION_LIKE_STUB_KINDS = {StubKind.Function, StubKind.CronJob}
-
 
 @dataclass(slots=True)
 class FunctionControlService:
@@ -96,7 +94,7 @@ class FunctionControlService:
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse:
         try:
             stub = self.control_plane.get_stub(request.stub_id)
-            if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+            if stub.kind is not StubKind.Function:
                 return FunctionInvokeResponse.from_result(
                     task_id="",
                     output=f"stub is not a function: {stub.id}",
@@ -393,7 +391,7 @@ class FunctionControlService:
             )
             return scheduled is not None
         stub = self.control_plane.get_stub(stub_id)
-        if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+        if stub.kind is not StubKind.Function:
             return False
         launched = self._launch_function_container(
             stub,
@@ -594,7 +592,7 @@ class FunctionControlService:
         """
 
         stub = self.control_plane.get_stub(stub_id)
-        if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+        if stub.kind is not StubKind.Function:
             return
         config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
         self._assert_within_pending_limit(stub.id, config)
@@ -740,7 +738,7 @@ class FunctionControlService:
         for task in self.services.tasks.due_retry_tasks(now=current, limit=limit):
             if task.stub_id:
                 stub = self.control_plane.get_stub(task.stub_id)
-                if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+                if stub.kind is not StubKind.Function:
                     continue
             if task.next_retry_at is not None and current < task.next_retry_at:
                 continue
@@ -796,7 +794,7 @@ class FunctionControlService:
             served.add(task.stub_id)
             try:
                 stub = self.control_plane.get_stub(task.stub_id)
-                if stub.kind not in FUNCTION_LIKE_STUB_KINDS:
+                if stub.kind is not StubKind.Function:
                     continue
                 result = self._schedule_function_task(task, eligible_at=at)
             except DomainError:

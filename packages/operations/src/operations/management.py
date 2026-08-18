@@ -33,7 +33,7 @@ from database.repositories.orchestration import (
 from database.repositories.storage import ObjectRepository
 from execution.containers.planning import validate_checkpoint_activation
 from execution.containers.service import ContainerService
-from execution.functions.service import FUNCTION_LIKE_STUB_KINDS, FunctionControlService
+from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
 from observability.events import EventService
 from observability.metrics import MetricsService
@@ -299,10 +299,7 @@ def _is_uuid(value: str) -> bool:
 
 def _task_view(record: RelatedTaskRecord, *, can_write: bool) -> TaskView:
     terminal = is_terminal_task_status(record.task.status)
-    rerunnable_stub = record.workload is not None and record.workload.kind in {
-        StubKind.Function,
-        StubKind.CronJob,
-    }
+    rerunnable_stub = record.workload is not None and record.workload.kind is StubKind.Function
     actions = TaskActionCapabilities(
         can_cancel=can_write and not terminal,
         can_rerun=can_write and terminal and rerunnable_stub,
@@ -580,12 +577,13 @@ class ManagementService:
                 status="active" if deployment.active else "inactive",
             )
         self._publish_deployment_change(updated, workspace_id=workspace_id)
-        if updated.kind is DeploymentKind.CronJob:
-            self.services.cron_jobs.set_deployment_enabled(
-                updated.id,
-                enabled=active,
-                workspace=workspace,
-            )
+        # Unconditional: the call matches on deployment id, so a deployment with
+        # no schedule has nothing to toggle and asking is cheaper than knowing.
+        self.services.cron_jobs.set_deployment_enabled(
+            updated.id,
+            enabled=active,
+            workspace=workspace,
+        )
         if not active:
             self._stop_deployment_containers(workspace, updated)
         self.services.events.emit(
@@ -1104,7 +1102,7 @@ class ManagementService:
         """
 
         stub = self._stub_for_task(task)
-        if stub is not None and stub.kind in FUNCTION_LIKE_STUB_KINDS:
+        if stub is not None and stub.kind is StubKind.Function:
             FunctionControlService(self.services).cancel_task(task.id)
             return
         self.services.tasks.cancel(task.id)
