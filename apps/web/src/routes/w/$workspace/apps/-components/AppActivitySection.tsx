@@ -1,7 +1,7 @@
 import { Panel } from "@/components/shared/Panel";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { TaskTimeWindowBucket } from "@/lib/api/schemas";
+import { countLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import { ActivitySparkline } from "./ActivitySparkline";

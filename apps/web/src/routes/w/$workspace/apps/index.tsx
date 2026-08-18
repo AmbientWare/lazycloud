@@ -5,11 +5,10 @@ import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { PanelError } from "@/components/shared/PanelError";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AppSummary } from "@/lib/api/schemas";
-import { exactTime, relativeTime } from "@/lib/format";
+import { countLabel, exactTime, formatKind, relativeTime } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -140,23 +139,19 @@ function AppCard({
         </header>
 
         <section className="mt-6" aria-label="24 hour activity">
-          <div>
-            <div>
-              <div className="micro-label">Tasks · 24 hours</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="readout text-xl leading-none text-foreground">
-                  {item.runs_24h.toLocaleString()}
-                </span>
-                <span
-                  className={cn(
-                    "text-xs",
-                    item.failed_runs_24h > 0 ? "text-destructive" : "text-muted-foreground",
-                  )}
-                >
-                  {countLabel(item.failed_runs_24h, "failed", "failed")}
-                </span>
-              </div>
-            </div>
+          <div className="micro-label">Tasks · 24 hours</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="readout text-xl leading-none text-foreground">
+              {item.runs_24h.toLocaleString()}
+            </span>
+            <span
+              className={cn(
+                "text-xs",
+                item.failed_runs_24h > 0 ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {countLabel(item.failed_runs_24h, "failed", "failed")}
+            </span>
           </div>
           <ActivitySparkline
             values={normalizedActivity(item.activity_24h)}
@@ -228,11 +223,4 @@ function normalizedActivity(values: number[]): number[] {
   return values.length === 24
     ? values
     : [...Array.from({ length: Math.max(24 - values.length, 0) }, () => 0), ...values].slice(-24);
-}
-
-function formatKind(kind: string): string {
-  return kind
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }

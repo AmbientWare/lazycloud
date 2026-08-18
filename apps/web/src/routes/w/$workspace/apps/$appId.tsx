@@ -67,22 +67,19 @@ function AppDetailPage() {
           )
         }
         actions={
-          app.isError ? null : (
+          app.data ? (
             <>
               <AppDetailStatus
-                app={app.data}
                 latestDeployment={latestDeployment}
                 activeWorkloads={activeWorkloads}
               />
-              {app.data ? (
-                <AppLifecycleActions
-                  app={app.data}
-                  workspaceId={workspace.id}
-                  workspaceName={workspace.name}
-                />
-              ) : null}
+              <AppLifecycleActions
+                app={app.data}
+                workspaceId={workspace.id}
+                workspaceName={workspace.name}
+              />
             </>
-          )
+          ) : null
         }
         contentClassName="overflow-y-auto lg:overflow-hidden"
       >

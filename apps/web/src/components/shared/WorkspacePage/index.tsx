@@ -1,14 +1,9 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
 /** The one measure every workspace page is set to. */
-const PAGE_WIDTHS = {
-  wide: "max-w-[1600px]",
-  full: "",
-} as const;
-
-export type WorkspacePageWidth = keyof typeof PAGE_WIDTHS;
+const PAGE_WIDTH = "max-w-[1600px]";
 
 /**
  * The frame every workspace page opens with.
@@ -28,19 +23,15 @@ export function WorkspacePage({
   description,
   actions,
   children,
-  width = "wide",
   className,
   contentClassName,
-  contentStyle,
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
-  width?: WorkspacePageWidth;
   className?: string;
   contentClassName?: string;
-  contentStyle?: CSSProperties;
 }) {
   return (
     <div
@@ -50,7 +41,7 @@ export function WorkspacePage({
         className,
       )}
     >
-      <div className={cn("mx-auto flex min-h-0 w-full flex-1 flex-col gap-3", PAGE_WIDTHS[width])}>
+      <div className={cn("mx-auto flex min-h-0 w-full flex-1 flex-col gap-3", PAGE_WIDTH)}>
         <header className="panel shrink-0 rounded-md bg-card px-4 py-3">
           <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -67,7 +58,6 @@ export function WorkspacePage({
         <div
           data-workspace-page-content=""
           className={cn("min-h-0 flex-1 overflow-hidden", contentClassName)}
-          style={contentStyle}
         >
           {children}
         </div>

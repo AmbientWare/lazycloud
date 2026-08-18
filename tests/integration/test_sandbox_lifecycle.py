@@ -12,7 +12,6 @@ from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from scheduler.autoscaling import AutoscalingDriver, PodAutoscaler
-from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -22,6 +21,7 @@ from scheduler.state import (
 from shared.container_requests import WorkerContainerRequestPayload
 from shared.containers import ContainerStatus
 from shared.http.pods import CreatePodRequest, PodSandboxUpdateTTLRequest
+from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.workload_keys import pod_keep_warm_lock_key
 from tests.real_redis import RealRedisActors

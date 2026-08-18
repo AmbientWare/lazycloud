@@ -6,8 +6,6 @@ export type UsageRangeKey = (typeof usageRangeKeys)[number];
 
 export type UsageRange = {
   key: UsageRangeKey;
-  /** What the control is labelled with. */
-  label: string;
   /** How the page's facts and its empty states name the span in a sentence. */
   caption: string;
   window: UsageCostWindow;
@@ -31,32 +29,48 @@ const DAY_MS = 24 * HOUR_MS;
 /**
  * The window one range covers, and how finely it is read.
  *
- * Every window ends at `at` rather than at a future boundary. A month asked for
- * whole would answer with the days nobody has lived yet, and the chart drawn
- * from it is empty by construction — somebody reading it on the third would see
- * three bars of spend and twenty-eight of nothing.
+ * Both ends sit on a UTC boundary of the range's own interval, so the intervals
+ * the server measures are the days and hours a customer reads them as. UTC
+ * because that is the calendar the billing period is kept in; a local-midnight
+ * window would put the customer's day boundary somewhere inside the platform's.
  *
- * Every window opens on a UTC boundary of its own interval, so the intervals the
- * server measures from that start are the days and hours a customer reads them
- * as. UTC because that is the calendar the billing period is kept in; a
- * local-midnight window would put the customer's day boundary somewhere inside
- * the platform's.
+ * The far end is the boundary closing the interval in progress, never the far
+ * end of the calendar period: a month asked for whole answers with the days
+ * nobody has lived yet, and somebody reading it on the third would see three
+ * bars of spend and twenty-eight of nothing. Ending on a boundary rather than at
+ * the instant of the call is also what makes the window cacheable — both ends
+ * are part of the query key, and an end taken to the millisecond guarantees a
+ * miss on every arrival at the page and leaves the abandoned window in the cache
+ * until it is collected.
  */
 export function usageRange(key: UsageRangeKey, at: Date): UsageRange {
-  return { key, ...RANGE_TEXT[key], ...span(key, at) };
+  return { key, caption: RANGE_TEXT[key].caption, ...span(key, at) };
 }
 
 function span(key: UsageRangeKey, at: Date): { window: UsageCostWindow; bucket: UsageCostBucket } {
-  const end = at.toISOString();
+  const hour = startOfHour(at);
+  const day = startOfDay(at);
   switch (key) {
     case "24h":
-      return { window: { start: iso(startOfHour(at) - 23 * HOUR_MS), end }, bucket: "hour" };
+      return {
+        window: { start: iso(hour - 23 * HOUR_MS), end: iso(hour + HOUR_MS) },
+        bucket: "hour",
+      };
     case "7d":
-      return { window: { start: iso(startOfDay(at) - 6 * DAY_MS), end }, bucket: "day" };
+      return {
+        window: { start: iso(day - 6 * DAY_MS), end: iso(day + DAY_MS) },
+        bucket: "day",
+      };
     case "30d":
-      return { window: { start: iso(startOfDay(at) - 29 * DAY_MS), end }, bucket: "day" };
+      return {
+        window: { start: iso(day - 29 * DAY_MS), end: iso(day + DAY_MS) },
+        bucket: "day",
+      };
     case "month":
-      return { window: { start: calendarMonthWindow(at).start, end }, bucket: "day" };
+      return {
+        window: { start: calendarMonthWindow(at).start, end: iso(day + DAY_MS) },
+        bucket: "day",
+      };
   }
 }
 

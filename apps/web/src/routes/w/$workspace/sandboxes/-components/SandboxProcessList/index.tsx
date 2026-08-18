@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Square } from "lucide-react";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -55,7 +56,7 @@ export function SandboxProcessList({
             ))}
           </div>
         ) : query.isError ? (
-          <p className="p-3 text-sm text-destructive">{query.error.message}</p>
+          <PanelError message={query.error.message} />
         ) : query.data.processes.length === 0 ? (
           <PanelEmpty message="No processes" className="p-4" />
         ) : (

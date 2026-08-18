@@ -12,10 +12,10 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
-import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { countLabel } from "@/lib/format";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
@@ -87,11 +87,6 @@ function WorkloadDetailPage() {
       enabled: Boolean(group),
     }),
   );
-  const latency = useQuery({
-    ...taskLatencyQueryOptions(workspace.id, group?.stubIds ?? []),
-    enabled: Boolean(group) && OBSERVABLE_KINDS.has(group?.kind ?? ""),
-  });
-
   if (deployments.isPending || stubs.isPending || app.isPending) return <WorkloadSkeleton />;
   const loadError = deployments.error ?? stubs.error ?? app.error;
   if (loadError) {
@@ -115,11 +110,6 @@ function WorkloadDetailPage() {
   const isPublic = Boolean(app.data?.public || currentStub?.public);
   const isPod = group.kind === "pod";
   const showsInvoke = group.active && PLAYGROUND_KINDS.has(group.kind);
-  // The chart earns its band only where there is something in the window to
-  // plot; otherwise the task table below states the same silence once.
-  const showsLatency =
-    OBSERVABLE_KINDS.has(group.kind) &&
-    (latency.isPending || latency.isError || latencyHasSignal(latency.data?.buckets));
 
   return (
     <WorkspacePage
@@ -222,18 +212,7 @@ function WorkloadDetailPage() {
             value="activity"
             className="m-0 flex min-h-0 flex-1 flex-col overflow-hidden"
           >
-            {showsLatency ? (
-              <div className="h-52 shrink-0 border-b border-border/80 p-3">
-                <PanelErrorBoundary title="Performance could not be displayed">
-                  <LatencyPanel
-                    buckets={latency.data?.buckets}
-                    pending={latency.isPending}
-                    error={latency.error}
-                    kind={group.kind}
-                  />
-                </PanelErrorBoundary>
-              </div>
-            ) : null}
+            <WorkloadLatency workspaceId={workspace.id} group={group} />
             <WorkloadRuns
               workspaceId={workspace.id}
               workspaceName={workspace.name}
@@ -262,6 +241,44 @@ function WorkloadDetailPage() {
         </TabsContent>
       </Tabs>
     </WorkspacePage>
+  );
+}
+
+/**
+ * The performance band above the workload's runs.
+ *
+ * The query lives here rather than on the page because the tab it draws in is
+ * unmounted until somebody opens it, and most workloads land on Invoke: asked a
+ * level up, every arrival at the page would run a windowed rollup nobody was
+ * looking at.
+ */
+function WorkloadLatency({ workspaceId, group }: { workspaceId: string; group: WorkloadGroup }) {
+  const observable = OBSERVABLE_KINDS.has(group.kind);
+  const latency = useQuery({
+    ...taskLatencyQueryOptions(workspaceId, group.stubIds),
+    enabled: observable,
+  });
+
+  // The chart earns its band only where there is something in the window to
+  // plot; otherwise the task table below states the same silence once.
+  if (
+    !observable ||
+    !(latency.isPending || latency.isError || latencyHasSignal(latency.data?.buckets))
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="h-52 shrink-0 border-b border-border/80 p-3">
+      <PanelErrorBoundary title="Performance could not be displayed">
+        <LatencyPanel
+          buckets={latency.data?.buckets}
+          pending={latency.isPending}
+          error={latency.error}
+          kind={group.kind}
+        />
+      </PanelErrorBoundary>
+    </div>
   );
 }
 

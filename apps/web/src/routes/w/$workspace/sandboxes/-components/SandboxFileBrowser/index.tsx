@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PodFileInfo } from "@/lib/api/schemas";
@@ -157,7 +158,7 @@ export function SandboxFileBrowser({
           {query.isPending ? (
             <FileSkeleton />
           ) : query.isError ? (
-            <p className="p-3 text-sm text-destructive">{query.error.message}</p>
+            <PanelError message={query.error.message} />
           ) : query.data.files.length === 0 ? (
             <PanelEmpty message="Empty directory" className="p-4" />
           ) : (

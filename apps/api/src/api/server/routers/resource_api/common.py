@@ -30,6 +30,22 @@ def _management(services: ApiServices) -> ManagementService:
     return ManagementService(services)
 
 
+def member_workspaces(services: ApiServices, user_id: str) -> dict[str, str]:
+    """Every workspace this person reaches, and what each is called.
+
+    The whole scope of an account-wide answer, resolved from the membership rows
+    naming the workspaces rather than from anything a request supplied: a total
+    or a reading assembled from ids a caller named would be a total of whatever
+    it asked for. Ids are `list(mapping)`.
+
+    Names come off the same read that decides the scope, because a row names the
+    workspace it belongs to and looking those names up separately would be a
+    second answer to which workspaces the answer covers.
+    """
+
+    return {workspace.id: workspace.name for workspace in services.users.workspaces(user_id)}
+
+
 def _parsed_time(value: str | None) -> datetime | None:
     if not value:
         return None

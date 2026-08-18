@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -383,6 +383,14 @@ redis.call("HSET", KEYS[1],
 redis.call("DEL", KEYS[2])
 redis.call("SREM", KEYS[3], ARGV[2])
 return {ARGV[5], "1"}
+"""
+
+CONTAINER_STATUSES_SCRIPT = """
+local statuses = {}
+for index = 1, #KEYS do
+    statuses[index] = redis.call("HGET", KEYS[index], "status") or ""
+end
+return statuses
 """
 
 UPDATABLE_CONTAINER_STATUSES = frozenset(
@@ -1421,12 +1429,13 @@ class RedisSchedulerWorkerRepository:
         see one still queued.
         """
 
-        if container_id in self.redis.hash_get_all(self.keys.container_request_payloads()):
+        if self.redis.hash_get(self.keys.container_request_payloads(), container_id) is not None:
             return True
-        return bool(
-            worker_id
-            and container_id
-            in self.redis.hash_get_all(self.keys.worker_request_payloads(worker_id))
+        if not worker_id:
+            return False
+        return (
+            self.redis.hash_get(self.keys.worker_request_payloads(worker_id), container_id)
+            is not None
         )
 
     def _take_worker_request(self, worker_id: str) -> str | None:
@@ -1881,6 +1890,43 @@ class RedisSchedulerContainerRepository:
         if not raw:
             return None
         return redis_serialization.load_model_hash(SchedulerContainerState, raw)
+
+    def container_statuses(
+        self,
+        container_ids: Sequence[str],
+    ) -> dict[str, SchedulerContainerStatus]:
+        """What the scheduler currently says about each of these containers.
+
+        One round trip for the whole set, and only the field the answer needs.
+        The callers that ask this ask it about every live container of a workload
+        on every pass, where reading a whole state each would be a round trip and
+        a model validation per container per tick.
+
+        A container with no state is absent rather than carrying a placeholder
+        status: "the scheduler no longer backs this" is a different fact from any
+        status it could hold, and the callers separate them.
+        """
+
+        ids = list(container_ids)
+        if not ids:
+            return {}
+        raw = self.redis.eval_scalars(
+            CONTAINER_STATUSES_SCRIPT,
+            len(ids),
+            *(self.keys.container_state(container_id) for container_id in ids),
+        )
+        if len(raw) != len(ids):
+            msg = "scheduler container status read returned an invalid response"
+            raise SchedulerRepositoryError(msg)
+        statuses: dict[str, SchedulerContainerStatus] = {}
+        for container_id, value in zip(ids, raw, strict=True):
+            text = redis_serialization.redis_text(value)
+            if not text:
+                continue
+            statuses[container_id] = SchedulerContainerStatus(
+                str(redis_serialization.loads_field(text))
+            )
+        return statuses
 
     def is_container_cancelled(self, container_id: str) -> bool:
         return bool(self.redis.exists(self.keys.container_cancellation(container_id)))

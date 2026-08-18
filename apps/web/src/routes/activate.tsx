@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { ApiError } from "@/lib/api/client";
 import type { DeviceCode } from "@/lib/api/schemas";
@@ -71,12 +72,12 @@ function CodeEntryForm({ error }: { error?: string }) {
       ) : null}
       <label className="block text-xs font-medium text-muted-foreground">
         Code
-        <input
+        <Input
           value={value}
           onChange={(event) => setValue(event.target.value.toUpperCase())}
           placeholder="XXXX-XXXX"
           autoFocus
-          className="mono mt-1 h-9 w-full rounded-md border border-input bg-muted px-3 text-sm text-foreground outline-none focus:border-ring"
+          className="mono mt-1"
         />
       </label>
       <Button type="submit" className="w-full" disabled={normalizeUserCode(value).length !== 9}>
@@ -124,8 +125,8 @@ function DeviceCodeDecision({
   if (approve.isSuccess) {
     return (
       <Outcome tone="positive" title="CLI connected">
-        The CLI is now signed in as <span className="font-medium">{user.display_name}</span> and reaches
-        every workspace you belong to. You can return to your terminal.
+        The CLI is now signed in as <span className="font-medium">{user.display_name}</span> and
+        reaches every workspace you belong to. You can return to your terminal.
       </Outcome>
     );
   }
@@ -169,8 +170,8 @@ function DeviceCodeDecision({
       ) : null}
 
       <p className="text-sm text-muted-foreground">
-        Approving signs the CLI in as <span className="font-medium">{user.display_name}</span>. It will
-        reach every workspace you belong to, and picks its active one itself.
+        Approving signs the CLI in as <span className="font-medium">{user.display_name}</span>. It
+        will reach every workspace you belong to, and picks its active one itself.
       </p>
 
       <div className="flex gap-2">

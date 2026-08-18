@@ -185,6 +185,11 @@ MAX_ACTIVITY_BUCKETS = 500
 A ceiling rather than a preference: every interval is a point in every series a
 reader gets back, so an unbounded one turns a chart request into a response
 nothing can draw and a query nothing can serve.
+
+Deliberately not the cost series' own interval cap. That one is derived from the
+window a bill may cover, so a year of daily bars lands exactly on it; this window
+has no such span to be measured against — its width is named in seconds by the
+caller — so the figure here is only what a response can carry.
 """
 
 
@@ -408,14 +413,6 @@ def _local_package_path(path: str) -> Path | None:
     return Path(path).expanduser().resolve()
 
 
-@dataclass(slots=True)
-class _ActivityGroup:
-    kind: AccountActivitySeriesKind
-    workspace_id: str
-    app_id: str
-    values: list[float]
-
-
 def _account_activity_series(
     amounts: Mapping[tuple[str, str], list[float]],
     *,
@@ -439,41 +436,32 @@ def _account_activity_series(
     the intervals as equals would weight the one in progress like a whole hour.
     """
 
-    groups = [
-        _ActivityGroup(
-            kind=(
-                AccountActivitySeriesKind.App if app_id else AccountActivitySeriesKind.Unassigned
-            ),
-            workspace_id=workspace_id,
-            app_id=app_id,
-            values=readings,
-        )
-        for (workspace_id, app_id), readings in amounts.items()
-    ]
     ordered = sorted(
-        groups,
-        key=lambda group: (
-            -sum(group.values),
-            app_names.get(group.app_id, ""),
-            group.workspace_id,
-            group.app_id,
+        amounts.items(),
+        key=lambda entry: (
+            -sum(entry[1]),
+            app_names.get(entry[0][1], ""),
+            entry[0][0],
+            entry[0][1],
         ),
     )
     series = [
         AccountActivitySeries(
-            kind=group.kind,
-            workspace_id=group.workspace_id,
-            workspace_name=workspace_names.get(group.workspace_id, ""),
-            app_id=group.app_id,
-            app_name=app_names.get(group.app_id, ""),
-            total=sum(group.values) / window_divisor,
-            buckets=_activity_buckets(group.values, start, window_seconds, bucket_divisors),
+            kind=(
+                AccountActivitySeriesKind.App if app_id else AccountActivitySeriesKind.Unassigned
+            ),
+            workspace_id=workspace_id,
+            workspace_name=workspace_names.get(workspace_id, ""),
+            app_id=app_id,
+            app_name=app_names.get(app_id, ""),
+            total=sum(readings) / window_divisor,
+            buckets=_activity_buckets(readings, start, window_seconds, bucket_divisors),
         )
-        for group in ordered[:limit]
+        for (workspace_id, app_id), readings in ordered[:limit]
     ]
     folded = ordered[limit:]
     if folded:
-        columns = zip(*(group.values for group in folded), strict=True)
+        columns = zip(*(readings for _, readings in folded), strict=True)
         summed = [sum(readings) for readings in columns]
         series.append(
             AccountActivitySeries(

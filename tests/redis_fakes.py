@@ -212,10 +212,7 @@ class FakeRedis:
         first_list: str,
         second_list: str,
         timeout: int,
-        src: str = "LEFT",
-        dest: str = "RIGHT",
     ) -> str | None:
-        _ = (src, dest)
         deadline = time.monotonic() + timeout
         with self._list_condition:
             self.blpop_started.set()

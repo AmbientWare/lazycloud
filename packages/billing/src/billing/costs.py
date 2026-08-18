@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import MappingProxyType
 
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import (
@@ -240,10 +241,18 @@ class UsageCostService:
         end: datetime,
         group_by: UsageCostGroupKey,
         limit: int,
+        workspace_names: Mapping[str, str] = MappingProxyType({}),
         app_id: str | None = None,
         workload_id: str | None = None,
         cursor: str | None = None,
     ) -> UsageCostPage:
+        """One page of what these workspaces spent, and what the whole window cost.
+
+        `workspace_names` is what the caller already knows each workspace is
+        called, so a scope resolved from membership rows is not looked up a
+        second time to label the rows it produced.
+        """
+
         _checked_window(start, end)
         if limit < 1 or limit > MAX_COST_PAGE:
             raise InvalidInputError(f"a cost page holds between 1 and {MAX_COST_PAGE} rows")
@@ -254,6 +263,7 @@ class UsageCostService:
             end=end,
             group_by=group_by,
             limit=limit,
+            workspace_names=workspace_names,
             app_id=app_id,
             workload_id=workload_id,
             cursor=_decode_cursor(cursor),

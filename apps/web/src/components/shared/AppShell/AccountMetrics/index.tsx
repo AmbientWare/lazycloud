@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
+import { ShareBar } from "@/components/shared/ShareBar";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { shareLabel } from "@/lib/format";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { taskMetricsQueryOptions } from "@/lib/queries/tasks";
 import { accountContainerCountsQueryOptions } from "@/lib/queries/account-metrics";
@@ -94,8 +96,7 @@ function ReadingStrip() {
         label="Concurrency"
         className="border-b border-border sm:border-b-0 sm:border-r"
         query={billing}
-        value={accountLive}
-        formatted={`${accountLive.toLocaleString()} / ${ceiling.toLocaleString()}`}
+        reading={`${accountLive.toLocaleString()} / ${ceiling.toLocaleString()}`}
         detail="Ceiling on your plan"
         meter={billing.data ? { used: accountLive, limit: ceiling } : undefined}
       />
@@ -117,7 +118,7 @@ function ReadingStrip() {
         tone={tasks.data && tasks.data.failed > 0 ? "danger" : "neutral"}
         detail={
           tasks.data
-            ? `${formatPercent(tasks.data.failure_rate)} of tasks in ${workspace.name}`
+            ? `${shareLabel(tasks.data.failure_rate)} of tasks in ${workspace.name}`
             : undefined
         }
       />
@@ -141,7 +142,7 @@ type ReadingQuery = {
 function Reading({
   label,
   value,
-  formatted,
+  reading,
   detail,
   tone = "neutral",
   meter,
@@ -149,10 +150,16 @@ function Reading({
   className,
 }: {
   label: string;
-  value: number | undefined;
-  formatted?: string;
+  value?: number;
+  /** The figure as written, where it is not one count — `3 / 10` against a ceiling. */
+  reading?: string;
   detail?: ReactNode;
   tone?: "neutral" | "danger";
+  /**
+   * Only a reading with a bound gets a bar, because only it has something to be
+   * near. Its colour is a second reading of a fact the cell already states in
+   * both numbers, never the only one.
+   */
   meter?: { used: number; limit: number };
   query: ReadingQuery;
   className?: string;
@@ -183,46 +190,16 @@ function Reading({
               tone === "danger" ? "text-destructive" : "text-foreground",
             )}
           >
-            {formatted ?? value?.toLocaleString() ?? "—"}
+            {reading ?? value?.toLocaleString() ?? "—"}
           </div>
-          {meter ? <Meter used={meter.used} limit={meter.limit} /> : null}
+          {meter && meter.limit > 0 ? (
+            <ShareBar share={meter.used / meter.limit} tone="capacity" className="mt-1.5 w-full" />
+          ) : null}
           {detail ? (
-            <p
-              className={cn("truncate text-[11px] text-muted-foreground", meter ? "mt-1" : "mt-1")}
-            >
-              {detail}
-            </p>
+            <p className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</p>
           ) : null}
         </>
       )}
     </div>
   );
-}
-
-/**
- * The one reading with a bound, drawn against it.
- *
- * Only this cell gets a bar, because only this figure has a ceiling to be near.
- * The colour is a second reading of the same fact and never the only one — the
- * cell above it always states both numbers.
- */
-function Meter({ used, limit }: { used: number; limit: number }) {
-  if (limit <= 0) return null;
-  const share = Math.min(used / limit, 1);
-  return (
-    <span className="mt-1.5 block h-1 w-full rounded-full bg-muted" aria-hidden="true">
-      <span
-        className={cn(
-          "block h-1 rounded-full",
-          share >= 1 ? "bg-destructive" : share >= 0.8 ? "bg-warning" : "bg-foreground/45",
-        )}
-        style={{ width: `${Math.max(share * 100, used > 0 ? 3 : 0)}%` }}
-      />
-    </span>
-  );
-}
-
-function formatPercent(rate: number): string {
-  if (rate > 0 && rate < 0.001) return "<0.1%";
-  return `${(rate * 100).toFixed(rate >= 0.1 ? 0 : 1)}%`;
 }

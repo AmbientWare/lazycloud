@@ -546,8 +546,7 @@ class WorkerRepositoryService:
         *,
         principal: WorkerRepositoryPrincipal | None = None,
     ) -> Iterator[GetNextContainerRequestResponse]:
-        emitted = 0
-        while request.max_responses <= 0 or emitted < request.max_responses:
+        while True:
             worker = self._validate_worker_stream(request.worker_id, principal=principal)
             try:
                 self._require_source_cache_available(request, principal=principal)
@@ -594,9 +593,7 @@ class WorkerRepositoryService:
                 # the response has already started, so a raise escapes unmapped.
                 return
             self._record_worker_queue_lifecycle(container_request, worker_id=request.worker_id)
-            response = GetNextContainerRequestResponse(container_request=container_request)
-            emitted += 1
-            yield response
+            yield GetNextContainerRequestResponse(container_request=container_request)
             # One request per stream. It is in flight until the worker
             # acknowledges it, and the take returns an unacknowledged request
             # ahead of the queue, so continuing here would hand the same one back

@@ -6,6 +6,7 @@ import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
+import { PanelError } from "@/components/shared/PanelError";
 import { ShellButton } from "@/components/shared/ShellDialog";
 import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
 import { StatusChip } from "@/components/shared/StatusChip";
@@ -212,12 +213,7 @@ function PodInstanceDrawerBody({
                 <ChartSkeleton />
               </div>
             ) : metrics.isError ? (
-              <div
-                className="flex h-44 items-center justify-center text-sm text-destructive"
-                role="alert"
-              >
-                {metrics.error.message}
-              </div>
+              <PanelError message={metrics.error.message} layout="centered" />
             ) : (
               <PanelErrorBoundary title="Instance metrics could not be displayed">
                 <ContainerMetricsCharts points={metrics.data?.points} />

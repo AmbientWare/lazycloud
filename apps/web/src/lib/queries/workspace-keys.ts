@@ -19,12 +19,17 @@ export type AccountActivityKeyParts = {
   limit: number;
 };
 
-export type UsageCostKeyParts = {
+export type AccountCostKeyParts = {
   start: string;
   end: string;
   groupBy: string;
   appId: string | null;
-  workloadId: string | null;
+};
+
+export type AccountCostSeriesKeyParts = {
+  start: string;
+  end: string;
+  bucket: string;
 };
 
 const workspaceRoot = (workspaceId: string) => ["workspace", workspaceId] as const;
@@ -182,11 +187,6 @@ export const workspaceQueryKeys = {
     list: (workspaceId: string, configKey: string) =>
       [...workspaceRoot(workspaceId), "resources", configKey] as const,
   },
-  usage: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "usage"] as const,
-    costs: (workspaceId: string, scope: UsageCostKeyParts) =>
-      [...workspaceRoot(workspaceId), "usage", "costs", scope] as const,
-  },
   settings: {
     concurrency: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "settings", "concurrency"] as const,
@@ -218,6 +218,18 @@ export const accountQueryKeys = {
     containerCounts: () => [...accountRoot, "metrics", "container-counts"] as const,
     activity: (scope: AccountActivityKeyParts) =>
       [...accountRoot, "metrics", "activity", scope] as const,
+  },
+  /**
+   * Spend is invoiced to the account, so it is cached against the account and
+   * not against whichever workspace happened to be selected when it was read.
+   * Kept apart from `billing`, which answers the plan: a plan change should not
+   * refetch two windowed aggregates over the ledger.
+   */
+  usage: {
+    root: () => [...accountRoot, "usage"] as const,
+    costs: (scope: AccountCostKeyParts) => [...accountRoot, "usage", "costs", scope] as const,
+    series: (scope: AccountCostSeriesKeyParts) =>
+      [...accountRoot, "usage", "cost-series", scope] as const,
   },
   domains: () => [...accountRoot, "custom-domains"] as const,
   tokens: () => [...accountRoot, "tokens"] as const,

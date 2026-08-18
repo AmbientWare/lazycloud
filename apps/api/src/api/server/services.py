@@ -1248,7 +1248,6 @@ def _compose_api_services(
             redis=redis,
             workload=EndpointAutoscaler(
                 core,
-                redis=redis,
                 endpoints=endpoint,
                 dispatches=ApiEndpointDispatchAutoscalingReader(
                     EndpointDispatchStateRepository(core)

@@ -294,9 +294,8 @@ class WorkerRepositoryHttpClient:
         self,
         request: GetNextContainerRequestRequest,
     ) -> GetNextContainerRequestResponse:
-        stream_request = request.model_copy(update={"max_responses": request.max_responses or 1})
         last_response = GetNextContainerRequestResponse()
-        for response in self.stream_next_container_requests(stream_request):
+        for response in self.stream_next_container_requests(request):
             last_response = response
             if response.container_request is not None:
                 return response
@@ -849,7 +848,6 @@ class RemoteSchedulerWorkerRepository:
                 worker_id=worker_id,
                 cache_generation_id=session.generation_id,
                 cache_session_fence=session.session_fence,
-                max_responses=1,
             )
         )
         request = response.container_request

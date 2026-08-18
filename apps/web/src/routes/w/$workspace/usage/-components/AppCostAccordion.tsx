@@ -7,13 +7,13 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import type { UsageCostRow } from "@/lib/api/schemas";
-import { formatCostNanos } from "@/lib/money";
+import { shareLabel } from "@/lib/format";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import { accountCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 import { cn } from "@/lib/utils";
 
 import { AppWorkloadCosts } from "./AppWorkloadCosts";
-import { ShareBar, shareLabel } from "./ShareBar";
+import { RowFigures } from "./RowFigures";
 
 /**
  * What each app cost over the range, dearest first, opening onto the workloads
@@ -149,7 +149,12 @@ function AppRow({
         )}
       />
       <RowIdentity name={name} detail={workspaceLabel(row)} title={row.app_id} />
-      <RowFigures share={share} costNanos={row.cost_nanos} currency={currency} />
+      <RowFigures
+        share={share}
+        label={`${shareLabel(share)} of spend over this range`}
+        costNanos={row.cost_nanos}
+        currency={currency}
+      />
     </button>
   );
 }
@@ -173,7 +178,12 @@ function UnattributedRow({
     <div className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5">
       <span className="size-3.5 shrink-0" aria-hidden="true" />
       <RowIdentity name="Unattributed" detail={`No app · ${workspaceLabel(row)}`} />
-      <RowFigures share={share} costNanos={row.cost_nanos} currency={currency} />
+      <RowFigures
+        share={share}
+        label={`${shareLabel(share)} of spend over this range`}
+        costNanos={row.cost_nanos}
+        currency={currency}
+      />
     </div>
   );
 }
@@ -186,32 +196,6 @@ function RowIdentity({ name, detail, title }: { name: string; detail: string; ti
       </span>
       <span className="truncate text-[11px] text-muted-foreground">{detail}</span>
     </span>
-  );
-}
-
-function RowFigures({
-  share,
-  costNanos,
-  currency,
-}: {
-  share: number;
-  costNanos: number;
-  currency: string;
-}) {
-  return (
-    <>
-      <ShareBar
-        share={share}
-        label={`${shareLabel(share)} of spend over this range`}
-        className="hidden w-24 shrink-0 sm:block lg:w-40"
-      />
-      <span className="mono w-10 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-        {shareLabel(share)}
-      </span>
-      <span className="readout w-24 shrink-0 text-right text-sm text-foreground">
-        {formatCostNanos(costNanos, currency)}
-      </span>
-    </>
   );
 }
 
