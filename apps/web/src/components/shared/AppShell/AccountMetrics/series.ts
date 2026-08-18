@@ -30,9 +30,21 @@ const ACTIVITY_COLORS: readonly SeriesColor[] = [
   { light: "var(--chart-5)", dark: "var(--chart-1)" },
 ];
 
-/** Not one of the named apps, so not one of the identity hues either. */
+/**
+ * Not one of the named apps, so not one of the identity hues either.
+ *
+ * The folded row is always drawn last, which puts it against whichever identity
+ * slot the account happened to fill last: slot 3 for an account with four named
+ * rows, slot 0 for one with a single app. So it has to clear every hue in its
+ * theme, not just the one below it in the common case. Light's muted ink sits at
+ * lightness 0.41 with almost no chroma, a hand's breadth from `--chart-3` at
+ * 0.40 — measured against it, ΔE 9.2 under normal vision, which is a pair a
+ * reader with full colour vision cannot separate. Light's own ink can: it is the
+ * same neutral two steps darker, 20.5 from `--chart-3` and further from
+ * everything else. Dark's muted ink is already clear of all four.
+ */
 const FOLDED_COLOR: SeriesColor = {
-  light: "var(--muted-foreground)",
+  light: "var(--foreground)",
   dark: "var(--muted-foreground)",
 };
 
@@ -77,4 +89,24 @@ function baseLabel(series: AccountActivitySeries): string {
 /** Stable per-series key; also the suffix of the CSS variable holding its hue. */
 export function activitySeriesKey(index: number): string {
   return `series-${index}`;
+}
+
+/**
+ * Where a name stops being a name and starts being an identifier.
+ *
+ * Deployed apps are routinely named by a tool rather than a person, and the
+ * generated half is the half that tells two of them apart:
+ * `function_scaling_09d30198bef5` and `function_scaling_87767f6d27a3` share
+ * every character a reader looks at first. Splitting at the separator lets the
+ * identifier be set in the data face, where a run of hex is read digit by digit
+ * instead of skimmed as a word — the whole name is still printed, in order, and
+ * a name that is not built this way comes back whole.
+ *
+ * Eight hex characters is the shortest run worth treating as an identifier;
+ * below that the tail is as likely to be part of the name as not.
+ */
+export function splitGeneratedName(label: string): { name: string; identifier: string } {
+  const match = /^(.+[-_])([0-9a-f]{8,})$/i.exec(label);
+  if (!match) return { name: label, identifier: "" };
+  return { name: match[1] ?? label, identifier: match[2] ?? "" };
 }

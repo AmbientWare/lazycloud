@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
-import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
+import type { BarShapeProps } from "recharts";
 
-import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import {
@@ -22,7 +22,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import type {
   AccountActivity,
@@ -42,10 +41,12 @@ import {
   activitySeriesColor,
   activitySeriesKey,
   activitySeriesLabels,
+  splitGeneratedName,
 } from "./series";
 import {
   MEASURE_GROUPS,
   emptyWindowMessage,
+  flatWindowNote,
   formatReading,
   formatTick,
   measureLabels,
@@ -55,33 +56,40 @@ import {
 
 const RANGES: AccountActivityRange[] = ["6h", "24h", "7d"];
 
+/** Wide and short, the way a clock is read; shorter still where the drawer is the whole screen. */
+const PLOT_HEIGHT = "h-44 sm:h-56";
+
 /**
  * The account's activity over a window: its shape over time, and its rank.
  *
- * One reading behind two views. The chart says when the account was busy and
- * the breakdown says which app made it busy, and because both read the same
- * response neither can quote a figure the other contradicts.
+ * The plot and the list read one response, so neither can quote a figure the
+ * other contradicts. The list sits under the plot rather than behind a tab
+ * because it is the plot's key as well as its table — a band is only identified
+ * once something names it, and a reading is only checkable once something
+ * prints it — and because a name a tool generated needs a whole line to be told
+ * from its neighbour, which a row of swatches under a chart does not have.
  */
 export function ActivityPanel() {
   const [measure, setMeasure] = useState<AccountActivityMeasure>("containers");
-  const [range, setRange] = useState<AccountActivityRange>("24h");
+  /* Six hours cut into quarter-hours, not a day cut into hours. The drawer is
+     opened to ask whether the account is healthy now, and accounts on this
+     platform work in bursts: a burst that fills two thirds of a six-hour window
+     occupies four hours of a day, so the wider default spent most of the plot
+     proving that nothing had happened. The day and the week are one control
+     away, and the strip above already reads the day. */
+  const [range, setRange] = useState<AccountActivityRange>("6h");
   const activity = useQuery(
     accountActivityQueryOptions({ measure, range, limit: ACTIVITY_SERIES_LIMIT }),
   );
 
   return (
-    <Tabs
-      defaultValue="over-time"
-      className="panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md"
-    >
-      <LinearTabsList ariaLabel="Account metrics views" className="shrink-0 bg-card px-2">
-        <LinearTab value="over-time">Usage over time</LinearTab>
-        <LinearTab value="breakdown">Breakdown</LinearTab>
-      </LinearTabsList>
-
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/80 px-3 py-2">
+    <section aria-label="Account activity" className="panel shrink-0 overflow-hidden rounded-md">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/80 px-3 py-2">
         <span className="micro-label">Resource</span>
-        <Select value={measure} onValueChange={(next) => setMeasure(next as AccountActivityMeasure)}>
+        <Select
+          value={measure}
+          onValueChange={(next) => setMeasure(next as AccountActivityMeasure)}
+        >
           <SelectTrigger size="sm" className="h-7 text-xs" aria-label="Resource">
             <SelectValue />
           </SelectTrigger>
@@ -113,26 +121,16 @@ export function ActivityPanel() {
         <WindowSummary activity={activity.data} />
       </div>
 
-      <TabsContent value="over-time" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
-        {activity.isPending ? (
-          <ChartSkeleton />
-        ) : activity.isError ? (
-          <PanelError message={activity.error.message} layout="centered" />
-        ) : (
-          <ActivityChart activity={activity.data} measure={measure} range={range} />
-        )}
-      </TabsContent>
-
-      <TabsContent value="breakdown" className="m-0 min-h-0 flex-1 overflow-auto">
-        {activity.isPending ? (
-          <BreakdownSkeleton />
-        ) : activity.isError ? (
-          <PanelError message={activity.error.message} layout="centered" />
-        ) : (
-          <ActivityBreakdown activity={activity.data} measure={measure} range={range} />
-        )}
-      </TabsContent>
-    </Tabs>
+      {activity.isPending ? (
+        <ActivitySkeleton />
+      ) : activity.isError ? (
+        <div className="flex min-h-40 items-center justify-center">
+          <PanelError message={activity.error.message} />
+        </div>
+      ) : (
+        <ActivityReading activity={activity.data} measure={measure} range={range} />
+      )}
+    </section>
   );
 }
 
@@ -147,9 +145,7 @@ function WindowSummary({ activity }: { activity: AccountActivity | undefined }) 
   );
 }
 
-type ChartRow = Record<string, string | number>;
-
-function ActivityChart({
+function ActivityReading({
   activity,
   measure,
   range,
@@ -158,37 +154,54 @@ function ActivityChart({
   measure: AccountActivityMeasure;
   range: AccountActivityRange;
 }) {
-  const { theme } = useTheme();
   /* Emptiness is about whether anything was measured, never about whether the
      figures are zero: an account that holds no GPU has an answer to "how many
-     GPUs", and it is a flat band along the baseline rather than a blank panel
+     GPUs", and the plot draws it against a real scale rather than blanking and
      telling somebody to go and deploy something. */
   if (activity.series.length === 0) {
-    return <EmptyWindow measure={measure} range={range} className="h-full min-h-32" />;
+    return (
+      <PanelEmpty
+        message={emptyWindowMessage(measure, accountActivityRanges[range].label)}
+        detail="Deploy a workload or run a task, and its share of the account shows up here."
+        className="min-h-40 py-8"
+      />
+    );
   }
 
   const labels = activitySeriesLabels(activity.series);
+  return (
+    <>
+      <ActivityChart activity={activity} measure={measure} labels={labels} />
+      <ActivityBreakdown activity={activity} labels={labels} />
+    </>
+  );
+}
+
+type ChartRow = Record<string, string | number>;
+
+function ActivityChart({
+  activity,
+  measure,
+  labels,
+}: {
+  activity: AccountActivity;
+  measure: AccountActivityMeasure;
+  labels: string[];
+}) {
+  const { theme } = useTheme();
   const spine = activity.series[0]?.buckets ?? [];
+  const keys = activity.series.map((_series, index) => activitySeriesKey(index));
   const config: ChartConfig = Object.fromEntries(
     activity.series.map((series, index) => [
-      activitySeriesKey(index),
+      keys[index] ?? "",
       { label: labels[index], theme: activitySeriesColor(series, index) },
     ]),
   );
   const swatches: Record<string, string> = Object.fromEntries(
     activity.series.map((series, index) => [
-      activitySeriesKey(index),
+      keys[index] ?? "",
       activitySeriesColor(series, index)[theme],
     ]),
-  );
-  const peak = Math.max(
-    0,
-    ...spine.map((_bucket, bucketIndex) =>
-      activity.series.reduce(
-        (stacked, series) => stacked + (series.buckets[bucketIndex]?.value ?? 0),
-        0,
-      ),
-    ),
   );
   const rows: ChartRow[] = spine.map((bucket, bucketIndex) => {
     const row: ChartRow = {
@@ -196,95 +209,155 @@ function ActivityChart({
       full: exactTime(bucket.timestamp),
     };
     for (const [index, series] of activity.series.entries()) {
-      row[activitySeriesKey(index)] = series.buckets[bucketIndex]?.value ?? 0;
+      row[keys[index] ?? ""] = series.buckets[bucketIndex]?.value ?? 0;
     }
     return row;
   });
+  const peak = Math.max(
+    0,
+    ...rows.map((row) => keys.reduce((stacked, key) => stacked + Number(row[key] ?? 0), 0)),
+  );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-1.5">
+    <div className="px-3 pb-2 pt-3">
       {/* What the scale counts, stated once where a rotated axis title would go.
           Written flat rather than turned on its side: the drawer gives the plot
           a couple of hundred pixels of height, and a rotated caption spends more
           of its width than the label is worth. Not in the strip's uppercase
           label either — `GiB` is a unit symbol, and upper-casing it prints a
           unit nobody publishes. */}
-      <p className="shrink-0 pl-1 text-[11px] font-medium text-muted-foreground">
+      <p className="pl-1 text-[11px] font-medium text-muted-foreground">
         {unitAxisLabels[activity.unit]}
       </p>
-      <ChartContainer config={config} className="aspect-auto min-h-32 w-full flex-1">
-        <AreaChart data={rows} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-          <CartesianGrid stroke="var(--border)" vertical={false} />
-          <XAxis
-            dataKey="label"
-            stroke="var(--muted-foreground)"
-            tickLine={false}
-            axisLine={false}
-            minTickGap={28}
-            tickMargin={6}
-            tick={{ fontSize: 10 }}
-          />
-          <YAxis
-            stroke="var(--muted-foreground)"
-            tickLine={false}
-            axisLine={false}
-            width={44}
-            allowDecimals={activity.unit !== "starts"}
-            tickFormatter={(value: number | string) => formatTick(Number(value) || 0, activity.unit)}
-            tick={{ fontSize: 10 }}
-          />
-          <ChartTooltip
-            content={
-              <ChartTooltipContent
-                indicator="dot"
-                labelFormatter={(_value, payload) => bucketTooltipLabel(payload)}
-                formatter={(value, name, item) => (
-                  <TooltipReading
-                    name={String(name)}
-                    color={swatches[String(item.dataKey ?? "")] ?? "var(--muted-foreground)"}
-                    value={Number(value) || 0}
-                    unit={activity.unit}
-                  />
-                )}
-              />
-            }
-          />
-          {peak > 0 ? null : (
-            /* A window whose bands are all flat spans no range, so the scale has
-               nothing to derive ticks from and comes back blank — an axis with
-               no numbers on it reads as a chart that failed rather than as a
-               resource nothing used. This asks for one unit of headroom, which
-               is the only way to set the scale of a stacked series: the axis's
-               own `domain` is computed from the stack and ignores what the
-               element is given. Invisible, because the fact it states is the
-               band on the baseline and not a line of its own. */
-            <ReferenceLine y={1} ifOverflow="extendDomain" stroke="transparent" />
-          )}
-          {activity.series.map((series, index) => (
-            <Area
-              key={activitySeriesKey(index)}
-              /* Stepped for both kinds of reading. A count belongs to a whole
-                 interval, and a level is the mean across one — neither says
-                 anything about an instant inside it, so a curve between two of
-                 them would draw readings nobody took. */
-              type="stepAfter"
-              stackId="activity"
-              dataKey={activitySeriesKey(index)}
-              name={labels[index]}
-              /* The stroke is the surface, not the series: it draws the hairline
-               gap that keeps one band's edge off the next one's fill. */
-              stroke="var(--card)"
-              strokeWidth={2}
-              fill={`var(--color-${activitySeriesKey(index)})`}
-              fillOpacity={0.85}
-              isAnimationActive={false}
+      <div className="relative">
+        <ChartContainer config={config} className={`aspect-auto w-full ${PLOT_HEIGHT}`}>
+          <BarChart
+            data={rows}
+            margin={{ top: 6, right: 6, bottom: 0, left: 0 }}
+            barCategoryGap="18%"
+          >
+            <CartesianGrid stroke="var(--border)" vertical={false} />
+            <XAxis
+              dataKey="label"
+              stroke="var(--muted-foreground)"
+              tickLine={false}
+              axisLine={false}
+              minTickGap={28}
+              tickMargin={6}
+              tick={{ fontSize: 10 }}
             />
-          ))}
-        </AreaChart>
-      </ChartContainer>
-      <ActivityLegend series={activity.series} labels={labels} />
+            <YAxis
+              stroke="var(--muted-foreground)"
+              tickLine={false}
+              axisLine={false}
+              width={46}
+              allowDecimals={activity.unit !== "starts"}
+              tickFormatter={(value: number | string) =>
+                formatTick(Number(value) || 0, activity.unit)
+              }
+              tick={{ fontSize: 10 }}
+            />
+            <ChartTooltip
+              cursor={{ fill: "var(--accent)", opacity: 0.5 }}
+              content={
+                <ChartTooltipContent
+                  indicator="dot"
+                  labelFormatter={(_value, payload) => bucketTooltipLabel(payload)}
+                  formatter={(value, name, item) => (
+                    <TooltipReading
+                      name={String(name)}
+                      color={swatches[String(item.dataKey ?? "")] ?? "var(--muted-foreground)"}
+                      value={Number(value) || 0}
+                      unit={activity.unit}
+                    />
+                  )}
+                />
+              }
+            />
+            {peak > 0 ? null : (
+              /* A window whose readings are all zero spans no range, so the
+                 scale has nothing to derive ticks from and comes back blank —
+                 an axis with no numbers on it reads as a chart that failed
+                 rather than as a resource nothing used. This asks for one unit
+                 of headroom, which is the only way to set the scale of a
+                 stacked series: the axis's own `domain` is computed from the
+                 stack and ignores what the element is given. Invisible, because
+                 the fact it states is the empty plot and not a line of its
+                 own. */
+              <ReferenceLine y={1} ifOverflow="extendDomain" stroke="transparent" />
+            )}
+            {activity.series.map((series, index) => (
+              <Bar
+                key={keys[index]}
+                /* A column, because a reading belongs to a whole interval and
+                   says nothing about an instant inside it: a count is what
+                   happened between two boundaries and a level is the mean
+                   across them. The column's width is that interval, stated by
+                   the mark itself. A curve or a step would have to draw the
+                   space between two intervals as though something were measured
+                   there, and on the windows this account actually produces —
+                   where four buckets in twenty carry everything — a stepped
+                   fill degenerates into isolated slabs that read as a broken
+                   chart rather than as a quiet one. */
+                stackId="activity"
+                dataKey={keys[index]}
+                name={labels[index]}
+                fill={`var(--color-${keys[index]})`}
+                maxBarSize={20}
+                shape={activitySegment(keys[index] ?? "", keys)}
+                isAnimationActive={false}
+              />
+            ))}
+          </BarChart>
+        </ChartContainer>
+        {peak > 0 ? null : (
+          <p className="pointer-events-none absolute inset-0 flex items-center justify-center pl-10 text-[11px] text-muted-foreground">
+            {flatWindowNote(measure)}
+          </p>
+        )}
+      </div>
     </div>
   );
+}
+
+/** The surface showing between two bands of one column; `barCategoryGap` does the same between columns. */
+const STACK_GAP = 2;
+/** The rounded end of a column, at the only corner that is a reading. */
+const CAP_RADIUS = 3;
+
+/**
+ * One band of one interval's column.
+ *
+ * Drawn by hand for the two pieces of negative space a stack needs. The gap
+ * between bands is surface showing through rather than a stroke around the
+ * fill, so nothing but data carries ink; it is taken off the top of every band
+ * that has another above it, which leaves the column's overall height — the
+ * figure the axis is read against — exactly where the scale puts it. Only that
+ * top is rounded, because only the top of the column is a reading; every
+ * boundary below it is a join. A band too short to give the gap away keeps its
+ * full height instead, since a hairline reading rounded to nothing is the one
+ * thing this must not draw.
+ */
+function activitySegment(seriesKey: string, keys: readonly string[]) {
+  return ({ x, y, width, height, fill, payload }: BarShapeProps) => {
+    if (!(height > 0) || !(width > 0)) return null;
+    const row = (payload ?? {}) as ChartRow;
+    const topmost = keys.filter((key) => Number(row[key] ?? 0) > 0).at(-1);
+    const capped = topmost === seriesKey;
+    const gap = capped || height <= STACK_GAP + 1 ? 0 : STACK_GAP;
+    const top = y + gap;
+    const drawn = height - gap;
+    if (!capped) {
+      return <rect x={x} y={top} width={width} height={drawn} fill={fill} />;
+    }
+    const radius = Math.min(CAP_RADIUS, width / 2, drawn);
+    return (
+      <path
+        fill={fill}
+        d={`M${x},${top + drawn}L${x},${top + radius}Q${x},${top} ${x + radius},${top}L${x + width - radius},${top}Q${x + width},${top} ${x + width},${top + radius}L${x + width},${top + drawn}Z`}
+      />
+    );
+  };
 }
 
 /** One band's share of the interval under the cursor, in the unit it is read in. */
@@ -307,7 +380,7 @@ function TooltipReading({
         aria-hidden="true"
       />
       <div className="flex flex-1 items-center justify-between gap-6 leading-none">
-        <span className="min-w-0 truncate text-muted-foreground">{name}</span>
+        <SeriesLabel label={name} className="min-w-0 truncate text-muted-foreground" />
         <span className="mono shrink-0 font-medium tabular-nums text-foreground">
           {formatReading(value, unit)}
         </span>
@@ -317,65 +390,53 @@ function TooltipReading({
 }
 
 /**
- * The key, in the order the bands are stacked.
+ * An app's name, with the part a tool generated set in the data face.
  *
- * Written here rather than taken from the chart library, whose legend sorts its
- * entries by value: a key listed in a different order from the stack it
- * describes makes the reader match colours by eye, which is the one job a
- * legend exists to remove.
+ * `function_scaling_09d30198bef5` and `function_scaling_87767f6d27a3` are the
+ * same word to anyone skimming, and the half that separates them is the half
+ * that looks like noise. Setting it in the monospace face gives the run of hex
+ * even spacing and its own texture, so the eye stops there and reads it instead
+ * of sliding off; nothing is shortened, elided or invented, and a name no tool
+ * generated is left exactly as it was.
  */
-function ActivityLegend({
-  series,
-  labels,
-}: {
-  series: AccountActivitySeries[];
-  labels: string[];
-}) {
-  const { theme } = useTheme();
+function SeriesLabel({ label, className }: { label: string; className?: string }) {
+  const { name, identifier } = splitGeneratedName(label);
   return (
-    <ul className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-1 text-[11px] text-muted-foreground">
-      {series.map((entry, index) => (
-        <li key={activitySeriesKey(index)} className="flex min-w-0 items-center gap-1.5">
-          <span
-            className="size-2 shrink-0 rounded-[2px]"
-            style={{ background: activitySeriesColor(entry, index)[theme] }}
-            aria-hidden="true"
-          />
-          <span className="min-w-0 truncate" title={labels[index]}>
-            {labels[index]}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <span className={className} title={label}>
+      {name}
+      {identifier ? <span className="mono">{identifier}</span> : null}
+    </span>
   );
 }
 
-function ActivityBreakdown({
-  activity,
-  measure,
-  range,
-}: {
-  activity: AccountActivity;
-  measure: AccountActivityMeasure;
-  range: AccountActivityRange;
-}) {
-  if (activity.series.length === 0) {
-    return <EmptyWindow measure={measure} range={range} className="h-full min-h-32" />;
-  }
-
-  const labels = activitySeriesLabels(activity.series);
+/**
+ * The key, and the totals it keys.
+ *
+ * In the order the bands are stacked rather than by size, and written here
+ * rather than taken from the chart library, whose legend sorts its entries by
+ * value: a key listed in a different order from the stack it describes makes
+ * the reader match colours by eye, which is the one job a key exists to remove.
+ *
+ * Every figure the plot encodes as a length is printed here as a number, which
+ * is what keeps the reading available to somebody who cannot separate two of
+ * the bands by colour, or reach a tooltip at all.
+ */
+function ActivityBreakdown({ activity, labels }: { activity: AccountActivity; labels: string[] }) {
   return (
-    <div role="list" aria-label="Activity by app">
-      {activity.series.map((series, index) => (
-        <BreakdownRow
-          key={activitySeriesKey(index)}
-          series={series}
-          label={labels[index] ?? ""}
-          index={index}
-          total={activity.total}
-          unit={activity.unit}
-        />
-      ))}
+    <div className="border-t border-border/80">
+      <p className="micro-label px-3 pb-1 pt-2">By app</p>
+      <div role="list" aria-label="Activity by app">
+        {activity.series.map((series, index) => (
+          <BreakdownRow
+            key={activitySeriesKey(index)}
+            series={series}
+            label={labels[index] ?? ""}
+            index={index}
+            total={activity.total}
+            unit={activity.unit}
+          />
+        ))}
+      </div>
       {activity.series.some((series) => series.kind === "other") ? (
         <p className="px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
           Only the busiest apps are named. Everything else is summed into Other apps, so the shares
@@ -403,21 +464,20 @@ function BreakdownRow({
   const share = total > 0 ? series.total / total : 0;
   const color = activitySeriesColor(series, index)[theme];
   return (
-    <div
-      role="listitem"
-      className="flex items-center gap-3 border-b border-border/60 px-3 py-2.5 last:border-b-0"
-    >
+    <div role="listitem" className="flex items-center gap-3 border-t border-border/60 px-3 py-2">
       <span
         className="size-2 shrink-0 rounded-[2px]"
         style={{ background: color }}
         aria-hidden="true"
       />
-      <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={label}>
-        {label}
-      </span>
+      <SeriesLabel label={label} className="min-w-0 flex-1 truncate text-[13px] text-foreground" />
       {/* Fixed width, not fluid: a two-percent bar stretched across the drawer
-          puts its stub and its figure too far apart to be read as one row. */}
-      <span className="h-1 w-20 shrink-0 rounded-full bg-muted sm:w-32" aria-hidden="true">
+          puts its stub and its figure too far apart to be read as one row. Gone
+          entirely where the drawer is the whole screen — it draws the share the
+          figure beside it already states, and the width it costs is the width
+          that decides whether two apps named by the same tool can be told
+          apart. */}
+      <span className="hidden h-1 w-32 shrink-0 rounded-full bg-muted sm:block" aria-hidden="true">
         <span
           className="block h-1 rounded-full"
           style={{
@@ -436,47 +496,26 @@ function BreakdownRow({
   );
 }
 
-function EmptyWindow({
-  measure,
-  range,
-  className,
-}: {
-  measure: AccountActivityMeasure;
-  range: AccountActivityRange;
-  className?: string;
-}) {
-  return (
-    <PanelEmpty
-      message={emptyWindowMessage(measure, accountActivityRanges[range].label)}
-      detail="Deploy a workload or run a task, and its share of the account shows up here."
-      className={className}
-    />
-  );
-}
-
-function ChartSkeleton() {
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-1.5" aria-hidden="true">
-      <Skeleton className="h-2.5 w-10 shrink-0" />
-      <Skeleton className="min-h-32 flex-1" />
-      <div className="flex shrink-0 justify-center gap-4">
-        {[0, 1, 2].map((slot) => (
-          <Skeleton key={slot} className="h-2.5 w-20" />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function BreakdownSkeleton() {
+function ActivitySkeleton() {
   return (
     <div aria-hidden="true">
-      {[0, 1, 2, 3].map((slot) => (
-        <div key={slot} className="space-y-2 border-b border-border/60 px-3 py-2.5 last:border-b-0">
-          <Skeleton className="h-3.5 w-32" />
-          <Skeleton className="h-1 w-full" />
+      <div className="px-3 pb-2 pt-3">
+        <Skeleton className="h-2.5 w-10" />
+        <Skeleton className={`mt-1.5 w-full ${PLOT_HEIGHT}`} />
+      </div>
+      <div className="border-t border-border/80">
+        <div className="px-3 pb-1 pt-2">
+          <Skeleton className="h-2.5 w-12" />
         </div>
-      ))}
+        {[0, 1, 2, 3].map((slot) => (
+          <div key={slot} className="flex items-center gap-3 border-t border-border/60 px-3 py-2">
+            <Skeleton className="size-2 shrink-0 rounded-[2px]" />
+            <Skeleton className="h-3.5 flex-1" />
+            <Skeleton className="hidden h-1 w-32 shrink-0 sm:block" />
+            <Skeleton className="h-3.5 w-24 shrink-0" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
