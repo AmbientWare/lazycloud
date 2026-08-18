@@ -1502,6 +1502,7 @@ def _worker_repository_service(
                 services=core,
                 stubs=core.control_plane_service,
             ),
+            tasks=core.tasks,
         ),
         redis=redis,
     )

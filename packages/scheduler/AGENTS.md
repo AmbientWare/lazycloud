@@ -90,3 +90,20 @@ is the honest answer — those containers are doing the thing they exist for.
 Where there is a window, scale-down does nothing and self-retirement removes the
 excess. Stopping a container early there would throw away the warm container the
 next call was about to reach, which is the whole point of pooling.
+
+The floor is held per stub and every deployed version keeps its own, so a
+redeploy releases the floor the version before it held. An author asking for two
+resident interpreters wants two, not two more each time they ship, and prior
+versions stay invocable by number — nothing else would ever remove those
+containers, since a floor is what makes their window infinite. The release sets
+the floor to zero and leaves the window infinite, which reads backwards and is
+the only thing that works: a container took its keep-warm seconds from the
+environment it started with, so a finite window written to the config would
+reach the config and not them. A zero floor with no window is what hands them to
+scale-down.
+
+Every function stub is selected, bound to a deployment or not. A stub reached
+through `.remote()`, `.map()` or `lazycloud run` before anything is deployed has
+a backlog like any other, and it is the one case where the first container came
+from an invocation rather than from here — so refusing it leaves a fan-out being
+served one container at a time.

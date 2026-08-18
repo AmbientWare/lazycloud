@@ -148,7 +148,6 @@ function WorkloadDetailPage() {
           <WorkloadOperation
             workspaceId={workspace.id}
             deployment={current}
-            stub={currentStub}
             group={group}
             isPublic={isPublic}
             runningContainers={runningContainers.length}

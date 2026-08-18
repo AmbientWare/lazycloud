@@ -54,7 +54,9 @@ usually further away than any window worth paying for. Set it explicitly if runs
 are close enough together to reuse a warm container.
 
 Deploying again replaces the schedule: one fires per resource, whatever version
-it came from. Pause or remove it through its deployment.
+it came from. Removing `cron` and deploying again removes it — the function stays
+deployed and callable, it just stops firing on its own. Pause or remove the whole
+resource through its deployment.
 
 ```bash
 lazycloud deployment list --app maintenance

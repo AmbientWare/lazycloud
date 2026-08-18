@@ -296,6 +296,13 @@ class DeploymentSpec(ContractModel):
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> DeploymentSpec:
+        # A schedule fires an invocation, and a function is the only kind that
+        # has one. Refused here rather than at the tick, where the schedule
+        # exists, fires against a stub that cannot serve it, and records the
+        # same failure every minute for as long as the deployment lives.
+        if self.cron and self.kind is not DeploymentKind.Function:
+            msg = "cron is only supported for function workloads"
+            raise ValueError(msg)
         # A container that never retires itself has to be one something else
         # removes. A pod deployment is that by construction; a function is only
         # that when it declares a warm floor, which is what puts its count under
