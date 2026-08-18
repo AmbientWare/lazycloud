@@ -7,19 +7,19 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
-  Moon,
   PanelRightOpen,
   Search,
   Settings,
-  Sun,
 } from "lucide-react";
 
 import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitcher";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
+import { AccountRail } from "@/components/shared/AppShell/AccountRail";
+import { ThemeToggle } from "@/components/shared/AppShell/ThemeToggle";
 import { SettingsDialog } from "@/components/shared/SettingsDialog";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
-import { useTheme } from "@/components/shared/ThemeProvider/theme";
+
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -230,28 +230,16 @@ function DesktopRail({
         ))}
       </nav>
 
-      <div className="mt-auto border-t border-sidebar-border px-3 py-3">
-        <nav aria-label="Account navigation" className="space-y-0.5">
-          <SettingsRailButton active={settingsOpen} onOpen={onOpenSettings} />
-          {accountNav.map((item) => (
-            <RailLink
-              key={item.segment}
-              item={item}
-              active={navItemActive(path, basePath, item.segment)}
-              workspaceName={workspace.name}
-            />
-          ))}
-        </nav>
-        <ThemeToggle className="mt-2" />
-        <button
-          type="button"
-          onClick={onLogout}
-          className="interactive-row mt-0.5 flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground hover:text-foreground"
-        >
-          <LogOut className="size-4" aria-hidden="true" />
-          Sign out
-        </button>
-      </div>
+      <AccountRail settingsOpen={settingsOpen} onOpenSettings={onOpenSettings} onLogout={onLogout}>
+        {accountNav.map((item) => (
+          <RailLink
+            key={item.segment}
+            item={item}
+            active={navItemActive(path, basePath, item.segment)}
+            workspaceName={workspace.name}
+          />
+        ))}
+      </AccountRail>
     </aside>
   );
 }
@@ -393,28 +381,6 @@ function MobileMenu({
   );
 }
 
-/** Shell theme control: switches between the light default and dark mode. */
-function ThemeToggle({ className }: { className?: string }) {
-  const { theme, setTheme } = useTheme();
-  const next = theme === "dark" ? "light" : "dark";
-  const Icon = theme === "dark" ? Sun : Moon;
-  return (
-    <button
-      type="button"
-      onClick={() => setTheme(next)}
-      aria-label={`Switch to ${next} mode`}
-      title={`Switch to ${next} mode`}
-      className={cn(
-        "interactive-row flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground hover:text-foreground",
-        className,
-      )}
-    >
-      <Icon className="size-4" aria-hidden="true" />
-      {theme === "dark" ? "Light mode" : "Dark mode"}
-    </button>
-  );
-}
-
 function MobileNavigation({ path, basePath }: { path: string; basePath: string }) {
   const { workspace } = useWorkspace();
   return (
@@ -472,23 +438,4 @@ function WorkspaceMetricsControl() {
 function navItemActive(path: string, basePath: string, segment: string): boolean {
   const target = `${basePath}/${segment}`;
   return path === target || path.startsWith(`${target}/`);
-}
-
-function SettingsRailButton({ active, onOpen }: { active: boolean; onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      data-selected={active}
-      className={cn(
-        "interactive-row flex h-9 w-full items-center gap-2.5 rounded-none border-l-2 border-transparent px-2.5 text-[13px] outline-none transition-[border-color,color] duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring",
-        active
-          ? "border-l-brand font-medium text-sidebar-foreground"
-          : "text-muted-foreground hover:text-sidebar-foreground",
-      )}
-    >
-      <Settings className="size-4" aria-hidden="true" />
-      Settings
-    </button>
-  );
 }
