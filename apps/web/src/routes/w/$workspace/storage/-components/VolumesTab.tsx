@@ -37,7 +37,7 @@ export function VolumesTab({
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
-      <div className="panel grid min-h-[28rem] flex-1 overflow-visible rounded-md lg:min-h-0 lg:grid-cols-[15rem_minmax(0,1fr)] lg:overflow-hidden">
+      <div className="grid min-h-[28rem] flex-1 overflow-visible lg:min-h-0 lg:grid-cols-[15rem_minmax(0,1fr)] lg:overflow-hidden">
         <aside className="min-h-0 overflow-visible border-b border-border lg:overflow-y-auto lg:border-b-0 lg:border-r">
           {creating ? (
             <VolumeForm

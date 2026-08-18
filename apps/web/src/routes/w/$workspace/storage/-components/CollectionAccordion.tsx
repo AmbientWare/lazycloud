@@ -27,7 +27,7 @@ export function CollectionAccordion({
       <section
         aria-label={`${config.title} collection`}
         data-collection-scroll=""
-        className="panel min-h-[24rem] flex-1 overflow-visible rounded-md lg:min-h-0 lg:overflow-y-auto"
+        className="min-h-[24rem] flex-1 overflow-visible lg:min-h-0 lg:overflow-y-auto"
       >
         <div className="flex min-h-11 items-center gap-2 border-b border-border px-3 py-2">
           <h2 className="text-sm font-medium">{config.title}</h2>

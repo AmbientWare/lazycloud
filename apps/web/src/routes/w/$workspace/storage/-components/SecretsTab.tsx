@@ -36,7 +36,7 @@ export function SecretsTab({
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
-      <div className="panel min-h-[24rem] flex-1 divide-y divide-border overflow-visible rounded-md lg:min-h-0 lg:overflow-y-auto">
+      <div className="min-h-[24rem] flex-1 divide-y divide-border overflow-visible lg:min-h-0 lg:overflow-y-auto">
         <div
           aria-hidden="true"
           data-secret-table-header=""

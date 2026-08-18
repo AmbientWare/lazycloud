@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation } from "@tanstack/react-query";
+import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { TerminalSquare, X } from "lucide-react";
 
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
@@ -61,11 +62,11 @@ function ShellDialog({ containerId }: { containerId: string }) {
     <Dialog.Portal>
       <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/60 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
       <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] flex h-[min(46rem,calc(100dvh-1rem))] w-[calc(100vw-1rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-md border border-border bg-background shadow-2xl outline-none duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:h-[min(80dvh,46rem)] sm:w-[min(92vw,72rem)]">
-        <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-3 pr-12">
+        <DrawerHeader className="flex min-h-14 items-center gap-3">
           <TerminalSquare className="size-4 shrink-0 text-brand" aria-hidden="true" />
           <Dialog.Title className="text-base font-semibold text-foreground">Shell</Dialog.Title>
           <Dialog.Description className="sr-only">Interactive terminal session</Dialog.Description>
-        </header>
+        </DrawerHeader>
 
         <div className="flex min-h-0 flex-1 flex-col bg-background p-3 sm:p-4">
           {session.isPending ? (
