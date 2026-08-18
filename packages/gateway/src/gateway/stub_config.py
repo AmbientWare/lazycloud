@@ -221,11 +221,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
                 else None
             ),
             concurrency=runtime_config.concurrency,
-            keep_warm=resolve_keep_warm_seconds(
-                kind,
-                runtime_config.keep_warm,
-                scheduled=bool(config.cron),
-            ),
+            keep_warm=resolve_keep_warm_seconds(kind, runtime_config.keep_warm),
         ),
         env={key: value or "" for key, value in config.env.items()},
         secrets=config.secrets,

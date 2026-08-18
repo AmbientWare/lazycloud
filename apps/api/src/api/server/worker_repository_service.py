@@ -2470,11 +2470,10 @@ class WorkerRepositoryService:
         platform's problem, and the caller's invocation is still wanted.
         """
 
-        repository = TaskRepository(session)
-        for held in repository.list_inflight_for_container(container.id):
-            if held.id == container.task_id:
-                continue
-            repository.release_claim(held.id)
+        TaskRepository(session).release_claims_for_container(
+            container.id,
+            except_task_id=container.task_id,
+        )
 
     def _mark_container_preemption_settled(self, container_id: str) -> None:
         if self.services is None:

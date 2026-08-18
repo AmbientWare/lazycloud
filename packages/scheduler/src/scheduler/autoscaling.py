@@ -31,7 +31,7 @@ from shared.autoscaling import (
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.errors import DomainError, NotFoundError
+from shared.errors import DomainError, InvalidInputError, NotFoundError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
@@ -113,10 +113,9 @@ class AutoscaleResult(ContractModel):
     """What one tick concluded about one workload.
 
     `kind` is what separates the three, and the sample is carried as a name and
-    a number rather than a field per kind. A result shaped per kind meant every
-    reader of the autoscaler surface — the state row, the metrics, the history,
-    the operator's reconcile output — had a branch for each, and the kind added
-    last is the one each of those branches forgot.
+    a number rather than a field per kind, so every reader of the autoscaler
+    surface — the state row, the metrics, the history, the reconcile output —
+    has one shape and no per-kind branch.
     """
 
     kind: AutoscalerTargetKind
@@ -191,8 +190,6 @@ class ScalePlan:
     max_containers: int = 0
     min_containers: int = 0
     tasks_per_container: int = 1
-    keep_warm_seconds: int = 0
-    saturated: bool = False
 
 
 class WorkloadAutoscaler(Protocol):
@@ -223,7 +220,14 @@ class WorkloadAutoscaler(Protocol):
 
     def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan: ...
 
-    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]: ...
+    def start_one(self, stub: StubRecord) -> str | None:
+        """Start one container and name it, or answer `None` to stop asking.
+
+        `None` is a refusal the platform already made — a ceiling reached, no
+        work to warrant one — and not a failure worth recording. Raise
+        `DomainError` for that, and the driver records it and stops.
+        """
+        ...
 
     def scale_down(
         self,
@@ -231,7 +235,6 @@ class WorkloadAutoscaler(Protocol):
         containers: list[ContainerRecord],
         count: int,
         *,
-        keep_warm_seconds: int,
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]: ...
@@ -245,13 +248,7 @@ class AutoscalingDriver:
     a contended tick still records, the container counts, the failed-container
     threshold, the inactive deployment, the workspace guardrail, and the metrics
     and event and state row a tick leaves behind: all of it here, once, for
-    every kind.
-
-    Written as three copies these drifted, and the drift was invisible because
-    each copy was individually correct. The function autoscaler was the newest
-    copy and it had never read the pause flag, never recorded a metric, and
-    never named an action it took — three ways of being absent from the surface
-    an operator uses, none of which looked like a bug in a diff.
+    every kind, and none of it reachable from a workload.
     """
 
     services: SchedulerServices
@@ -339,14 +336,13 @@ class AutoscalingDriver:
                 decision = scale_kind(desired, current)
         delta = desired - current
         if delta > 0 and active and plan.valid:
-            actions.extend(self.workload.scale_up(stub, delta))
+            actions.extend(self._start(stub, delta))
         elif delta < 0:
             actions.extend(
                 self.workload.scale_down(
                     stub,
                     holding,
                     -delta,
-                    keep_warm_seconds=plan.keep_warm_seconds,
                     active_instance=active and not failure_threshold_reached,
                     now=current_time,
                 )
@@ -370,6 +366,32 @@ class AutoscalingDriver:
         )
         self._record(stub, result, plan)
         return result
+
+    def _start(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
+        """Ask for containers one at a time until the workload stops giving them.
+
+        Here rather than in each workload so that one event carries one name: the
+        action is a metric label and a state-row entry, and three loops spelled it
+        three ways with two different renderings of the same refusal.
+        """
+
+        actions: list[AutoscaleAction] = []
+        for _ in range(count):
+            try:
+                container_id = self.workload.start_one(stub)
+            except DomainError as exc:
+                actions.append(AutoscaleAction(action="scale-up-failed", reason=exc.message))
+                break
+            if container_id is None:
+                break
+            actions.append(
+                AutoscaleAction(
+                    container_id=container_id,
+                    action="start",
+                    reason="pressure requires more containers",
+                )
+            )
+        return actions
 
     def _record(self, stub: StubRecord, result: AutoscaleResult, plan: ScalePlan) -> None:
         identity = self.workload.identity
@@ -402,7 +424,7 @@ class AutoscalingDriver:
                 "min_containers": plan.min_containers,
                 "tasks_per_container": plan.tasks_per_container,
                 "guardrails": result.guardrails,
-                "actions": _autoscale_action_json_values(result.actions),
+                "actions": [*action_payloads],
             }
             self.services.events.emit(
                 identity.scale_decision_action,
@@ -423,7 +445,7 @@ class AutoscalingDriver:
             signal_name=result.signal_name,
             signal_value=result.signal_value,
             max_containers=plan.max_containers,
-            pressure_saturated=plan.saturated,
+            pressure_saturated=_pressure_saturated(result.signal_value, plan),
             failed_container_count=len(result.failed_containers),
             decision=result.decision.value,
             reason=result.reason,
@@ -529,11 +551,9 @@ class FunctionAutoscaler:
         return FUNCTION_AUTOSCALER
 
     def selects(self, stub: StubRecord) -> bool:
-        # Bound to a deployment, as the other two workloads also require. A
-        # deploy leaves behind a stub with no deployment id, and provisioning
-        # from that one would hold a second copy of everything this stub is
-        # configured to hold — invisible while a function held containers only
-        # for work it had, and a doubled bill once it holds a warm floor.
+        # Bound to a deployment, as the other two workloads also require:
+        # provisioning for an unbound stub would hold a second copy of
+        # everything the bound one holds.
         return stub.kind is StubKind.Function and bool(stub.deployment_id)
 
     def partition(
@@ -567,22 +587,12 @@ class FunctionAutoscaler:
             max_containers=config.effective_max_containers,
             min_containers=config.min_containers,
             tasks_per_container=config.tasks_per_container,
-            keep_warm_seconds=stub.config.runtime.keep_warm,
-            saturated=_backlog_pressure_saturated(signal, config),
         )
 
-    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
-        actions: list[AutoscaleAction] = []
-        for _ in range(count):
-            try:
-                started = self.functions.start_function_container(stub.id)
-            except DomainError as exc:
-                actions.append(AutoscaleAction(action="scale-up-failed", reason=exc.message))
-                break
-            if not started:
-                break
-            actions.append(AutoscaleAction(action="scale-up"))
-        return actions
+    def start_one(self, stub: StubRecord) -> str | None:
+        # The container is reserved against the stub, so its id is settled where
+        # the ceiling is checked rather than here.
+        return "" if self.functions.start_function_container(stub.id) else None
 
     def scale_down(
         self,
@@ -590,7 +600,6 @@ class FunctionAutoscaler:
         containers: list[ContainerRecord],
         count: int,
         *,
-        keep_warm_seconds: int,
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
@@ -608,7 +617,7 @@ class FunctionAutoscaler:
         """
 
         del active_instance, now
-        if keep_warm_seconds >= 0:
+        if stub.config.runtime.keep_warm >= 0:
             return []
         candidates = [
             container for container in containers if container.status is ContainerStatus.Running
@@ -671,29 +680,16 @@ class EndpointAutoscaler:
             max_containers=config.max_containers,
             min_containers=config.min_containers,
             tasks_per_container=config.tasks_per_container,
-            keep_warm_seconds=config.keep_warm_seconds,
-            saturated=_endpoint_pressure_saturated(signal, config),
         )
 
-    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
-        actions: list[AutoscaleAction] = []
-        timeout = _endpoint_timeout_seconds(stub.config)
-        for _ in range(count):
-            try:
-                response = self.endpoints.start_endpoint_serve(
-                    StartEndpointServeRequest(stub_id=stub.id, timeout=timeout)
-                )
-            except DomainError as exc:
-                actions.append(AutoscaleAction(action="scale-up-failed", reason=exc.message))
-                break
-            actions.append(
-                AutoscaleAction(
-                    container_id=response.container_id,
-                    action="start",
-                    reason="endpoint request pressure requires more containers",
-                )
+    def start_one(self, stub: StubRecord) -> str | None:
+        response = self.endpoints.start_endpoint_serve(
+            StartEndpointServeRequest(
+                stub_id=stub.id,
+                timeout=_endpoint_timeout_seconds(stub.config),
             )
-        return actions
+        )
+        return response.container_id
 
     def scale_down(
         self,
@@ -701,7 +697,6 @@ class EndpointAutoscaler:
         containers: list[ContainerRecord],
         count: int,
         *,
-        keep_warm_seconds: int,
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
@@ -712,7 +707,7 @@ class EndpointAutoscaler:
             self.redis,
             stub,
             containers,
-            keep_warm_seconds=keep_warm_seconds,
+            keep_warm_seconds=_endpoint_autoscaler_config(stub.config).keep_warm_seconds,
             now=now,
         ):
             if len(actions) >= count:
@@ -787,34 +782,15 @@ class PodAutoscaler:
             valid=decision.valid,
             max_containers=config.max_containers,
             min_containers=config.min_containers,
-            keep_warm_seconds=(0 if stub.kind is StubKind.Sandbox else config.keep_warm_seconds),
-            saturated=_pod_pressure_saturated(signal, config),
         )
 
-    def scale_up(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
-        actions: list[AutoscaleAction] = []
-        for _ in range(count):
-            try:
-                response = self.pods.create_pod(CreatePodRequest(stub_id=stub.id))
-            except DomainError as exc:
-                actions.append(AutoscaleAction(action="scale-up-failed", reason=str(exc)))
-                break
-            if not response.container_id:
-                actions.append(
-                    AutoscaleAction(
-                        action="scale-up-failed",
-                        reason="pod create returned no container id",
-                    )
-                )
-                break
-            actions.append(
-                AutoscaleAction(
-                    container_id=response.container_id,
-                    action="start",
-                    reason="pod deployment desired capacity requires more containers",
-                )
-            )
-        return actions
+    def start_one(self, stub: StubRecord) -> str | None:
+        response = self.pods.create_pod(CreatePodRequest(stub_id=stub.id))
+        if not response.container_id:
+            # A pod that reports no container is a failure to record, not a
+            # refusal to respect: nothing was started and nothing named it.
+            raise InvalidInputError("pod create returned no container id")
+        return response.container_id
 
     def scale_down(
         self,
@@ -822,11 +798,15 @@ class PodAutoscaler:
         containers: list[ContainerRecord],
         count: int,
         *,
-        keep_warm_seconds: int,
         active_instance: bool,
         now: datetime,
     ) -> list[AutoscaleAction]:
         workspace_id = stub.workspace_id
+        # A sandbox is held by its lock rather than by a window, which is the
+        # same distinction `keep_warm_lock_authoritative` states below.
+        keep_warm_seconds = (
+            0 if stub.kind is StubKind.Sandbox else _pod_autoscaler_config(stub).keep_warm_seconds
+        )
         states = _pod_container_states(self.redis, workspace_id, stub, containers)
         stop_plan = select_stoppable_pod_containers(
             states,
@@ -868,9 +848,16 @@ def _function_autoscaler_config(config: StubConfig) -> BacklogAutoscalerConfig:
     )
 
 
-def _backlog_pressure_saturated(queue_length: int, config: BacklogAutoscalerConfig) -> bool:
-    servable = max(config.effective_max_containers, 0) * max(config.tasks_per_container, 1)
-    return servable > 0 and queue_length > servable
+def _pressure_saturated(signal: int, plan: ScalePlan) -> bool:
+    """Whether the workload wants more than its ceiling can ever serve.
+
+    One formula for all three: the ceiling times what one container takes is
+    what the stub can serve at most, and a signal above that is pressure the
+    autoscaler is not allowed to answer.
+    """
+
+    servable = max(plan.max_containers, 0) * max(plan.tasks_per_container, 1)
+    return servable > 0 and signal > servable
 
 
 class EndpointAutoscalerConfig(ContractModel):
@@ -1005,10 +992,6 @@ def _autoscale_action_payloads(
     ]
 
 
-def _autoscale_action_json_values(actions: Sequence[AutoscaleAction]) -> list[JsonValue]:
-    return [payload for payload in _autoscale_action_payloads(actions)]
-
-
 def _guardrail_limited(guardrails: dict[str, JsonValue]) -> bool:
     return guardrails.get("limited") is True
 
@@ -1031,18 +1014,6 @@ def _action_reason(action: dict[str, JsonValue]) -> str:
 def _is_no_worker_capacity(reason: str) -> bool:
     normalized = reason.lower()
     return "no worker capacity" in normalized or "worker capacity" in normalized
-
-
-def _endpoint_pressure_saturated(
-    active_requests: int,
-    config: EndpointAutoscalerConfig,
-) -> bool:
-    target_requests = max(config.max_containers, 0) * max(config.tasks_per_container, 1)
-    return target_requests > 0 and active_requests > target_requests
-
-
-def _pod_pressure_saturated(total_connections: int, config: PodAutoscalerConfig) -> bool:
-    return config.max_containers > 0 and total_connections > config.max_containers
 
 
 def _should_persist_scale_event(

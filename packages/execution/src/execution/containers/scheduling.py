@@ -179,11 +179,10 @@ class ContainerSchedulingPersistenceService:
         caller's.
         """
 
-        repository = TaskRepository(session)
-        for held in repository.list_inflight_for_container(container.id):
-            if held.id == container.task_id:
-                continue
-            repository.release_claim(held.id)
+        TaskRepository(session).release_claims_for_container(
+            container.id,
+            except_task_id=container.task_id,
+        )
 
     def mark_scheduling_failed(
         self,

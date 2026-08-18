@@ -655,12 +655,7 @@ def test_new_cron_version_takes_over_the_prior_schedule(
     assert jobs[0].name == first_job.name
     assert jobs[0].deployment_id == second.id
     assert jobs[0].cron == "0 * * * *"
-    assert jobs[0].payload == {
-        "stub_id": second_stub.id,
-        "workspace_name": "default",
-        "deployment_id": second.id,
-        "cron": "0 * * * *",
-    }
+    assert second.stub_id == second_stub.id
 
 
 def test_inactive_cron_deployment_never_enqueues(

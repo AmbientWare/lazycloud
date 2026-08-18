@@ -889,9 +889,9 @@ class ApiServices(ApiServiceCore):
             events,
             compute_policies,
             DeploymentRegistrationService(apps, control_plane),
+            cron_jobs,
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
-            schedules=cron_jobs,
         )
         resolved_image_build_executor = image_build_executor or _image_build_executor(
             image_build_execution_config,

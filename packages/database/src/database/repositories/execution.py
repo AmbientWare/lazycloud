@@ -226,6 +226,55 @@ class TaskRepository:
         task.started_at = None
         return self.upsert(task)
 
+    def containers_with_inflight_work(self, container_ids: Sequence[str]) -> set[str]:
+        """Which of these containers is holding work, as one question.
+
+        Answered with the ids alone: the caller is deciding what may be stopped,
+        so it needs membership rather than the tasks themselves, and reading the
+        rows back would deserialise every in-flight invocation to answer a
+        yes-or-no about each container.
+        """
+
+        ids = [container_id for container_id in container_ids if container_id]
+        if not ids:
+            return set()
+        rows = self.session.scalars(
+            select(TaskTable.container_id)
+            .where(
+                TaskTable.container_id.in_(ids),
+                TaskTable.status.in_([status.value for status in IN_FLIGHT_TASK_STATUSES]),
+            )
+            .distinct()
+        )
+        return {str(value) for value in rows if value}
+
+    def release_claims_for_container(
+        self,
+        container_id: str,
+        *,
+        except_task_id: str | None = None,
+    ) -> list[Task]:
+        """Give back everything this container was holding.
+
+        What every path that ends a container has to do, so it lives here rather
+        than in each of them: an uncommanded exit, a scheduling failure and a
+        stop all leave the same rows naming a container that is gone, and a
+        claim nobody gives back is a caller waiting forever.
+
+        `except_task_id` is the task the container was created for, where it had
+        one — that task is settled by the caller against the container's own
+        terminal state, and releasing it here would undo that.
+        """
+
+        released: list[Task] = []
+        for held in self.list_inflight_for_container(container_id):
+            if except_task_id is not None and held.id == except_task_id:
+                continue
+            task = self.release_claim(held.id)
+            if task is not None:
+                released.append(task)
+        return released
+
     def list_inflight_for_container(self, container_id: str) -> list[Task]:
         """Work this container has claimed and not finished.
 

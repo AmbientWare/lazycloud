@@ -24,7 +24,6 @@ from pydantic import Field, JsonValue
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord, CronJobRun, next_cron_run
-from shared.deployment_records import Deployment
 from shared.events import EventLevel
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
@@ -1532,7 +1531,7 @@ class Scheduler:
                     reason="deployment inactive",
                 )
             else:
-                stub_id = _scheduled_stub_id(cron_job, deployment)
+                stub_id = deployment.stub_id or ""
                 if not stub_id:
                     raise ValueError("scheduled deployment published no stub to invoke")
                 run = self._run_cron_function(cron_job, stub_id)
@@ -1665,19 +1664,6 @@ class SchedulerRunResult(ContractModel):
     billing_enforcement_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
-
-
-def _scheduled_stub_id(cron_job: CronJobRecord, deployment: Deployment) -> str:
-    """The stub a fired schedule invokes.
-
-    Read from the deployment rather than trusted from the schedule's payload:
-    the payload was written when the schedule was created, and the deployment is
-    what the tick just resolved. They agree, and where they cannot the
-    deployment wins — it is the row a redeploy updates.
-    """
-
-    del cron_job
-    return deployment.stub_id or ""
 
 
 def _record_worker_pool_drain_observability(

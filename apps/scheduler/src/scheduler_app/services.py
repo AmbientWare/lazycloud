@@ -352,8 +352,8 @@ class SchedulerAppServices:
             events,
             compute_policies,
             DeploymentRegistrationService(apps, control_plane),
+            cron_jobs,
             workspace_changes=workspace_changes,
-            schedules=cron_jobs,
         )
         _, tailnet_cleanup = scheduler_tailnet_services(
             context=context,

@@ -9,12 +9,7 @@ from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
-from shared.cron import (
-    CronJobRecord,
-    next_cron_run,
-    normalize_cron_expression,
-    schedule_payload,
-)
+from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
 from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
@@ -87,10 +82,7 @@ class DeploymentScheduleWriter(Protocol):
         deployment: Deployment,
         *,
         cron: str,
-        stub_id: str,
         workspace: str,
-        workspace_name: str,
-        queue: str = "tasks",
     ) -> CronJobRecord: ...
 
 
@@ -100,9 +92,9 @@ class DeploymentService:
     events: ControlEventEmitter
     pool_resolver: DeploymentPoolResolver
     registrar: DeploymentRegistrar
+    schedules: DeploymentScheduleWriter
     workspace_changes: WorkspaceChangePublisher | None = None
     placement_resources: DeploymentPlacementResourceManager | None = None
-    schedules: DeploymentScheduleWriter | None = None
 
     def deploy(self, spec: DeploymentSpec, *, workspace: str = "default") -> Deployment:
         normalized_spec = _normalize_runtime_spec(spec)
@@ -197,13 +189,11 @@ class DeploymentService:
             # and inside this block so a failure here is compensated with the
             # rest of the deploy rather than leaving a schedule for a deployment
             # that was rolled back.
-            if normalized_spec.cron and self.schedules is not None:
+            if normalized_spec.cron:
                 self.schedules.create_for_deployment(
                     deployment,
                     cron=normalized_spec.cron,
-                    stub_id=registration.stub_id,
                     workspace=workspace_record.id,
-                    workspace_name=workspace_record.name,
                 )
         except Exception as deployment_failure:
             compensation_failures: list[Exception] = []
@@ -444,10 +434,7 @@ class CronJobService:
         deployment: Deployment,
         *,
         cron: str,
-        stub_id: str,
         workspace: str,
-        workspace_name: str,
-        queue: str = "tasks",
     ) -> CronJobRecord:
         """Give this deployment the schedule its spec declared.
 
@@ -456,11 +443,10 @@ class CronJobService:
         service that deploys — which depends on the registration that calls this.
 
         Named for the deployment's subdomain, which is the one identity a
-        resource keeps across its versions and which is already checked for
-        collisions when it is minted. So deploying again upserts the same row and
-        the previous version's schedule stops existing, rather than a scan that
-        has to remember to compare app as well as name — the scan did not, and
-        two apps in one workspace deleted each other's schedules.
+        resource keeps across its versions and is already checked for collisions
+        when it is minted. Deploying again upserts that row, so the previous
+        version's schedule stops existing without anything having to go looking
+        for it.
         """
 
         try:
@@ -476,13 +462,6 @@ class CronJobService:
                 name=deployment.subdomain,
                 cron=normalized_cron,
                 deployment_id=deployment.id,
-                queue=queue,
-                payload=schedule_payload(
-                    stub_id=stub_id,
-                    workspace_name=workspace_name,
-                    deployment_id=deployment.id,
-                    cron=normalized_cron,
-                ),
                 next_run_at=next_run_at,
             )
             saved = repository.upsert(record, workspace_id=workspace_id)
