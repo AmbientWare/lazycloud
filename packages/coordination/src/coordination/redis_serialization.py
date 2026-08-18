@@ -14,10 +14,7 @@ _JSON_MAPPING_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str,
 
 def dump_model_hash(model: ContractModel) -> dict[str, str]:
     payload = _JSON_MAPPING_ADAPTER.validate_json(model.model_dump_json())
-    return {
-        key: json.dumps(value, separators=(",", ":"), sort_keys=True)
-        for key, value in payload.items()
-    }
+    return {key: dumps_field(value) for key, value in payload.items()}
 
 
 def load_model_hash[T: ContractModel](
@@ -34,6 +31,10 @@ def dump_model_json(model: ContractModel) -> str:
 
 def load_model_json[T: ContractModel](model_type: type[T], value: RedisWireScalar) -> T:
     return model_type.model_validate_json(redis_text(value))
+
+
+def dumps_field(value: JsonValue) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
 def loads_field(value: RedisWireScalar) -> JsonValue:

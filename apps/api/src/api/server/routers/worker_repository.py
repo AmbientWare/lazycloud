@@ -12,6 +12,8 @@ from worker.origin_access import (
     ImageArchiveUploadCredentialRequest,
 )
 from worker.repository_payloads import (
+    AcknowledgeContainerRequestRequest,
+    AcknowledgeContainerRequestResponse,
     AcknowledgeWorkerEventRequest,
     AcknowledgeWorkerEventResponse,
     AcquireAutomaticCheckpointLeaseRequest,
@@ -172,6 +174,21 @@ def get_next_container_request(
         ("container-request", "", item)
         for item in service.stream_next_container_requests(request, principal=principal)
     )
+
+
+@router.post(
+    "/worker-repository/acknowledge-container-request",
+    response_model=AcknowledgeContainerRequestResponse,
+)
+def acknowledge_container_request(
+    request: AcknowledgeContainerRequestRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> AcknowledgeContainerRequestResponse:
+    _require_worker_subject(
+        principal, request.worker_id, action="container request acknowledgement"
+    )
+    return service.acknowledge_container_request(request)
 
 
 @router.post("/worker-repository/stream-worker-events", response_class=StreamingResponse)

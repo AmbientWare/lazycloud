@@ -12,8 +12,13 @@ from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from scheduler.autoscaling import AutoscalingDriver, PodAutoscaler
+from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
-from scheduler.state import SchedulerWorkerRequest
+from scheduler.state import (
+    RedisSchedulerContainerRepository,
+    RedisSchedulerWorkerRepository,
+    SchedulerWorkerRequest,
+)
 from shared.container_requests import WorkerContainerRequestPayload
 from shared.containers import ContainerStatus
 from shared.http.pods import CreatePodRequest, PodSandboxUpdateTTLRequest
@@ -102,11 +107,24 @@ def test_scheduler_expires_prepared_sandbox_without_a_deployment(
     container.started_at = started_at
     with services.context.database.session() as session:
         ContainerRepository(session).upsert(container)
+    # A container the record calls running carries the scheduler state its
+    # worker re-arms; without one it is a record nothing backs, which is the
+    # case the driver reclaims.
+    RedisSchedulerContainerRepository(redis).set_container_state(
+        SchedulerContainerState(
+            container_id=container.id,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            status=SchedulerContainerStatus.Running,
+        )
+    )
 
     autoscaler = AutoscalingDriver(
         services,
         redis=redis,
         workload=PodAutoscaler(services, redis=redis, pods=pod_service),
+        container_states=RedisSchedulerContainerRepository(redis),
+        container_requests=RedisSchedulerWorkerRepository(redis),
     )
     held = autoscaler.reconcile(now=utc_now())
 

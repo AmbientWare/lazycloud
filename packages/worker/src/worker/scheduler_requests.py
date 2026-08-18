@@ -40,32 +40,48 @@ from worker.image_build_execution import (
 from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
 from worker.monitoring import WorkerUsageWindowRecorder
 from worker.status import (
-    WorkerCancelledRequestAction,
-    WorkerCancelledRequestPlan,
-    plan_worker_cancelled_request,
+    WorkerDeliveredRequestAction,
+    WorkerDeliveredRequestPlan,
+    plan_delivered_container_request,
 )
 
 LOGGER = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
+WORKER_REQUEST_DELIVERY_RETRY_SECONDS = 60.0
+"""How long this worker keeps retrying a delivery it could not act on.
+
+Only a request the worker never took is retried, and only against a fault it
+cannot see past—the control plane being unreachable. A time bound rather than an
+attempt count, because what it has to stay under is a clock: the durable row's
+start deadline does not reclaim a container while something still claims to be
+delivering a request for it, so the retrying has to end well inside that window
+however fast this worker polls.
+"""
 
 
 class WorkerSchedulerRequestAction(StrEnum):
     Idle = "idle"
     DropMissingState = "drop-missing-state"
     DropStoppingState = "drop-stopping-state"
+    DropFinishedState = "drop-finished-state"
+    SkipStartedContainer = "skip-started-container"
+    ReconcileDelivery = "reconcile-delivery"
     Execute = "execute"
 
 
 class WorkerSchedulerRequestStatus(StrEnum):
     Idle = "idle"
     Dropped = "dropped"
+    Reconciled = "reconciled"
     Executed = "executed"
     Error = "error"
 
 
 class WorkerSchedulerRequestWorkerRepository(Protocol):
     def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None: ...
+
+    def acknowledge_worker_request(self, worker_id: str, container_id: str) -> bool: ...
 
     def update_worker_capacity(
         self,
@@ -104,7 +120,7 @@ class WorkerSchedulerRequestResult(ContractModel):
     request: SchedulerWorkerRequest | None = None
     execution: ContainerExecutionResult | None = None
     image_build: WorkerImageBuildExecutionResult | None = None
-    cancelled: WorkerCancelledRequestPlan | None = None
+    delivery: WorkerDeliveredRequestPlan | None = None
     capacity_released: bool = False
     capacity_release_error: str = ""
     state_deleted: bool = False
@@ -121,6 +137,22 @@ class _BackgroundExecution:
     request: SchedulerWorkerRequest
     thread: threading.Thread | None = None
     result: WorkerSchedulerRequestResult | None = None
+
+
+@dataclass(slots=True)
+class _Delivery:
+    """A request this worker has been handed and has not yet acknowledged.
+
+    Held for exactly as long as the control plane could still redeliver it, which
+    is what makes a redelivery recognisable: the same container arriving twice is
+    the same work, not a second container to start.
+    """
+
+    request: SchedulerWorkerRequest
+    first_attempt_at: float = field(default_factory=monotonic)
+    attempts: int = 0
+    held: bool = False
+    committed: bool = False
 
 
 @dataclass(slots=True)
@@ -145,8 +177,11 @@ class WorkerSchedulerRequestProcessor:
     away."""
 
     _background: dict[str, _BackgroundExecution] = field(default_factory=dict, init=False)
+    _deliveries: dict[str, _Delivery] = field(default_factory=dict, init=False)
+    _delivery_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
+        self._retry_acknowledgements()
         completed = self._pop_completed_background()
         if completed is not None:
             return completed
@@ -159,13 +194,39 @@ class WorkerSchedulerRequestProcessor:
                 action=WorkerSchedulerRequestAction.Idle,
             )
 
+        if not self._begin_delivery(request):
+            # The same request arriving again while this worker still holds it is
+            # the control plane not having heard the acknowledgement, not a second
+            # container to start. Nothing here runs, releases capacity, or touches
+            # the container's state; the retry above is what ends the redelivery.
+            return WorkerSchedulerRequestResult(
+                worker_id=self.worker_id,
+                status=WorkerSchedulerRequestStatus.Reconciled,
+                action=WorkerSchedulerRequestAction.ReconcileDelivery,
+                container_id=request.container_id,
+                request=request,
+            )
+
+        try:
+            result = self._process_request(request)
+        except Exception:
+            # Reaching here means the control plane could not be asked what to do
+            # with the request, so this worker has taken nothing. Acknowledging it
+            # would throw the container away for a fault that has already passed
+            # by the next poll, which is the whole failure this path removes.
+            self._end_delivery(request.container_id, resolved=False)
+            raise
+        self._end_delivery(request.container_id, resolved=True)
+        return result
+
+    def _process_request(self, request: SchedulerWorkerRequest) -> WorkerSchedulerRequestResult:
         state = self.containers.get_container_state(request.container_id)
-        cancelled = plan_worker_cancelled_request(
+        delivery = plan_delivered_container_request(
             state_missing=state is None,
             state_status=state.status if state is not None else None,
         )
-        if cancelled.drop:
-            return self._drop_request(request, cancelled)
+        if delivery.drop:
+            return self._drop_request(request, delivery)
 
         if is_image_build_scheduler_request(request):
             return self._release_capacity(request, self._execute_image_build_request(request))
@@ -208,22 +269,135 @@ class WorkerSchedulerRequestProcessor:
             )
         return self._release_capacity(request, result)
 
-    def _execute_container(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
-        registered = False
+    def _begin_delivery(self, request: SchedulerWorkerRequest) -> bool:
+        """Take this delivery, or refuse it because the worker already holds it."""
+
+        with self._delivery_lock:
+            delivery = self._deliveries.get(request.container_id)
+            if delivery is not None and (delivery.held or delivery.committed):
+                return False
+            if delivery is None:
+                delivery = _Delivery(request=request)
+                self._deliveries[request.container_id] = delivery
+            delivery.request = request
+            delivery.attempts += 1
+            delivery.held = True
+            return True
+
+    def _commit_delivery(self, container_id: str) -> None:
+        """Tell the control plane this worker holds the container, and stop holding the request.
+
+        Called where the worker has taken local ownership—the container is in its
+        active set, or the build it names has been marked running—so a worker that
+        dies before that point has its request redelivered rather than dropped.
+        What remains after it is the durable row's start deadline, which covers a
+        worker that acknowledged and then died before the container came up.
+        """
+
+        with self._delivery_lock:
+            delivery = self._deliveries.get(container_id)
+            if delivery is None:
+                return
+            delivery.committed = True
+        self._acknowledge(container_id)
+
+    def _end_delivery(self, container_id: str, *, resolved: bool) -> None:
+        """Close a delivery out: acknowledge it, or hand it back to be redelivered.
+
+        A request the worker resolved is acknowledged however it ended—started,
+        dropped, or recognised as one it had already run. A request it never got
+        to look at is left in flight so the next poll brings it back, and only a
+        worker that cannot make progress on it at all gives up: the durable row's
+        start deadline cannot reclaim a container while a request for it is still
+        live, so retrying here has to be bounded rather than endless.
+        """
+
+        with self._delivery_lock:
+            delivery = self._deliveries.get(container_id)
+            if delivery is None:
+                return
+            delivery.held = False
+            attempts = delivery.attempts
+            retrying = (
+                monotonic() - delivery.first_attempt_at
+            ) < WORKER_REQUEST_DELIVERY_RETRY_SECONDS
+            if not delivery.committed:
+                if not resolved and retrying:
+                    LOGGER.warning(
+                        "container request could not be acted on; leaving it for redelivery",
+                        extra={
+                            "worker_id": self.worker_id,
+                            "container_id": container_id,
+                            "attempts": attempts,
+                        },
+                    )
+                    return
+                delivery.committed = True
+                if not resolved:
+                    LOGGER.warning(
+                        "container request giving up after repeated failures",
+                        extra={
+                            "worker_id": self.worker_id,
+                            "container_id": container_id,
+                            "attempts": attempts,
+                        },
+                    )
+        self._acknowledge(container_id)
+
+    def _acknowledge(self, container_id: str) -> None:
         try:
-            if self.lifecycle is not None:
-                self.lifecycle.register_container(context.request)
-                registered = True
+            self.workers.acknowledge_worker_request(self.worker_id, container_id)
+        except Exception as exc:
+            # The control plane is what is unreachable, so the request is still in
+            # flight and will be handed back. Keeping it here is what makes that
+            # redelivery a no-op instead of a second container.
+            LOGGER.warning(
+                "container request acknowledgement failed; will retry",
+                extra={
+                    "worker_id": self.worker_id,
+                    "container_id": container_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            return
+        with self._delivery_lock:
+            self._deliveries.pop(container_id, None)
+
+    def _retry_acknowledgements(self) -> None:
+        with self._delivery_lock:
+            pending = [
+                container_id
+                for container_id, delivery in self._deliveries.items()
+                if delivery.committed and not delivery.held
+            ]
+        for container_id in pending:
+            self._acknowledge(container_id)
+
+    def _take_container(self, context: ContainerExecutionContext) -> None:
+        if self.lifecycle is not None:
+            self.lifecycle.register_container(context.request)
+        self._commit_delivery(context.request.container_id)
+
+    def _release_container(self, container_id: str) -> None:
+        if self.lifecycle is not None:
+            self.lifecycle.unregister_container(container_id)
+
+    def _execute_container(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
+        self._take_container(context)
+        try:
             return self.execution.execute(context)
         finally:
-            if registered and self.lifecycle is not None:
-                self.lifecycle.unregister_container(context.request.container_id)
+            self._release_container(context.request.container_id)
 
     def _start_background(
         self,
         request: SchedulerWorkerRequest,
         context: ContainerExecutionContext,
     ) -> WorkerSchedulerRequestResult:
+        # Taken here rather than on the thread: this call returns to a loop that
+        # polls again immediately, and the acknowledgement has to be in flight
+        # before it does or every background start costs a redelivery.
+        self._take_container(context)
         active = _BackgroundExecution(request=request)
         thread = threading.Thread(
             target=self._run_background,
@@ -249,7 +423,7 @@ class WorkerSchedulerRequestProcessor:
         context: ContainerExecutionContext,
     ) -> None:
         try:
-            execution = self._execute_container(context)
+            execution = self._execute_registered_container(context)
         except Exception as exc:  # pragma: no cover - defensive owner boundary
             result = WorkerSchedulerRequestResult(
                 worker_id=self.worker_id,
@@ -282,6 +456,15 @@ class WorkerSchedulerRequestProcessor:
                 ),
             )
         active.result = self._release_capacity(active.request, result)
+
+    def _execute_registered_container(
+        self,
+        context: ContainerExecutionContext,
+    ) -> ContainerExecutionResult:
+        try:
+            return self.execution.execute(context)
+        finally:
+            self._release_container(context.request.container_id)
 
     def _pop_completed_background(self) -> WorkerSchedulerRequestResult | None:
         for container_id, active in tuple(self._background.items()):
@@ -329,6 +512,9 @@ class WorkerSchedulerRequestProcessor:
                 SchedulerContainerStatus.Running,
                 ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
             )
+            # A build has no container to register, so the status it just wrote is
+            # the record that this worker holds it.
+            self._commit_delivery(request.container_id)
             image_build = self._metered_image_build(
                 request,
                 image_builds,
@@ -439,25 +625,38 @@ class WorkerSchedulerRequestProcessor:
     def _drop_request(
         self,
         request: SchedulerWorkerRequest,
-        cancelled: WorkerCancelledRequestPlan,
+        delivery: WorkerDeliveredRequestPlan,
     ) -> WorkerSchedulerRequestResult:
         state_deleted = False
-        if cancelled.delete_state:
+        if delivery.delete_state:
             state_deleted = self.containers.delete_container_state(request.container_id)
-        action = (
-            WorkerSchedulerRequestAction.DropMissingState
-            if cancelled.action is WorkerCancelledRequestAction.DropMissingState
-            else WorkerSchedulerRequestAction.DropStoppingState
+        LOGGER.warning(
+            "container request will not run: %s",
+            delivery.reason,
+            extra={"worker_id": self.worker_id, "container_id": request.container_id},
         )
         result = WorkerSchedulerRequestResult(
             worker_id=self.worker_id,
-            status=WorkerSchedulerRequestStatus.Dropped,
-            action=action,
+            status=(
+                WorkerSchedulerRequestStatus.Reconciled
+                if delivery.action
+                in {
+                    WorkerDeliveredRequestAction.DropFinishedState,
+                    WorkerDeliveredRequestAction.SkipStartedContainer,
+                }
+                else WorkerSchedulerRequestStatus.Dropped
+            ),
+            action=_DROP_ACTIONS[delivery.action],
             container_id=request.container_id,
             request=request,
-            cancelled=cancelled,
+            delivery=delivery,
             state_deleted=state_deleted,
         )
+        if not delivery.release_capacity:
+            # The container this names is running or has run, so its reservation is
+            # released by the execution that holds it. Releasing again here would
+            # hand the worker capacity it never got back.
+            return result
         return self._release_capacity(request, result)
 
     def _release_capacity(
@@ -479,6 +678,20 @@ class WorkerSchedulerRequestProcessor:
                 }
             )
         return result.model_copy(update={"capacity_released": True})
+
+
+_DROP_ACTIONS: dict[WorkerDeliveredRequestAction, WorkerSchedulerRequestAction] = {
+    WorkerDeliveredRequestAction.DropMissingState: (WorkerSchedulerRequestAction.DropMissingState),
+    WorkerDeliveredRequestAction.DropStoppingState: (
+        WorkerSchedulerRequestAction.DropStoppingState
+    ),
+    WorkerDeliveredRequestAction.DropFinishedState: (
+        WorkerSchedulerRequestAction.DropFinishedState
+    ),
+    WorkerDeliveredRequestAction.SkipStartedContainer: (
+        WorkerSchedulerRequestAction.SkipStartedContainer
+    ),
+}
 
 
 def _billable_gpu(*, gpu_count: int, worker_gpu_type: str) -> str:

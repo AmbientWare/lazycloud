@@ -133,6 +133,15 @@ class RedisTransport(Protocol):
         timeout: float,
     ) -> RedisCommandResponse: ...
 
+    def blmove(
+        self,
+        first_list: str,
+        second_list: str,
+        timeout: int,
+        src: str = "LEFT",
+        dest: str = "RIGHT",
+    ) -> RedisCommandResponse: ...
+
     def lrange(self, name: str, start: int, end: int) -> RedisCommandResponse: ...
 
     def lindex(self, name: str, index: int) -> RedisCommandResponse: ...
@@ -581,6 +590,30 @@ class RedisClient:
         if len(values) != 2:
             raise TypeError("Redis BLPOP response must contain a key and value")
         return values[0], values[1]
+
+    def blocking_list_move(
+        self,
+        source: str,
+        destination: str,
+        *,
+        timeout_seconds: int,
+    ) -> RedisWireScalar | None:
+        """Move the head of `source` to the tail of `destination`, waiting for one to arrive.
+
+        One command, so a consumer that dies mid-take leaves the entry on
+        `destination` rather than nowhere: a blocking pop followed by a push has a
+        window in which the value exists only in the caller's memory.
+
+        Whole seconds, and never zero, because Redis reads a zero timeout as "wait
+        forever" — a caller with less than a second left polls instead of blocking.
+        """
+
+        if timeout_seconds < 1:
+            raise ValueError("blocking list move timeout must be at least one second")
+        return _optional_scalar(
+            self._transport.blmove(source, destination, timeout_seconds),
+            "BLMOVE",
+        )
 
     def list_range(self, key: str, start: int, end: int) -> list[RedisWireScalar]:
         return _scalar_sequence(

@@ -207,6 +207,29 @@ class FakeRedis:
                     return None
                 self._list_condition.wait(remaining)
 
+    def blmove(
+        self,
+        first_list: str,
+        second_list: str,
+        timeout: int,
+        src: str = "LEFT",
+        dest: str = "RIGHT",
+    ) -> str | None:
+        _ = (src, dest)
+        deadline = time.monotonic() + timeout
+        with self._list_condition:
+            self.blpop_started.set()
+            while True:
+                values = self.lists.get(first_list, [])
+                if values:
+                    moved = values.pop(0)
+                    self.lists.setdefault(second_list, []).append(moved)
+                    return moved
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._list_condition.wait(remaining)
+
     def lrange(self, name: str, start: int, end: int) -> list[str]:
         values = self.lists.get(name, [])
         stop = None if end == -1 else end + 1

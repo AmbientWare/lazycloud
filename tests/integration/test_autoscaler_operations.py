@@ -23,7 +23,7 @@ from scheduler.autoscaling import (
     FunctionAutoscaler,
     PodAutoscaler,
 )
-from scheduler.state import RedisSchedulerContainerRepository
+from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWorkerRepository
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,
@@ -172,9 +172,13 @@ def _autoscaler_operations(
             services,
             redis=redis,
             workload=FunctionAutoscaler(services, functions=FunctionControlService(services)),
+            container_states=RedisSchedulerContainerRepository(redis),
+            container_requests=RedisSchedulerWorkerRepository(redis),
         ),
         endpoint_autoscaler=AutoscalingDriver(
             services,
+            container_states=RedisSchedulerContainerRepository(redis),
+            container_requests=RedisSchedulerWorkerRepository(redis),
             redis=redis,
             workload=EndpointAutoscaler(
                 services,
@@ -188,12 +192,9 @@ def _autoscaler_operations(
         pod_autoscaler=AutoscalingDriver(
             services,
             redis=redis,
-            workload=PodAutoscaler(
-                services,
-                redis=redis,
-                pods=pods,
-                container_states=RedisSchedulerContainerRepository(redis),
-            ),
+            workload=PodAutoscaler(services, redis=redis, pods=pods),
+            container_states=RedisSchedulerContainerRepository(redis),
+            container_requests=RedisSchedulerWorkerRepository(redis),
         ),
     )
 

@@ -51,6 +51,8 @@ from worker.origin_access import (
     ImageArchiveUploadCredentialRequest,
 )
 from worker.repository_payloads import (
+    AcknowledgeContainerRequestRequest,
+    AcknowledgeContainerRequestResponse,
     AcknowledgeWorkerEventRequest,
     AcknowledgeWorkerEventResponse,
     AcquireAutomaticCheckpointLeaseRequest,
@@ -318,6 +320,16 @@ class WorkerRepositoryHttpClient:
             "/worker-repository/stream-worker-events",
             request,
             WorkerStreamEvent,
+        )
+
+    def acknowledge_container_request(
+        self,
+        request: AcknowledgeContainerRequestRequest,
+    ) -> AcknowledgeContainerRequestResponse:
+        return self._post_model(
+            "/worker-repository/acknowledge-container-request",
+            request,
+            AcknowledgeContainerRequestResponse,
         )
 
     def acknowledge_worker_event(self, event_id: str, worker_id: str) -> None:
@@ -844,6 +856,14 @@ class RemoteSchedulerWorkerRepository:
         if request is not None:
             self.state.remember_request(request)
         return request
+
+    def acknowledge_worker_request(self, worker_id: str, container_id: str) -> bool:
+        return self.client.acknowledge_container_request(
+            AcknowledgeContainerRequestRequest(
+                worker_id=worker_id,
+                container_id=container_id,
+            )
+        ).acknowledged
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
         return self.client.get_worker_by_id(WorkerIdRequest(worker_id=worker_id)).worker

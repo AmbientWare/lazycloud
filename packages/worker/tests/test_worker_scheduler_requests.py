@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import pytest
 from pydantic import JsonValue
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.state import (
@@ -34,6 +35,7 @@ from worker.image_build_execution import (
     WorkerImageBuildExecutionResult,
     WorkerImageBuildStatus,
 )
+from worker.repository_client import WorkerRepositoryClientError
 from worker.scheduler_requests import (
     WorkerSchedulerRequestAction,
     WorkerSchedulerRequestProcessor,
@@ -354,6 +356,121 @@ def test_worker_scheduler_request_processor_reports_execution_failure() -> None:
     assert workers.capacity_changes == [("worker-1", "ctr-1", WorkerCapacityChange.Add)]
 
 
+def test_worker_scheduler_request_processor_reconciles_a_redelivered_request() -> None:
+    """A redelivery of a container this worker holds must not start a second one."""
+
+    request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
+    workers = _WorkerRepository(
+        requests=[request],
+        acknowledge_error="control plane is unreachable",
+    )
+    containers = _ContainerRepository(
+        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
+    )
+    runtime_started = threading.Event()
+    stop_requested = threading.Event()
+    stopper = _ShutdownStopper(stop_requested)
+    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1", stopper=stopper)
+    execution = _BlockingExecutionService(
+        started=runtime_started,
+        stop_requested=stop_requested,
+        containers=containers,
+    )
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id="worker-1",
+        workers=workers,
+        containers=containers,
+        execution=execution,
+        worker_gpu_type="",
+        lifecycle=lifecycle,
+    )
+
+    started = processor.run_once()
+    assert started.background
+    assert runtime_started.wait(timeout=1)
+
+    redelivered = processor.run_once()
+
+    assert redelivered.status is WorkerSchedulerRequestStatus.Reconciled
+    assert redelivered.action is WorkerSchedulerRequestAction.ReconcileDelivery
+    assert [context.request.container_id for context in execution.contexts] == ["ctr-1"]
+    assert lifecycle.active_container_ids() == ["ctr-1"]
+    assert workers.capacity_changes == []
+    stop_requested.set()
+
+
+def test_worker_scheduler_request_processor_keeps_a_request_it_could_not_act_on() -> None:
+    """An unreachable control plane must not cost the container.
+
+    The worker took nothing, so the request stays in flight and the next poll
+    brings it back. Acknowledging it here is what stranded a `pending` row with
+    nothing coming for it.
+    """
+
+    request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
+    workers = _WorkerRepository(requests=[request])
+    containers = _ContainerRepository(
+        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)},
+        state_errors=1,
+    )
+    execution = _ExecutionService()
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id="worker-1",
+        workers=workers,
+        containers=containers,
+        execution=execution,
+        worker_gpu_type="",
+    )
+
+    with pytest.raises(WorkerRepositoryClientError):
+        processor.run_once()
+
+    assert workers.acknowledged == []
+    assert [entry.container_id for entry in workers.in_flight] == ["ctr-1"]
+
+    started = processor.run_once()
+
+    assert started.status is WorkerSchedulerRequestStatus.Executed
+    assert started.background
+    assert workers.acknowledged == [("worker-1", "ctr-1")]
+    assert workers.in_flight == []
+    _wait_for_background_result(processor, "ctr-1")
+    assert [context.request.container_id for context in execution.contexts] == ["ctr-1"]
+
+
+def test_worker_scheduler_request_processor_refuses_a_container_it_already_started() -> None:
+    """The guard that survives a worker restart: the container's own state.
+
+    A dispatch writes `pending` before the request is queued and only the worker
+    that took it writes `running`, so a request arriving for a running container
+    is one this worker already acted on and lost the acknowledgement for.
+    """
+
+    request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
+    workers = _WorkerRepository(requests=[request])
+    containers = _ContainerRepository(
+        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Running)}
+    )
+    execution = _ExecutionService()
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id="worker-1",
+        workers=workers,
+        containers=containers,
+        execution=execution,
+        worker_gpu_type="",
+    )
+
+    result = processor.run_once()
+
+    assert result.status is WorkerSchedulerRequestStatus.Reconciled
+    assert result.action is WorkerSchedulerRequestAction.SkipStartedContainer
+    assert execution.contexts == []
+    assert containers.deleted == []
+    assert workers.capacity_changes == []
+    assert workers.acknowledged == [("worker-1", "ctr-1")]
+    assert workers.in_flight == []
+
+
 def _request(
     *,
     payload: dict[str, JsonValue] | None = None,
@@ -400,12 +517,37 @@ def _state(
 
 @dataclass(slots=True)
 class _WorkerRepository:
+    """Delivers at least once, exactly as the scheduler repository does.
+
+    A request taken from the queue stays in flight and is handed back on every
+    take until it is acknowledged, so a processor that ignores redelivery fails
+    here rather than only against Redis.
+    """
+
     requests: list[SchedulerWorkerRequest] = field(default_factory=list)
     capacity_changes: list[tuple[str, str, WorkerCapacityChange]] = field(default_factory=list)
+    acknowledged: list[tuple[str, str]] = field(default_factory=list)
+    in_flight: list[SchedulerWorkerRequest] = field(default_factory=list)
+    acknowledge_error: str = ""
 
     def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None:
         _ = worker_id
-        return self.requests.pop(0) if self.requests else None
+        if self.in_flight:
+            return self.in_flight[0]
+        if not self.requests:
+            return None
+        request = self.requests.pop(0)
+        self.in_flight.append(request)
+        return request
+
+    def acknowledge_worker_request(self, worker_id: str, container_id: str) -> bool:
+        self.acknowledged.append((worker_id, container_id))
+        if self.acknowledge_error:
+            raise WorkerRepositoryClientError(self.acknowledge_error)
+        remaining = [request for request in self.in_flight if request.container_id != container_id]
+        acknowledged = len(remaining) < len(self.in_flight)
+        self.in_flight = remaining
+        return acknowledged
 
     def update_worker_capacity(
         self,
@@ -433,8 +575,12 @@ class _ContainerRepository:
     status_updates: list[tuple[str, SchedulerContainerStatus]] = field(default_factory=list)
     exit_codes: list[tuple[str, int]] = field(default_factory=list)
     ttls: list[int] = field(default_factory=list)
+    state_errors: int = 0
 
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+        if self.state_errors > 0:
+            self.state_errors -= 1
+            raise WorkerRepositoryClientError("control plane is unreachable")
         return self.states.get(container_id)
 
     def update_container_status(

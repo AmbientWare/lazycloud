@@ -812,6 +812,77 @@ def test_scheduler_worker_repository_requeues_expired_worker_requests(
     assert requeued.retry_count == 1
 
 
+def test_expired_worker_requeues_delivered_requests_but_not_started_containers(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A gone worker's in-flight requests come back, except the ones it already ran.
+
+    Reclaim is bound to the worker's keepalive rather than a clock of its own, and
+    a delivered request whose container reads `running` was acted on: requeueing
+    it would start a second container for one durable row.
+    """
+
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            worker_id="worker-1",
+            pool=MachinePool("default"),
+            status=SchedulerWorkerStatus.Available,
+            free_cpu_millicores=1000,
+            free_memory_mib=1000,
+            total_cpu_millicores=1000,
+            total_memory_mib=1000,
+            created_at=now,
+            updated_at=now,
+        ),
+        now=now,
+    )
+    delivered = [
+        SchedulerWorkerRequest(
+            workspace_id="ws-1",
+            stub_id="stub-1",
+            container_id=container_id,
+            timestamp=now,
+        )
+        for container_id in ("container-1", "container-2")
+    ]
+    for request in delivered:
+        workers.enqueue_worker_request("worker-1", request)
+        containers.set_container_state(
+            SchedulerContainerState(
+                container_id=request.container_id,
+                stub_id=request.stub_id,
+                workspace_id=request.workspace_id,
+                worker_id="worker-1",
+                status=SchedulerContainerStatus.Pending,
+            )
+        )
+        assert workers.get_next_container_request("worker-1") == request
+        assert workers.acknowledge_worker_request("worker-1", request.container_id)
+    # Both are delivered again; only the second reaches a container.
+    for request in delivered:
+        workers.enqueue_worker_request("worker-1", request)
+    assert workers.get_next_container_request("worker-1") == delivered[0]
+    containers.update_container_status(
+        "container-1",
+        SchedulerContainerStatus.Running,
+    )
+
+    redis.delete(workers.keys.worker_state("worker-1"))
+    [cleanup] = workers.cleanup_missing_workers(now=now + timedelta(seconds=5))
+
+    assert cleanup.request_ids == ["container-2"]
+    assert redis.list_length(workers.keys.worker_inflight_requests("worker-1")) == 0
+    assert redis.hash_length(workers.keys.worker_request_payloads("worker-1")) == 0
+    requeued = _backlog_request(redis, workers)
+    assert requeued.container_id == "container-2"
+    assert requeued.retry_count == 1
+
+
 def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_locks(
     real_redis_actors: _RealRedisActors,
 ) -> None:
@@ -876,6 +947,7 @@ def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_loc
 
     repo.enqueue_worker_request("worker-1", request)
     assert repo.get_next_container_request("worker-1") == request
+    assert repo.acknowledge_worker_request("worker-1", request.container_id)
     assert repo.get_next_container_request("worker-1") is None
 
     repo.enqueue_container_request(request, ready_at=now)
@@ -1019,6 +1091,7 @@ def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_delive
         request.container_id
     ]
     assert workers.get_next_container_request("worker-1") == request
+    assert workers.acknowledge_worker_request("worker-1", request.container_id)
     assert workers.get_next_container_request("worker-1") is None
 
     cancelled_request = request.model_copy(update={"container_id": "container-2"})
@@ -1532,7 +1605,7 @@ def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit(
     assert worker.resource_version == 0
 
 
-def test_worker_request_dequeue_is_atomic_without_the_worker_mutation_lock(
+def test_worker_request_dequeue_holds_one_delivery_without_the_worker_mutation_lock(
     real_redis_actors: _RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -1562,11 +1635,15 @@ def test_worker_request_dequeue_is_atomic_without_the_worker_mutation_lock(
     with ThreadPoolExecutor(max_workers=2) as executor:
         dequeued = list(executor.map(dequeue_once, range(2)))
 
-    assert {request.container_id for request in dequeued if request is not None} == {
-        "container-1",
-        "container-2",
-    }
+    # A worker holds one delivery at a time: until it acknowledges the first
+    # request, every take hands that same one back rather than moving on.
+    assert {request.container_id for request in dequeued if request is not None} == {"container-1"}
     assert all(request is not None for request in dequeued)
+    assert workers.acknowledge_worker_request("worker-1", "container-1")
+    second = workers.get_next_container_request("worker-1")
+    assert second is not None
+    assert second.container_id == "container-2"
+    assert workers.acknowledge_worker_request("worker-1", "container-2")
     assert workers.get_next_container_request("worker-1") is None
     assert redis.get(worker_lock_key) == "scheduler-owner"
 
@@ -1592,9 +1669,11 @@ def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate(
         dequeued = waiting.result(timeout=1.0)
 
     assert dequeued == request
+    assert workers.acknowledge_worker_request("worker-1", request.container_id)
     assert workers.get_next_container_request("worker-1") is None
     assert redis.hash_length(workers.keys.worker_request_payloads("worker-1")) == 0
-    assert workers.wait_for_next_container_request("worker-1", timeout_seconds=0.001) is None
+    assert redis.list_length(workers.keys.worker_inflight_requests("worker-1")) == 0
+    assert workers.wait_for_next_container_request("worker-1", timeout_seconds=1.0) is None
 
 
 def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced_from(

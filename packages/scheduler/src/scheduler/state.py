@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
+from math import ceil
 from secrets import token_urlsafe
 
 from coordination.redis_client import RedisClient, RedisWireScalar
@@ -139,11 +140,12 @@ removed = removed + redis.call("HDEL", KEYS[4], ARGV[1])
 return removed
 """
 
-ENQUEUE_WORKER_REQUEST_SCRIPT = """
+PLACE_WORKER_REQUEST_SCRIPT = """
 if redis.call("EXISTS", KEYS[3]) == 1 then
     return 0
 end
 redis.call("LREM", KEYS[1], 0, ARGV[1])
+redis.call("LREM", KEYS[4], 0, ARGV[1])
 redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
 redis.call("RPUSH", KEYS[1], ARGV[1])
 return 1
@@ -164,6 +166,7 @@ if ARGV[5] == "1" and redis.call("GET", KEYS[9]) ~= ARGV[6] then
 end
 redis.call("HSET", KEYS[1], unpack(ARGV, 7, #ARGV))
 redis.call("LREM", KEYS[2], 0, ARGV[1])
+redis.call("LREM", KEYS[12], 0, ARGV[1])
 redis.call("HSET", KEYS[3], ARGV[1], ARGV[3])
 redis.call("RPUSH", KEYS[2], ARGV[1])
 redis.call("ZREM", KEYS[5], ARGV[1])
@@ -178,46 +181,92 @@ end
 return 1
 """
 
-POP_WORKER_REQUEST_SCRIPT = """
+TAKE_WORKER_REQUEST_SCRIPT = """
+while true do
+    local request_id = redis.call("LINDEX", KEYS[3], 0)
+    if not request_id then
+        break
+    end
+    local payload = redis.call("HGET", KEYS[2], request_id)
+    if payload then
+        return {request_id, payload}
+    end
+    redis.call("LPOP", KEYS[3])
+end
 while redis.call("LLEN", KEYS[1]) > 0 do
     local request_id = redis.call("LPOP", KEYS[1])
     local payload = redis.call("HGET", KEYS[2], request_id)
-    redis.call("HDEL", KEYS[2], request_id)
     if payload then
+        redis.call("LREM", KEYS[3], 0, request_id)
+        redis.call("RPUSH", KEYS[3], request_id)
         return {request_id, payload}
     end
 end
 return {}
 """
 
-TAKE_WORKER_REQUEST_PAYLOAD_SCRIPT = """
+CLAIM_MOVED_WORKER_REQUEST_SCRIPT = """
 local payload = redis.call("HGET", KEYS[1], ARGV[1])
 if payload then
-    redis.call("HDEL", KEYS[1], ARGV[1])
     return payload
 end
+redis.call("LREM", KEYS[2], 0, ARGV[1])
 return ""
+"""
+
+ACKNOWLEDGE_WORKER_REQUEST_SCRIPT = """
+if redis.call("LREM", KEYS[1], 0, ARGV[1]) == 0 then
+    return 0
+end
+redis.call("HDEL", KEYS[2], ARGV[1])
+return 1
+"""
+
+RETURN_WORKER_REQUEST_SCRIPT = """
+redis.call("LREM", KEYS[1], 0, ARGV[1])
+redis.call("LREM", KEYS[2], 0, ARGV[1])
+redis.call("HDEL", KEYS[3], ARGV[1])
+if redis.call("EXISTS", KEYS[6]) == 1 then
+    return 0
+end
+redis.call("HSET", KEYS[5], ARGV[1], ARGV[2])
+return redis.call("ZADD", KEYS[4], ARGV[3], ARGV[1])
 """
 
 CANCEL_WORKER_REQUEST_SCRIPT = """
 local payload = redis.call("HGET", KEYS[2], ARGV[1])
 local removed = redis.call("LREM", KEYS[1], 0, ARGV[1])
+removed = removed + redis.call("LREM", KEYS[3], 0, ARGV[1])
 redis.call("HDEL", KEYS[2], ARGV[1])
 return {removed, payload or ""}
 """
 
 DRAIN_WORKER_REQUESTS_SCRIPT = """
-local request_ids = redis.call("LRANGE", KEYS[1], 0, -1)
-local requests = {}
-for _, request_id in ipairs(request_ids) do
+local queued = {}
+for _, request_id in ipairs(redis.call("LRANGE", KEYS[1], 0, -1)) do
     local payload = redis.call("HGET", KEYS[2], request_id)
     if payload then
-        table.insert(requests, payload)
+        table.insert(queued, payload)
+    end
+end
+local delivered = {}
+for _, request_id in ipairs(redis.call("LRANGE", KEYS[3], 0, -1)) do
+    local payload = redis.call("HGET", KEYS[2], request_id)
+    if payload then
+        table.insert(delivered, payload)
     end
 end
 redis.call("DEL", KEYS[1])
 redis.call("DEL", KEYS[2])
-return requests
+redis.call("DEL", KEYS[3])
+local drained = {tostring(#queued)}
+for _, payload in ipairs(queued) do
+    table.insert(drained, payload)
+end
+for _, payload in ipairs(delivered) do
+    table.insert(drained, payload)
+end
+return drained
 """
 
 PREEMPT_WORKER_REQUESTS_SCRIPT = """
@@ -239,17 +288,20 @@ redis.call("HSET", KEYS[1],
 local requeued = {1}
 local request_count = tonumber(ARGV[3])
 for index = 1, request_count do
-    local request_id = ARGV[8 + ((index - 1) * 2) + 1]
-    local payload = ARGV[8 + ((index - 1) * 2) + 2]
+    local request_id = ARGV[11 + ((index - 1) * 2) + 1]
+    local payload = ARGV[11 + ((index - 1) * 2) + 2]
     redis.call("LREM", KEYS[2], 0, request_id)
+    redis.call("LREM", KEYS[7], 0, request_id)
     redis.call("HDEL", KEYS[3], request_id)
-    if redis.call("EXISTS", KEYS[6 + index]) == 0 then
+    local cancelled = redis.call("EXISTS", KEYS[7 + index]) == 1
+    local started = redis.call("HGET", KEYS[7 + request_count + index], "status") == ARGV[11]
+    if not cancelled and not started then
         redis.call("HSET", KEYS[5], request_id, payload)
-        redis.call("ZADD", KEYS[4], ARGV[9 + (request_count * 2)], request_id)
+        redis.call("ZADD", KEYS[4], ARGV[9], request_id)
         table.insert(requeued, request_id)
     end
 end
-redis.call("SET", KEYS[6], ARGV[2], "EX", ARGV[10 + (request_count * 2)])
+redis.call("SET", KEYS[6], ARGV[2], "EX", ARGV[10])
 return requeued
 """
 
@@ -415,6 +467,18 @@ class WorkerReservedCapacity:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerRequestDrain:
+    """Everything one worker held, split by whether it had been handed out.
+
+    The two halves are requeued under different rules, so a drain that flattened
+    them would have to guess which was which.
+    """
+
+    queued: list[str] = field(default_factory=list)
+    delivered: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class CapacityReservationDispatchAllocation:
     reservation_id: str
     request_index_key: str
@@ -483,6 +547,17 @@ class SchedulerStateKeys:
 
     def worker_request_payloads(self, worker_id: str) -> str:
         return self.redis.key(self.namespace, "workers", worker_id, "request-payloads")
+
+    def worker_inflight_requests(self, worker_id: str) -> str:
+        """Requests handed to this worker and not yet acknowledged by it.
+
+        A delivery moves the id here in the same command that removes it from the
+        queue, and only the worker's acknowledgement removes it. The payload stays
+        in `worker_request_payloads` throughout, so a request in flight is still a
+        request the scheduler can see, requeue, and cancel.
+        """
+
+        return self.redis.key(self.namespace, "workers", worker_id, "inflight-requests")
 
     def worker_preemption_operation(self, worker_id: str, operation_id: str) -> str:
         operation_digest = sha256(operation_id.encode()).hexdigest()
@@ -690,21 +765,23 @@ class RedisSchedulerWorkerRepository:
         *,
         now: datetime,
     ) -> WorkerRemovalResult | None:
+        """Reclaim a worker whose keepalive lapsed, including what it was handed.
+
+        This is the bound on an in-flight request: it is reclaimed when the worker
+        that holds it stops proving it is alive, not on a clock of its own. A
+        worker that is up re-arms its state key and keeps its own deliveries, and
+        gets them back on its next poll.
+        """
+
         worker_id = self.keys.worker_id_from_state_key(state_key)
         self.redis.set_remove(self.keys.worker_index(), state_key)
         if not worker_id:
             return None
-        raw_items = self.drain_worker_requests(worker_id)
-        request_ids: list[str] = []
+        drain = self.drain_worker_requests(worker_id)
         try:
-            for raw_item in raw_items:
-                request = SchedulerWorkerRequest.model_validate_json(raw_item).requeued(now=now)
-                if self.is_container_cancelled(request.container_id):
-                    continue
-                request_ids.append(request.container_id)
-                self.enqueue_container_request(request, ready_at=now)
+            request_ids = self._requeue_drained_worker_requests(drain, now=now)
         except Exception:
-            self.restore_worker_requests(worker_id, raw_items)
+            self.restore_worker_requests(worker_id, drain)
             self.redis.set_add(self.keys.worker_index(), state_key)
             raise
         self.redis.delete(state_key)
@@ -865,22 +942,29 @@ class RedisSchedulerWorkerRepository:
                 self.keys.worker_request_payloads(operation.worker_id)
             )
             requests: list[SchedulerWorkerRequest] = []
-            for raw_request_id in self.redis.list_range(
+            # Queued and in-flight alike: a preempted machine keeps neither, and a
+            # request the worker was handed is exactly as lost as one it never saw
+            # unless something takes it back. The script decides which of them may
+            # be requeued.
+            for list_key in (
                 self.keys.worker_requests(operation.worker_id),
-                0,
-                -1,
+                self.keys.worker_inflight_requests(operation.worker_id),
             ):
-                request_id = redis_serialization.redis_text(raw_request_id)
-                raw = payloads.get(request_id)
-                if raw is None:
-                    continue
-                requests.append(
-                    SchedulerWorkerRequest.model_validate_json(
-                        redis_serialization.redis_text(raw)
-                    ).requeued(now=now)
-                )
+                for raw_request_id in self.redis.list_range(list_key, 0, -1):
+                    request_id = redis_serialization.redis_text(raw_request_id)
+                    raw = payloads.get(request_id)
+                    if raw is None:
+                        continue
+                    requests.append(
+                        SchedulerWorkerRequest.model_validate_json(
+                            redis_serialization.redis_text(raw)
+                        ).requeued(now=now)
+                    )
             cancellation_keys = [
                 self.keys.container_cancellation(request.container_id) for request in requests
+            ]
+            container_state_keys = [
+                self.keys.container_state(request.container_id) for request in requests
             ]
             request_args = [
                 value
@@ -900,14 +984,16 @@ class RedisSchedulerWorkerRepository:
             result = _redis_script_text_items(
                 self.redis.eval_scalars(
                     PREEMPT_WORKER_REQUESTS_SCRIPT,
-                    6 + len(cancellation_keys),
+                    7 + len(cancellation_keys) + len(container_state_keys),
                     self.keys.worker_state(operation.worker_id),
                     self.keys.worker_requests(operation.worker_id),
                     self.keys.worker_request_payloads(operation.worker_id),
                     self.keys.container_requests(),
                     self.keys.container_request_payloads(),
                     operation_key,
+                    self.keys.worker_inflight_requests(operation.worker_id),
                     *cancellation_keys,
+                    *container_state_keys,
                     str(operation.expected_resource_version),
                     operation.operation_id,
                     len(requests),
@@ -916,9 +1002,10 @@ class RedisSchedulerWorkerRepository:
                     updated_worker_fields["updated_at"],
                     current_worker_fields["capacity_owner_id"],
                     current_worker_fields["machine_id"] if operation.machine_id else "",
-                    *request_args,
                     now.timestamp(),
                     DEFAULT_CONTAINER_CANCELLATION_TTL_SECONDS,
+                    redis_serialization.dumps_field(SchedulerContainerStatus.Running.value),
+                    *request_args,
                 )
             )
             status = int(result[0]) if result else 0
@@ -1099,6 +1186,7 @@ class RedisSchedulerWorkerRepository:
         worker_state_key = self.keys.worker_state(worker_id)
         worker_queue_key = self.keys.worker_requests(worker_id)
         worker_payloads_key = self.keys.worker_request_payloads(worker_id)
+        worker_inflight_key = self.keys.worker_inflight_requests(worker_id)
         cancellation_key = self.keys.container_cancellation(request_id)
         ready_key = self.keys.container_requests()
         backlog_payloads_key = self.keys.container_request_payloads()
@@ -1126,7 +1214,7 @@ class RedisSchedulerWorkerRepository:
         )
         result = self.redis.eval_int(
             DISPATCH_CLAIMED_WORKER_REQUEST_SCRIPT,
-            11,
+            12,
             worker_state_key,
             worker_queue_key,
             worker_payloads_key,
@@ -1138,6 +1226,7 @@ class RedisSchedulerWorkerRepository:
             request_index_key,
             allocation_key,
             allocation_index_key,
+            worker_inflight_key,
             request_id,
             claim.token,
             queued_request.model_dump_json(),
@@ -1174,16 +1263,35 @@ class RedisSchedulerWorkerRepository:
         worker_id: str,
         request: SchedulerWorkerRequest,
     ) -> int:
+        return self._place_worker_request(worker_id, request, delivered=False)
+
+    def _place_worker_request(
+        self,
+        worker_id: str,
+        request: SchedulerWorkerRequest,
+        *,
+        delivered: bool,
+    ) -> int:
+        """Put this request on exactly one of the worker's two lists.
+
+        Queued and in flight are the same request in two states, so placing it on
+        one clears it from the other. Returning a request the worker refused, and
+        restoring a drain that failed part-way, both depend on that: leaving the
+        old entry behind would let one request be delivered twice from two places.
+        """
+
         queue_key = self.keys.worker_requests(worker_id)
+        inflight_key = self.keys.worker_inflight_requests(worker_id)
         payloads_key = self.keys.worker_request_payloads(worker_id)
         cancellation_key = self.keys.container_cancellation(request.container_id)
         payload = request.model_dump_json()
         return self.redis.eval_int(
-            ENQUEUE_WORKER_REQUEST_SCRIPT,
-            3,
-            queue_key,
+            PLACE_WORKER_REQUEST_SCRIPT,
+            4,
+            inflight_key if delivered else queue_key,
             payloads_key,
             cancellation_key,
+            queue_key if delivered else inflight_key,
             request.container_id,
             payload,
         )
@@ -1304,6 +1412,15 @@ class RedisSchedulerWorkerRepository:
         *,
         worker_id: str = "",
     ) -> bool:
+        """Whether anything is still going to hand this container to a worker.
+
+        The worker payload hash answers for both of the worker's lists, because a
+        delivery moves the id and never the payload: a request in flight is one
+        the worker has been handed and has not acknowledged, and the callers that
+        reap a container the scheduler no longer backs must see it exactly as they
+        see one still queued.
+        """
+
         if container_id in self.redis.hash_get_all(self.keys.container_request_payloads()):
             return True
         return bool(
@@ -1312,26 +1429,41 @@ class RedisSchedulerWorkerRepository:
             in self.redis.hash_get_all(self.keys.worker_request_payloads(worker_id))
         )
 
-    def _pop_worker_request_payload(self, worker_id: str) -> str | None:
-        queue_key = self.keys.worker_requests(worker_id)
-        payloads_key = self.keys.worker_request_payloads(worker_id)
+    def _take_worker_request(self, worker_id: str) -> str | None:
         result = _redis_script_text_items(
-            self.redis.eval_scalars(POP_WORKER_REQUEST_SCRIPT, 2, queue_key, payloads_key)
+            self.redis.eval_scalars(
+                TAKE_WORKER_REQUEST_SCRIPT,
+                3,
+                self.keys.worker_requests(worker_id),
+                self.keys.worker_request_payloads(worker_id),
+                self.keys.worker_inflight_requests(worker_id),
+            )
         )
         return result[1] if len(result) == 2 else None
 
     def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None:
-        raw = self._pop_worker_request_payload(worker_id)
+        """Hand the worker its next request without destroying it.
+
+        Delivery is at least once. The request moves to the worker's in-flight
+        list in the same command that takes it off the queue, and stays there
+        until the worker acknowledges it, so a control plane that dies between
+        the take and the response redelivers rather than losing the container.
+        An unacknowledged request is returned again ahead of the queue, which is
+        why the worker has to reconcile a redelivery against what it is already
+        running instead of starting a second container.
+        """
+
+        raw = self._take_worker_request(worker_id)
         if raw is None:
             return None
         return SchedulerWorkerRequest.model_validate_json(raw)
 
-    def _take_worker_request_payload(self, worker_id: str, request_id: str) -> str:
-        payloads_key = self.keys.worker_request_payloads(worker_id)
+    def _claim_moved_worker_request(self, worker_id: str, request_id: str) -> str:
         value = self.redis.eval_scalar(
-            TAKE_WORKER_REQUEST_PAYLOAD_SCRIPT,
-            1,
-            payloads_key,
+            CLAIM_MOVED_WORKER_REQUEST_SCRIPT,
+            2,
+            self.keys.worker_request_payloads(worker_id),
+            self.keys.worker_inflight_requests(worker_id),
             request_id,
         )
         if value is None:
@@ -1348,28 +1480,90 @@ class RedisSchedulerWorkerRepository:
             raise ValueError("worker request wait timeout must be greater than zero")
         deadline = time.monotonic() + timeout_seconds
         queue_key = self.keys.worker_requests(worker_id)
+        inflight_key = self.keys.worker_inflight_requests(worker_id)
         while True:
+            raw = self._take_worker_request(worker_id)
+            if raw is not None:
+                return SchedulerWorkerRequest.model_validate_json(raw)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            popped = self.redis.blocking_list_pop(queue_key, timeout=remaining)
-            if popped is None:
+            # One command, so nothing exists only in this process: a blocking pop
+            # followed by a write would lose the request if the control plane died
+            # between them, which is the failure this whole path exists to remove.
+            # Redis waits in whole seconds and reads zero as forever, so a shorter
+            # remainder is rounded up rather than turned into an unbounded wait.
+            moved = self.redis.blocking_list_move(
+                queue_key,
+                inflight_key,
+                timeout_seconds=ceil(remaining),
+            )
+            if moved is None:
                 return None
-            request_id = redis_serialization.redis_text(popped[1])
-            raw = self._take_worker_request_payload(worker_id, request_id)
-            if raw:
-                return SchedulerWorkerRequest.model_validate_json(raw)
+            request_id = redis_serialization.redis_text(moved)
+            payload = self._claim_moved_worker_request(worker_id, request_id)
+            if payload:
+                return SchedulerWorkerRequest.model_validate_json(payload)
+
+    def acknowledge_worker_request(self, worker_id: str, container_id: str) -> bool:
+        """Retire a delivered request once the worker has taken the container.
+
+        Until this lands the request is redeliverable, and after it lands nothing
+        in Redis holds the container: the durable row's start deadline is what
+        covers a worker that acknowledged and then died before starting.
+        """
+
+        return bool(
+            self.redis.eval_int(
+                ACKNOWLEDGE_WORKER_REQUEST_SCRIPT,
+                2,
+                self.keys.worker_inflight_requests(worker_id),
+                self.keys.worker_request_payloads(worker_id),
+                container_id,
+            )
+        )
+
+    def return_worker_request(
+        self,
+        worker_id: str,
+        request: SchedulerWorkerRequest,
+        *,
+        ready_at: datetime | None = None,
+    ) -> int:
+        """Take a request back off a worker and return it to the ready queue.
+
+        One command for both halves. Acknowledging and then enqueueing would leave
+        a window where the request belongs to nobody, which is the same hole as
+        popping and then answering.
+        """
+
+        scheduled_at = ready_at or utc_now()
+        return self.redis.eval_int(
+            RETURN_WORKER_REQUEST_SCRIPT,
+            6,
+            self.keys.worker_requests(worker_id),
+            self.keys.worker_inflight_requests(worker_id),
+            self.keys.worker_request_payloads(worker_id),
+            self.keys.container_requests(),
+            self.keys.container_request_payloads(),
+            self.keys.container_cancellation(request.container_id),
+            request.container_id,
+            request.model_dump_json(),
+            scheduled_at.timestamp(),
+        )
 
     def cancel_worker_request(self, worker_id: str, container_id: str) -> bool:
         def write() -> bool:
             queue_key = self.keys.worker_requests(worker_id)
             payloads_key = self.keys.worker_request_payloads(worker_id)
+            inflight_key = self.keys.worker_inflight_requests(worker_id)
             result = _redis_script_text_items(
                 self.redis.eval_scalars(
                     CANCEL_WORKER_REQUEST_SCRIPT,
-                    2,
+                    3,
                     queue_key,
                     payloads_key,
+                    inflight_key,
                     container_id,
                 )
             )
@@ -1387,30 +1581,70 @@ class RedisSchedulerWorkerRepository:
 
         return self._with_worker_lock(worker_id, write)
 
-    def drain_worker_requests(self, worker_id: str) -> list[str]:
+    def drain_worker_requests(self, worker_id: str) -> WorkerRequestDrain:
         queue_key = self.keys.worker_requests(worker_id)
         payloads_key = self.keys.worker_request_payloads(worker_id)
-        return _redis_script_text_items(
-            self.redis.eval_scalars(DRAIN_WORKER_REQUESTS_SCRIPT, 2, queue_key, payloads_key)
+        inflight_key = self.keys.worker_inflight_requests(worker_id)
+        drained = _redis_script_text_items(
+            self.redis.eval_scalars(
+                DRAIN_WORKER_REQUESTS_SCRIPT,
+                3,
+                queue_key,
+                payloads_key,
+                inflight_key,
+            )
+        )
+        if not drained:
+            return WorkerRequestDrain()
+        queued_count = int(drained[0])
+        return WorkerRequestDrain(
+            queued=drained[1 : 1 + queued_count],
+            delivered=drained[1 + queued_count :],
         )
 
-    def restore_worker_requests(self, worker_id: str, raw_requests: list[str]) -> int:
-        retained = [
-            raw
-            for raw in raw_requests
-            if not self.is_container_cancelled(
-                SchedulerWorkerRequest.model_validate_json(raw).container_id
-            )
-        ]
-        if not retained:
-            return 0
+    def restore_worker_requests(self, worker_id: str, drain: WorkerRequestDrain) -> int:
         restored = 0
-        for raw in retained:
-            restored += self._enqueue_worker_request(
-                worker_id,
-                SchedulerWorkerRequest.model_validate_json(raw),
-            )
+        for raw_requests, delivered in ((drain.queued, False), (drain.delivered, True)):
+            for raw in raw_requests:
+                request = SchedulerWorkerRequest.model_validate_json(raw)
+                if self.is_container_cancelled(request.container_id):
+                    continue
+                restored += self._place_worker_request(worker_id, request, delivered=delivered)
         return restored
+
+    def _requeue_drained_worker_requests(
+        self,
+        drain: WorkerRequestDrain,
+        *,
+        now: datetime,
+    ) -> list[str]:
+        """Return a gone worker's requests to the ready queue.
+
+        A queued request was never handed out, so it is requeued outright. A
+        delivered one may already have become a container: the worker is the only
+        party that writes `running`, and a dispatch resets the state to `pending`
+        before the request is queued, so a delivered request whose container reads
+        `running` was acted on. Requeueing that would start a second container for
+        one durable row, and the row is already the orphan reconciler's.
+        """
+
+        request_ids: list[str] = []
+        for raw_requests, delivered in ((drain.queued, False), (drain.delivered, True)):
+            for raw in raw_requests:
+                request = SchedulerWorkerRequest.model_validate_json(raw).requeued(now=now)
+                if self.is_container_cancelled(request.container_id):
+                    continue
+                if delivered and self._container_started(request.container_id):
+                    continue
+                request_ids.append(request.container_id)
+                self.enqueue_container_request(request, ready_at=now)
+        return request_ids
+
+    def _container_started(self, container_id: str) -> bool:
+        raw = self.redis.hash_get(self.keys.container_state(container_id), "status")
+        if raw is None:
+            return False
+        return redis_serialization.loads_field(raw) == SchedulerContainerStatus.Running.value
 
     def is_container_cancelled(self, container_id: str) -> bool:
         return bool(self.redis.exists(self.keys.container_cancellation(container_id)))
@@ -1427,19 +1661,11 @@ class RedisSchedulerWorkerRepository:
                 raise WorkerStateNotFoundError(worker_id)
 
             requeue_time = now or utc_now()
-            raw_items = self.drain_worker_requests(worker_id)
-            request_ids: list[str] = []
+            drain = self.drain_worker_requests(worker_id)
             try:
-                for raw_item in raw_items:
-                    request = SchedulerWorkerRequest.model_validate_json(raw_item).requeued(
-                        now=requeue_time
-                    )
-                    if self.is_container_cancelled(request.container_id):
-                        continue
-                    request_ids.append(request.container_id)
-                    self.enqueue_container_request(request, ready_at=requeue_time)
+                request_ids = self._requeue_drained_worker_requests(drain, now=requeue_time)
             except Exception:
-                self.restore_worker_requests(worker_id, raw_items)
+                self.restore_worker_requests(worker_id, drain)
                 raise
 
             self.redis.set_remove(self.keys.worker_index(), state_key)
