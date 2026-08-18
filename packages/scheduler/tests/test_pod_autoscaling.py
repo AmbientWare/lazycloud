@@ -233,6 +233,68 @@ def test_pod_keep_warm_minus_one_is_durable_never_scale_to_zero(
         )
 
 
+def test_always_on_pod_deployment_releases_containers_the_operator_scaled_away(
+    isolated_services: ApiServices,
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    scheduler = _Scheduler()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = real_redis_actors.client()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler_cancellation=_scheduler_request_service(isolated_services, redis),
+        ),
+    )
+    stub = _create_pod_stub(
+        isolated_services,
+        keep_warm_seconds=-1,
+        autoscaler={"min_containers": 2, "max_containers": 2},
+    )
+    current_time = utc_now()
+    kept = _record_container(
+        isolated_services,
+        stub,
+        "00000000-0000-4000-8000-000000000407",
+        created_at=current_time - timedelta(seconds=120),
+    )
+    released = _record_container(
+        isolated_services,
+        stub,
+        "00000000-0000-4000-8000-000000000408",
+        created_at=current_time - timedelta(seconds=60),
+    )
+    # An always-on pod holds its keep-warm lock with no expiry, so both
+    # containers carry one for as long as they run.
+    locks = {
+        container.id: redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container.id))
+        for container in (kept, released)
+    }
+    for lock_key in locks.values():
+        redis.set(lock_key, "1")
+
+    deployment_id = stub.deployment_id
+    assert deployment_id is not None
+    ManagementService(isolated_services).scale_deployment(
+        "default",
+        deployment_id,
+        containers=1,
+    )
+    result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
+
+    assert result.current_containers == 2
+    assert result.desired_containers == 1
+    assert [action.container_id for action in result.actions] == [released.id]
+    assert isolated_services.containers.get(released.id).status is ContainerStatus.Stopped
+    assert isolated_services.containers.get(kept.id).status is ContainerStatus.Running
+    assert not redis.exists(locks[released.id])
+    assert redis.exists(locks[kept.id])
+
+
 def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
     isolated_services: ApiServices,
     real_redis_actors: _RealRedisActors,
