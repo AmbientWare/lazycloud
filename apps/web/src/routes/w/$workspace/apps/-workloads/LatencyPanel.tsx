@@ -3,6 +3,7 @@ import { format, parseISO } from "date-fns";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import {
   ChartContainer,
   ChartTooltip,
@@ -47,11 +48,7 @@ export function LatencyPanel({
   const latest = [...buckets].reverse().find((bucket) => bucket.count > 0);
 
   if (tasks === 0 && coldStarts === 0) {
-    return (
-      <div className="flex h-full min-h-32 items-center justify-center text-sm text-muted-foreground">
-        No tasks in the last 24 hours
-      </div>
-    );
+    return <PanelEmpty message="No tasks in the last 24 hours" className="h-full min-h-32" />;
   }
 
   const data = buckets.map((bucket) => ({

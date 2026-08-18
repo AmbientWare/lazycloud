@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { Fact } from "@/components/shared/Fact";
 import { PanelError } from "@/components/shared/PanelError";
 import {
   Select,
@@ -177,14 +178,11 @@ function InspectorHeader({
 function CollectionStats({ items }: { items: Array<{ label: string; value: string }> }) {
   return (
     <dl
-      className="mt-3 grid gap-2 rounded-sm bg-muted/45 p-2.5"
+      className="mt-3 grid gap-2 rounded-sm bg-muted/45 p-2.5 text-xs text-foreground"
       style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
     >
       {items.map((item) => (
-        <div key={item.label} className="min-w-0">
-          <dt className="micro-label truncate">{item.label}</dt>
-          <dd className="mono mt-1 truncate text-xs tabular-nums text-foreground">{item.value}</dd>
-        </div>
+        <Fact key={item.label} label={item.label} value={item.value} mono />
       ))}
     </dl>
   );

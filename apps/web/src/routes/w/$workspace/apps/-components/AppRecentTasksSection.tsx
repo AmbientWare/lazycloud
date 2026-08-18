@@ -1,13 +1,12 @@
 import { Link } from "@tanstack/react-router";
 
 import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { Task } from "@/lib/api/schemas";
-import { durationBetween, relativeTime, startupBetween } from "@/lib/format";
-
-import { exactTime } from "./app-detail-format";
+import { durationBetween, exactTime, relativeTime, startupBetween } from "@/lib/format";
 
 export function AppRecentTasksSection({
   workspaceName,
@@ -39,15 +38,9 @@ export function AppRecentTasksSection({
             {error}
           </div>
         ) : pending ? (
-          <div className="space-y-2 p-4" aria-hidden="true">
-            {Array.from({ length: 4 }, (_, index) => (
-              <Skeleton key={index} className="h-14 w-full" />
-            ))}
-          </div>
+          <RowsSkeleton rows={4} height="h-14" />
         ) : (tasks?.length ?? 0) === 0 ? (
-          <div className="flex min-h-32 items-center justify-center text-sm text-muted-foreground">
-            No recent tasks
-          </div>
+          <PanelEmpty message="No recent tasks" className="min-h-32" />
         ) : (
           <RecentRunsList tasks={tasks ?? []} workspaceName={workspaceName} appId={appId} />
         )}

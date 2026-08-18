@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
+import { CopyButton } from "@/components/shared/CopyButton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -64,12 +66,11 @@ export function AccessTokens() {
         ) : controller.loadError ? (
           <PanelError message="Access tokens could not be loaded. Try again shortly." />
         ) : controller.tokens.length === 0 ? (
-          <div className="flex min-h-32 flex-col items-center justify-center gap-1 p-8 text-center">
-            <p className="text-sm text-foreground">No tokens yet</p>
-            <p className="text-xs text-muted-foreground">
-              Create one to reach this account from the CLI, CI, or the API.
-            </p>
-          </div>
+          <PanelEmpty
+            message="No tokens yet"
+            detail="Create one to reach this account from the CLI, CI, or the API."
+            className="min-h-32 p-8"
+          />
         ) : (
           <TokenTable controller={controller} tokens={controller.tokens} />
         )}
@@ -213,7 +214,6 @@ function TokenTime({
  */
 function IssuedTokenNotice({ issued, onDismiss }: { issued: IssuedToken; onDismiss: () => void }) {
   const [revealed, setRevealed] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   return (
     <section
@@ -242,17 +242,7 @@ function IssuedTokenNotice({ issued, onDismiss }: { issued: IssuedToken; onDismi
         >
           {revealed ? <EyeOff /> : <Eye />}
         </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          aria-label="Copy token value"
-          title="Copy token value"
-          onClick={() => {
-            void navigator.clipboard.writeText(issued.secret).then(() => setCopied(true));
-          }}
-        >
-          {copied ? <Check className="text-positive" /> : <Copy />}
-        </Button>
+        <CopyButton value={issued.secret} label="token value" variant="outline" />
         <Button size="sm" onClick={onDismiss}>
           Done
         </Button>

@@ -19,6 +19,12 @@ export function relativeTime(value: string | undefined): string {
   }
 }
 
+/** The machine-precise reading of a timestamp, for the `title` behind a relative one. */
+export function exactTime(value: string): string {
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
+}
+
 export type StatusTone = "success" | "warning" | "danger" | "muted";
 
 /**

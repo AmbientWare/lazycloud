@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, Loader2, Play } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 
+import { CopyButton } from "@/components/shared/CopyButton";
+import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { invokeDeployment, type InvokeResult } from "@/lib/api/invoke";
 import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
@@ -118,13 +120,11 @@ function PlaygroundForm({
 
   return (
     <Tabs defaultValue="request" className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border/80 px-4">
-        <TabsList className="border-0">
-          <TabsTrigger value="request">Request</TabsTrigger>
-          <TabsTrigger value="curl">curl</TabsTrigger>
-          <TabsTrigger value="python">Python</TabsTrigger>
-        </TabsList>
-      </div>
+      <LinearTabsList ariaLabel="Playground views" className="px-4">
+        <LinearTab value="request">Request</LinearTab>
+        <LinearTab value="curl">curl</LinearTab>
+        <LinearTab value="python">Python</LinearTab>
+      </LinearTabsList>
 
       <TabsContent value="request" className="m-0 min-h-0 flex-1 overflow-auto p-4">
         <div className="space-y-3">
@@ -303,29 +303,12 @@ function prettyBody(result: InvokeResult): string {
 }
 
 function Snippet({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
   return (
     <div className="relative">
       <pre className="mono max-h-40 overflow-auto rounded-md border border-border bg-muted/40 p-2.5 pr-9 text-xs">
         {text}
       </pre>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={copy}
-        aria-label={`Copy ${label}`}
-        title={`Copy ${label}`}
-        className="absolute top-1.5 right-1.5 size-7"
-      >
-        {copied ? <Check className="size-3.5 text-positive" /> : <Copy className="size-3.5" />}
-      </Button>
+      <CopyButton value={text} label={label} className="absolute top-1.5 right-1.5 size-7" />
     </div>
   );
 }

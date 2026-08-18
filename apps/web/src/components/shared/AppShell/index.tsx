@@ -25,6 +25,7 @@ import {
 
 import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitcher";
 import { useSession } from "@/components/shared/AuthGate/session";
+import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { SettingsDialog } from "@/components/shared/SettingsDialog";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
 import { useTheme } from "@/components/shared/ThemeProvider/theme";
@@ -344,9 +345,9 @@ function MobileMenu({
         <Menu className="size-4" />
       </Button>
       <SheetContent aria-describedby={undefined} className="max-w-xs gap-0">
-        <header className="border-b border-border px-4 py-3 pr-12">
+        <DrawerHeader>
           <SheetTitle>{workspace.name}</SheetTitle>
-        </header>
+        </DrawerHeader>
         <nav aria-label="Account menu" className="p-3">
           <button
             type="button"
@@ -485,9 +486,9 @@ function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   return (
     <Sheet open onOpenChange={(next) => (next ? undefined : onClose())}>
       <SheetContent aria-describedby={undefined} className="gap-0 sm:max-w-md">
-        <header className="border-b border-border px-4 py-3 pr-12">
+        <DrawerHeader>
           <SheetTitle>Create workspace</SheetTitle>
-        </header>
+        </DrawerHeader>
         <form
           className="flex flex-col gap-3 p-4"
           onSubmit={(event) => {

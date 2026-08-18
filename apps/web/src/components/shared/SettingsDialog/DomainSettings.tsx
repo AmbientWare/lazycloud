@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 
+import { useCopyToClipboard } from "@/components/shared/CopyButton/useCopyToClipboard";
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -196,18 +197,13 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
 }
 
 function CopyValue({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard(value);
   return (
     <button
       type="button"
       aria-label={`Copy ${label}`}
-      title={`Copy ${label}`}
-      onClick={() => {
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
+      title={copied ? "Copied" : `Copy ${label}`}
+      onClick={copy}
       className="mono inline-flex max-w-full items-center gap-1.5 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted"
     >
       <span className="truncate">{value}</span>

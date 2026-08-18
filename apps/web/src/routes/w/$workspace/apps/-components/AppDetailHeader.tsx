@@ -2,9 +2,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import type { App, Deployment } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
-
-import { exactTime } from "./app-detail-format";
+import { exactTime, relativeTime } from "@/lib/format";
 
 /**
  * What an app is, under its name.

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -117,17 +118,16 @@ export function PodInstances({
               />
             </>
           ) : (
-            <div className="flex h-full min-h-36 flex-col items-center justify-center gap-2 px-6 text-center">
-              <Server className="size-5 text-muted-foreground" aria-hidden="true" />
-              <div className="text-sm font-medium">
-                {statusFilter === "active" ? "No active instances" : "No instances"}
-              </div>
-              <p className="max-w-xs text-xs text-muted-foreground">
-                {statusFilter === "active"
+            <PanelEmpty
+              icon={Server}
+              message={statusFilter === "active" ? "No active instances" : "No instances"}
+              detail={
+                statusFilter === "active"
                   ? "Scale this Pod above zero to start an instance."
-                  : "This Pod has no recorded instances yet."}
-              </p>
-            </div>
+                  : "This Pod has no recorded instances yet."
+              }
+              className="h-full min-h-36 px-6"
+            />
           )}
         </div>
       </div>

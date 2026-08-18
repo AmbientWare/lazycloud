@@ -3,10 +3,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { CopyId } from "@/components/shared/CopyId";
+import { Fact } from "@/components/shared/Fact";
+import { FactGrid } from "@/components/shared/Fact/FactGrid";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, ContainerMetricsPoint, Task } from "@/lib/api/schemas";
-import { durationBetween, formatBytes, relativeTime } from "@/lib/format";
+import { durationBetween, exactTime, formatBytes, relativeTime } from "@/lib/format";
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
@@ -22,9 +25,12 @@ export function ContainerTab({
   if (!record.container_id || !record.container) {
     const pending = ["pending", "retry", "running"].includes(record.status);
     return (
-      <div className="flex h-full min-h-48 items-center justify-center p-6 text-sm text-muted-foreground">
-        {pending ? "Waiting for a container" : "Container details are unavailable for this task"}
-      </div>
+      <PanelEmpty
+        message={
+          pending ? "Waiting for a container" : "Container details are unavailable for this task"
+        }
+        className="h-full min-h-48 p-6"
+      />
     );
   }
 
@@ -116,19 +122,17 @@ function ContainerDetails({
           </h3>
           <StatusChip status={container.status} live={running} />
         </div>
-        <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+        <FactGrid columns={3} className="mt-4">
           {facts.map((fact) => (
-            <div key={fact.label} className="min-w-0">
-              <dt className="micro-label mb-1">{fact.label}</dt>
-              <dd
-                className={fact.mono ? "mono truncate text-sm" : "truncate text-sm tabular-nums"}
-                title={fact.title ?? (typeof fact.value === "string" ? fact.value : undefined)}
-              >
-                {fact.value}
-              </dd>
-            </div>
+            <Fact
+              key={fact.label}
+              label={fact.label}
+              value={fact.value}
+              mono={fact.mono}
+              title={fact.title}
+            />
           ))}
-        </dl>
+        </FactGrid>
       </section>
 
       <section className="border-t border-border pt-4" aria-labelledby="container-compute-heading">
@@ -174,16 +178,11 @@ function ContainerCapacity({ sample }: { sample: ContainerMetricsPoint | undefin
     },
   ];
   return (
-    <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
+    <FactGrid columns={3} className="mt-3 gap-y-3">
       {capacity.map((item) => (
-        <div key={item.label} className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{item.label}</dt>
-          <dd className="mono mt-0.5 truncate text-sm tabular-nums" title={item.value}>
-            {item.value}
-          </dd>
-        </div>
+        <Fact key={item.label} label={item.label} value={item.value} mono />
       ))}
-    </dl>
+    </FactGrid>
   );
 }
 
@@ -213,9 +212,4 @@ function formatCpu(millicores: number): string {
   if (millicores <= 0) return "Not reported";
   const vcpus = Number((millicores / 1_000).toFixed(2));
   return `${vcpus} vCPU`;
-}
-
-function exactTime(value: string): string {
-  const timestamp = new Date(value);
-  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }

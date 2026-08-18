@@ -6,9 +6,12 @@ import { ArrowLeft } from "lucide-react";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { Panel } from "@/components/shared/Panel";
 import { PanelError } from "@/components/shared/PanelError";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
@@ -81,9 +84,7 @@ function WorkloadDetailPage() {
   }
   if (!group) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        No deployed workload named {name} in this app
-      </div>
+      <PanelEmpty message={`No deployed workload named ${name} in this app`} className="h-full" />
     );
   }
 
@@ -105,16 +106,18 @@ function WorkloadDetailPage() {
     <WorkspacePage
       title={<span className="mono">{group.name}</span>}
       description={
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="flex items-center gap-1.5">
-            <StubKindIcon kind={group.kind} className="size-3.5" />
-            {kindLabel(group)}
-          </span>
-          <span aria-hidden="true">·</span>
-          <span className="mono">v{current.version}</span>
-          <span aria-hidden="true">·</span>
-          <span>{runningContainers.length} running</span>
-        </span>
+        <PageFacts
+          items={[
+            <span key="kind" className="flex items-center gap-1.5">
+              <StubKindIcon kind={group.kind} className="size-3.5" />
+              {kindLabel(group)}
+            </span>,
+            <span key="version" className="mono">
+              v{current.version}
+            </span>,
+            countLabel(runningContainers.length, "running", "running"),
+          ]}
+        />
       }
       actions={
         <>

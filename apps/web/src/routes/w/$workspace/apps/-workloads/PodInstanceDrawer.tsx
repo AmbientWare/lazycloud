@@ -2,6 +2,8 @@ import { useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CliHint } from "@/components/shared/CliHint";
+import { Fact } from "@/components/shared/Fact";
+import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { ShellButton } from "@/components/shared/ShellDialog";
@@ -10,13 +12,12 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
+import { exactTime, relativeTime } from "@/lib/format";
 import {
   containerMetricsTimeseriesQueryOptions,
   containerQueryOptions,
 } from "@/lib/queries/containers";
 import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
-import { cn } from "@/lib/utils";
 
 import { currentDeployment, findWorkloadGroup } from "./grouping";
 import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
@@ -143,8 +144,8 @@ function PodInstanceDrawerBody({
           className="panel shrink-0 overflow-hidden rounded-md"
           aria-label="Instance summary"
         >
-          <dl className="grid grid-cols-2 gap-x-5 gap-y-4 p-4 sm:grid-cols-4">
-            <DrawerFact
+          <FactGrid columns={4} className="gap-x-5 p-4">
+            <Fact
               label="Placement"
               value={podInstancePlacement(record)}
               title={
@@ -155,21 +156,21 @@ function PodInstanceDrawerBody({
                 undefined
               }
             />
-            <DrawerFact label="Uptime" value={podInstanceUptime(record)} mono />
-            <DrawerFact
+            <Fact label="Uptime" value={podInstanceUptime(record)} mono />
+            <Fact
               label="CPU allocation"
               value={resources.cpu == null ? "Default" : `${resources.cpu} vCPU`}
               mono
             />
-            <DrawerFact label="Memory allocation" value={resources.memory ?? "Default"} mono />
+            <Fact label="Memory allocation" value={resources.memory ?? "Default"} mono />
             {resources.gpu ? (
-              <DrawerFact
+              <Fact
                 label="GPU allocation"
                 value={`${resources.gpu}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
                 mono
               />
             ) : null}
-          </dl>
+          </FactGrid>
           {record.actions.can_shell && running ? (
             <section
               aria-label="Terminal access"
@@ -243,30 +244,4 @@ function PodInstanceDrawerSkeleton() {
       </div>
     </div>
   );
-}
-
-function DrawerFact({
-  label,
-  value,
-  mono = false,
-  title,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  title?: string;
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="micro-label mb-1">{label}</dt>
-      <dd className={cn("truncate text-sm", mono && "mono tabular-nums")} title={title ?? value}>
-        {value}
-      </dd>
-    </div>
-  );
-}
-
-function exactTime(value: string): string {
-  const timestamp = new Date(value);
-  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
 }

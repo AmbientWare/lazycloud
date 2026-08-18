@@ -3,10 +3,12 @@ import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 
 import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import { Skeleton } from "@/components/ui/skeleton";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import {
   Select,
   SelectContent,
@@ -15,10 +17,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Container, Deployment } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
+import { exactTime, relativeTime } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
-import { exactTime, formatCount, formatKind } from "./app-detail-format";
+import { formatKind } from "./app-detail-format";
 
 export function AppWorkloadsSection({
   workspaceName,
@@ -70,7 +72,7 @@ export function AppWorkloadsSection({
     >
       <Panel
         title={<span id="app-workloads-heading">Workloads</span>}
-        description={formatCount(groups.length, "deployed workload")}
+        description={countLabel(groups.length, "deployed workload")}
         action={
           <Select
             value={kind ?? "all"}
@@ -93,20 +95,16 @@ export function AppWorkloadsSection({
         contentClassName="p-0"
       >
         {pending ? (
-          <WorkloadsSkeleton />
+          <RowsSkeleton rows={4} height="h-14" />
         ) : error ? (
           <div className="flex min-h-48 items-center justify-center px-4 text-sm text-destructive">
             {error}
           </div>
         ) : groups.length === 0 ? (
-          <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-            No deployed workloads for this app
-          </div>
+          <PanelEmpty message="No deployed workloads for this app" className="min-h-48" />
         ) : rows.length === 0 ? (
           <div>
-            <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-              No workloads match this type
-            </div>
+            <PanelEmpty message="No workloads match this type" className="min-h-48" />
             {continuation}
           </div>
         ) : (
@@ -197,16 +195,6 @@ export function AppWorkloadsSection({
           </div>
         )}
       </Panel>
-    </div>
-  );
-}
-
-function WorkloadsSkeleton() {
-  return (
-    <div className="space-y-2 p-4" aria-hidden="true">
-      {Array.from({ length: 4 }, (_, index) => (
-        <Skeleton key={index} className="h-14 w-full" />
-      ))}
     </div>
   );
 }

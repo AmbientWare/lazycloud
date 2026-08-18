@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PodFileInfo } from "@/lib/api/schemas";
@@ -158,7 +159,7 @@ export function SandboxFileBrowser({
           ) : query.isError ? (
             <p className="p-3 text-sm text-destructive">{query.error.message}</p>
           ) : query.data.files.length === 0 ? (
-            <p className="p-4 text-center text-sm text-muted-foreground">Empty directory</p>
+            <PanelEmpty message="Empty directory" className="p-4" />
           ) : (
             [...query.data.files].sort(byDirThenName).map((file) => {
               const target = joinPath(path, file.name);
