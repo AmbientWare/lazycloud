@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -110,3 +110,93 @@ def test_account_costs_sum_the_caller_workspaces_and_nobody_else_s(
         f"{body['cost_nanos']} against 300 + 200"
     )
     assert body["workspace_id"] == "", "an account-wide page named one of its workspaces"
+
+
+def test_account_cost_series_buckets_the_window_and_stops_at_membership(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    """The shape of an account's spend, over exactly the intervals it was asked for.
+
+    A chart is drawn from what comes back, so an interval nothing ran in has to
+    arrive costing nothing rather than not arrive: a series that skips its quiet
+    hours draws two spends an hour apart as two spends side by side, and the
+    reader takes a flat week for a busy one.
+
+    Scoped the way the total beside it is, and proven the same way — a third
+    workspace's spend is absent from every interval, because a shape assembled
+    from beyond membership would disclose one customer's activity to another.
+    """
+
+    now = utc_now()
+    # An hour boundary far enough ahead that the rate below is already effective
+    # when the first metering window opens.
+    origin = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    control = ControlPlaneService(isolated_services.context)
+    with isolated_services.context.database.session() as session:
+        PlatformRateRepository(session).publish(
+            pricing_version="test.account-series",
+            effective_at=now + _RATE_AT,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(0),
+        )
+        held = isolated_services.context.default_workspace_id(session)
+    owner_user_id = workspace_owner_user_id(isolated_services.context, held)
+    stranger = owned_workspace(control, f"stranger-{uuid4().hex[:8]}")
+
+    for workspace_id, hour, quantity in (
+        (held, 0, 300),
+        (held, 2, 500),
+        (stranger.id, 1, 900),
+    ):
+        started_at = origin + timedelta(hours=hour)
+        isolated_services.usage.append(
+            UsageRecord(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                resource_type="workspace",
+                resource_id=workspace_id,
+                metric=UsageMetric.NetworkEgressBytes,
+                quantity=quantity,
+                unit=UsageUnit.Bytes,
+                labels={"app_id": str(uuid4()), "stub_id": str(uuid4())},
+                metadata={
+                    METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+                    METERING_WINDOW_ENDED_AT_METADATA_KEY: (started_at + _WINDOW).isoformat(),
+                },
+            )
+        )
+
+    issuer = TokenIssuer(isolated_services.context)
+    with isolated_services.context.database.session() as session:
+        raw_token, _ = issuer.issue_for_user(
+            session, "account-series-owner", user_id=owner_user_id, kind=TokenKind.User
+        )
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+
+    response = client.get(
+        "/api/v1/billing/cost-series",
+        params={
+            "start": origin.isoformat(),
+            "end": (origin + timedelta(hours=4)).isoformat(),
+            "bucket": "hour",
+        },
+        headers={"Authorization": f"Bearer {raw_token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [bucket["cost_nanos"] for bucket in body["data"]] == [300, 0, 500, 0], (
+        "the series is not one interval per hour of the window, holding only this "
+        f"account's spend: {body['data']}"
+    )
+    assert body["cost_nanos"] == 800, (
+        f"the total and the intervals it is drawn from disagree: {body['cost_nanos']}"
+    )
+    assert [datetime.fromisoformat(bucket["started_at"]) for bucket in body["data"]] == [
+        origin + timedelta(hours=hour) for hour in range(4)
+    ]
+    assert [total["dimension"] for total in body["data"][0]["dimensions"]] == ["network_egress"]
+    assert body["data"][1]["dimensions"] == [], (
+        "an interval nothing was metered in reported a measurement"
+    )

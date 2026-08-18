@@ -53,6 +53,18 @@ class UsageCostGroupKey(StringEnum):
     Task = "task"
 
 
+class UsageCostBucket(StringEnum):
+    """How wide one interval of a cost series is.
+
+    Closed, and the two widths a spend chart is read at: a day for a billing
+    period, an hour for the last day of it. Anything finer would draw a bar per
+    metering window, and anything coarser is a total rather than a shape.
+    """
+
+    Hour = "hour"
+    Day = "day"
+
+
 class UsageCostComponentResponse(HttpModel):
     """One resource's share of a row, and the invoice line it rolls up into.
 
@@ -133,12 +145,69 @@ class UsageCostListResponse(HttpModel):
     next: str = ""
 
 
+class UsageCostDimensionTotalResponse(HttpModel):
+    """One invoice line's share of an interval.
+
+    Keyed by dimension rather than by component because a bar is read against a
+    bill: the components a dimension breaks into are this platform's own
+    granularity, and they are already carried per row by the breakdown beside
+    the chart.
+
+    A dimension nothing was metered in is absent rather than zero. On a cost row
+    a zero line says the resource was measured and free; over an interval no row
+    was written at all, and stating zero would claim a measurement that was never
+    taken.
+    """
+
+    dimension: BilledDimension
+    cost_nanos: int = Field(default=0, ge=0)
+
+
+class UsageCostBucketResponse(HttpModel):
+    """What one interval of the window cost.
+
+    Every interval the window covers is present, including the ones that cost
+    nothing: a chart that skips them draws a run of quiet days as a run of busy
+    ones side by side.
+
+    `ended_at` is clipped to the end of the window, so the last interval reports
+    the span it actually covers rather than one running past the question asked.
+    """
+
+    started_at: datetime
+    ended_at: datetime
+    cost_nanos: int = Field(default=0, ge=0)
+    dimensions: list[UsageCostDimensionTotalResponse] = Field(default_factory=list)
+
+
+class UsageCostSeriesResponse(HttpModel):
+    """An account's spend over a window, as the shape it took.
+
+    Intervals are measured from `start` in whole `bucket` widths rather than
+    truncated to a calendar, so a window that opens on a UTC boundary is read in
+    UTC days and one that does not is still read in exact days from where it
+    opened. `cost_nanos` is the intervals summed, so the total a customer reads
+    and the bars they read it from cannot state different figures.
+    """
+
+    start: datetime
+    end: datetime
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    bucket: UsageCostBucket
+    cost_nanos: int = Field(default=0, ge=0)
+    data: list[UsageCostBucketResponse] = Field(default_factory=list)
+
+
 __all__ = [
     "UsageAggregationResponse",
+    "UsageCostBucket",
+    "UsageCostBucketResponse",
     "UsageCostComponentResponse",
+    "UsageCostDimensionTotalResponse",
     "UsageCostGroupKey",
     "UsageCostListResponse",
     "UsageCostRowResponse",
+    "UsageCostSeriesResponse",
     "UsageRecordListResponse",
     "UsageRecordResponse",
     "UsageSummaryResponse",

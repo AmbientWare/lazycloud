@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import urlparse
 
-from billing.costs import MAX_COST_PAGE, BillingStanding, BillingStandingService, UsageCostService
+from billing.costs import (
+    MAX_COST_PAGE,
+    BillingStanding,
+    BillingStandingService,
+    UsageCostSeries,
+    UsageCostService,
+)
 from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan
@@ -16,7 +22,14 @@ from shared.http.billing import (
     BillingPlanResponse,
     BillingSummaryResponse,
 )
-from shared.http.usage import UsageCostGroupKey, UsageCostListResponse
+from shared.http.usage import (
+    UsageCostBucket,
+    UsageCostBucketResponse,
+    UsageCostDimensionTotalResponse,
+    UsageCostGroupKey,
+    UsageCostListResponse,
+    UsageCostSeriesResponse,
+)
 from shared.payments import BILLING_CURRENCY
 from shared.timestamps import utc_now
 
@@ -60,6 +73,7 @@ def account_costs(
     end: datetime,
     user_id: read_user,
     group_by: UsageCostGroupKey = UsageCostGroupKey.App,
+    app_id: str | None = None,
     limit: int = Query(50, ge=1, le=MAX_COST_PAGE),
     cursor: str | None = None,
     services: ApiServices = Depends(current_services),
@@ -74,6 +88,13 @@ def account_costs(
     Scoped to the workspaces this person is a member of, resolved here rather
     than named by the caller — an account-wide total assembled from ids a
     request supplied would be a total of whatever it asked for.
+
+    `app_id` narrows to one app, which is how a caller reads what the workloads
+    inside it cost without a second scope to authorize: membership still decides
+    which workspaces are summed, so an id belonging to somebody else's app
+    selects rows this account has none of and totals nothing. An empty value is
+    a filter rather than an absent one, and selects the usage that reached no
+    app at all.
     """
 
     with services.context.database.session() as session:
@@ -86,6 +107,7 @@ def account_costs(
             start=start,
             end=end,
             group_by=group_by,
+            app_id=app_id,
             limit=limit,
             cursor=cursor,
         )
@@ -98,6 +120,45 @@ def account_costs(
         end=end,
         group_by=group_by,
     )
+
+
+@router.get(
+    "/cost-series",
+    response_model=UsageCostSeriesResponse,
+    operation_id="get_account_cost_series",
+)
+def account_cost_series(
+    start: datetime,
+    end: datetime,
+    user_id: read_user,
+    bucket: UsageCostBucket = UsageCostBucket.Day,
+    services: ApiServices = Depends(current_services),
+) -> UsageCostSeriesResponse:
+    """What this account spent over a window, interval by interval.
+
+    Beside the total rather than derived from it: a bill is one figure, and the
+    question a customer asks next is which day it came from. One request answers
+    the whole chart — a request per bar would be thirty scans of the same index,
+    and two of them reading either side of a metering write would draw a shape
+    the total does not add up to.
+
+    Scoped to the workspaces this person is a member of, the same way the total
+    beside it is, and for the same reason: a shape assembled from ids a request
+    supplied would be the shape of whatever it asked for.
+    """
+
+    with services.context.database.session() as session:
+        workspace_ids = [
+            workspace.id
+            for workspace in WorkspaceMemberRepository(session).workspaces_for_user(user_id)
+        ]
+        series = UsageCostService(session).series(
+            workspace_ids=workspace_ids,
+            start=start,
+            end=end,
+            bucket=bucket,
+        )
+    return _series_response(series)
 
 
 @router.post(
@@ -224,6 +285,31 @@ def start_billing_portal(
         return_url=return_url,
     )
     return BillingHostedSessionResponse(url=session_url.url)
+
+
+def _series_response(series: UsageCostSeries) -> UsageCostSeriesResponse:
+    return UsageCostSeriesResponse(
+        start=series.start,
+        end=series.end,
+        currency=BILLING_CURRENCY,
+        bucket=series.bucket,
+        cost_nanos=series.cost_nanos,
+        data=[
+            UsageCostBucketResponse(
+                started_at=interval.started_at,
+                ended_at=interval.ended_at,
+                cost_nanos=interval.cost_nanos,
+                dimensions=[
+                    UsageCostDimensionTotalResponse(
+                        dimension=total.dimension,
+                        cost_nanos=total.cost_nanos,
+                    )
+                    for total in interval.dimensions
+                ],
+            )
+            for interval in series.intervals
+        ],
+    )
 
 
 def _summary(standing: BillingStanding) -> BillingSummaryResponse:
