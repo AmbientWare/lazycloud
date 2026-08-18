@@ -2203,8 +2203,9 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
             isolated_services,
             redis=redis,
             pods=PodControlService(isolated_services, redis=redis),
-            container_states=container_repo,
         ),
+        container_states=container_repo,
+        container_requests=RedisSchedulerWorkerRepository(redis),
     ).reconcile(now=now + timedelta(seconds=62))[0]
 
     assert result.current_containers == 0

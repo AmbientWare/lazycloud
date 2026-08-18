@@ -59,6 +59,26 @@ from scheduler.services import (
 AUTOSCALER_LOCK_TTL_SECONDS = 10
 AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
 AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
+CONTAINER_START_DEADLINE_SECONDS = 600
+"""How long an unheld `pending` container may sit before it stops being capacity.
+
+Bounded from both ends. Below it, a start still in progress must not be reaped:
+the reclaim frees the ceiling, the next tick starts a replacement, and if the
+deadline is shorter than the real start that replacement is reaped at the same
+age — a workload that never runs at all, where the symptom was one that ran
+late. Above it, nothing is gained: a stranded container is already recovered at
+about sixteen minutes, when its scheduler state lapses and its worker's orphan
+path fails it, so a deadline past that would only re-describe what already
+happens and would still leave the recovery owned by a cache expiry.
+
+Six hundred is the platform's own figure for how long a pending container may
+legitimately show no progress — the window a worker re-arms that container's
+scheduler state for while it is still pulling — and it lands a clear six minutes
+inside the sixteen. It is a bound on a start already in somebody's hands, not on
+the wait for capacity: a request still queued for placement is read directly
+below, so the clock never has to allow for the fifteen minutes the dispatcher
+may spend retrying one.
+"""
 FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
 ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
 ENDPOINT_AUTOSCALER_SOURCE = "endpoint.autoscaler"
@@ -71,8 +91,17 @@ class PodControl(Protocol):
     def expire_pods(self, *, now: datetime | None = None) -> list[ContainerRecord]: ...
 
 
-class PodContainerStateReader(Protocol):
+class SchedulerContainerStateReader(Protocol):
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
+
+class ContainerRequestReader(Protocol):
+    def has_recoverable_container_request(
+        self,
+        container_id: str,
+        *,
+        worker_id: str = "",
+    ) -> bool: ...
 
 
 class FunctionAutoscaleControl(Protocol):
@@ -107,6 +136,14 @@ class AutoscaleAction(ContractModel):
     container_id: str = ""
     action: str
     reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class StaleContainer:
+    """A record holding a ceiling slot, and the finding that says it should not."""
+
+    record: ContainerRecord
+    reason: str
 
 
 class AutoscaleResult(ContractModel):
@@ -200,21 +237,16 @@ class WorkloadAutoscaler(Protocol):
     about which of them may be stopped. That is the whole of it. Deliberately no
     reach into the pass that runs around this: what a workload cannot see, it
     cannot forget to do.
+
+    Which containers count as capacity is not among the differences. A record the
+    scheduler no longer backs is not a container of any kind, and answering that
+    per workload is how two of the three came to answer it with "all of them".
     """
 
     @property
     def identity(self) -> AutoscalerIdentity: ...
 
     def selects(self, stub: StubRecord) -> bool: ...
-
-    def partition(
-        self,
-        containers: list[ContainerRecord],
-    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
-        """Split what is holding capacity from what only claims to be."""
-        ...
-
-    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]: ...
 
     def sample(self, stub: StubRecord) -> int: ...
 
@@ -245,15 +277,17 @@ class AutoscalingDriver:
     """The reconcile pass every workload gets, identically.
 
     Stub selection and the pause an operator set, the stub's lock and the state
-    a contended tick still records, the container counts, the failed-container
-    threshold, the inactive deployment, the workspace guardrail, and the metrics
-    and event and state row a tick leaves behind: all of it here, once, for
-    every kind, and none of it reachable from a workload.
+    a contended tick still records, the container counts and which of them are
+    real, the failed-container threshold, the inactive deployment, the workspace
+    guardrail, and the metrics and event and state row a tick leaves behind: all
+    of it here, once, for every kind, and none of it reachable from a workload.
     """
 
     services: SchedulerServices
     redis: RedisClient
     workload: WorkloadAutoscaler
+    container_states: SchedulerContainerStateReader
+    container_requests: ContainerRequestReader
 
     def reconcile(
         self,
@@ -290,10 +324,15 @@ class AutoscalingDriver:
         identity = self.workload.identity
         active = _deployment_active(self.services, stub)
         containers = _containers_for_stub(self.services, stub)
-        holding, stale = self.workload.partition(containers)
-        actions = self.workload.recover(stale)
+        holding, stale = _partition_backed_containers(
+            containers,
+            self.container_states,
+            self.container_requests,
+            now=current_time,
+        )
+        actions = self._recover(stale)
         current = len(holding)
-        pending = _pending_container_count(containers)
+        pending = _pending_container_count(holding)
         signal = self.workload.sample(stub)
         plan = self.workload.plan(stub, signal=signal, current=current)
         # A container that fails on startup frees the slot it was counted in, so
@@ -366,6 +405,35 @@ class AutoscalingDriver:
         )
         self._record(stub, result, plan)
         return result
+
+    def _recover(self, stale: list[StaleContainer]) -> list[AutoscaleAction]:
+        """Give back the ceiling slots that records nothing backs are holding.
+
+        Stopped rather than deleted, and stopped through the one settlement path
+        every other platform-owned stop takes, so an invocation this container
+        had claimed is released back to the queue instead of being reported to
+        its caller as cancelled.
+
+        A second scheduler that reached the same conclusion — the stub lock is
+        held for a bounded time, so two ticks can overlap on a slow pass — finds
+        the record already terminal and stops there: the stop reads the row
+        first and settles nothing twice.
+        """
+
+        actions: list[AutoscaleAction] = []
+        for container in stale:
+            stopped = self.services.containers.stop(
+                container.record.id,
+                reason=StopContainerReason.Scheduler,
+            )
+            actions.append(
+                AutoscaleAction(
+                    container_id=stopped.id,
+                    action="recover-stale",
+                    reason=container.reason,
+                )
+            )
+        return actions
 
     def _start(self, stub: StubRecord, count: int) -> list[AutoscaleAction]:
         """Ask for containers one at a time until the workload stops giving them.
@@ -558,16 +626,6 @@ class FunctionAutoscaler:
         # it leaves a fan-out being served one container at a time.
         return stub.kind is StubKind.Function
 
-    def partition(
-        self,
-        containers: list[ContainerRecord],
-    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
-        return _active_containers(containers), []
-
-    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]:
-        del stale
-        return []
-
     def sample(self, stub: StubRecord) -> int:
         return self.functions.unclaimed_task_count(stub.id)
 
@@ -661,16 +719,6 @@ class EndpointAutoscaler:
     def selects(self, stub: StubRecord) -> bool:
         return stub.kind in {StubKind.Endpoint, StubKind.Asgi} and bool(stub.deployment_id)
 
-    def partition(
-        self,
-        containers: list[ContainerRecord],
-    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
-        return _active_containers(containers), []
-
-    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]:
-        del stale
-        return []
-
     def sample(self, stub: StubRecord) -> int:
         return self.dispatches.active_count(stub.id)
 
@@ -737,7 +785,6 @@ class PodAutoscaler:
     services: SchedulerServices
     redis: RedisClient
     pods: PodControl
-    container_states: PodContainerStateReader | None = None
 
     @property
     def identity(self) -> AutoscalerIdentity:
@@ -747,28 +794,6 @@ class PodAutoscaler:
         return stub.kind in {StubKind.Pod, StubKind.Sandbox} and (
             stub.kind is StubKind.Sandbox or bool(stub.deployment_id)
         )
-
-    def partition(
-        self,
-        containers: list[ContainerRecord],
-    ) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
-        return _pod_active_containers(containers, self.container_states)
-
-    def recover(self, stale: list[ContainerRecord]) -> list[AutoscaleAction]:
-        actions: list[AutoscaleAction] = []
-        for container in stale:
-            stopped = self.services.containers.stop(
-                container.id,
-                reason=StopContainerReason.Scheduler,
-            )
-            actions.append(
-                AutoscaleAction(
-                    container_id=stopped.id,
-                    action="recover-stale",
-                    reason="scheduler state missing for running pod",
-                )
-            )
-        return actions
 
     def sample(self, stub: StubRecord) -> int:
         return _pod_total_connections(self.redis, stub.workspace_id, stub.id)
@@ -1147,28 +1172,82 @@ def _active_containers(containers: list[ContainerRecord]) -> list[ContainerRecor
     ]
 
 
-def _pod_active_containers(
+def _partition_backed_containers(
     containers: list[ContainerRecord],
-    states: PodContainerStateReader | None,
-) -> tuple[list[ContainerRecord], list[ContainerRecord]]:
-    active = _active_containers(containers)
-    if states is None:
-        return active, []
+    states: SchedulerContainerStateReader,
+    requests: ContainerRequestReader,
+    *,
+    now: datetime,
+) -> tuple[list[ContainerRecord], list[StaleContainer]]:
+    """Split records the scheduler still backs from records that only look live.
+
+    The durable row is what the ceiling is counted from, so a row that says
+    `pending` or `running` while nothing is going to make it true is a slot held
+    against a workload that cannot use it. At `max_containers = 1` that is not a
+    degradation, it is a stop: desired equals current forever and the backlog
+    grows one entry per fire.
+    """
+
     live: list[ContainerRecord] = []
-    stale: list[ContainerRecord] = []
-    for container in active:
-        if container.status is ContainerStatus.Pending:
-            live.append(container)
-            continue
-        state = states.get_container_state(container.id)
-        if state is None or state.status not in {
-            SchedulerContainerStatus.Pending,
-            SchedulerContainerStatus.Running,
-        }:
-            stale.append(container)
+    stale: list[StaleContainer] = []
+    for container in _active_containers(containers):
+        reason = _stale_reason(
+            container,
+            states.get_container_state(container.id),
+            requests,
+            now=now,
+        )
+        if reason:
+            stale.append(StaleContainer(record=container, reason=reason))
             continue
         live.append(container)
     return live, stale
+
+
+def _stale_reason(
+    container: ContainerRecord,
+    state: SchedulerContainerState | None,
+    requests: ContainerRequestReader,
+    *,
+    now: datetime,
+) -> str:
+    """Why this record is not capacity, or empty where it still is.
+
+    Read from the durable row and from what actually holds the container, never
+    from whether a Redis key happens to be alive: the scheduler state is
+    re-armed by whoever holds it, so a worker wedged half-way through a start
+    refreshes it indefinitely, and a durable row that only becomes true when a
+    cache entry expires has the ownership backwards.
+
+    A `running` row is the case pods already covered: it has started, so no
+    scheduler state at all means the worker that was running it is gone.
+
+    A `pending` row is the one that stranded functions and endpoints, and it has
+    two legitimate reasons to still be pending. Either a request for it is
+    queued, in which case the dispatcher owns it and bounds its own retrying —
+    read here rather than guessed at, so the deadline below never has to cover
+    a wait for capacity. Or a worker has taken it and is starting it, which is
+    what the deadline covers and the only thing it covers.
+    """
+
+    if state is not None and state.status not in {
+        SchedulerContainerStatus.Pending,
+        SchedulerContainerStatus.Running,
+    }:
+        return f"scheduler state is {state.status.value}"
+    if container.status is ContainerStatus.Running:
+        return "scheduler state missing for running container" if state is None else ""
+    if state is not None and state.status is SchedulerContainerStatus.Running:
+        # Started, and only the durable row has yet to catch up.
+        return ""
+    if requests.has_recoverable_container_request(
+        container.id,
+        worker_id=container.runtime_worker_id,
+    ):
+        return ""
+    if (now - container.created_at).total_seconds() < CONTAINER_START_DEADLINE_SECONDS:
+        return ""
+    return "container never started within the start deadline"
 
 
 def _pending_container_count(containers: list[ContainerRecord]) -> int:
@@ -1413,14 +1492,18 @@ def _redis_non_negative_int(value: object) -> int:
 
 
 __all__ = [
+    "CONTAINER_START_DEADLINE_SECONDS",
     "AutoscaleAction",
     "AutoscaleResult",
     "AutoscalerIdentity",
     "AutoscalingDriver",
+    "ContainerRequestReader",
     "EndpointAutoscaler",
     "FunctionAutoscaler",
     "PodAutoscaler",
     "ScalePlan",
+    "SchedulerContainerStateReader",
     "SchedulerServices",
+    "StaleContainer",
     "WorkloadAutoscaler",
 ]

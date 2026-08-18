@@ -229,6 +229,8 @@ class SchedulerRuntime:
                     scheduler_services,
                     redis=redis_client,
                     workload=FunctionAutoscaler(scheduler_services, functions=function_control),
+                    container_states=container_states,
+                    container_requests=worker_states,
                 ),
                 endpoints=AutoscalingDriver(
                     scheduler_services,
@@ -239,6 +241,8 @@ class SchedulerRuntime:
                         endpoints=endpoint_control,
                         dispatches=endpoint_dispatches,
                     ),
+                    container_states=container_states,
+                    container_requests=worker_states,
                 ),
                 pods=AutoscalingDriver(
                     scheduler_services,
@@ -247,8 +251,9 @@ class SchedulerRuntime:
                         scheduler_services,
                         redis=redis_client,
                         pods=pod_control,
-                        container_states=container_states,
                     ),
+                    container_states=container_states,
+                    container_requests=worker_states,
                 ),
                 pod_control=pod_control,
                 functions=function_control,

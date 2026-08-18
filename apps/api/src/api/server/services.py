@@ -1240,6 +1240,8 @@ def _compose_api_services(
             core,
             redis=redis,
             workload=FunctionAutoscaler(core, functions=function),
+            container_states=scheduler_containers,
+            container_requests=scheduler_workers,
         ),
         endpoint_autoscaler=AutoscalingDriver(
             core,
@@ -1252,6 +1254,8 @@ def _compose_api_services(
                     EndpointDispatchStateRepository(core)
                 ),
             ),
+            container_states=scheduler_containers,
+            container_requests=scheduler_workers,
         ),
         pod_autoscaler=AutoscalingDriver(
             core,
@@ -1260,8 +1264,9 @@ def _compose_api_services(
                 core,
                 redis=redis,
                 pods=pod,
-                container_states=scheduler_containers,
             ),
+            container_states=scheduler_containers,
+            container_requests=scheduler_workers,
         ),
     )
     scheduler_worker_admin = SchedulerWorkerAdminService(
