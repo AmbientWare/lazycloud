@@ -7,6 +7,8 @@ import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -15,9 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { stubKinds, taskStatuses } from "@/lib/api/schemas";
+import { taskStatuses, workloadKinds } from "@/lib/api/schemas";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
-import { selectTaskList, tasksInfiniteQueryOptions } from "@/lib/queries/tasks";
+import {
+  selectTaskList,
+  taskMetricsQueryOptions,
+  tasksInfiniteQueryOptions,
+} from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type TasksSearch = {
@@ -33,7 +39,7 @@ type TasksSearch = {
 export const Route = createFileRoute("/w/$workspace/tasks")({
   validateSearch: (search: Record<string, unknown>): TasksSearch => ({
     status: pickOption(search.status, taskStatuses),
-    kind: pickOption(search.kind, stubKinds),
+    kind: pickOption(search.kind, workloadKinds),
     app: typeof search.app === "string" && search.app ? search.app : undefined,
     workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
     deployment:
@@ -72,6 +78,7 @@ function TasksPage() {
     }),
   );
   const apps = useQuery(appSummariesQueryOptions(workspace.id));
+  const metrics = useQuery(taskMetricsQueryOptions(workspace.id));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
   const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)
     ?.deployment?.name;
@@ -86,6 +93,17 @@ function TasksPage() {
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <WorkspacePage
         title="Tasks"
+        description={
+          metrics.data ? (
+            <PageFacts
+              items={[
+                countLabel(metrics.data.total, "task"),
+                countLabel(metrics.data.failed, "failed", "failed"),
+                "last 24 hours",
+              ]}
+            />
+          ) : null
+        }
         actions={
           <Button
             variant="outline"
@@ -159,7 +177,7 @@ function TasksPage() {
               <FilterSelect
                 label="Type"
                 value={search.kind}
-                options={stubKinds}
+                options={workloadKinds}
                 allLabel="All types"
                 onChange={(kind) => setSearch({ kind })}
               />

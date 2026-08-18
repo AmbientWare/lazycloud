@@ -4,6 +4,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AppSummary } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
@@ -26,7 +28,27 @@ function AppsPage() {
   const items = apps.data?.items ?? [];
 
   return (
-    <WorkspacePage title="Apps" contentClassName="overflow-y-auto pr-1">
+    <WorkspacePage
+      title="Apps"
+      description={
+        apps.isPending ? null : (
+          <PageFacts
+            items={[
+              countLabel(items.length, "app"),
+              countLabel(
+                items.reduce((total, item) => total + item.workload_count, 0),
+                "workload",
+              ),
+              countLabel(
+                items.reduce((total, item) => total + item.running_containers, 0),
+                "running container",
+              ),
+            ]}
+          />
+        )
+      }
+      contentClassName="overflow-y-auto pr-1"
+    >
       {apps.isPending ? (
         <AppCardsSkeleton />
       ) : apps.isError ? (
