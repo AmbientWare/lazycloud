@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
+import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { setAuthToken } from "@/lib/api/client";
 import { completeSignInMutationOptions, githubSignInHref } from "@/lib/queries/auth";
@@ -70,15 +71,13 @@ function SignInCallbackPage() {
 
   if (failure) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background p-4">
-        <section className="panel w-full max-w-md rounded-md p-5">
-          <h1 className="text-xl font-semibold">Sign-in did not complete</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{failure}</p>
-          <Button asChild className="mt-4 w-full">
-            <a href={githubSignInHref("/dashboard")}>Try again</a>
-          </Button>
-        </section>
-      </main>
+      <PreShellScreen>
+        <h1 className="text-xl font-semibold">Sign-in did not complete</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{failure}</p>
+        <Button asChild className="mt-4 w-full">
+          <a href={githubSignInHref("/dashboard")}>Try again</a>
+        </Button>
+      </PreShellScreen>
     );
   }
 

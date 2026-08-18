@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { Panel } from "@/components/shared/Panel";
+import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
@@ -76,7 +77,7 @@ function WorkloadDetailPage() {
   if (deployments.isPending || stubs.isPending || app.isPending) return <WorkloadSkeleton />;
   const loadError = deployments.error ?? stubs.error ?? app.error;
   if (loadError) {
-    return <div className="p-4 text-sm text-destructive">{loadError.message}</div>;
+    return <PanelError message={loadError.message} />;
   }
   if (!group) {
     return (

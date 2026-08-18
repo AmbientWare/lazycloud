@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { Panel } from "@/components/shared/Panel";
+import { PanelError } from "@/components/shared/PanelError";
 import { TaskTable } from "@/components/shared/TaskTable";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 
@@ -49,7 +50,7 @@ function WorkloadRuns({
 }) {
   const tasks = useQuery(tasksQueryOptions(workspaceId, { limit: 50, appId, stubIds }));
   if (tasks.isError) {
-    return <div className="p-4 text-sm text-destructive">{tasks.error.message}</div>;
+    return <PanelError message={tasks.error.message} />;
   }
   return (
     <TaskTable

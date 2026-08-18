@@ -5,6 +5,7 @@ import { Pause, Play } from "lucide-react";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
+import { PanelError } from "@/components/shared/PanelError";
 import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
@@ -182,9 +183,7 @@ function TasksPage() {
             </div>
           </div>
           {tasks.isError ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-destructive">
-              {tasks.error.message}
-            </div>
+            <PanelError message={tasks.error.message} layout="centered" />
           ) : (
             <>
               <TaskTable

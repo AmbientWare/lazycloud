@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Play } from "lucide-react";
 
+import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -50,7 +51,7 @@ export function Playground({
     );
   }
   if (manifest.isError) {
-    return <div className="p-4 text-sm text-destructive">{manifest.error.message}</div>;
+    return <PanelError message={manifest.error.message} />;
   }
   return (
     <PlaygroundForm

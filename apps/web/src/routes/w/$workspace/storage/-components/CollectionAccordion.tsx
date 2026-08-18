@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 
+import { PanelError } from "@/components/shared/PanelError";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ResourceConfig, ResourceRow } from "@/lib/api/resources";
 import { displayValue } from "@/lib/format";
@@ -36,7 +37,7 @@ export function CollectionAccordion({
         {query.isPending ? (
           <CollectionSkeleton />
         ) : query.isError ? (
-          <p className="p-4 text-sm text-destructive">{query.error.message}</p>
+          <PanelError message={query.error.message} />
         ) : rows.length === 0 ? (
           <p className="p-8 text-center text-sm text-muted-foreground">
             No {config.title.toLowerCase()}

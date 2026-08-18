@@ -17,6 +17,7 @@ import {
   awsConnectionPresentation,
 } from "./AwsConnectionDialog/lifecycle";
 import { Panel } from "@/components/shared/Panel";
+import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,9 +68,7 @@ export function ComputeSettings() {
   if (loadError) {
     return (
       <Panel title="Compute">
-        <p className="p-4 text-sm text-destructive" role="alert">
-          {loadError.message}
-        </p>
+        <PanelError message={loadError.message} />
       </Panel>
     );
   }
@@ -663,9 +662,7 @@ function SelfHostedPanel({
           <Skeleton className="h-10 w-full" />
         </div>
       ) : error ? (
-        <p className="p-4 text-sm text-destructive" role="alert">
-          {error.message}
-        </p>
+        <PanelError message={error.message} />
       ) : machines.length === 0 ? (
         <p className="px-4 py-6 text-center text-sm text-muted-foreground">
           No self-hosted machines connected

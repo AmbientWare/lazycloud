@@ -3,6 +3,7 @@ import { Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Panel } from "@/components/shared/Panel";
+import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,9 +62,7 @@ export function AccessTokens() {
         {controller.isLoading ? (
           <TokenTableSkeleton />
         ) : controller.loadError ? (
-          <p className="p-4 text-sm text-destructive" role="alert">
-            Access tokens could not be loaded. Try again shortly.
-          </p>
+          <PanelError message="Access tokens could not be loaded. Try again shortly." />
         ) : controller.tokens.length === 0 ? (
           <div className="flex min-h-32 flex-col items-center justify-center gap-1 p-8 text-center">
             <p className="text-sm text-foreground">No tokens yet</p>

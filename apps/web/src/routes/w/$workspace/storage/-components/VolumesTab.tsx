@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Download, File, Folder, Loader2, Trash2, Upload } from "lucide-react";
 
+import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Volume, VolumePathInfo } from "@/lib/api/schemas";
@@ -52,7 +53,7 @@ export function VolumesTab({
           {query.isPending ? (
             <VolumesSkeleton />
           ) : query.isError ? (
-            <p className="p-4 text-sm text-destructive">{query.error.message}</p>
+            <PanelError message={query.error.message} />
           ) : query.data.volumes.length === 0 && !creating ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
               No volumes yet. Create one to mount it into a workload.
@@ -266,7 +267,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
         {query.isPending ? (
           <FileSkeleton />
         ) : query.isError ? (
-          <p className="p-4 text-sm text-destructive">{query.error.message}</p>
+          <PanelError message={query.error.message} />
         ) : items.length === 0 ? (
           <p className="p-8 text-center text-sm text-muted-foreground">Empty directory</p>
         ) : (
