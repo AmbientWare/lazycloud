@@ -694,6 +694,8 @@ class App:
         checkpoint_readiness_port: int | None = None,
         checkpoint_readiness_timeout_seconds: int = 600,
         checkpoint_readiness_interval_seconds: float = 1.0,
+        health_check_path: str | None = None,
+        health_check_port: int | None = None,
         tcp: bool = False,
         block_network: bool = False,
         allow_list: list[str] | None = None,
@@ -722,6 +724,9 @@ class App:
             checkpoint_enabled: Enable checkpoint support when available.
             checkpoint_readiness_path, checkpoint_readiness_port: HTTP readiness probe used
                 before checkpointing a Pod without a managed runner.
+            health_check_path, health_check_port: HTTP probe the proxy calls before routing
+                to a container. Unset, it connects to the port instead, which proves only
+                that something is listening.
             tcp, block_network, allow_list, docker_enabled: Network and Docker policy.
             pool, provider, metadata: Placement and custom metadata.
         """
@@ -745,6 +750,8 @@ class App:
             checkpoint_readiness_port=checkpoint_readiness_port,
             checkpoint_readiness_timeout_seconds=checkpoint_readiness_timeout_seconds,
             checkpoint_readiness_interval_seconds=checkpoint_readiness_interval_seconds,
+            health_check_path=health_check_path,
+            health_check_port=health_check_port,
             tcp=tcp,
             block_network=block_network,
             allow_list=allow_list,
@@ -1414,6 +1421,8 @@ def _pod_options(
     checkpoint_readiness_port: int | None,
     checkpoint_readiness_timeout_seconds: int,
     checkpoint_readiness_interval_seconds: float,
+    health_check_path: str | None,
+    health_check_port: int | None,
     tcp: bool,
     block_network: bool,
     allow_list: list[str] | None,
@@ -1443,6 +1452,8 @@ def _pod_options(
         "checkpoint_readiness_port": checkpoint_readiness_port,
         "checkpoint_readiness_timeout_seconds": checkpoint_readiness_timeout_seconds,
         "checkpoint_readiness_interval_seconds": checkpoint_readiness_interval_seconds,
+        "health_check_path": health_check_path,
+        "health_check_port": health_check_port,
         "tcp": tcp,
         "block_network": block_network,
         "allow_list": allow_list,

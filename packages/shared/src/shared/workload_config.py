@@ -61,6 +61,8 @@ class StubRuntimeConfig(ContractModel):
     checkpoint_readiness_port: int = Field(default=0, ge=0, le=65535)
     checkpoint_readiness_timeout_seconds: int = Field(default=600, ge=1)
     checkpoint_readiness_interval_seconds: float = Field(default=1.0, gt=0)
+    health_check_path: str = ""
+    health_check_port: int = Field(default=0, ge=0, le=65535)
     pool_selector: str | None = None
     runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str | None = None

@@ -16,6 +16,9 @@ DEFAULT_VOLUMES_PREFIX = "volumes"
 DEFAULT_ARTIFACTS_PREFIX = "artifacts"
 DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH = "/workspace"
 CONTAINER_INNER_PORT = 8001
+# Served by the runner rather than by user code, so a probe against it answers
+# whether the serving loop is up even when the handler is wedged.
+CONTAINER_HEALTH_PATH = "/health"
 # Matches DEFAULT_DISK in shared.deployment_records, in bytes.
 DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 
@@ -174,6 +177,7 @@ class WorkerContainerRequestPayload(ContractModel):
 
 
 __all__ = [
+    "CONTAINER_HEALTH_PATH",
     "CONTAINER_INNER_PORT",
     "DEFAULT_ARTIFACTS_PATH",
     "DEFAULT_ARTIFACTS_PREFIX",

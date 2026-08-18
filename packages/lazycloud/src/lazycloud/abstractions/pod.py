@@ -83,6 +83,8 @@ class PodOptions(TypedDict, total=False):
     checkpoint_readiness_port: int | None
     checkpoint_readiness_timeout_seconds: int
     checkpoint_readiness_interval_seconds: float
+    health_check_path: str | None
+    health_check_port: int | None
     tcp: bool
     block_network: bool
     allow_list: list[str] | None
@@ -190,6 +192,8 @@ class Pod(ControlClientConfigMixin):
     checkpoint_readiness_port: int | None = None
     checkpoint_readiness_timeout_seconds: int = 600
     checkpoint_readiness_interval_seconds: float = 1.0
+    health_check_path: str | None = None
+    health_check_port: int | None = None
     tcp: bool = False
     block_network: bool = False
     allow_list: list[str] | None = None
@@ -230,6 +234,10 @@ class Pod(ControlClientConfigMixin):
                 "checkpoint_enabled Pods require checkpoint_readiness_path and "
                 "checkpoint_readiness_port"
             )
+        if bool(self.health_check_path) != bool(self.health_check_port):
+            raise ValueError("health_check_path and health_check_port are set together")
+        if self.health_check_path and not self.health_check_path.startswith("/"):
+            raise ValueError("health_check_path must be absolute")
 
     @property
     def control_client(self) -> PodClient:
@@ -287,6 +295,8 @@ class Pod(ControlClientConfigMixin):
                     "checkpoint_readiness_interval_seconds": (
                         self.checkpoint_readiness_interval_seconds
                     ),
+                    "health_check_path": self.health_check_path or "",
+                    "health_check_port": self.health_check_port or 0,
                 },
             ),
         )

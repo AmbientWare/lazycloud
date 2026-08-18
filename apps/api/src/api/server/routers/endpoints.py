@@ -23,6 +23,7 @@ from fastapi import (
     WebSocket,
     status,
 )
+from shared.container_requests import CONTAINER_HEALTH_PATH
 from shared.http.endpoints import (
     EndpointForwardRequest,
     StartEndpointServeRequest,
@@ -585,7 +586,12 @@ async def _forward_endpoint_request(
         headers=request_headers(request),
         body=await request.body(),
     )
-    result = await run_in_threadpool(service.forward_endpoint_request, forwarded)
+    handler = (
+        service.forward_endpoint_health
+        if forwarded.path == CONTAINER_HEALTH_PATH
+        else service.forward_endpoint_request
+    )
+    result = await run_in_threadpool(handler, forwarded)
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body
     )
@@ -606,6 +612,11 @@ async def _forward_asgi_http_request(
         headers=request_headers(request),
         body=await request.body(),
     )
+    if forwarded.path == CONTAINER_HEALTH_PATH:
+        result = await run_in_threadpool(service.forward_endpoint_health, forwarded)
+        return forwarded_response(
+            status_code=result.status_code, headers=result.headers, body=result.body
+        )
     session: EndpointIngressDispatchSession | None = None
     try:
         session = await run_in_threadpool(service.prepare_asgi_http, forwarded)

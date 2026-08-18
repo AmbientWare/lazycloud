@@ -4,6 +4,7 @@ import secrets
 import socket
 import time
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
@@ -89,6 +90,11 @@ from execution.container_clients import (
     SchedulerContainerClientFactory,
 )
 from execution.containers.planning import ContainerSchedulingOptions
+from execution.containers.readiness import (
+    AlwaysReadyContainers,
+    ContainerHealthCheck,
+    ContainerReadiness,
+)
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
@@ -133,6 +139,7 @@ class PodControlService:
     pod_proxy_http_client: PodProxyForwardClient | None = None
     pod_proxy_socket_client: PodProxySocketClient | None = None
     pod_proxy_connections: PodProxyConnectionRepository | None = None
+    container_readiness: ContainerReadiness = field(default_factory=AlwaysReadyContainers)
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
     poll_interval_seconds: float = POD_CONTAINER_DISCOVERY_INTERVAL_MS / 1000
@@ -1096,11 +1103,16 @@ class PodControlService:
     ) -> PodProxyTarget:
         stub = self.control_plane.get_stub(stub_id)
         workspace = self.control_plane.get_workspace(stub.workspace_id)
+        config = PodStubConfig.model_validate(stub.config, from_attributes=True)
         containers, targets = self._pod_backend_containers(
             workspace_id=stub.workspace_id,
             workspace_name=workspace.name,
             stub_id=stub.id,
             port=request.port,
+            health_check=ContainerHealthCheck(
+                path=config.runtime.health_check_path,
+                port=config.runtime.health_check_port,
+            ),
         )
         plan = plan_pod_proxy(request, containers)
         if plan.failure_reason is PodProxyFailureReason.NoAvailableContainers:
@@ -1178,6 +1190,7 @@ class PodControlService:
         workspace_name: str,
         stub_id: str,
         port: int,
+        health_check: ContainerHealthCheck,
     ) -> tuple[list[PodBackendContainer], dict[str, PodProxyTarget]]:
         with self.services.context.database.session() as session:
             records = [
@@ -1185,9 +1198,9 @@ class PodControlService:
                 for container in ContainerRepository(session).list(workspace_id=workspace_id)
                 if container.stub_id == stub_id
             ]
-        backend_containers: list[PodBackendContainer] = []
         targets: dict[str, PodProxyTarget] = {}
         container_clients = self._container_client_factory()
+        candidates: list[tuple[ContainerRecord, dict[int, str], list[AgentBackendRoute]]] = []
         for container in records:
             state = container_clients.state_for(container)
             if state is None:
@@ -1198,18 +1211,7 @@ class PodControlService:
             address_map = dict(address_map_record.address_map)
             if not address_map:
                 continue
-            backend_containers.append(
-                PodBackendContainer(
-                    container_id=container.id,
-                    address_map=address_map,
-                    active_connections=self._pod_proxy_connections().container_connections(
-                        workspace_name,
-                        stub_id,
-                        container.id,
-                    ),
-                    ready=True,
-                )
-            )
+            candidates.append((container, address_map, list(address_map_record.routes)))
             address = address_map.get(port, "")
             if address:
                 targets[container.id] = PodProxyTarget(
@@ -1217,7 +1219,65 @@ class PodControlService:
                     address=address,
                     route_id=_route_id_for_port(address_map_record.routes, port),
                 )
+
+        # Probing in series would make a stub's slowest unreachable backend set the
+        # latency of every request that had a healthy one to go to.
+        readiness = self._probe_candidates(
+            candidates,
+            workspace_id=workspace_id,
+            stub_id=stub_id,
+            port=port,
+            health_check=health_check,
+        )
+        backend_containers = [
+            PodBackendContainer(
+                container_id=container.id,
+                address_map=address_map,
+                active_connections=self._pod_proxy_connections().container_connections(
+                    workspace_name,
+                    stub_id,
+                    container.id,
+                ),
+                ready=readiness.get(container.id, False),
+            )
+            for container, address_map, _routes in candidates
+        ]
         return backend_containers, targets
+
+    def _probe_candidates(
+        self,
+        candidates: list[tuple[ContainerRecord, dict[int, str], list[AgentBackendRoute]]],
+        *,
+        workspace_id: str,
+        stub_id: str,
+        port: int,
+        health_check: ContainerHealthCheck,
+    ) -> dict[str, bool]:
+        if not candidates:
+            return {}
+        probe_port = health_check.port or port
+
+        def probe(
+            entry: tuple[ContainerRecord, dict[int, str], list[AgentBackendRoute]],
+        ) -> tuple[str, bool]:
+            container, address_map, routes = entry
+            return (
+                container.id,
+                self.container_readiness.is_ready(
+                    container_id=container.id,
+                    stub_id=stub_id,
+                    address=address_map.get(probe_port, ""),
+                    route_id=_route_id_for_port(routes, probe_port),
+                    port=probe_port,
+                    health_check=health_check,
+                ),
+            )
+
+        if len(candidates) == 1:
+            container_id, ready = probe(candidates[0])
+            return {container_id: ready}
+        with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+            return dict(pool.map(probe, candidates))
 
     def _pod_proxy_http_client(self) -> PodProxyForwardClient:
         if self.pod_proxy_http_client is None:

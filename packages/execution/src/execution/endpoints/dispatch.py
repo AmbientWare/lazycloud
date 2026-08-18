@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import socket
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -23,13 +24,19 @@ from networking.dialer import (
 )
 from networking.routing import build_backend_route_dial_plan
 from pydantic import Field
-from shared.container_requests import CONTAINER_INNER_PORT
+from shared.container_requests import CONTAINER_HEALTH_PATH, CONTAINER_INNER_PORT
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_MAX_PENDING_TASKS
 from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
 from shared.scheduling import SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.urls import parse_container_address
+
+from execution.containers.readiness import (
+    AlwaysReadyContainers,
+    ContainerHealthCheck,
+    ContainerReadiness,
+)
 
 DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS = 175.0
 DEFAULT_ENDPOINT_QUEUE_TIMEOUT_SECONDS = 600.0
@@ -273,6 +280,7 @@ class EndpointInstanceDispatcher:
     tailnet_peer_resolver: TailnetPeerResolver | None = None
     endpoint_port: int = CONTAINER_INNER_PORT
     http_client: EndpointHttpClient | None = None
+    readiness: ContainerReadiness = field(default_factory=AlwaysReadyContainers)
 
     def forward(
         self,
@@ -396,7 +404,43 @@ class EndpointInstanceDispatcher:
             target = self._target_for_state(state)
             if target is not None:
                 targets.append(target)
-        return targets
+        return self._ready_targets(targets, stub_id)
+
+    def _ready_targets(
+        self,
+        targets: list[EndpointDispatchTarget],
+        stub_id: str,
+    ) -> list[EndpointDispatchTarget]:
+        """Drop containers whose runner is not answering yet.
+
+        A container reaching `Running` has started, not bound its port, and the
+        sort above would otherwise hand a caller the least loaded backend
+        precisely because nothing has reached it.
+        """
+
+        if not targets:
+            return targets
+        health_check = ContainerHealthCheck(
+            path=CONTAINER_HEALTH_PATH,
+            port=self.endpoint_port,
+        )
+
+        def ready(target: EndpointDispatchTarget) -> bool:
+            route = target.route
+            return self.readiness.is_ready(
+                container_id=target.container_id,
+                stub_id=stub_id,
+                address=target.address,
+                route_id=route.route_id if route is not None else "",
+                port=self.endpoint_port,
+                health_check=health_check,
+            )
+
+        if len(targets) == 1:
+            return targets if ready(targets[0]) else []
+        with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            verdicts = list(pool.map(ready, targets))
+        return [target for target, is_ready in zip(targets, verdicts, strict=True) if is_ready]
 
     def _target_for_state(
         self,

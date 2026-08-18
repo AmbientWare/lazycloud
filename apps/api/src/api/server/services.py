@@ -58,6 +58,7 @@ from execution.task_rerun import TaskRerunService
 from execution.tasks import TaskService
 from execution.volumes.control import VolumeControlService
 from execution.volumes.records import VolumeService
+from gateway.container_readiness import RedisContainerReadiness
 from gateway.container_transport import HttpContainerServiceTransportFactory
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.pod_proxy import PodProxyHttpClient, RedisPodProxyConnectionRepository
@@ -317,6 +318,11 @@ class EndpointApiService(Protocol):
     ) -> StartEndpointServeResponse: ...
 
     def forward_endpoint_request(
+        self,
+        request: EndpointForwardRequest,
+    ) -> EndpointForwardResponse: ...
+
+    def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse: ...
@@ -1174,6 +1180,15 @@ def _compose_api_services(
             route_dialer_config=route_dialer_config,
             tailnet_peer_waiter=tailnet_runtime,
             tailnet_peer_resolver=tailnet_runtime,
+            readiness=RedisContainerReadiness(
+                core.redis(),
+                PodProxyHttpClient(
+                    route_resolver=route_resolver,
+                    route_dialer_config=route_dialer_config,
+                    tailnet_peer_waiter=tailnet_runtime,
+                    tailnet_peer_resolver=tailnet_runtime,
+                ),
+            ),
         ),
         gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
     )
@@ -1460,6 +1475,7 @@ def _pod_control_service(
         pod_proxy_http_client=proxy_client,
         pod_proxy_socket_client=proxy_client,
         pod_proxy_connections=RedisPodProxyConnectionRepository(core.redis()),
+        container_readiness=RedisContainerReadiness(core.redis(), proxy_client),
         redis=core.redis(),
     )
 

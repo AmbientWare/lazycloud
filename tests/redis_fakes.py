@@ -30,6 +30,7 @@ class FakeRedis:
         self.lists: dict[str, list[str]] = {}
         self.zsets: dict[str, dict[str, float]] = {}
         self.expirations: dict[str, int] = {}
+        self.pexpirations: dict[str, int] = {}
         self.published: list[tuple[str, str]] = []
         self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
         self.stream_ids: dict[str, int] = {}
@@ -42,16 +43,22 @@ class FakeRedis:
         value: RedisWireScalar,
         *,
         ex: int | None = None,
+        px: int | None = None,
         nx: bool = False,
     ) -> bool:
         with self._lock:
             if nx and name in self.values:
                 return False
             self.values[name] = value
-            if ex is not None:
+            if px is not None:
+                self.pexpirations[name] = px
+                self.expirations.pop(name, None)
+            elif ex is not None:
                 self.expirations[name] = ex
+                self.pexpirations.pop(name, None)
             else:
                 self.expirations.pop(name, None)
+                self.pexpirations.pop(name, None)
             return True
 
     def get(self, name: str) -> RedisWireScalar | None:
