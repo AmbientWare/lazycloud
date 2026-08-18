@@ -3,12 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
+from observability.stream_state import RedisStreamRecord, log_record_from_redis
 from pydantic import JsonValue
 from shared.containers import ContainerRecord
 from shared.http.gateway_tasks import EndTaskRequest
 from shared.http.objects import ObjectMetadata
+from shared.realtime.streams import LogStreamQuery
 
-CONTAINER_OUTPUT_EVENT_LIMIT = 100
+CONTAINER_OUTPUT_LOG_LIMIT = 100
 
 
 class GatewayTaskLogEntry(Protocol):
@@ -19,31 +21,22 @@ class GatewayTaskLogEntry(Protocol):
     def message(self) -> str: ...
 
 
-class GatewayEventRecord(Protocol):
-    @property
-    def data(self) -> dict[str, JsonValue]: ...
-
-
 class GatewayTaskLogProvider(Protocol):
     def logs(self, task_id: str) -> Iterable[GatewayTaskLogEntry]: ...
 
 
-class GatewayEventProvider(Protocol):
-    def list_for_resource(
+class GatewayContainerLogProvider(Protocol):
+    def read_logs(
         self,
+        query: LogStreamQuery,
         *,
-        resource_type: str,
-        resource_id: str,
-        limit: int,
-    ) -> Iterable[GatewayEventRecord]: ...
+        limit: int | None = None,
+    ) -> tuple[RedisStreamRecord, ...]: ...
 
 
 class GatewayOutputSource(Protocol):
     @property
     def tasks(self) -> GatewayTaskLogProvider: ...
-
-    @property
-    def events(self) -> GatewayEventProvider: ...
 
 
 def object_key(metadata: ObjectMetadata, object_hash: str) -> str:
@@ -54,7 +47,21 @@ def object_key(metadata: ObjectMetadata, object_hash: str) -> str:
     return key
 
 
-def container_output(source: GatewayOutputSource, container: ContainerRecord) -> str:
+def container_output(
+    source: GatewayOutputSource,
+    container: ContainerRecord,
+    *,
+    logs: GatewayContainerLogProvider,
+) -> str:
+    """What the container has written, from whichever store holds it.
+
+    A workload that runs invocations writes through its task, and that record is
+    preferred because it is the one attributed to the caller. Everything else —
+    a pod, a sandbox, anything with no task at all — is captured by the worker
+    and appended to the container's log stream, which is the only place that
+    output exists.
+    """
+
     if container.task_id:
         task_output = "\n".join(
             entry.message
@@ -64,21 +71,19 @@ def container_output(source: GatewayOutputSource, container: ContainerRecord) ->
         if task_output:
             return task_output
 
-    lines: list[str] = []
-    for event in source.events.list_for_resource(
-        resource_type="container",
-        resource_id=container.id,
-        limit=CONTAINER_OUTPUT_EVENT_LIMIT,
-    ):
-        stdout = event.data.get("stdout")
-        stderr = event.data.get("stderr")
-        if isinstance(stdout, str) and stdout:
-            lines.append(stdout)
-        if isinstance(stderr, str) and stderr:
-            lines.append(stderr)
-        if lines:
-            break
-    return "\n".join(lines)
+    records = logs.read_logs(
+        LogStreamQuery(
+            workspace_id=container.workspace_id,
+            stub_id=container.stub_id or "",
+            container_id=container.id,
+            limit=CONTAINER_OUTPUT_LOG_LIMIT,
+        ),
+        limit=CONTAINER_OUTPUT_LOG_LIMIT,
+    )
+    decoded = (log_record_from_redis(record) for record in records)
+    return "\n".join(
+        entry.message for entry in decoded if entry.stream in {"stdout", "stderr"} and entry.message
+    )
 
 
 def task_result_value(request: EndTaskRequest) -> JsonValue:
@@ -92,8 +97,7 @@ def task_result_value(request: EndTaskRequest) -> JsonValue:
 
 
 __all__ = [
-    "GatewayEventProvider",
-    "GatewayEventRecord",
+    "GatewayContainerLogProvider",
     "GatewayOutputSource",
     "GatewayTaskLogEntry",
     "GatewayTaskLogProvider",
