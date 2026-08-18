@@ -34,7 +34,6 @@ export function AccessTokens() {
   return (
     <Panel
       title="Access tokens"
-      description="Credentials for the CLI, CI, and the API"
       action={
         <Button
           size="sm"

@@ -54,7 +54,9 @@ export function VolumesTab({
           ) : query.isError ? (
             <p className="p-4 text-sm text-destructive">{query.error.message}</p>
           ) : query.data.volumes.length === 0 && !creating ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">No volumes</p>
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              No volumes yet. Create one to mount it into a workload.
+            </p>
           ) : (
             <div className="divide-y divide-border/60">
               {query.data.volumes.map((volume) => (

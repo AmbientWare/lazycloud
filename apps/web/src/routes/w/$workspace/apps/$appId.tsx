@@ -11,7 +11,10 @@ import { taskBucketsQueryOptions, tasksQueryOptions } from "@/lib/queries/tasks"
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { AppActivitySection } from "./-components/AppActivitySection";
-import { AppDetailHeader } from "./-components/AppDetailHeader";
+import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import { Skeleton } from "@/components/ui/skeleton";
+
+import { AppDetailFacts, AppDetailStatus } from "./-components/AppDetailHeader";
 import { AppLifecycleActions } from "./-components/AppLifecycleActions";
 import { AppRecentTasksSection } from "./-components/AppRecentTasksSection";
 import { AppSandboxesSection } from "./-components/AppSandboxesSection";
@@ -48,73 +51,82 @@ function AppDetailPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-        <div className="mx-auto flex min-h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-4 md:px-6 md:py-5 lg:h-full lg:min-h-0">
-          {app.isError ? (
-            <div className="panel flex min-h-48 items-center justify-center rounded-md p-4 text-sm text-destructive">
-              {app.error.message}
-            </div>
-          ) : (
+      <WorkspacePage
+        title={app.data ? app.data.name : <Skeleton className="h-6 w-48" aria-hidden="true" />}
+        description={
+          app.isError ? null : (
+            <AppDetailFacts
+              latestDeployment={latestDeployment}
+              workloadCount={workloadGroups.length}
+              activeWorkloads={activeWorkloads}
+            />
+          )
+        }
+        actions={
+          app.isError ? null : (
             <>
-              <AppDetailHeader
+              <AppDetailStatus
                 app={app.data}
                 latestDeployment={latestDeployment}
-                workloadCount={workloadGroups.length}
                 activeWorkloads={activeWorkloads}
-                actions={
-                  app.data ? (
-                    <AppLifecycleActions
-                      app={app.data}
-                      workspaceId={workspace.id}
-                      workspaceName={workspace.name}
-                    />
-                  ) : null
-                }
               />
-              <div className="grid min-h-0 gap-3 lg:flex-1 lg:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.8fr)] lg:overflow-hidden">
-                <AppWorkloadsSection
+              {app.data ? (
+                <AppLifecycleActions
+                  app={app.data}
+                  workspaceId={workspace.id}
                   workspaceName={workspace.name}
-                  appId={appId}
-                  deployments={deploymentRows}
-                  containers={containerList.items.map((item) => item.container)}
-                  pending={deployments.isPending || containers.isPending}
-                  error={queryError(deployments.error) ?? queryError(containers.error)}
-                  nextCursor={continuationCursor}
-                  loadingMore={deployments.isFetchingNextPage || containers.isFetchingNextPage}
-                  loadMoreError={
-                    deployments.isFetchNextPageError || containers.isFetchNextPageError
-                  }
-                  onLoadMore={() => {
-                    if (continuingDeployments) void deployments.fetchNextPage();
-                    else void containers.fetchNextPage();
-                  }}
-                  continuationLabel={continuingDeployments ? "workloads" : "container state"}
                 />
-                <div className="grid min-h-0 gap-3 lg:grid-rows-[minmax(7rem,0.8fr)_minmax(10rem,1.25fr)_minmax(7rem,0.9fr)] lg:overflow-hidden">
-                  <AppActivitySection
-                    buckets={activity.data?.items}
-                    pending={activity.isPending}
-                    error={queryError(activity.error)}
-                  />
-                  <AppRecentTasksSection
-                    workspaceName={workspace.name}
-                    appId={appId}
-                    tasks={tasks.data?.data}
-                    pending={tasks.isPending}
-                    error={queryError(tasks.error)}
-                  />
-                  <AppSandboxesSection
-                    workspaceName={workspace.name}
-                    sandboxes={sandboxes.data?.data}
-                    pending={sandboxes.isPending}
-                    error={queryError(sandboxes.error)}
-                  />
-                </div>
-              </div>
+              ) : null}
             </>
-          )}
-        </div>
-      </div>
+          )
+        }
+        contentClassName="overflow-y-auto lg:overflow-hidden"
+      >
+        {app.isError ? (
+          <div className="panel flex min-h-48 items-center justify-center rounded-md p-4 text-sm text-destructive">
+            {app.error.message}
+          </div>
+        ) : (
+          <div className="grid min-h-full gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.8fr)] lg:overflow-hidden">
+            <AppWorkloadsSection
+              workspaceName={workspace.name}
+              appId={appId}
+              deployments={deploymentRows}
+              containers={containerList.items.map((item) => item.container)}
+              pending={deployments.isPending || containers.isPending}
+              error={queryError(deployments.error) ?? queryError(containers.error)}
+              nextCursor={continuationCursor}
+              loadingMore={deployments.isFetchingNextPage || containers.isFetchingNextPage}
+              loadMoreError={deployments.isFetchNextPageError || containers.isFetchNextPageError}
+              onLoadMore={() => {
+                if (continuingDeployments) void deployments.fetchNextPage();
+                else void containers.fetchNextPage();
+              }}
+              continuationLabel={continuingDeployments ? "workloads" : "container state"}
+            />
+            <div className="grid min-h-0 gap-3 lg:grid-rows-[minmax(7rem,0.8fr)_minmax(10rem,1.25fr)_minmax(7rem,0.9fr)] lg:overflow-hidden">
+              <AppActivitySection
+                buckets={activity.data?.items}
+                pending={activity.isPending}
+                error={queryError(activity.error)}
+              />
+              <AppRecentTasksSection
+                workspaceName={workspace.name}
+                appId={appId}
+                tasks={tasks.data?.data}
+                pending={tasks.isPending}
+                error={queryError(tasks.error)}
+              />
+              <AppSandboxesSection
+                workspaceName={workspace.name}
+                sandboxes={sandboxes.data?.data}
+                pending={sandboxes.isPending}
+                error={queryError(sandboxes.error)}
+              />
+            </div>
+          </div>
+        )}
+      </WorkspacePage>
       <Outlet />
     </div>
   );

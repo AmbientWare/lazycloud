@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -154,11 +155,17 @@ class BillingStandingService:
 
 @dataclass(frozen=True, slots=True)
 class UsageCostService:
-    """What a workspace's usage cost, attributed to what ran it.
+    """What usage cost, attributed to what ran it.
 
     Reads the priced ledger rather than recomputing anything from usage: the
     segments already carry the frozen cost, the quantity and the components, so
     the dashboard and the invoice are summing the same rows.
+
+    Scoped by a set of workspaces rather than one, because the same question is
+    asked at two levels: a workspace looking at its own spend, and an account
+    looking at every workspace it is invoiced for together. One query answers
+    both, so the total on the billing page and the total on a workspace page
+    cannot drift into two calculations that have to agree.
     """
 
     session: Session
@@ -166,7 +173,7 @@ class UsageCostService:
     def costs(
         self,
         *,
-        workspace_id: str,
+        workspace_ids: Sequence[str],
         start: datetime,
         end: datetime,
         group_by: UsageCostGroupKey,
@@ -183,7 +190,7 @@ class UsageCostService:
             raise InvalidInputError(f"a cost page holds between 1 and {MAX_COST_PAGE} rows")
         repository = BillingLedgerCostRepository(self.session)
         page = repository.page(
-            workspace_id=workspace_id,
+            workspace_ids=workspace_ids,
             start=start,
             end=end,
             group_by=group_by,
@@ -194,7 +201,7 @@ class UsageCostService:
         )
         return UsageCostPage(
             cost_nanos=repository.window_cost_nanos(
-                workspace_id=workspace_id,
+                workspace_ids=workspace_ids,
                 start=start,
                 end=end,
                 app_id=app_id,

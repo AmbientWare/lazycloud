@@ -26,11 +26,7 @@ export function BillingSettings() {
 
   return (
     <>
-      <Panel
-        title="Plan"
-        description="What this account is on, and what it has left to spend"
-        action={summary ? <StandingChip summary={summary} /> : null}
-      >
+      <Panel title="Plan" action={summary ? <StandingChip summary={summary} /> : null}>
         <div className="flex flex-col gap-4 p-4">
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">

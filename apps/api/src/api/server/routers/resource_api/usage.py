@@ -6,21 +6,18 @@ from billing.costs import MAX_COST_PAGE, UsageCostService
 from fastapi import APIRouter, Depends, Query
 from shared.http.usage import (
     UsageAggregationResponse,
-    UsageCostComponentResponse,
     UsageCostGroupKey,
     UsageCostListResponse,
-    UsageCostRowResponse,
     UsageRecordListResponse,
     UsageRecordResponse,
     UsageSummaryResponse,
 )
-from shared.payments import BILLING_CURRENCY
 from shared.usage import UsageGroupKey, UsageMetric
 from shared.usage_query import UsageQuery
 
 from api.server.auth import read_workspace
 from api.server.dependencies import current_services
-from api.server.routers.resource_api.common import _parsed_time
+from api.server.routers.resource_api.common import _parsed_time, usage_cost_list_response
 from api.server.services import ApiServices
 
 router = APIRouter()
@@ -52,7 +49,7 @@ def usage_costs(
 
     with services.context.database.session() as session:
         page = UsageCostService(session).costs(
-            workspace_id=workspace_id,
+            workspace_ids=[workspace_id],
             start=start,
             end=end,
             group_by=group_by,
@@ -61,35 +58,12 @@ def usage_costs(
             workload_id=workload_id,
             cursor=cursor,
         )
-    return UsageCostListResponse(
+    return usage_cost_list_response(
+        page,
         workspace_id=workspace_id,
         start=start,
         end=end,
-        currency=BILLING_CURRENCY,
         group_by=group_by,
-        cost_nanos=page.cost_nanos,
-        data=[
-            UsageCostRowResponse(
-                app_id=row.app_id,
-                app_name=row.app_name,
-                workload_id=row.workload_id,
-                workload_name=row.workload_name,
-                workload_kind=row.workload_kind,
-                task_id=row.task_id,
-                cost_nanos=row.cost_nanos,
-                components=[
-                    UsageCostComponentResponse(
-                        dimension=total.dimension,
-                        component=total.component,
-                        quantity=float(total.quantity),
-                        cost_nanos=total.cost_nanos,
-                    )
-                    for total in row.components
-                ],
-            )
-            for row in page.rows
-        ],
-        next=page.next,
     )
 
 

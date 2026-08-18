@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from urllib.parse import urlparse
 
-from billing.costs import BillingStanding, BillingStandingService
-from fastapi import APIRouter, Depends, status
+from billing.costs import MAX_COST_PAGE, BillingStanding, BillingStandingService, UsageCostService
+from database.repositories.identity import WorkspaceMemberRepository
+from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan
 from shared.errors import InvalidInputError
 from shared.http.billing import (
@@ -14,11 +16,13 @@ from shared.http.billing import (
     BillingPlanResponse,
     BillingSummaryResponse,
 )
+from shared.http.usage import UsageCostGroupKey, UsageCostListResponse
 from shared.payments import BILLING_CURRENCY
 from shared.timestamps import utc_now
 
 from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
+from api.server.routers.resource_api.common import usage_cost_list_response
 from api.server.services import ApiServices
 from billing import BillingAccountService, BillingPlanChangeService, owned_workspace_id
 
@@ -44,6 +48,56 @@ def billing_summary(
     with services.context.database.session() as session:
         standing = BillingStandingService(session).standing(user_id=user_id, at=utc_now())
     return _summary(standing)
+
+
+@router.get(
+    "/costs",
+    response_model=UsageCostListResponse,
+    operation_id="list_account_costs",
+)
+def account_costs(
+    start: datetime,
+    end: datetime,
+    user_id: read_user,
+    group_by: UsageCostGroupKey = UsageCostGroupKey.App,
+    limit: int = Query(50, ge=1, le=MAX_COST_PAGE),
+    cursor: str | None = None,
+    services: ApiServices = Depends(current_services),
+) -> UsageCostListResponse:
+    """What this account spent, across every workspace it is invoiced for.
+
+    Beside the summary rather than under `/usage` for the reason the summary
+    itself is: the provider invoices an account, so someone running dev, staging
+    and prod wants one figure covering the three, and reaching it a workspace at
+    a time leaves them adding up their own bill.
+
+    Scoped to the workspaces this person is a member of, resolved here rather
+    than named by the caller — an account-wide total assembled from ids a
+    request supplied would be a total of whatever it asked for.
+    """
+
+    with services.context.database.session() as session:
+        workspace_ids = [
+            workspace.id
+            for workspace in WorkspaceMemberRepository(session).workspaces_for_user(user_id)
+        ]
+        page = UsageCostService(session).costs(
+            workspace_ids=workspace_ids,
+            start=start,
+            end=end,
+            group_by=group_by,
+            limit=limit,
+            cursor=cursor,
+        )
+    # No workspace named: this page covers an account, and picking one of its
+    # workspaces to label it with would state a scope the page does not have.
+    return usage_cost_list_response(
+        page,
+        workspace_id="",
+        start=start,
+        end=end,
+        group_by=group_by,
+    )
 
 
 @router.post(

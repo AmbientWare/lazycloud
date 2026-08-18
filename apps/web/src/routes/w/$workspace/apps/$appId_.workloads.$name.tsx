@@ -128,7 +128,7 @@ function WorkloadDetailPage() {
           </Link>
         </>
       }
-      contentClassName="mx-auto flex w-full max-w-[1600px] flex-col gap-3 overflow-y-auto lg:grid lg:overflow-hidden"
+      contentClassName="flex flex-col gap-3 overflow-y-auto lg:grid lg:overflow-hidden"
       contentStyle={{
         gridTemplateRows: showsControls
           ? "max-content minmax(0, 1.25fr) minmax(0, 0.75fr)"
@@ -141,7 +141,6 @@ function WorkloadDetailPage() {
       >
         <Panel
           title={operationTitle(group)}
-          description="Current deployment configuration and capacity"
           contentClassName="overflow-auto p-0 lg:overflow-visible"
           className="min-h-[18rem] lg:col-span-2 lg:min-h-0"
         >
@@ -175,7 +174,6 @@ function WorkloadDetailPage() {
           {showsInvoke ? (
             <Panel
               title="Invoke"
-              description="Send a request with the deployed contract"
               contentClassName="overflow-hidden p-0"
               className="h-[18rem] min-h-0 lg:h-full"
             >
@@ -260,7 +258,6 @@ function VersionsPanel({
   return (
     <Panel
       title="Versions"
-      description="Deployment history and controls"
       contentClassName="overflow-auto p-0"
       className="min-h-[18rem] lg:absolute lg:inset-0 lg:min-h-0"
     >
@@ -282,7 +279,7 @@ function WorkloadSkeleton() {
   return (
     <WorkspacePage
       title={<Skeleton className="h-7 w-64" />}
-      contentClassName="mx-auto flex w-full max-w-[1600px] flex-col gap-3 overflow-y-auto lg:grid lg:overflow-hidden"
+      contentClassName="flex flex-col gap-3 overflow-y-auto lg:grid lg:overflow-hidden"
       contentStyle={{
         gridTemplateRows: "max-content minmax(0, 1.25fr) minmax(0, 0.75fr)",
       }}

@@ -30,7 +30,6 @@ export function AppRecentTasksSection({
     >
       <Panel
         title={<span id="app-recent-tasks-heading">Recent tasks</span>}
-        description="Latest root activity across this app"
         action={<span className="text-[11px] text-muted-foreground">15 most recent</span>}
         className="h-full"
         contentClassName="p-0"

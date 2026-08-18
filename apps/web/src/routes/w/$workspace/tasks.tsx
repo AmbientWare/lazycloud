@@ -98,7 +98,6 @@ function TasksPage() {
             {live ? "Pause" : "Resume"}
           </Button>
         }
-        contentClassName="mx-auto w-full max-w-[1600px]"
       >
         <section
           className="panel flex h-full min-h-0 flex-col overflow-hidden rounded-md"

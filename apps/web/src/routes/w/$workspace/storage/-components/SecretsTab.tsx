@@ -59,7 +59,9 @@ export function SecretsTab({
         ) : query.isError ? (
           <p className="p-4 text-sm text-destructive">{query.error.message}</p>
         ) : query.data.secrets.length === 0 && !creating ? (
-          <p className="p-6 text-center text-sm text-muted-foreground">No secrets</p>
+          <p className="p-6 text-center text-sm text-muted-foreground">
+            No secrets yet. Create one to inject it into a workload.
+          </p>
         ) : (
           query.data.secrets.map((secret) =>
             editing === secret.name ? (
@@ -332,7 +334,6 @@ function SecretForm({
           autoFocus={mode === "update"}
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          placeholder="Enter secret value"
           type="password"
           className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring"
         />

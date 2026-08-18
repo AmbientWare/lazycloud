@@ -32,16 +32,14 @@ import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { appQueryOptions } from "@/lib/queries/apps";
+import { containerQueryOptions } from "@/lib/queries/containers";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
 type NavTarget =
-  | "/w/$workspace/apps"
-  | "/w/$workspace/tasks"
-  | "/w/$workspace/storage"
-  | "/w/$workspace/usage";
+  "/w/$workspace/apps" | "/w/$workspace/tasks" | "/w/$workspace/storage" | "/w/$workspace/usage";
 
 type NavItem = {
   label: string;
@@ -54,6 +52,14 @@ const primaryNav: NavItem[] = [
   { label: "Apps", segment: "apps", to: "/w/$workspace/apps", icon: LayoutGrid },
   { label: "Tasks", segment: "tasks", to: "/w/$workspace/tasks", icon: Activity },
   { label: "Storage", segment: "storage", to: "/w/$workspace/storage", icon: Database },
+];
+
+/**
+ * Usage sits with Settings rather than above, because it answers about the
+ * account and not the workspace the rail is scoped to: the provider invoices an
+ * account, so the figure is the same wherever the workspace switcher is left.
+ */
+const accountNav: NavItem[] = [
   { label: "Usage", segment: "usage", to: "/w/$workspace/usage", icon: ChartNoAxesCombined },
 ];
 
@@ -233,6 +239,14 @@ function DesktopRail({
       <div className="mt-auto border-t border-sidebar-border px-3 py-3">
         <nav aria-label="Account navigation" className="space-y-0.5">
           <SettingsRailButton active={settingsOpen} onOpen={onOpenSettings} />
+          {accountNav.map((item) => (
+            <RailLink
+              key={item.segment}
+              item={item}
+              active={navItemActive(path, basePath, item.segment)}
+              workspaceName={workspace.name}
+            />
+          ))}
         </nav>
         <ThemeToggle className="mt-2" />
         <button
@@ -349,6 +363,21 @@ function MobileMenu({
             <Settings className="size-4" aria-hidden="true" />
             Settings
           </button>
+          {accountNav.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.segment}
+                to={item.to}
+                params={{ workspace: workspace.name }}
+                onClick={() => setOpen(false)}
+                className="interactive-row mt-0.5 flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
+              >
+                <Icon className="size-4" aria-hidden="true" />
+                {item.label}
+              </Link>
+            );
+          })}
           <ThemeToggle className="mt-0.5 h-10 gap-3 px-3 text-sm" />
         </nav>
         <div className="mt-auto border-t border-border p-3">
@@ -404,8 +433,16 @@ function ContextBar({
   const router = useRouter();
   const appId = appIdFromPath(path, basePath);
   const app = useQuery({ ...appQueryOptions(workspace.id, appId ?? ""), enabled: appId !== null });
-  const breadcrumbs = shellBreadcrumbs(path, workspace.name, app.data?.name);
-  if (breadcrumbs.length <= 1) return null;
+  const sandboxId = sandboxIdFromPath(path, basePath);
+  const sandbox = useQuery({
+    ...containerQueryOptions(workspace.id, sandboxId ?? ""),
+    enabled: sandboxId !== null,
+  });
+  const breadcrumbs = shellBreadcrumbs(path, workspace.name, app.data?.name, sandbox.data?.name);
+  // Rendered on every workspace route, however short the trail. Hiding it where
+  // the trail was one crumb long put the bar on two pages out of a dozen, moved
+  // the content 48px whenever you crossed between them, and took the search
+  // control — which lives in here — with it.
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-3 sm:px-4 lg:h-12 lg:px-5">
@@ -461,7 +498,7 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
   return (
     <nav
       aria-label="Mobile navigation"
-      className="grid h-14 shrink-0 grid-cols-4 border-t border-sidebar-border bg-sidebar/90 shadow-[0_-6px_24px_oklch(0_0_0/0.14)] lg:hidden"
+      className="grid h-14 shrink-0 grid-cols-3 border-t border-sidebar-border bg-sidebar/90 shadow-[0_-6px_24px_oklch(0_0_0/0.14)] lg:hidden"
     >
       {primaryNav.map((item) => {
         const Icon = item.icon;
@@ -572,6 +609,10 @@ function appIdFromPath(path: string, basePath: string): string | null {
   return section === "apps" && appId ? decodeURIComponent(appId) : null;
 }
 
+function sandboxIdFromPath(path: string, basePath: string): string | null {
+  const [section, containerId] = path.slice(basePath.length).split("/").filter(Boolean);
+  return section === "sandboxes" && containerId ? decodeURIComponent(containerId) : null;
+}
 
 function SettingsRailButton({ active, onOpen }: { active: boolean; onOpen: () => void }) {
   return (

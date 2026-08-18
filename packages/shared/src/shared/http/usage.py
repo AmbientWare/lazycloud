@@ -91,6 +91,13 @@ class UsageCostRowResponse(HttpModel):
 
     app_id: str = ""
     app_name: str = ""
+    workspace_name: str = ""
+    """Workspace the row's app belongs to.
+
+    Carried on the row rather than the envelope because the envelope may cover
+    an account, where every row has a different answer.
+    """
+
     workload_id: str = ""
     workload_name: str = ""
     workload_kind: str = ""
@@ -100,14 +107,19 @@ class UsageCostRowResponse(HttpModel):
 
 
 class UsageCostListResponse(HttpModel):
-    """A page of a workspace's cost, ordered by what cost the most.
+    """A page of cost, ordered by what cost the most.
 
     `cost_nanos` totals the whole window rather than the page, so a page that
     does not sum to it is a page with more behind it, and the figure a customer
     is shown as their bill never depends on how far they scrolled.
+
+    `workspace_id` names the one workspace this page covers, and is empty where
+    the page covers an account: an account is invoiced as a whole, and picking
+    one of its workspaces to name would be a page labelled with a scope it does
+    not have.
     """
 
-    workspace_id: str
+    workspace_id: str = ""
     start: datetime
     end: datetime
     currency: str = Field(pattern=r"^[A-Z]{3}$")

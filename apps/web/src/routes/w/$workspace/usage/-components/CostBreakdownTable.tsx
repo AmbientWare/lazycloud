@@ -15,7 +15,7 @@ import type { LedgerComponent, UsageCostGroupKey, UsageCostRow } from "@/lib/api
 import { formatDuration } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
-import { usageCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
+import { accountCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 
 const COMPONENT_LABELS: Record<string, string> = {
   container_time: "Container",
@@ -40,15 +40,13 @@ const LEVEL_HEADING: Record<UsageCostGroupKey, string> = {
  * be kept in agreement.
  */
 export function CostBreakdownTable({
-  workspaceId,
   window,
   groupBy,
 }: {
-  workspaceId: string;
   window: UsageCostWindow;
   groupBy: UsageCostGroupKey;
 }) {
-  const costs = useInfiniteQuery(usageCostsQueryOptions(workspaceId, window, { groupBy }));
+  const costs = useInfiniteQuery(accountCostsQueryOptions(window, { groupBy }));
   const { items: rows, nextCursor } = selectInfiniteList(costs.data, costs.hasNextPage, rowKey);
   const currency = costs.data?.pages[0]?.currency ?? "USD";
 
@@ -151,8 +149,13 @@ function RowIdentity({ row, groupBy }: { row: UsageCostRow; groupBy: UsageCostGr
     );
   }
   return (
-    <span className="block truncate text-sm" title={row.app_id}>
-      {row.app_name || row.app_id || "Unattributed"}
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate text-sm" title={row.app_id}>
+        {row.app_name || row.app_id || "Unattributed"}
+      </span>
+      {row.workspace_name ? (
+        <span className="truncate text-xs text-muted-foreground">{row.workspace_name}</span>
+      ) : null}
     </span>
   );
 }
