@@ -6,17 +6,15 @@ former sends traffic to a backend that is not there yet, so the proxy paths ask
 this instead.
 
 The probe itself dials the backend, which belongs to the gateway. What lives
-here is the protocol the routing services depend on, and the always-ready
-implementation they fall back to when nothing has been wired.
+here is the protocol the routing services depend on. There is deliberately no
+always-ready implementation to fall back on: answering the one question this
+exists to ask with a silent yes disables the property, so a service that reaches
+a routing path without a probe refuses instead.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Protocol
-
-from pydantic import Field
-from shared.contracts import ContractModel
 
 DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS = 2.0
 # One probe per container per window rather than one per request: the endpoint
@@ -26,41 +24,12 @@ DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS = 2.0
 DEFAULT_READINESS_CACHE_TTL_MS = 500
 
 
-class ContainerHealthCheck(ContractModel):
-    """How to ask one container whether it is serving.
-
-    An empty path means a TCP connect, which proves only that something accepted
-    the connection. A path names an HTTP probe the workload answers itself, which
-    is the only form that can distinguish a bound socket from a working one.
-    """
-
-    path: str = ""
-    port: int = Field(default=0, ge=0, le=65535)
-
-    @property
-    def is_http(self) -> bool:
-        return bool(self.path)
-
-
 class ContainerReadiness(Protocol):
-    def is_ready(
-        self,
-        *,
-        container_id: str,
-        stub_id: str,
-        address: str,
-        route_id: str,
-        port: int,
-        health_check: ContainerHealthCheck | None = None,
-    ) -> bool: ...
+    """Ask whether one backend is serving.
 
-
-@dataclass(frozen=True, slots=True)
-class AlwaysReadyContainers:
-    """The behavior of every caller before a probe existed.
-
-    Kept as the unconfigured default so a service constructed without a probe
-    routes exactly as it used to rather than refusing every container.
+    An empty `health_path` means a TCP connect, which proves only that something
+    accepted the connection. A path names an HTTP probe the workload answers
+    itself, which is the only form that tells a bound socket from a working one.
     """
 
     def is_ready(
@@ -71,16 +40,12 @@ class AlwaysReadyContainers:
         address: str,
         route_id: str,
         port: int,
-        health_check: ContainerHealthCheck | None = None,
-    ) -> bool:
-        _ = container_id, stub_id, address, route_id, port, health_check
-        return True
+        health_path: str = "",
+    ) -> bool: ...
 
 
 __all__ = [
     "DEFAULT_READINESS_CACHE_TTL_MS",
     "DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS",
-    "AlwaysReadyContainers",
-    "ContainerHealthCheck",
     "ContainerReadiness",
 ]

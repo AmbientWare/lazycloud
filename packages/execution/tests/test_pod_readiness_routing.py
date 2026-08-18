@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from uuid import uuid4
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.orchestration import ContainerRepository
-from execution.containers.readiness import ContainerHealthCheck
-from execution.pods.planning import PodProxyRequest
+from execution.pods.planning import PodProxyProtocol
 from execution.pods.service import PodControlService
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.routing import AgentBackendRoute, BackendRouteState
@@ -17,8 +16,8 @@ from shared.scheduling import (
     SchedulerContainerStatus,
 )
 
-READY_CONTAINER = "00000000-0000-4000-8000-0000000002a1"
-UNREADY_CONTAINER = "00000000-0000-4000-8000-0000000002a2"
+SERVING_CONTAINER = "00000000-0000-4000-8000-0000000002a1"
+STARTED_CONTAINER = "00000000-0000-4000-8000-0000000002a2"
 PORT = 8080
 
 
@@ -55,10 +54,9 @@ class _RunningContainers:
         )
 
 
-@dataclass(slots=True)
-class _ProbeOneContainer:
-    ready_container_id: str
-    probed: list[str] = field(default_factory=list)
+@dataclass(frozen=True, slots=True)
+class _OnlyOneIsServing:
+    serving_container_id: str
 
     def is_ready(
         self,
@@ -68,11 +66,10 @@ class _ProbeOneContainer:
         address: str,
         route_id: str,
         port: int,
-        health_check: ContainerHealthCheck | None = None,
+        health_path: str = "",
     ) -> bool:
-        _ = stub_id, address, route_id, port, health_check
-        self.probed.append(container_id)
-        return container_id == self.ready_container_id
+        _ = stub_id, address, route_id, port, health_path
+        return container_id == self.serving_container_id
 
 
 def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
@@ -82,8 +79,7 @@ def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
 
     Both containers here are `Running` with an exposed address, which is
     everything routing looked at before the probe existed — so without it the
-    selection is a coin toss between a backend that answers and one that does
-    not.
+    selection is decided by tie-break among backends that are not equivalent.
     """
 
     control = ControlPlaneService(isolated_services.context)
@@ -91,7 +87,7 @@ def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         repository = ContainerRepository(session)
-        for container_id in (READY_CONTAINER, UNREADY_CONTAINER):
+        for container_id in (SERVING_CONTAINER, STARTED_CONTAINER):
             repository.upsert(
                 ContainerRecord(
                     id=container_id,
@@ -104,15 +100,19 @@ def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
                 )
             )
 
-    readiness = _ProbeOneContainer(ready_container_id=READY_CONTAINER)
     service = PodControlService(
         isolated_services,
         redis=isolated_services.redis(),
         container_clients=_RunningContainers(workspace_id=workspace_id, stub_id=stub.id),
-        container_readiness=readiness,
+        container_readiness_probe=_OnlyOneIsServing(serving_container_id=SERVING_CONTAINER),
     )
 
-    target = service._pod_proxy_target(stub.id, PodProxyRequest(port=PORT))
+    session = service.prepare_pod_proxy(
+        stub_id=stub.id,
+        port=PORT,
+        path="/",
+        query_params={},
+        protocol=PodProxyProtocol.Http,
+    )
 
-    assert target.container_id == READY_CONTAINER
-    assert sorted(readiness.probed) == sorted([READY_CONTAINER, UNREADY_CONTAINER])
+    assert session.target.container_id == SERVING_CONTAINER

@@ -63,6 +63,22 @@ class StubRuntimeConfig(ContractModel):
     checkpoint_readiness_interval_seconds: float = Field(default=1.0, gt=0)
     health_check_path: str = ""
     health_check_port: int = Field(default=0, ge=0, le=65535)
+
+    @field_validator("health_check_path")
+    @classmethod
+    def health_check_path_is_absolute(cls, value: str) -> str:
+        """Refuse here rather than let every probe of it quietly fail.
+
+        A relative path makes each container permanently unready, which the proxy
+        can only report as having no container to route to — naming neither the
+        path nor that it was the reason.
+        """
+
+        if value and not value.startswith("/"):
+            msg = "health_check_path must be absolute"
+            raise ValueError(msg)
+        return value
+
     pool_selector: str | None = None
     runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str | None = None

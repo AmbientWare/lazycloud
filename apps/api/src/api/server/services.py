@@ -36,6 +36,7 @@ from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
 from execution.containers.preemption import PreemptedContainerService
+from execution.containers.readiness import ContainerReadiness
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
@@ -1172,6 +1173,13 @@ def _compose_api_services(
         transport_factory=transport_factory,
         service_token=core.container_service_settings.token.get_secret_value(),
     )
+    proxy_client = PodProxyHttpClient(
+        route_resolver=route_resolver,
+        route_dialer_config=route_dialer_config,
+        tailnet_peer_waiter=tailnet_runtime,
+        tailnet_peer_resolver=tailnet_runtime,
+    )
+    container_readiness = RedisContainerReadiness(redis, proxy_client, proxy_client)
     endpoint = endpoint_service or EndpointControlService(
         core,
         dispatcher=EndpointInstanceDispatcher(
@@ -1180,15 +1188,7 @@ def _compose_api_services(
             route_dialer_config=route_dialer_config,
             tailnet_peer_waiter=tailnet_runtime,
             tailnet_peer_resolver=tailnet_runtime,
-            readiness=RedisContainerReadiness(
-                core.redis(),
-                PodProxyHttpClient(
-                    route_resolver=route_resolver,
-                    route_dialer_config=route_dialer_config,
-                    tailnet_peer_waiter=tailnet_runtime,
-                    tailnet_peer_resolver=tailnet_runtime,
-                ),
-            ),
+            readiness_probe=container_readiness,
         ),
         gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
     )
@@ -1212,8 +1212,9 @@ def _compose_api_services(
     pod = pod_service or _pod_control_service(
         core,
         scheduler_containers=scheduler_containers,
-        route_resolver=route_resolver,
         container_clients=container_clients,
+        proxy_client=proxy_client,
+        container_readiness=container_readiness,
     )
     shell = shell_service or ShellControlService(
         core,
@@ -1457,16 +1458,10 @@ def _pod_control_service(
     core: ApiServiceCore,
     *,
     scheduler_containers: RedisSchedulerContainerRepository,
-    route_resolver: SchedulerBackendRouteResolver,
     container_clients: SchedulerContainerClientFactory,
+    proxy_client: PodProxyHttpClient,
+    container_readiness: ContainerReadiness,
 ) -> PodControlService:
-    resolved_route_dialer_config = core.backend_route_settings.to_dialer_config()
-    proxy_client = PodProxyHttpClient(
-        route_resolver=route_resolver,
-        route_dialer_config=resolved_route_dialer_config,
-        tailnet_peer_waiter=core.tailnet_runtime,
-        tailnet_peer_resolver=core.tailnet_runtime,
-    )
     return PodControlService(
         core,
         gateway_http_url=core.gateway_settings.public_http_url,
@@ -1475,7 +1470,7 @@ def _pod_control_service(
         pod_proxy_http_client=proxy_client,
         pod_proxy_socket_client=proxy_client,
         pod_proxy_connections=RedisPodProxyConnectionRepository(core.redis()),
-        container_readiness=RedisContainerReadiness(core.redis(), proxy_client),
+        container_readiness_probe=container_readiness,
         redis=core.redis(),
     )
 

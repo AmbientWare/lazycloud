@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import uvicorn
 from foundation.handler_loading import evict_user_code_modules, load_callable
 from pydantic import TypeAdapter, ValidationError
-from shared.container_requests import CONTAINER_HEALTH_PATH
+from shared.container_requests import CONTAINER_HEALTH_PATH, CONTAINER_INNER_PORT
 from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
@@ -59,7 +59,6 @@ from runner.invocation import invoke_handler
 from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
 from runner.runtime import DEFAULT_GATEWAY_ENDPOINT, DEFAULT_RUNNER_TIMEOUT_SECONDS
 
-CONTAINER_INNER_PORT = 8001
 ENDPOINT_SERVE_PORT_ENV = "BIND_PORT"
 ENDPOINT_HANDLER_ENV = "HANDLER"
 ASGI_STUB_TYPE = "asgi"

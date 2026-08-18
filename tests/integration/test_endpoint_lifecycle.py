@@ -29,6 +29,8 @@ from execution.endpoints.service import (
     EndpointWebSocketDispatchRejected,
 )
 from fastapi.testclient import TestClient
+from gateway.container_readiness import RedisContainerReadiness
+from gateway.pod_proxy import PodProxyHttpClient
 from identity.auth import AuthService
 from pydantic import JsonValue
 from runner.serve import EndpointServeRunner, RunnerASGIApplication
@@ -183,7 +185,9 @@ async def app(scope, receive, send):
         )
         service = EndpointControlService(
             isolated_services,
-            dispatcher=EndpointInstanceDispatcher(containers),
+            dispatcher=EndpointInstanceDispatcher(
+                containers, readiness_probe=_readiness(isolated_services)
+            ),
         )
         request = EndpointForwardRequest(
             stub_id=stub.id,
@@ -260,7 +264,7 @@ def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
     )
     service = EndpointControlService(
         isolated_services,
-        dispatcher=EndpointInstanceDispatcher(containers),
+        dispatcher=EndpointInstanceDispatcher(containers, readiness_probe=_ServingContainers()),
     )
 
     session = service.prepare_asgi_websocket(
@@ -305,7 +309,9 @@ def test_endpoint_service_without_running_container_schedules_warmup(
     _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=0.1)
     service = EndpointControlService(
         isolated_services,
-        dispatcher=EndpointInstanceDispatcher(_EndpointContainers()),
+        dispatcher=EndpointInstanceDispatcher(
+            _EndpointContainers(), readiness_probe=_ServingContainers()
+        ),
     )
 
     response = service.forward_endpoint_request(
@@ -348,7 +354,7 @@ def predict():
     containers = _EndpointContainers()
     service = EndpointControlService(
         isolated_services,
-        dispatcher=EndpointInstanceDispatcher(containers),
+        dispatcher=EndpointInstanceDispatcher(containers, readiness_probe=_ServingContainers()),
     )
     result: list[EndpointForwardResponse] = []
 
@@ -412,7 +418,9 @@ def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_fu
 
         response = EndpointControlService(
             isolated_services,
-            dispatcher=EndpointInstanceDispatcher(_EndpointContainers()),
+            dispatcher=EndpointInstanceDispatcher(
+                _EndpointContainers(), readiness_probe=_ServingContainers()
+            ),
         ).forward_endpoint_request(
             EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
         )
@@ -454,7 +462,9 @@ def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is_full(
     ) as exc_info:
         EndpointControlService(
             isolated_services,
-            dispatcher=EndpointInstanceDispatcher(_EndpointContainers()),
+            dispatcher=EndpointInstanceDispatcher(
+                _EndpointContainers(), readiness_probe=_ServingContainers()
+            ),
         ).prepare_asgi_websocket(EndpointForwardRequest(stub_id=stub.id, method="GET", path="/ws"))
 
     assert exc_info.value.status_code == 429
@@ -514,7 +524,9 @@ def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
 
     response = EndpointControlService(
         services,
-        dispatcher=EndpointInstanceDispatcher(_EndpointContainers()),
+        dispatcher=EndpointInstanceDispatcher(
+            _EndpointContainers(), readiness_probe=_ServingContainers()
+        ),
     ).forward_endpoint_request(EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"))
 
     assert response.status_code == 504
@@ -697,6 +709,42 @@ def _serve_handler(handler_ref: str, *, stub_type: str, stub_id: str) -> _Served
     return _ServedEndpoint(server=server, thread=thread)
 
 
+@dataclass(frozen=True, slots=True)
+class _ServingContainers:
+    """For the tests that never stand a backend up.
+
+    They cover dispatch bookkeeping — queue admission, heartbeats, cancellation —
+    against an address nothing listens on, so a real probe would correctly find
+    nothing serving and time them out. The probe itself is exercised by the tests
+    that do serve a runner, which use `_readiness`.
+    """
+
+    def is_ready(
+        self,
+        *,
+        container_id: str,
+        stub_id: str,
+        address: str,
+        route_id: str,
+        port: int,
+        health_path: str = "",
+    ) -> bool:
+        _ = container_id, stub_id, address, route_id, port, health_path
+        return True
+
+
+def _readiness(services: ApiServices) -> RedisContainerReadiness:
+    """The production probe, dialing the served runner directly.
+
+    These addresses are plain host:port rather than backend routes, so the
+    gateway client needs no resolver — and the runner answers `/health` itself,
+    which is exactly what the probe asks in production.
+    """
+
+    client = PodProxyHttpClient()
+    return RedisContainerReadiness(services.redis(), client, client)
+
+
 @dataclass(slots=True)
 class _ServedASGI:
     server: uvicorn.Server
@@ -768,7 +816,7 @@ class _EndpointContainers:
 
 class _CancellingEndpointDispatcher(EndpointInstanceDispatcher):
     def __init__(self, containers: _EndpointContainers, runtime: ApiServices) -> None:
-        super().__init__(containers)
+        super().__init__(containers, readiness_probe=_ServingContainers())
         self.runtime = runtime
         self.cancelled_task: Task | None = None
 
@@ -942,7 +990,9 @@ async def app(scope, receive, send):
         )
         service = EndpointControlService(
             isolated_services,
-            dispatcher=EndpointInstanceDispatcher(containers),
+            dispatcher=EndpointInstanceDispatcher(
+                containers, readiness_probe=_readiness(isolated_services)
+            ),
         )
         task_ids_before = {task.id for task in isolated_services.tasks.list()}
         usage_before = len(isolated_services.usage.list(workspace_id=stub.workspace_id))

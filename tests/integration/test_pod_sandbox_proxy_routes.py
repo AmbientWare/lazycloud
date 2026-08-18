@@ -81,6 +81,7 @@ def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=connections,
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -135,6 +136,7 @@ def test_pod_proxy_records_demand_before_waiting_for_scale_from_zero(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=connections,
+        container_readiness_probe=_ServingContainers(),
         pod_proxy_start_timeout_seconds=0.1,
         poll_interval_seconds=0.0,
     )
@@ -232,6 +234,7 @@ def test_pod_websocket_proxies_subprotocol_text_binary_and_balances_demand(
         pod_proxy_http_client=_RecordingProxyClient(),
         pod_proxy_socket_client=socket_client,
         pod_proxy_connections=connections,
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -337,6 +340,7 @@ def test_pod_websocket_upgrade_withholds_proxy_credentials_from_the_backend(
         pod_proxy_http_client=_RecordingProxyClient(),
         pod_proxy_socket_client=_LoopbackSocketClient(backend_port),
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -391,6 +395,7 @@ def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=connections,
+        container_readiness_probe=_ServingContainers(),
         pod_proxy_start_timeout_seconds=10,
     )
     client = client_stack.enter_context(
@@ -468,6 +473,7 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -531,6 +537,7 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
         pod_proxy_http_client=proxy_client,
         pod_proxy_socket_client=socket_client,
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -587,6 +594,7 @@ def test_sandbox_proxy_supports_id_deployment_and_public_path_forms(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -641,6 +649,7 @@ def test_pod_proxy_returns_service_unavailable_when_port_is_missing(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -698,6 +707,7 @@ def test_pod_and_sandbox_private_routes_use_token_workspace(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -765,6 +775,7 @@ def test_cross_workspace_public_app_does_not_publish_a_private_sandbox(
         container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
         pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
+        container_readiness_probe=_ServingContainers(),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, pod_service=service))
@@ -779,6 +790,29 @@ def test_cross_workspace_public_app_does_not_publish_a_private_sandbox(
     assert public_response.status_code == 404
     assert private_response.status_code == 209
     assert len(proxy_client.calls) == 1
+
+
+@dataclass(frozen=True, slots=True)
+class _ServingContainers:
+    """Readiness is not what these tests vary.
+
+    They exercise port selection, header and body preservation, and connection
+    accounting, so every backend that has an address answers. The cases that turn
+    a backend down live in `packages/execution/tests/test_pod_readiness_routing.py`.
+    """
+
+    def is_ready(
+        self,
+        *,
+        container_id: str,
+        stub_id: str,
+        address: str,
+        route_id: str,
+        port: int,
+        health_path: str = "",
+    ) -> bool:
+        _ = container_id, stub_id, route_id, port, health_path
+        return bool(address)
 
 
 @dataclass(slots=True)
