@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from database.tables.apps import AppTable, StubTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from database.tables.identity import WorkspaceTable
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
@@ -70,6 +71,14 @@ class LedgerCostRow:
 
     app_id: str
     app_name: str
+    workspace_name: str
+    """Workspace the row's app belongs to, so an account-wide page reads.
+
+    Taken from the app rather than grouped on: an app belongs to exactly one
+    workspace, so grouping by both would split nothing and only lengthen the
+    cursor every page is ordered by.
+    """
+
     workload_id: str
     workload_name: str
     workload_kind: str
@@ -113,7 +122,7 @@ class BillingLedgerCostRepository:
     def window_cost_nanos(
         self,
         *,
-        workspace_id: str,
+        workspace_ids: Sequence[str],
         start: datetime,
         end: datetime,
         app_id: str | None = None,
@@ -122,7 +131,7 @@ class BillingLedgerCostRepository:
         total = self.session.scalars(
             select(func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0)).where(
                 *_window(
-                    workspace_id=workspace_id,
+                    workspace_ids=workspace_ids,
                     start=start,
                     end=end,
                     app_id=app_id,
@@ -164,7 +173,7 @@ class BillingLedgerCostRepository:
     def page(
         self,
         *,
-        workspace_id: str,
+        workspace_ids: Sequence[str],
         start: datetime,
         end: datetime,
         group_by: UsageCostGroupKey,
@@ -182,7 +191,7 @@ class BillingLedgerCostRepository:
             )
             .where(
                 *_window(
-                    workspace_id=workspace_id,
+                    workspace_ids=workspace_ids,
                     start=start,
                     end=end,
                     app_id=app_id,
@@ -201,7 +210,7 @@ class BillingLedgerCostRepository:
         found = self.session.execute(statement).all()
         keys = [tuple(str(value) for value in row[: len(columns)]) for row in found[:limit]]
         components = self._components(
-            workspace_id=workspace_id,
+            workspace_ids=workspace_ids,
             start=start,
             end=end,
             columns=columns,
@@ -231,7 +240,7 @@ class BillingLedgerCostRepository:
     def _components(
         self,
         *,
-        workspace_id: str,
+        workspace_ids: Sequence[str],
         start: datetime,
         end: datetime,
         columns: tuple[InstrumentedAttribute[str], ...],
@@ -260,7 +269,7 @@ class BillingLedgerCostRepository:
             )
             .where(
                 *_window(
-                    workspace_id=workspace_id,
+                    workspace_ids=workspace_ids,
                     start=start,
                     end=end,
                     app_id=app_id,
@@ -303,16 +312,16 @@ class BillingLedgerCostRepository:
 
         app_ids = {key[0] for key in keys if key[0]}
         workload_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
-        apps = (
-            {
-                str(row[0]): str(row[1])
-                for row in self.session.execute(
-                    select(AppTable.id, AppTable.name).where(AppTable.id.in_(app_ids))
-                ).all()
-            }
-            if app_ids
-            else {}
-        )
+        apps: dict[str, str] = {}
+        app_workspaces: dict[str, str] = {}
+        if app_ids:
+            for row in self.session.execute(
+                select(AppTable.id, AppTable.name, WorkspaceTable.name)
+                .join(WorkspaceTable, WorkspaceTable.id == AppTable.workspace_id)
+                .where(AppTable.id.in_(app_ids))
+            ).all():
+                apps[str(row[0])] = str(row[1])
+                app_workspaces[str(row[0])] = str(row[2])
         workloads = (
             {
                 str(row[0]): (str(row[1]), str(row[2]))
@@ -325,12 +334,13 @@ class BillingLedgerCostRepository:
             if workload_ids
             else {}
         )
-        return _ResolvedNames(apps=apps, workloads=workloads)
+        return _ResolvedNames(apps=apps, app_workspaces=app_workspaces, workloads=workloads)
 
 
 @dataclass(frozen=True, slots=True)
 class _ResolvedNames:
     apps: dict[str, str]
+    app_workspaces: dict[str, str]
     workloads: dict[str, tuple[str, str]]
 
 
@@ -357,14 +367,14 @@ def _after(
 
 def _window(
     *,
-    workspace_id: str,
+    workspace_ids: Sequence[str],
     start: datetime,
     end: datetime,
     app_id: str | None,
     workload_id: str | None,
 ) -> tuple[ColumnElement[bool], ...]:
     predicates: tuple[ColumnElement[bool], ...] = (
-        BillingLedgerSegmentTable.workspace_id == workspace_id,
+        BillingLedgerSegmentTable.workspace_id.in_(workspace_ids),
         BillingLedgerSegmentTable.segment_started_at >= start,
         BillingLedgerSegmentTable.segment_started_at < end,
     )
@@ -389,6 +399,7 @@ def _cost_row(
     return LedgerCostRow(
         app_id=app_id,
         app_name=names.apps.get(app_id, ""),
+        workspace_name=names.app_workspaces.get(app_id, ""),
         workload_id=workload_id,
         workload_name=workload_name,
         workload_kind=workload_kind,

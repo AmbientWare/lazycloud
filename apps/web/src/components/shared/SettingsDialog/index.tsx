@@ -32,13 +32,14 @@ export function SettingsDialog({
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent
-        className="flex h-[calc(100dvh-3rem)] w-[calc(100vw-3rem)] max-w-[76rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[76rem]"
-      >
+      <DialogContent className="flex h-[calc(100dvh-3rem)] w-[calc(100vw-3rem)] max-w-[76rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[76rem]">
         <header className="shrink-0 border-b border-border px-5 py-3.5 pr-12">
           <DialogTitle className="text-base">Settings</DialogTitle>
-          <DialogDescription className="mt-0.5 text-xs">
-            Signed in as <span className="font-medium text-foreground/90">{user.display_name}</span>
+          {/* Named for the dialog's accessible description and hidden, because
+              the General tab renders the same person as its own heading a couple
+              of inches below. */}
+          <DialogDescription className="sr-only">
+            Signed in as {user.display_name}
           </DialogDescription>
         </header>
 

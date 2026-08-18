@@ -73,7 +73,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     while True:
         with isolated_services.context.database.session() as session:
             page = BillingLedgerCostRepository(session).page(
-                workspace_id=workspace_id,
+                workspace_ids=[workspace_id],
                 start=started_at - _WINDOW,
                 end=ended_at + _WINDOW,
                 group_by=UsageCostGroupKey.Task,

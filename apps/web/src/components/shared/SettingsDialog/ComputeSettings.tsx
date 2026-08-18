@@ -66,7 +66,7 @@ export function ComputeSettings() {
 
   if (loadError) {
     return (
-      <Panel title="Compute" description="Customer-owned cloud infrastructure">
+      <Panel title="Compute">
         <p className="p-4 text-sm text-destructive" role="alert">
           {loadError.message}
         </p>
@@ -130,7 +130,7 @@ function ConnectedCloudsPanel({
   return (
     <Panel
       title="Connected clouds"
-      description="Your own cloud accounts, available to every workspace you own"
+      description="Connected once for your account, and reachable from every workspace in it"
       action={<AddCloudMenu connection={connection} onSelectAws={onManageAws} />}
       className="min-h-[18rem]"
       contentClassName="overflow-y-auto"
@@ -164,7 +164,7 @@ function ConnectedCloudsPanel({
                   <div className="mb-4">
                     <h3 className="text-sm font-medium">Provisioning</h3>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      Instance limits and defaults for this account, applied in every workspace
+                      Instance limits and defaults
                     </p>
                   </div>
                   {catalogLoading ? (
@@ -647,7 +647,7 @@ function SelfHostedPanel({
   return (
     <Panel
       title="Self-hosted machines"
-      description="Hosts you connected, available to every workspace you own"
+      description="Hosts you connected"
       action={
         <Button size="sm" variant="outline" onClick={onJoin}>
           <Server />

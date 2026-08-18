@@ -7,6 +7,7 @@ import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { ShellButton } from "@/components/shared/ShellDialog";
+import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { Button } from "@/components/ui/button";
@@ -117,10 +118,10 @@ function TaskDrawerSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-hidden="true">
       <SheetTitle className="sr-only">Task</SheetTitle>
-      <div className="flex min-h-14 items-center gap-2.5 border-b border-border bg-card px-4 py-3 pr-12">
+      <DrawerHeaderSkeleton>
         <Skeleton className="h-5 w-40" />
         <Skeleton className="h-5 w-16" />
-      </div>
+      </DrawerHeaderSkeleton>
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
         <div className="panel shrink-0 overflow-hidden rounded-md">
           <div className="flex items-center gap-3 border-b border-border px-4 py-2">
@@ -202,7 +203,7 @@ function TaskDrawerBody({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="shrink-0 border-b border-border bg-card px-4 py-3 pr-12">
+      <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle className="min-w-0 truncate">{record.name}</SheetTitle>
           <span aria-live="polite">
@@ -249,7 +250,7 @@ function TaskDrawerBody({
         {cancelError || rerunError ? (
           <p className="mt-1.5 text-xs text-destructive">{cancelError ?? rerunError}</p>
         ) : null}
-      </header>
+      </DrawerHeader>
 
       {refreshError ? (
         <ApiErrorNotice

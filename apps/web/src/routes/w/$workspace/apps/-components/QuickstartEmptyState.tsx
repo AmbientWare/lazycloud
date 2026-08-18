@@ -9,10 +9,9 @@ import { useWorkspaceLiveUpdates } from "@/lib/workspace-context";
 export function QuickstartEmptyState() {
   const { status: streamStatus } = useWorkspaceLiveUpdates();
 
-  const steps: { title: string; detail: string; commands: string[] }[] = [
+  const steps: { title: string; detail?: string; commands: string[] }[] = [
     {
       title: "Install the client",
-      detail: "Install the public LazyCloud client with uv.",
       commands: ["uv tool install lazycloud"],
     },
     {
@@ -40,9 +39,7 @@ export function QuickstartEmptyState() {
   return (
     <div className="mx-auto w-full max-w-lg py-10">
       <h3 className="text-base font-semibold">Deploy your first app</h3>
-      <p className="mt-1 text-sm text-muted-foreground">
-        This workspace has no apps yet. Two commands get one running.
-      </p>
+      <p className="mt-1 text-sm text-muted-foreground">This workspace has no apps yet.</p>
 
       <ol className="mt-6 space-y-5">
         {steps.map((step, index) => (
@@ -53,7 +50,9 @@ export function QuickstartEmptyState() {
             <div className="min-w-0 flex-1 space-y-2">
               <div>
                 <div className="text-sm font-medium">{step.title}</div>
-                <div className="text-xs text-muted-foreground">{step.detail}</div>
+                {step.detail ? (
+                  <div className="text-xs text-muted-foreground">{step.detail}</div>
+                ) : null}
               </div>
               {step.commands.map((command) => (
                 <CliHint key={command} command={command} />

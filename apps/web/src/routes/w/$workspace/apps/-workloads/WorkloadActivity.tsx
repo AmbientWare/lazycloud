@@ -20,7 +20,6 @@ export function WorkloadActivity({
   return (
     <Panel
       title="Activity"
-      description="Recent tasks for this workload"
       className="min-h-[22rem] shrink-0 lg:h-full lg:min-h-0"
       contentClassName="overflow-hidden p-0"
     >

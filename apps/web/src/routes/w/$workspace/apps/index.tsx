@@ -26,11 +26,7 @@ function AppsPage() {
   const items = apps.data?.items ?? [];
 
   return (
-    <WorkspacePage
-      title="Apps"
-      description="Deployed compute and recent execution health"
-      contentClassName="mx-auto w-full max-w-[1600px] overflow-y-auto pr-1"
-    >
+    <WorkspacePage title="Apps" contentClassName="overflow-y-auto pr-1">
       {apps.isPending ? (
         <AppCardsSkeleton />
       ) : apps.isError ? (
@@ -123,7 +119,7 @@ function AppCard({
         </header>
 
         <section className="mt-6" aria-label="24 hour activity">
-          <div className="flex items-end justify-between gap-4">
+          <div>
             <div>
               <div className="micro-label">Tasks · 24 hours</div>
               <div className="mt-1 flex items-baseline gap-2">
@@ -140,19 +136,6 @@ function AppCard({
                 </span>
               </div>
             </div>
-            <div
-              className="flex items-center gap-3 text-[10px] text-muted-foreground"
-              aria-hidden="true"
-            >
-              <span className="flex items-center gap-1.5">
-                <span className="size-1.5 bg-positive/75" />
-                Successful
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="size-1.5 bg-destructive" />
-                Failed
-              </span>
-            </div>
           </div>
           <ActivitySparkline
             values={normalizedActivity(item.activity_24h)}
@@ -160,13 +143,6 @@ function AppCard({
             label={`${item.app.name} task and failure activity over the last 24 hours`}
             className="mt-3 h-14 min-w-0"
           />
-          <div
-            className="mt-1.5 flex justify-between text-[10px] text-muted-foreground"
-            aria-hidden="true"
-          >
-            <span>24h ago</span>
-            <span>Now</span>
-          </div>
         </section>
 
         <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">

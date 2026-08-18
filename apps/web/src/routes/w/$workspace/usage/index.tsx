@@ -9,8 +9,7 @@ import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { usageCostGroupKeys, type UsageCostGroupKey } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
-import { calendarMonthWindow, usageCostsQueryOptions } from "@/lib/queries/usage";
-import { useWorkspace } from "@/lib/workspace-context";
+import { accountCostsQueryOptions, calendarMonthWindow } from "@/lib/queries/usage";
 
 import { AccountCeilingLine } from "./-components/AccountCeilingLine";
 import { CostBreakdownTable } from "./-components/CostBreakdownTable";
@@ -36,27 +35,23 @@ export const Route = createFileRoute("/w/$workspace/usage/")({
 });
 
 function UsagePage() {
-  const { workspace } = useWorkspace();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   // The window is the current UTC month, computed once per mount so paging and
   // the total cannot straddle a boundary crossed mid-session.
   const window = useMemo(() => calendarMonthWindow(new Date()), []);
-  const total = useInfiniteQuery(
-    usageCostsQueryOptions(workspace.id, window, { groupBy: search.view }),
-  );
+  const total = useInfiniteQuery(accountCostsQueryOptions(window, { groupBy: search.view }));
   const first = total.data?.pages[0];
 
   return (
     <WorkspacePage
       title="Usage"
-      description="What this workspace has run this month, and what it cost"
+      description="Every workspace on this account, this month"
       contentClassName="flex flex-col gap-4 overflow-y-auto pb-1"
     >
       <AccountCeilingLine />
       <Panel
         title="Cost this period"
-        description="Read from the priced ledger, dearest first"
         className="min-h-[24rem] flex-1"
         contentClassName="flex flex-col"
         action={
@@ -87,7 +82,7 @@ function UsagePage() {
               value={level}
               className="flex min-h-0 flex-1 flex-col overflow-hidden"
             >
-              <CostBreakdownTable workspaceId={workspace.id} window={window} groupBy={level} />
+              <CostBreakdownTable window={window} groupBy={level} />
             </TabsContent>
           ))}
         </Tabs>

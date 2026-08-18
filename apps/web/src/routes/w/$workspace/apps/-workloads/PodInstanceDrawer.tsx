@@ -5,6 +5,7 @@ import { CliHint } from "@/components/shared/CliHint";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { ShellButton } from "@/components/shared/ShellDialog";
+import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -112,7 +113,7 @@ function PodInstanceDrawerBody({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="shrink-0 border-b border-border bg-card px-4 py-3 pr-12">
+      <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle>Pod instance</SheetTitle>
           <StatusChip status={record.status} live={running} />
@@ -135,7 +136,7 @@ function PodInstanceDrawerBody({
             </>
           ) : null}
         </p>
-      </header>
+      </DrawerHeader>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         <section
@@ -176,9 +177,6 @@ function PodInstanceDrawerBody({
             >
               <div className="min-w-0">
                 <h3 className="text-xs font-medium text-foreground">Terminal access</h3>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  Uses your authenticated CLI profile
-                </p>
               </div>
               <CliHint
                 command={`lazycloud shell --container-id ${record.id}`}
@@ -195,9 +193,6 @@ function PodInstanceDrawerBody({
           <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border/80 px-4 py-2.5">
             <div>
               <h3 className="text-sm font-medium">Compute</h3>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Live utilization for this instance
-              </p>
             </div>
             {latestTimestamp ? (
               <time
@@ -238,10 +233,10 @@ function PodInstanceDrawerSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-hidden="true">
       <SheetTitle className="sr-only">Pod instance</SheetTitle>
-      <div className="flex min-h-14 items-center gap-2.5 border-b border-border bg-card px-4 py-3 pr-12">
+      <DrawerHeaderSkeleton>
         <Skeleton className="h-5 w-32" />
         <Skeleton className="h-5 w-16" />
-      </div>
+      </DrawerHeaderSkeleton>
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
         <Skeleton className="h-56 w-full shrink-0" />
         <Skeleton className="min-h-80 w-full flex-1" />

@@ -21,8 +21,7 @@ export function DomainSettings() {
   const [failure, setFailure] = useState<string | null>(null);
   const domains = useQuery(customDomainsQueryOptions());
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
 
   const register = useMutation({
     mutationFn: (value: string) => registerCustomDomain(value),
@@ -49,7 +48,7 @@ export function DomainSettings() {
   return (
     <Panel
       title="Domains"
-      description="Registered once for your account; any workspace you own can serve from them"
+      description="Registered for your account; any workspace in it can serve from them"
       action={
         <form
           className="flex items-center gap-2"

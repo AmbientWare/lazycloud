@@ -17,48 +17,69 @@ export function workspaceLandingPath(
   return `${nextBase}/${segment}`;
 }
 
+const SECTION_LABELS: Record<string, string> = {
+  apps: "Apps",
+  tasks: "Tasks",
+  storage: "Storage",
+  usage: "Usage",
+  sandboxes: "Sandboxes",
+};
+
+/**
+ * Every ancestor as a link, then the current resource as plain text.
+ *
+ * One rule for every route, so the bar is in the same place saying the same kind
+ * of thing wherever you are. The last crumb is deliberately the label the page's
+ * own heading uses: a trail ending in something the page does not call itself
+ * reads as a different resource.
+ */
 export function shellBreadcrumbs(
   pathname: string,
   workspaceName: string,
   appName?: string,
+  sandboxName?: string,
 ): ShellBreadcrumb[] {
   const base = `/w/${encodeURIComponent(workspaceName)}`;
   const parts = pathname.slice(base.length).split("/").filter(Boolean).map(safeDecode);
-  const [section, resourceId, childSection, childId] = parts;
+  const [section = "apps", resourceId, childSection, childId] = parts;
+  const sectionLabel = SECTION_LABELS[section] ?? section;
+  const sectionHref = `${base}/${section}`;
 
-  if (!section || section === "apps") {
-    if (!resourceId) return [{ label: "Apps" }];
-
-    const appLabel = appName || resourceId;
-    const appHref = `${base}/apps/${encodeURIComponent(resourceId)}`;
-    if (childSection === "workloads" && childId) {
-      return [
-        { label: "Apps", href: `${base}/apps` },
-        { label: appLabel, href: appHref },
-        { label: childId },
-      ];
-    }
-    if (childSection === "tasks" && childId) {
-      return [{ label: appLabel }];
-    }
-    return [];
+  if (section !== "apps" && section !== "sandboxes") {
+    return resourceId
+      ? [{ label: sectionLabel, href: sectionHref }, { label: resourceId }]
+      : [{ label: sectionLabel }];
   }
 
-  if (section === "tasks") {
-    return [{ label: "Tasks" }];
-  }
-
+  // A sandbox is reached through the app that owns it, which is also the only
+  // place the dashboard links to one — there is no sandboxes index to return to.
   if (section === "sandboxes") {
     return resourceId
-      ? [{ label: "Apps", href: `${base}/apps` }, { label: "Sandbox" }, { label: resourceId }]
-      : [{ label: "Apps", href: `${base}/apps` }, { label: "Sandboxes" }];
+      ? [{ label: "Apps", href: `${base}/apps` }, { label: sandboxName || resourceId }]
+      : [{ label: "Apps", href: `${base}/apps` }];
   }
 
-  const sectionLabels: Record<string, string> = {
-    storage: "Storage",
-    usage: "Usage",
-  };
-  return [{ label: sectionLabels[section] ?? section }];
+  if (!resourceId) return [{ label: "Apps" }];
+
+  const appLabel = appName || resourceId;
+  const appHref = `${base}/apps/${encodeURIComponent(resourceId)}`;
+  const trail: ShellBreadcrumb[] = [{ label: "Apps", href: `${base}/apps` }];
+
+  if (!childSection) return [...trail, { label: appLabel }];
+  if (childSection === "tasks") {
+    return [...trail, { label: appLabel, href: appHref }, { label: childId ?? "Task" }];
+  }
+  if (childSection !== "workloads" || !childId) {
+    return [...trail, { label: appLabel, href: appHref }];
+  }
+
+  const workloadHref = `${appHref}/workloads/${encodeURIComponent(childId)}`;
+  const grandId = parts[5];
+  const workload: ShellBreadcrumb = grandId
+    ? { label: childId, href: workloadHref }
+    : { label: childId };
+  const trailToWorkload = [...trail, { label: appLabel, href: appHref }, workload];
+  return grandId ? [...trailToWorkload, { label: grandId }] : trailToWorkload;
 }
 
 function safeDecode(value: string): string {

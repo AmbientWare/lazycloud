@@ -69,7 +69,6 @@ function SandboxDetailPage() {
           {stop.isError ? <p className="text-xs text-destructive">{stop.error.message}</p> : null}
         </>
       }
-      className="mx-auto max-w-7xl"
       contentClassName="overflow-y-auto lg:overflow-hidden"
     >
       <div className="grid min-h-full gap-4 lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]">
@@ -310,7 +309,7 @@ function EmptyOperation({ message }: { message: string }) {
 
 function SandboxSkeleton() {
   return (
-    <WorkspacePage title={<Skeleton className="h-7 w-72" />} className="mx-auto max-w-7xl">
+    <WorkspacePage title={<Skeleton className="h-7 w-72" />}>
       <div
         className="grid h-full min-h-0 gap-4 lg:grid-rows-[8rem_minmax(0,1fr)]"
         aria-hidden="true"

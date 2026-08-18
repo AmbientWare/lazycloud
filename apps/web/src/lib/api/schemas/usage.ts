@@ -88,6 +88,7 @@ export type UsageCostComponent = z.infer<typeof usageCostComponentSchema>;
 export const usageCostRowSchema = z.object({
   app_id: z.string().default(""),
   app_name: z.string().default(""),
+  workspace_name: z.string().default(""),
   workload_id: z.string().default(""),
   workload_name: z.string().default(""),
   workload_kind: z.string().default(""),
@@ -103,7 +104,8 @@ export type UsageCostRow = z.infer<typeof usageCostRowSchema>;
  * depends on how far somebody scrolled.
  */
 export const usageCostListSchema = z.object({
-  workspace_id: z.string(),
+  /** Empty where the page covers an account rather than one workspace. */
+  workspace_id: z.string().default(""),
   start: z.string(),
   end: z.string(),
   currency: z.string().regex(/^[A-Z]{3}$/),

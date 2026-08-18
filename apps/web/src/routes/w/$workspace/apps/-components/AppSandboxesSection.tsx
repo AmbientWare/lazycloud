@@ -30,7 +30,6 @@ export function AppSandboxesSection({
     >
       <Panel
         title={<span id="app-sandboxes-heading">Sandboxes</span>}
-        description="App-scoped interactive environments"
         action={
           sandboxes ? (
             <span className="whitespace-nowrap text-[11px] text-muted-foreground">
