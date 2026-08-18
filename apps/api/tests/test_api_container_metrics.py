@@ -12,7 +12,12 @@ from fastapi.testclient import TestClient
 from observability.stream_state import RedisEventStreamRepository
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
-from shared.http.observability import ContainerMetricsTimeseriesResponse
+from shared.http.observability import (
+    ContainerMetricsTimeseriesResponse,
+    WorkspaceActivityResponse,
+    WorkspaceActivitySeriesKind,
+    WorkspaceContainerCountsResponse,
+)
 from shared.realtime.contracts import (
     ContainerMetricsData,
     ContainerMetricsPayload,
@@ -113,3 +118,85 @@ def test_container_metrics_timeseries_empty_and_missing(
         headers=headers,
     )
     assert missing.status_code == 404
+
+
+def _seed_activity_container(
+    services: ApiServices,
+    *,
+    workspace_id: str,
+    app_id: str | None,
+    status: ContainerStatus,
+    name: str,
+) -> None:
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name=name,
+                image="img-activity",
+                command=["python3.12", "-m", "runner.function"],
+                workspace_id=workspace_id,
+                app_id=app_id,
+                status=status,
+            )
+        )
+
+
+def test_workspace_metrics_separate_live_footprint_from_windowed_starts(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    control = ControlPlaneService(isolated_services.context)
+    workspace = control.get_workspace("default")
+    alpha = isolated_services.apps.create("alpha").id
+    beta = isolated_services.apps.create("beta").id
+    gamma = isolated_services.apps.create("gamma").id
+    seeded = (
+        (alpha, ContainerStatus.Running, "alpha-0"),
+        (alpha, ContainerStatus.Running, "alpha-1"),
+        (alpha, ContainerStatus.Running, "alpha-2"),
+        (beta, ContainerStatus.Running, "beta-0"),
+        (beta, ContainerStatus.Pending, "beta-1"),
+        (gamma, ContainerStatus.Running, "gamma-0"),
+        # Finished, so it is a start the window counts and not capacity held.
+        (None, ContainerStatus.Exited, "loose-0"),
+    )
+    for app_id, status, name in seeded:
+        _seed_activity_container(
+            isolated_services,
+            workspace_id=workspace.id,
+            app_id=app_id,
+            status=status,
+            name=name,
+        )
+
+    raw_token, _ = administrator_credential(isolated_services, "workspace-metrics-reader")
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    headers = {"Authorization": f"Bearer {raw_token}"}
+
+    counts = client.get("/api/v1/metrics/workspace/containers", headers=headers)
+    assert counts.status_code == 200
+    held = WorkspaceContainerCountsResponse.model_validate_json(counts.content)
+    assert (held.running, held.pending) == (5, 1)
+
+    activity = client.get(
+        "/api/v1/metrics/workspace/activity",
+        headers=headers,
+        params={"limit": 2},
+    )
+    assert activity.status_code == 200
+    window = WorkspaceActivityResponse.model_validate_json(activity.content)
+    assert window.total == len(seeded)
+    assert [series.kind for series in window.series] == [
+        WorkspaceActivitySeriesKind.App,
+        WorkspaceActivitySeriesKind.App,
+        WorkspaceActivitySeriesKind.Other,
+    ]
+    assert [series.app_name for series in window.series[:2]] == ["alpha", "beta"]
+    # Every series spans the whole window, so a quiet interval reads as a zero
+    # rather than as an interval nobody measured.
+    assert {len(series.buckets) for series in window.series} == {24}
+    assert [series.buckets[-1].count for series in window.series] == [3, 2, 2]
+    assert sum(bucket.count for series in window.series for bucket in series.buckets) == (
+        window.total
+    )

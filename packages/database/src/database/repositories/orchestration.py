@@ -342,6 +342,28 @@ class ContainerRepository:
             or 0
         )
 
+    def live_counts_for_workspace(self, *, workspace_id: str) -> dict[ContainerStatus, int]:
+        """What this workspace is holding right now, per live status.
+
+        Restricted to the live statuses so the partial workspace index answers
+        it. Counting every status instead would scan the workspace's whole
+        history to report a figure about the present, and get slower every day
+        the workspace is used.
+
+        A status the workspace holds none of is absent rather than zero; the
+        caller names the statuses it renders.
+        """
+
+        rows = self.session.execute(
+            select(ContainerTable.status, func.count(ContainerTable.id))
+            .where(
+                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+            )
+            .group_by(ContainerTable.status)
+        ).all()
+        return {ContainerStatus(row[0]): int(row[1]) for row in rows}
+
     def lock_stub_capacity(self, stub_id: str) -> None:
         """Serialize the starts competing for one stub's container ceiling.
 

@@ -1,23 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Link,
-  Outlet,
-  useNavigate,
-  useRouter,
-  useRouterState,
-  useSearch,
-} from "@tanstack/react-router";
+import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import {
   Activity,
   ChartNoAxesCombined,
   Database,
   LayoutGrid,
-  Loader2,
   LogOut,
   Menu,
   Moon,
-  Plus,
+  PanelRightOpen,
   Search,
   Settings,
   Sun,
@@ -31,8 +22,6 @@ import { settingsView, type SettingsView } from "@/components/shared/SettingsDia
 import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { createWorkspace } from "@/lib/queries/workspace";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +53,14 @@ const accountNav: NavItem[] = [
 const GlobalSearch = lazy(() =>
   import("@/components/shared/AppShell/GlobalSearch").then((module) => ({
     default: module.GlobalSearch,
+  })),
+);
+
+/* Loaded when the drawer is first opened: its charts pull recharts in, which
+   nothing else in the shell needs to render navigation. */
+const WorkspaceMetricsDrawer = lazy(() =>
+  import("@/components/shared/AppShell/WorkspaceMetrics").then((module) => ({
+    default: module.WorkspaceMetricsDrawer,
   })),
 );
 
@@ -209,7 +206,7 @@ function DesktopRail({
       <div className="px-3 pb-3">
         <div className="flex items-center gap-1">
           <WorkspaceSwitcher className="min-w-0 flex-1" />
-          <CreateWorkspaceControl />
+          <WorkspaceMetricsControl />
         </div>
         <button
           type="button"
@@ -310,6 +307,7 @@ function MobileHeader({
         <img src="/lazycloud.png" alt="" className="size-8" />
       </Link>
       <WorkspaceSwitcher className="min-w-0 flex-1" compact />
+      <WorkspaceMetricsControl />
       <Button
         variant="ghost"
         size="icon"
@@ -447,79 +445,27 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
   );
 }
 
-function CreateWorkspaceControl() {
-  const { user } = useSession();
+/** Opens the workspace's readings beside whatever the rail is currently showing. */
+function WorkspaceMetricsControl() {
   const [open, setOpen] = useState(false);
-  if (user.role !== "administrator") return null;
   return (
     <>
       <Button
         variant="ghost"
         size="icon"
-        aria-label="Create workspace"
-        title="Create workspace"
+        aria-label="Workspace metrics"
+        title="Workspace metrics"
         className="size-8 text-muted-foreground"
         onClick={() => setOpen(true)}
       >
-        <Plus className="size-3.5" />
+        <PanelRightOpen className="size-3.5" />
       </Button>
-      {open ? <CreateWorkspaceSheet onClose={() => setOpen(false)} /> : null}
+      {open ? (
+        <Suspense fallback={null}>
+          <WorkspaceMetricsDrawer onClose={() => setOpen(false)} />
+        </Suspense>
+      ) : null}
     </>
-  );
-}
-
-function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const create = useMutation({
-    mutationFn: () => createWorkspace(name.trim()),
-    onSuccess: async (created) => {
-      // The shell resolves a workspace out of the session, so the session has to
-      // know about the new one before the route changes to it.
-      await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
-      onClose();
-      router.history.push(`/w/${encodeURIComponent(created.name)}/apps`);
-    },
-  });
-
-  return (
-    <Sheet open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <SheetContent aria-describedby={undefined} className="gap-0 sm:max-w-md">
-        <DrawerHeader>
-          <SheetTitle>Create workspace</SheetTitle>
-        </DrawerHeader>
-        <form
-          className="flex flex-col gap-3 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            create.mutate();
-          }}
-        >
-          <label className="block text-xs font-medium text-muted-foreground">
-            Name
-            <input
-              autoFocus
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="workspace-name"
-              className="mono mt-1 h-9 w-full rounded-md border border-input bg-muted px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </label>
-          <div className="flex items-center gap-2">
-            <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-              {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Create"}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-              Cancel
-            </Button>
-          </div>
-          {create.isError ? (
-            <p className="text-xs text-destructive">{create.error.message}</p>
-          ) : null}
-        </form>
-      </SheetContent>
-    </Sheet>
   );
 }
 

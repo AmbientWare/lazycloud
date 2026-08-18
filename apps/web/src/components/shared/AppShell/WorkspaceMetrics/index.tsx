@@ -1,0 +1,216 @@
+import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+
+import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
+import { DrawerHeader } from "@/components/shared/DrawerHeader";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { billingSummaryQueryOptions } from "@/lib/queries/billing";
+import { taskMetricsQueryOptions } from "@/lib/queries/tasks";
+import { workspaceContainerCountsQueryOptions } from "@/lib/queries/workspace-metrics";
+import { useWorkspace } from "@/lib/workspace-context";
+import { cn } from "@/lib/utils";
+
+import { ActivityPanel } from "./ActivityPanel";
+
+const TASK_METRICS_HOURS = 24;
+
+/**
+ * The workspace's instruments: what it is holding now, and what has moved
+ * through it.
+ *
+ * A drawer rather than a page because these are readings taken while doing
+ * something else — the question is "is this workspace healthy right now", asked
+ * without leaving whatever answered it.
+ */
+export function WorkspaceMetricsDrawer({ onClose }: { onClose: () => void }) {
+  const { workspace } = useWorkspace();
+  return (
+    <Sheet open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <SheetContent
+        aria-describedby={undefined}
+        aria-label="Workspace metrics"
+        className="gap-0 bg-background max-sm:left-0 max-sm:right-0 max-sm:max-w-none max-sm:border-l-0 sm:max-w-2xl xl:max-w-3xl"
+      >
+        <DrawerHeader>
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <SheetTitle className="min-w-0 truncate">Workspace metrics</SheetTitle>
+            <span className="mono min-w-0 truncate text-xs text-muted-foreground">
+              {workspace.name}
+            </span>
+          </div>
+        </DrawerHeader>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+          <PanelErrorBoundary title="Readings could not be displayed">
+            <ReadingStrip workspaceId={workspace.id} />
+          </PanelErrorBoundary>
+          <PanelErrorBoundary key={workspace.id} title="Workspace activity could not be displayed">
+            <ActivityPanel workspaceId={workspace.id} />
+          </PanelErrorBoundary>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * Four readings on one framed strip.
+ *
+ * One strip rather than four cards: these are read together, and hairlines
+ * between cells carry the separation that four floating surfaces would spend a
+ * whole row of chrome on.
+ */
+function ReadingStrip({ workspaceId }: { workspaceId: string }) {
+  const held = useQuery(workspaceContainerCountsQueryOptions(workspaceId));
+  const billing = useQuery(billingSummaryQueryOptions());
+  const tasks = useQuery(taskMetricsQueryOptions(workspaceId, TASK_METRICS_HOURS));
+
+  const ceiling = billing.data?.max_concurrent_containers ?? 0;
+  const accountLive = billing.data?.live_container_count ?? 0;
+
+  return (
+    <section
+      aria-label="Workspace readings"
+      className="panel grid shrink-0 grid-cols-2 overflow-hidden rounded-md sm:grid-cols-4"
+    >
+      <Reading
+        label="Live containers"
+        className="border-b border-r border-border sm:border-b-0"
+        query={held}
+        value={held.data ? held.data.running + held.data.pending : undefined}
+        detail={
+          held.data
+            ? `${held.data.running.toLocaleString()} running · ${held.data.pending.toLocaleString()} pending`
+            : undefined
+        }
+      />
+      <Reading
+        label="Concurrency"
+        className="border-b border-border sm:border-b-0 sm:border-r"
+        query={billing}
+        value={accountLive}
+        formatted={`${accountLive.toLocaleString()} / ${ceiling.toLocaleString()}`}
+        detail="Across the account"
+        meter={billing.data ? { used: accountLive, limit: ceiling } : undefined}
+      />
+      <Reading
+        label="Tasks · 24h"
+        className="border-r border-border"
+        query={tasks}
+        value={tasks.data?.total}
+        detail={tasks.data ? `${tasks.data.completed.toLocaleString()} completed` : undefined}
+      />
+      <Reading
+        label="Failures · 24h"
+        query={tasks}
+        value={tasks.data?.failed}
+        tone={tasks.data && tasks.data.failed > 0 ? "danger" : "neutral"}
+        detail={
+          tasks.data ? `${formatPercent(tasks.data.failure_rate)} of tasks failed` : undefined
+        }
+      />
+    </section>
+  );
+}
+
+type ReadingQuery = {
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+};
+
+/**
+ * One cell of the strip.
+ *
+ * A reading that could not be taken says so in the cell rather than showing a
+ * dash: a dash is what an instrument reads when the answer is genuinely zero or
+ * absent, and the two must not look the same.
+ */
+function Reading({
+  label,
+  value,
+  formatted,
+  detail,
+  tone = "neutral",
+  meter,
+  query,
+  className,
+}: {
+  label: string;
+  value: number | undefined;
+  formatted?: string;
+  detail?: ReactNode;
+  tone?: "neutral" | "danger";
+  meter?: { used: number; limit: number };
+  query: ReadingQuery;
+  className?: string;
+}) {
+  return (
+    <div className={cn("min-w-0 px-4 py-3", className)}>
+      <div className="micro-label truncate">{label}</div>
+      {query.isPending ? (
+        <div className="mt-1.5 space-y-1.5" aria-hidden="true">
+          <Skeleton className="h-4 w-14" />
+          <Skeleton className="h-2.5 w-20" />
+        </div>
+      ) : query.isError ? (
+        <>
+          <div className="readout mt-1 truncate text-[15px] text-destructive">Unavailable</div>
+          <p
+            className="mt-1 truncate text-[11px] text-muted-foreground"
+            title={query.error?.message}
+          >
+            {query.error?.message ?? "The reading could not be taken"}
+          </p>
+        </>
+      ) : (
+        <>
+          <div
+            className={cn(
+              "readout mt-1 truncate text-[15px]",
+              tone === "danger" ? "text-destructive" : "text-foreground",
+            )}
+          >
+            {formatted ?? value?.toLocaleString() ?? "—"}
+          </div>
+          {meter ? <Meter used={meter.used} limit={meter.limit} /> : null}
+          {detail ? (
+            <p
+              className={cn("truncate text-[11px] text-muted-foreground", meter ? "mt-1" : "mt-1")}
+            >
+              {detail}
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The one reading with a bound, drawn against it.
+ *
+ * Only this cell gets a bar, because only this figure has a ceiling to be near.
+ * The colour is a second reading of the same fact and never the only one — the
+ * cell above it always states both numbers.
+ */
+function Meter({ used, limit }: { used: number; limit: number }) {
+  if (limit <= 0) return null;
+  const share = Math.min(used / limit, 1);
+  return (
+    <span className="mt-1.5 block h-1 w-full rounded-full bg-muted" aria-hidden="true">
+      <span
+        className={cn(
+          "block h-1 rounded-full",
+          share >= 1 ? "bg-destructive" : share >= 0.8 ? "bg-warning" : "bg-foreground/45",
+        )}
+        style={{ width: `${Math.max(share * 100, used > 0 ? 3 : 0)}%` }}
+      />
+    </span>
+  );
+}
+
+function formatPercent(rate: number): string {
+  if (rate > 0 && rate < 0.001) return "<0.1%";
+  return `${(rate * 100).toFixed(rate >= 0.1 ? 0 : 1)}%`;
+}
