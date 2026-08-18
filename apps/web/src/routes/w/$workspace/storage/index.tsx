@@ -1,16 +1,20 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Button } from "@/components/ui/button";
 import { CollectionAccordion } from "./-components/CollectionAccordion";
 import { SecretsTab } from "./-components/SecretsTab";
 import { VolumesTab } from "./-components/VolumesTab";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { collectionResources } from "@/lib/api/resources";
+import { secretsQueryOptions, volumesQueryOptions } from "@/lib/queries/storage";
 import { useWorkspace } from "@/lib/workspace-context";
 
 const STORAGE_TABS = [
@@ -38,6 +42,8 @@ export const Route = createFileRoute("/w/$workspace/storage/")({
 
 function StoragePage() {
   const { workspace } = useWorkspace();
+  const volumes = useQuery(volumesQueryOptions(workspace.id));
+  const secrets = useQuery(secretsQueryOptions(workspace.id));
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const [creating, setCreating] = useState<"volumes" | "secrets" | null>(null);
@@ -45,7 +51,19 @@ function StoragePage() {
   const createLabel = createView === "volumes" ? "New volume" : "New secret";
 
   return (
-    <WorkspacePage title="Storage">
+    <WorkspacePage
+      title="Storage"
+      description={
+        volumes.data || secrets.data ? (
+          <PageFacts
+            items={[
+              volumes.data ? countLabel(volumes.data.volumes.length, "volume") : null,
+              secrets.data ? countLabel(secrets.data.secrets.length, "secret") : null,
+            ]}
+          />
+        ) : null
+      }
+    >
       <Tabs
         value={search.view}
         onValueChange={(view) => {

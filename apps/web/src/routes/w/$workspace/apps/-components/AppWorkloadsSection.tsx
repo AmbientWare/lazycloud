@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { stubKinds, type Container, type Deployment } from "@/lib/api/schemas";
+import type { Container, Deployment } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
@@ -47,6 +47,10 @@ export function AppWorkloadsSection({
 }) {
   const [kind, setKind] = useState<string>();
   const groups = groupDeploymentsByWorkload(deployments, appId);
+  // The kinds this app actually deploys, not the kinds one could. A filter
+  // offering a kind nothing here has is an option whose only outcome is an
+  // empty list.
+  const kindsPresent = [...new Set(groups.map((group) => group.kind))].sort();
   const rows = kind ? groups.filter((group) => group.kind === kind) : groups;
   const continuation = (
     <InfiniteScrollBoundary
@@ -77,7 +81,7 @@ export function AppWorkloadsSection({
             </SelectTrigger>
             <SelectContent align="end">
               <SelectItem value="all">All types</SelectItem>
-              {stubKinds.map((option) => (
+              {kindsPresent.map((option) => (
                 <SelectItem key={option} value={option}>
                   {formatKind(option)}
                 </SelectItem>

@@ -14,6 +14,17 @@ export const stubKinds = [
 ] as const;
 export type StubKind = (typeof stubKinds)[number];
 
+/**
+ * The kinds a person deploys and can therefore filter by.
+ *
+ * Narrower than `stubKinds`, which mirrors the wire enum and has to accept
+ * everything the server may send. `shell` and `command` are how the platform
+ * runs something on a workload's behalf, not workloads anyone declares —
+ * offering them as filters lists two options that can only ever return nothing.
+ */
+export const workloadKinds = ["function", "endpoint", "asgi", "pod", "sandbox"] as const;
+export type WorkloadKind = (typeof workloadKinds)[number];
+
 const stubRuntimeConfigSchema = z.object({
   cpu: z.union([z.number(), z.string()]).nullish(),
   memory: z.union([z.number(), z.string()]).nullish(),
@@ -42,4 +53,3 @@ export type Stub = z.infer<typeof stubSchema>;
 export const stubListSchema = z.object({
   stubs: z.array(stubSchema).default([]),
 });
-

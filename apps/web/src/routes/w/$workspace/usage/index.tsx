@@ -6,10 +6,13 @@ import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Panel } from "@/components/shared/Panel";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { usageCostGroupKeys, type UsageCostGroupKey } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
 import { accountCostsQueryOptions, calendarMonthWindow } from "@/lib/queries/usage";
+import { useWorkspace } from "@/lib/workspace-context";
 
 import { AccountCeilingLine } from "./-components/AccountCeilingLine";
 import { CostBreakdownTable } from "./-components/CostBreakdownTable";
@@ -35,6 +38,7 @@ export const Route = createFileRoute("/w/$workspace/usage/")({
 });
 
 function UsagePage() {
+  const { workspaces } = useWorkspace();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   // The window is the current UTC month, computed once per mount so paging and
@@ -46,7 +50,17 @@ function UsagePage() {
   return (
     <WorkspacePage
       title="Usage"
-      description="Every workspace on this account, this month"
+      description={
+        first ? (
+          <PageFacts
+            items={[
+              formatCostNanos(first.cost_nanos, first.currency),
+              countLabel(workspaces.length, "workspace"),
+              "this month",
+            ]}
+          />
+        ) : null
+      }
       contentClassName="flex flex-col gap-4 overflow-y-auto pb-1"
     >
       <AccountCeilingLine />

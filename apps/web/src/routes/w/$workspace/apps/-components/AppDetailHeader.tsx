@@ -1,8 +1,10 @@
 import { StatusChip } from "@/components/shared/StatusChip";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
+import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import type { App, Deployment } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 
-import { exactTime, formatCount } from "./app-detail-format";
+import { exactTime } from "./app-detail-format";
 
 /**
  * What an app is, under its name.
@@ -21,22 +23,22 @@ export function AppDetailFacts({
   activeWorkloads: number;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span>{formatCount(workloadCount, "workload")}</span>
-      <span aria-hidden="true">·</span>
-      <span>{formatCount(activeWorkloads, "active version")}</span>
-      <span aria-hidden="true">·</span>
-      {latestDeployment ? (
-        <span title={exactTime(latestDeployment.created_at)}>
-          Last deployed{" "}
-          <time dateTime={latestDeployment.created_at}>
-            {relativeTime(latestDeployment.created_at)}
-          </time>
-        </span>
-      ) : (
-        <span>No deployments yet</span>
-      )}
-    </div>
+    <PageFacts
+      items={[
+        countLabel(workloadCount, "workload"),
+        countLabel(activeWorkloads, "active version"),
+        latestDeployment ? (
+          <span title={exactTime(latestDeployment.created_at)}>
+            Last deployed{" "}
+            <time dateTime={latestDeployment.created_at}>
+              {relativeTime(latestDeployment.created_at)}
+            </time>
+          </span>
+        ) : (
+          "No deployments yet"
+        ),
+      ]}
+    />
   );
 }
 
