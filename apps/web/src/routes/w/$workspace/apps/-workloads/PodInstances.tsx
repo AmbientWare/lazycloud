@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Panel } from "@/components/shared/Panel";
+import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
@@ -95,9 +96,7 @@ export function PodInstances({
           {loading ? (
             <InstanceListSkeleton />
           ) : error ? (
-            <div className="p-4 text-sm text-destructive" role="alert">
-              {error.message}
-            </div>
+            <PanelError message={error.message} />
           ) : instances.length ? (
             <>
               {instances.map((container) => (

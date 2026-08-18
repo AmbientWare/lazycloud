@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import { PanelError } from "@/components/shared/PanelError";
 import type { Deployment } from "@/lib/api/schemas";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
@@ -83,9 +84,7 @@ function AppDetailPage() {
         contentClassName="overflow-y-auto lg:overflow-hidden"
       >
         {app.isError ? (
-          <div className="panel flex min-h-48 items-center justify-center rounded-md p-4 text-sm text-destructive">
-            {app.error.message}
-          </div>
+          <PanelError message={app.error.message} layout="framed" />
         ) : (
           <div className="grid min-h-full gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.8fr)] lg:overflow-hidden">
             <AppWorkloadsSection

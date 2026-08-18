@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { PanelError } from "@/components/shared/PanelError";
 import {
   Select,
   SelectContent,
@@ -35,7 +36,7 @@ export function QueueInspector({
   const peek = useQuery(queuePeekQueryOptions(workspaceId, name));
   const error = size.error ?? peek.error;
   const depth = size.data?.size ?? 0;
-  if (error) return <p className="p-4 text-sm text-destructive">{error.message}</p>;
+  if (error) return <PanelError message={error.message} />;
 
   if (size.isPending || peek.isPending) {
     return <InspectorSkeleton />;
@@ -88,7 +89,7 @@ export function MapInspector({
     : (keys.data?.keys[0] ?? "");
   const value = useQuery(mapValueQueryOptions(workspaceId, name, effectiveSelectedKey));
   const error = count.error ?? keys.error;
-  if (error) return <p className="p-4 text-sm text-destructive">{error.message}</p>;
+  if (error) return <PanelError message={error.message} />;
 
   if (count.isPending || keys.isPending) {
     return <InspectorSkeleton withControl />;

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
+import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { ApiError } from "@/lib/api/client";
@@ -32,21 +33,19 @@ function ActivatePage() {
   const userCode = normalizeUserCode(code);
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-4">
-      <section className="panel w-full max-w-md rounded-md p-5">
-        <div className="mb-5">
-          <div className="flex items-center gap-2">
-            <img src="/lazycloud.png" alt="" className="size-8" />
-            <span className="text-xl font-bold text-brand">LazyCloud</span>
-          </div>
-          <h1 className="mt-3 text-xl font-semibold">Approve CLI sign-in</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Confirm the code shown in your terminal to connect the CLI to your account.
-          </p>
+    <PreShellScreen>
+      <div className="mb-5">
+        <div className="flex items-center gap-2">
+          <img src="/lazycloud.png" alt="" className="size-8" />
+          <span className="text-xl font-bold text-brand">LazyCloud</span>
         </div>
-        {userCode.length === 9 ? <DeviceCodePanel userCode={userCode} /> : <CodeEntryForm />}
-      </section>
-    </main>
+        <h1 className="mt-3 text-xl font-semibold">Approve CLI sign-in</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Confirm the code shown in your terminal to connect the CLI to your account.
+        </p>
+      </div>
+      {userCode.length === 9 ? <DeviceCodePanel userCode={userCode} /> : <CodeEntryForm />}
+    </PreShellScreen>
   );
 }
 

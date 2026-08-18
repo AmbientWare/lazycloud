@@ -11,6 +11,7 @@ import { AlertTriangle, RotateCcw } from "lucide-react";
 import { Toaster } from "sonner";
 
 import { AuthGate } from "@/components/shared/AuthGate";
+import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { ThemeProvider } from "@/components/shared/ThemeProvider";
 import { themeInitScript, useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
@@ -71,34 +72,32 @@ function ThemedToaster() {
 function RootErrorComponent({ error, reset }: ErrorComponentProps) {
   return (
     <RootDocument>
-      <main className="flex h-dvh items-center justify-center overflow-auto bg-background p-4 text-foreground">
-        <section role="alert" className="panel w-full max-w-md rounded-md p-5">
-          <div className="flex items-center gap-2.5">
-            <img src="/lazycloud.png" alt="" className="size-7" />
-            <span className="text-lg font-bold text-brand">LazyCloud</span>
+      <PreShellScreen role="alert">
+        <div className="flex items-center gap-2.5">
+          <img src="/lazycloud.png" alt="" className="size-7" />
+          <span className="text-lg font-bold text-brand">LazyCloud</span>
+        </div>
+        <div className="mt-4 flex items-start gap-2.5">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold">Something went wrong</h1>
+            <p className="mt-1 break-words text-sm text-muted-foreground">
+              {error instanceof Error && error.message
+                ? error.message
+                : "The dashboard hit an unexpected error."}
+            </p>
           </div>
-          <div className="mt-4 flex items-start gap-2.5">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-            <div className="min-w-0">
-              <h1 className="text-base font-semibold">Something went wrong</h1>
-              <p className="mt-1 break-words text-sm text-muted-foreground">
-                {error instanceof Error && error.message
-                  ? error.message
-                  : "The dashboard hit an unexpected error."}
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 flex items-center gap-2">
-            <Button size="sm" onClick={() => window.location.reload()}>
-              Reload dashboard
-            </Button>
-            <Button variant="outline" size="sm" onClick={reset}>
-              <RotateCcw />
-              Try again
-            </Button>
-          </div>
-        </section>
-      </main>
+        </div>
+        <div className="mt-4 flex items-center gap-2">
+          <Button size="sm" onClick={() => window.location.reload()}>
+            Reload dashboard
+          </Button>
+          <Button variant="outline" size="sm" onClick={reset}>
+            <RotateCcw />
+            Try again
+          </Button>
+        </div>
+      </PreShellScreen>
     </RootDocument>
   );
 }

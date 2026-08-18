@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
+import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -57,7 +58,7 @@ export function SecretsTab({
         {query.isPending ? (
           <SecretsSkeleton />
         ) : query.isError ? (
-          <p className="p-4 text-sm text-destructive">{query.error.message}</p>
+          <PanelError message={query.error.message} />
         ) : query.data.secrets.length === 0 && !creating ? (
           <p className="p-6 text-center text-sm text-muted-foreground">
             No secrets yet. Create one to inject it into a workload.

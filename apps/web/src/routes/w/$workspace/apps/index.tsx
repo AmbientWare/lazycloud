@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import { PanelError } from "@/components/shared/PanelError";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
@@ -52,9 +53,7 @@ function AppsPage() {
       {apps.isPending ? (
         <AppCardsSkeleton />
       ) : apps.isError ? (
-        <div className="panel flex min-h-48 items-center justify-center rounded-md p-4 text-sm text-destructive">
-          {apps.error.message}
-        </div>
+        <PanelError message={apps.error.message} layout="framed" />
       ) : items.length === 0 ? (
         <QuickstartEmptyState />
       ) : (
