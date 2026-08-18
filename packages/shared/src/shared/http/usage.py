@@ -91,11 +91,15 @@ class UsageCostRowResponse(HttpModel):
 
     app_id: str = ""
     app_name: str = ""
+    workspace_id: str = ""
     workspace_name: str = ""
-    """Workspace the row's app belongs to.
+    """Workspace this row's cost was incurred in.
 
     Carried on the row rather than the envelope because the envelope may cover
-    an account, where every row has a different answer.
+    an account, where every row has a different answer. Grouped on, not derived
+    from the app: usage that reached no app carries an empty `app_id`, and that
+    same empty key in two workspaces would otherwise sum into one row naming
+    neither.
     """
 
     workload_id: str = ""

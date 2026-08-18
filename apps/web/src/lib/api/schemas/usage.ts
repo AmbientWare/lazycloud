@@ -88,6 +88,7 @@ export type UsageCostComponent = z.infer<typeof usageCostComponentSchema>;
 export const usageCostRowSchema = z.object({
   app_id: z.string().default(""),
   app_name: z.string().default(""),
+  workspace_id: z.string().default(""),
   workspace_name: z.string().default(""),
   workload_id: z.string().default(""),
   workload_name: z.string().default(""),
