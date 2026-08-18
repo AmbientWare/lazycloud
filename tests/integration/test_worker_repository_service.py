@@ -91,7 +91,7 @@ from shared.source_cache_cleanup import (
     WorkerCacheGenerationRecord,
     WorkerCacheGenerationState,
 )
-from shared.tasks import TaskStatus
+from shared.tasks import RetryPolicy, TaskStatus
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -2643,6 +2643,7 @@ def _worker_repository_service(
                 services=isolated_services,
                 stubs=isolated_services.control_plane_service,
             ),
+            tasks=isolated_services.tasks,
         ),
         redis=redis,
         object_storage=object_storage,
@@ -3098,19 +3099,25 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
     assert refused == 403
 
 
-def test_worker_repository_exit_releases_what_a_pooled_container_had_claimed(
+def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_lost(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
-    """A crashed pooled container gives its invocations back to the pool.
+    """A crashed pooled container gives its invocations back, and only so often.
 
     This is the common shape of an uncommanded death — OOM, a node lost, user
     code that segfaults — and the control plane never asked for it, so nothing
     on the stop path runs. A function container carries no task id, so the
     terminal-state sync that settles a container-addressed task cannot see what
-    this one was running. Left unreleased the task keeps naming a dead
-    container: no claim query can see it, no retry reaches it, and its caller
-    waits forever.
+    this one was running. Left unclaimed the task keeps naming a dead container:
+    no claim query can see it, no retry reaches it, and its caller waits forever.
+
+    Handed straight back it does something worse. The invocation that killed
+    this interpreter kills the next one, is handed back again, and runs at full
+    cost for as long as the account can pay — because a claim returning to an
+    attempt still marked running never advances the counter that would stop it.
+    So the exit charges an attempt: the invocation retries on the terms its
+    caller asked for and then fails for good, with an answer.
     """
 
     redis = real_redis_actors.client()
@@ -3123,29 +3130,35 @@ def test_worker_repository_exit_releases_what_a_pooled_container_had_claimed(
     )
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        container = ContainerRepository(session).records.create(
-            {
-                "name": "pooled-exit",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.function"],
-                "workspace_id": workspace_id,
-                "stub_id": stub.id,
-                "runtime_worker_id": "worker-1",
-                "status": ContainerStatus.Running.value,
-            },
-            workspace_id=workspace_id,
-            name="pooled-exit",
-            status=ContainerStatus.Running.value,
-        )
+
+    def crashing_container(name: str) -> ContainerRecord:
+        with isolated_services.context.database.session() as session:
+            return ContainerRepository(session).records.create(
+                {
+                    "name": name,
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runner.function"],
+                    "workspace_id": workspace_id,
+                    "stub_id": stub.id,
+                    "runtime_worker_id": "worker-1",
+                    "status": ContainerStatus.Running.value,
+                },
+                workspace_id=workspace_id,
+                name=name,
+                status=ContainerStatus.Running.value,
+            )
+
     claimed = isolated_services.tasks.create(
         "claimed-invocation",
         workspace_id=stub.workspace_id,
         stub_id=stub.id,
+        retry_policy=RetryPolicy(max_attempts=2),
     )
-    isolated_services.tasks.start(claimed.id, container_id=container.id)
 
+    first = crashing_container("pooled-exit-1")
+    isolated_services.tasks.start(claimed.id, container_id=first.id)
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=container.id, exit_code=137),
+        SetContainerExitCodeRequest(container_id=first.id, exit_code=137),
         principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
@@ -3154,4 +3167,18 @@ def test_worker_repository_exit_releases_what_a_pooled_container_had_claimed(
         f"task {released.id} still names the container that died holding it, so no "
         "claim can see it and its caller waits forever"
     )
-    assert released.status is TaskStatus.Pending
+    assert released.status is TaskStatus.Retry
+
+    second = crashing_container("pooled-exit-2")
+    isolated_services.tasks.start(claimed.id, container_id=second.id)
+    service.set_container_exit_code(
+        SetContainerExitCodeRequest(container_id=second.id, exit_code=137),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
+    )
+
+    settled = isolated_services.tasks.get(claimed.id)
+    assert settled.status is TaskStatus.Failed, (
+        f"task {settled.id} is {settled.status.value} after exhausting its attempts, so an "
+        "invocation that kills every container it touches is started again forever"
+    )
+    assert settled.attempt_number == 2

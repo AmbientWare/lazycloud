@@ -551,10 +551,12 @@ class FunctionAutoscaler:
         return FUNCTION_AUTOSCALER
 
     def selects(self, stub: StubRecord) -> bool:
-        # Bound to a deployment, as the other two workloads also require:
-        # provisioning for an unbound stub would hold a second copy of
-        # everything the bound one holds.
-        return stub.kind is StubKind.Function and bool(stub.deployment_id)
+        # Every function stub, bound to a deployment or not. A stub reached by
+        # `.remote()`, `.map()` or `lazycloud run` before anything is deployed
+        # has a backlog like any other, and it is the one case where the first
+        # container came from an invocation rather than from here — so refusing
+        # it leaves a fan-out being served one container at a time.
+        return stub.kind is StubKind.Function
 
     def partition(
         self,
@@ -619,11 +621,13 @@ class FunctionAutoscaler:
         del active_instance, now
         if stub.config.runtime.keep_warm >= 0:
             return []
-        candidates = [
-            container for container in containers if container.status is ContainerStatus.Running
-        ]
-        busy = self.functions.containers_holding_work([item.id for item in candidates])
-        idle = [container for container in candidates if container.id not in busy]
+        # Every container the excess was counted from, starting ones included.
+        # Two schedulers provisioning the same floor leave the newest half still
+        # pending, and considering only the running ones would answer an excess
+        # of two by stopping the two that are warm and keeping the two that are
+        # not — reclaiming the floor by discarding exactly what it is for.
+        busy = self.functions.containers_holding_work([item.id for item in containers])
+        idle = [container for container in containers if container.id not in busy]
         idle.sort(key=lambda container: container.created_at, reverse=True)
         actions: list[AutoscaleAction] = []
         for container in idle[:count]:

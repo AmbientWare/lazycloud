@@ -48,7 +48,21 @@ did not.
 A claim is only ever written by a container that is still live. One written
 afterwards names a container every settlement path has already run past, so
 nothing gives it back and its caller waits forever; a start that arrives from a
-terminal container is refused instead.
+terminal container is refused instead. That makes the order of a stop
+load-bearing: the container's terminal status is written before its claims are
+settled, or the container being stopped takes back what it just gave up and then
+goes away holding it. Where a settlement path can write both in one transaction
+it does; the stop cannot, so it orders them.
+
+Who ended the container decides whether its work is charged for the attempt. The
+platform stopping one — scaling down, draining, cancelling a neighbour — costs
+the invocation nothing: it is claimed again with its budget intact, and the
+caller sees only that it ran somewhere else. A container that died on its own
+having failed is the one exit the work itself may have caused, and there the
+invocation is charged an attempt and retried on its own terms. Handing it back
+free is what turns an invocation that kills its interpreter into a loop nothing
+bounds, because a claim returning to an attempt still marked running never
+advances the counter that `max_attempts` reads.
 
 ## Cancelling reaches the work, and stops there
 
@@ -88,3 +102,15 @@ There used to be a `CronJob` kind alongside `Function`. Fifteen places had to
 remember to name both, one of them an authorization set, and the autoscaler
 forgot — a schedule was the one function-shaped workload nothing would
 provision for.
+
+The kind was also what made a schedule impossible to attach to anything that
+could not run one, so the contracts now say it: only a function may carry
+`cron`, refused where the spec is written rather than at the tick. A pod with a
+schedule fires against a stub that cannot serve it and records the same failure
+every minute for as long as the deployment lives.
+
+A schedule is one per resource, not one per version, and it is answered on every
+deploy rather than only on the deploys that declare one. The row is named for
+the subdomain that every version shares, so a spec with no `cron` is stating
+that this resource has no schedule — and left unsaid, the row a previous version
+wrote outlives the source line that asked for it.

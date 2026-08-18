@@ -416,9 +416,11 @@ class _RecordingContainerStates:
 
     state: SchedulerContainerState | None
     refreshes: list[tuple[SchedulerContainerStatus, int]] = field(default_factory=list)
+    reads: int = 0
 
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
         del container_id
+        self.reads += 1
         return self.state
 
     def update_container_status(
@@ -498,7 +500,12 @@ def test_container_monitor_stops_heartbeating_a_state_the_platform_dropped() -> 
     )
 
     handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
-    sleep(0.2)
+    deadline = monotonic() + 5.0
+    while not states.reads and monotonic() < deadline:
+        sleep(0.01)
     handle.stop()
 
+    # Read before asserted, so the empty list is the guard refusing to write
+    # rather than a thread that had not reached the decision yet.
+    assert states.reads, "the heartbeat never looked at the container state"
     assert states.refreshes == []

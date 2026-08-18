@@ -33,6 +33,7 @@ from database.repositories.orchestration import (
 from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerControl
 from execution.containers.runtime_state import ContainerRuntimeStateRepository
+from execution.tasks import TaskService
 from foundation.network import worker_network_prefix
 from gateway.unit_state import billing_owner_for_unit
 from identity.auth import AuthorizationDeniedError, AuthService
@@ -330,6 +331,7 @@ class WorkerRepositoryDependencies:
     usage: UsageService
     workspace_changes: WorkspaceChangeService
     preempted_containers: PreemptedContainerControl
+    tasks: TaskService
 
 
 FATAL_CONTAINER_STARTUP_PHASES = frozenset(
@@ -2383,6 +2385,7 @@ class WorkerRepositoryService:
         preempted = termination_reason is StopContainerReason.Preempted
         reconcile_preemption = False
         settle_required = False
+        crashed_task_ids: list[str] = []
         with self.services.context.database.session() as session:
             container = ContainerRepository(session).get_across_workspaces(container_id)
             if container is None:
@@ -2431,7 +2434,24 @@ class WorkerRepositoryService:
             # work, and an exit nobody asked for would otherwise leave the task
             # naming a container that is gone: invisible to a claim, unreachable
             # by a retry, and waited on forever by its caller.
-            self._release_pooled_claims(session, container)
+            #
+            # Except where the container died on its own having failed, which is
+            # the one exit the work itself may have caused. Handed straight back,
+            # an invocation that kills its interpreter is claimed again, kills
+            # the next container the same way, and is handed back again — a loop
+            # nothing bounds, because a claim returning to an attempt still
+            # marked running never advances `attempt_number` and so never
+            # reaches `max_attempts`. Charged an attempt it retries on the usual
+            # terms and fails for good when they run out. Anything the platform
+            # stopped keeps its budget: that was not the caller's doing.
+            if termination_reason is StopContainerReason.Unknown and exit_code != 0:
+                crashed_task_ids = [
+                    task.id
+                    for task in TaskRepository(session).list_inflight_for_container(container.id)
+                    if task.id != container.task_id
+                ]
+            else:
+                self._release_pooled_claims(session, container)
             # The preemption retry intent must commit with the terminal state it belongs to.
             # A container that needs no settling is marked settled here so the recovery
             # sweep only ever sees work that is genuinely outstanding. A pooled
@@ -2451,6 +2471,19 @@ class WorkerRepositoryService:
                 container = ContainerRepository(session).upsert(container)
         if changed:
             self._publish_runtime_container_change(container)
+        for task_id in crashed_task_ids:
+            self.services.tasks.finish_with_retry(
+                task_id,
+                TaskStatus.Failed,
+                container_id=container.id,
+                error=_container_exit_error(
+                    container.id,
+                    exit_code,
+                    failed_phase=failed_phase,
+                    failure_detail=failure_detail,
+                ),
+                exit_code=exit_code,
+            )
         if settle_required:
             self.services.preempted_containers.preempted(container, exit_code=exit_code)
             self._mark_container_preemption_settled(container.id)
@@ -2466,8 +2499,10 @@ class WorkerRepositoryService:
 
         Read from the task side because the claim is the only record: a function
         container is started for its stub and its `task_id` stays empty for its
-        whole life. Released rather than failed — the container going away is the
-        platform's problem, and the caller's invocation is still wanted.
+        whole life. Released rather than failed, and released with its retry
+        budget untouched — the platform took this container away, so the caller's
+        invocation is still wanted and has spent nothing. The caller sees only
+        that it ran somewhere else.
         """
 
         TaskRepository(session).release_claims_for_container(

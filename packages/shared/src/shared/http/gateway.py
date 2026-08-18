@@ -217,10 +217,16 @@ class GetOrCreateStubRequest(HttpModel):
     workspace: str = "default"
 
     @model_validator(mode="after")
-    def never_keep_warm_is_pod_only(self) -> GetOrCreateStubRequest:
-        # The same rule the deployment record states: a container that does not
-        # retire itself needs something that removes it, which for a function is
-        # the autoscaler holding it to a declared floor.
+    def workload_configuration_is_canonical(self) -> GetOrCreateStubRequest:
+        # Both rules the deployment record states, checked here too because this
+        # is the other owner that builds a stub config, and a stub is deployable
+        # the moment it exists.
+        if self.cron and self.stub_type != DeploymentKind.Function.value:
+            msg = "cron is only supported for function workloads"
+            raise ValueError(msg)
+        # A container that does not retire itself needs something that removes
+        # it, which for a function is the autoscaler holding it to a declared
+        # floor.
         if (
             self.keep_warm_seconds == -1
             and self.stub_type != DeploymentKind.Pod.value

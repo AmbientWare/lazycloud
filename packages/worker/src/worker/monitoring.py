@@ -25,13 +25,45 @@ from worker.container_metrics import (
 from worker.events import ContainerLifecyclePayload, ContainerRequestContext, WorkerUsageEvidence
 from worker.finalization import ContainerStatusUpdater
 from worker.status import (
+    CONTAINER_STATE_TTL_SECONDS,
+    WorkerContainerStatus,
     WorkerStatusHeartbeatAction,
+    WorkerStatusHeartbeatPlan,
     normalize_worker_container_status,
     plan_worker_status_heartbeat,
 )
 from worker.supervision import WorkerUsageEmissionResult
 
 LOGGER = logging.getLogger(__name__)
+
+_HEARTBEAT_REFRESHES_PER_TTL = 4
+_HEARTBEAT_STATUSES = {
+    WorkerContainerStatus.Pending: SchedulerContainerStatus.Pending,
+    WorkerContainerStatus.Running: SchedulerContainerStatus.Running,
+}
+
+
+def _heartbeat_interval_seconds() -> float:
+    """How often to re-arm, given how long the platform waits before reaping.
+
+    Several refreshes inside one TTL, so a lost write or a late tick costs
+    margin rather than the container.
+    """
+
+    return CONTAINER_STATE_TTL_SECONDS / _HEARTBEAT_REFRESHES_PER_TTL
+
+
+def _heartbeat_next_status(plan: WorkerStatusHeartbeatPlan) -> SchedulerContainerStatus | None:
+    """The status this heartbeat may assert, or nothing where it may assert none.
+
+    A worker's liveness says something about a container the record calls
+    pending or running, and nothing about one being stopped or already finished.
+    Re-arming those would hold open a state something else has moved past.
+    """
+
+    if plan.action is not WorkerStatusHeartbeatAction.UpdateStatus:
+        return None
+    return _HEARTBEAT_STATUSES.get(plan.next_status)
 
 
 class ContainerRuntimeMonitorHandle(Protocol):
@@ -255,6 +287,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _samples: int = 0
     _published: int = 0
     _thread: threading.Thread | None = None
+    _heartbeat_stopped: bool = False
+    _last_heartbeat_at: float = float("-inf")
 
     def start(self) -> None:
         if self.metrics is None and self.usage_recorder is None and self.container_states is None:
@@ -288,7 +322,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
         self._publish_once(recorded_at=monotonic())
         while not self._stop.wait(self.settings.sample_interval_seconds):
             current = monotonic()
-            self._heartbeat_container_state()
+            self._heartbeat_container_state(recorded_at=current)
             self._publish_once(recorded_at=current)
             try:
                 self._record_usage_until(recorded_at=current)
@@ -304,7 +338,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
                     extra={"container_id": self.request.container_id},
                 )
 
-    def _heartbeat_container_state(self) -> None:
+    def _heartbeat_container_state(self, *, recorded_at: float) -> None:
         """Re-arm the scheduler's record of this container while it is running.
 
         The state carries a TTL that is re-armed only by a write, and the worker
@@ -315,12 +349,20 @@ class _ThreadedContainerRuntimeMonitorHandle:
         stub, and no stop is ever sent, so it keeps claiming. A container is
         allowed to outlive fifteen minutes; an invocation may take an hour.
 
+        Paced against that TTL rather than against the sample loop it rides on.
+        The two intervals answer different questions — how often this container
+        is measured, and how long the platform waits before calling it gone — and
+        tying the write to the first put a request pair on the control plane per
+        container every few seconds to hold a window measured in minutes.
+
         A missing state is deliberately not rewritten. Recreating it would hide
         a container the platform has already decided it does not know about,
         which is the one case where letting the sweep reap it is correct.
         """
 
-        if self.container_states is None:
+        if self.container_states is None or self._heartbeat_stopped:
+            return
+        if recorded_at - self._last_heartbeat_at < _heartbeat_interval_seconds():
             return
         container_id = self.request.container_id
         try:
@@ -333,19 +375,24 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 runtime_started=True,
                 runtime_pid=self.started_pid,
             )
-            if plan.action is not WorkerStatusHeartbeatAction.UpdateStatus:
-                # Missing, exited or stopping: all decided elsewhere. Stop
-                # heartbeating rather than asserting a liveness this thread is
-                # not the authority on.
-                self._stop.set()
+            next_status = _heartbeat_next_status(plan)
+            if next_status is None:
+                # A state this thread is not the authority on: missing, or a stop
+                # already in progress, or a record something has finished. Give
+                # up the heartbeat rather than assert a liveness that is not this
+                # thread's to assert — but only the heartbeat. Metrics and the
+                # usage drain run off the same loop, and this container is still
+                # consuming what they meter.
+                self._heartbeat_stopped = True
                 LOGGER.info(
                     "container state heartbeat stopping",
                     extra={"container_id": container_id, "reason": plan.reason},
                 )
                 return
+            self._last_heartbeat_at = recorded_at
             self.container_states.update_container_status(
                 container_id,
-                SchedulerContainerStatus.Running,
+                next_status,
                 ttl_seconds=plan.expiry_seconds,
             )
         except Exception:

@@ -420,6 +420,82 @@ def test_cron_schedule_follows_deployment_lifecycle(
     assert isolated_services.cron_jobs.list() == []
 
 
+def test_redeploying_without_cron_removes_the_schedule(
+    isolated_services: ApiServices,
+) -> None:
+    """Deleting `cron=` from the source is what stops the schedule.
+
+    The row is named for the subdomain, which every version of a resource
+    shares, so a redeploy that declares a schedule replaces it. One that
+    declares none has to say so: left alone the row survives its own source
+    line, still names the version that wrote it, and keeps firing something the
+    author has already deleted.
+    """
+
+    scheduled = DeploymentSpec(
+        name="nightly",
+        kind=DeploymentKind.Function,
+        handler="pkg:nightly",
+        cron="0 3 * * *",
+    )
+    isolated_services.deployments.deploy(scheduled)
+    assert len(isolated_services.cron_jobs.list()) == 1
+
+    isolated_services.deployments.deploy(
+        DeploymentSpec(name="nightly", kind=DeploymentKind.Function, handler="pkg:nightly")
+    )
+
+    assert isolated_services.cron_jobs.list() == [], (
+        "the schedule outlived the source line that asked for it, so the superseded "
+        "version keeps firing on a schedule nothing in the author's code names"
+    )
+
+
+def test_redeploying_releases_the_prior_version_warm_floor(
+    isolated_services: ApiServices,
+) -> None:
+    """A warm floor belongs to the resource, not to every version of it.
+
+    It is held per stub and each version keeps its own, and a floor makes the
+    idle window infinite — so without this every deploy pins another floor's
+    worth of containers that no name resolves to and nothing retires. The prior
+    version stays invocable by number; it just stops being warm.
+    """
+
+    control_plane = isolated_services.control_plane_service
+    warm: dict[str, JsonValue] = {"autoscaler": {"min_containers": 2, "max_containers": 4}}
+    v1 = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="predict",
+            kind=DeploymentKind.Function,
+            handler="pkg:v1",
+            metadata=warm,
+        )
+    )
+    assert control_plane.get_stub(v1.stub_id or "").config.autoscaler.min_containers == 2
+
+    isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="predict",
+            kind=DeploymentKind.Function,
+            handler="pkg:v2",
+            metadata=warm,
+        )
+    )
+
+    superseded = control_plane.get_stub(v1.stub_id or "")
+    assert superseded.config.autoscaler.min_containers == 0, (
+        "the superseded version still holds its own warm floor, so every deploy leaves "
+        "another two containers running that nothing routes to and nothing retires"
+    )
+    # The window stays infinite on purpose: a running container took its
+    # keep-warm seconds from the environment it started with, so a finite one
+    # written here would reach the config and not them. A zero floor with no
+    # window is what puts them under the autoscaler, which stops the idle ones.
+    assert superseded.config.runtime.keep_warm == -1
+    assert isolated_services.deployments.get(v1.id).active
+
+
 def test_cron_schedule_is_deleted_with_app(isolated_services: ApiServices) -> None:
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(

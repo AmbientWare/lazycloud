@@ -4,7 +4,7 @@ import { Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CronJob, Deployment, Stub } from "@/lib/api/schemas";
+import type { CronJob, Deployment } from "@/lib/api/schemas";
 import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
 import { cronJobsQueryOptions } from "@/lib/queries/cron";
 import { formatDuration, relativeTime } from "@/lib/format";
@@ -14,14 +14,12 @@ import type { WorkloadGroup } from "./grouping";
 export function WorkloadOperation({
   workspaceId,
   deployment,
-  stub,
   group,
   isPublic,
   runningContainers,
 }: {
   workspaceId: string;
   deployment: Deployment;
-  stub: Stub | undefined;
   group: WorkloadGroup;
   isPublic: boolean;
   runningContainers: number;

@@ -600,10 +600,8 @@ class ContainerService:
                     worker_id=cancellation.worker_id,
                     reason=reason,
                 )
-            self._settle_claimed_work(record, reason=reason)
             record.status = ContainerStatus.Stopped
             record.finished_at = utc_now()
-            self._release_runtime_state(record)
         with self.context.database.session() as session:
             updated = ContainerRepository(session).records.upsert(
                 record,
@@ -611,6 +609,16 @@ class ContainerService:
                 name=record.name,
                 status=record.status.value,
             )
+        if state_changed:
+            # After the row is terminal, never before. A claim is refused from a
+            # container the record calls terminal, so settling first opens a
+            # window where the work is free and this container still reads as
+            # live — it takes back what it just gave up and then goes away
+            # holding it. The other two settlement paths write the terminal
+            # status in the same session as the release; this one cannot, so it
+            # orders them instead.
+            self._settle_claimed_work(updated, reason=reason)
+            self._release_runtime_state(updated)
         self.events.emit(
             "container.stopped",
             resource_type="container",
