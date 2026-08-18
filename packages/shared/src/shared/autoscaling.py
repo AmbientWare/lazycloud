@@ -336,9 +336,11 @@ def _pod_stop_skip_reason(
         and now_seconds < container.started_at_seconds + keep_warm_seconds
     ):
         return PodContainerSkipReason.KeepWarmWindow
-    if (
-        keep_warm_lock_authoritative or keep_warm_seconds != 0
-    ) and container.keep_warm_lock_present:
+    # The lock defends a container only while it names a window that ends. An
+    # always-on pod is held up by its `min_containers` floor instead, and its
+    # lock never expires, so reading that lock as a per-container veto would
+    # refuse every reduction the deployment is ever asked for.
+    if (keep_warm_lock_authoritative or keep_warm_seconds > 0) and container.keep_warm_lock_present:
         return PodContainerSkipReason.KeepWarmLock
     if container.active_connections > 0:
         return PodContainerSkipReason.ActiveConnections
