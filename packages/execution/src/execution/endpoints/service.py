@@ -79,9 +79,6 @@ from execution.services import ExecutionServices
 
 ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS = 0.05
 ENDPOINT_HEALTH_PROBE_TIMEOUT_SECONDS = 10.0
-# A health probe runs no handler, so a container already serving its
-# concurrency limit can still answer one.
-ENDPOINT_HEALTH_PROBE_CONCURRENCY = 2**31
 ENDPOINT_BACKPRESSURE_STATUS_CODE = 429
 ENDPOINT_CANCELLED_STATUS_CODE = 499
 ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE = "endpoint request buffer is full"
@@ -305,6 +302,12 @@ class EndpointControlService:
         No ready container is reported as unavailable rather than waited out: the
         caller asked for the current answer, and a probe that blocks until
         capacity arrives has stopped being a probe.
+
+        The forward here is itself the probe, so selection deliberately skips the
+        readiness filter: running it would send every container the same
+        `GET /health` this request is about to send one of them, and an external
+        uptime check polls far slower than the verdict is cached, so that second
+        request is never the free one.
         """
 
         try:
@@ -314,12 +317,9 @@ class EndpointControlService:
             dispatcher = self.dispatcher
             if dispatcher is None:
                 return error_response(503, "endpoint dispatcher is not configured")
-            target = dispatcher.select_target(
-                stub.id,
-                max_inflight_per_container=ENDPOINT_HEALTH_PROBE_CONCURRENCY,
-            )
+            target = dispatcher.unprobed_target(stub.id)
             if target is None:
-                return error_response(503, "no ready endpoint containers")
+                return error_response(503, "no running endpoint containers")
             return dispatcher.forward_target(
                 target,
                 request,

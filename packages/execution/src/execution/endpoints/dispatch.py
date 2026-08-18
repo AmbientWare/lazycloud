@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import http.client
 import socket
-from collections.abc import Iterable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -32,11 +31,7 @@ from shared.scheduling import SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.urls import parse_container_address
 
-from execution.containers.readiness import (
-    AlwaysReadyContainers,
-    ContainerHealthCheck,
-    ContainerReadiness,
-)
+from execution.containers.readiness import ContainerReadiness
 
 DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS = 175.0
 DEFAULT_ENDPOINT_QUEUE_TIMEOUT_SECONDS = 600.0
@@ -218,6 +213,8 @@ class EndpointRequestDispatcher(Protocol):
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ) -> EndpointDispatchTarget | None: ...
 
+    def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None: ...
+
     def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
 
     def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None: ...
@@ -280,7 +277,7 @@ class EndpointInstanceDispatcher:
     tailnet_peer_resolver: TailnetPeerResolver | None = None
     endpoint_port: int = CONTAINER_INNER_PORT
     http_client: EndpointHttpClient | None = None
-    readiness: ContainerReadiness = field(default_factory=AlwaysReadyContainers)
+    readiness_probe: ContainerReadiness | None = None
 
     def forward(
         self,
@@ -339,10 +336,27 @@ class EndpointInstanceDispatcher:
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ) -> EndpointDispatchTarget | None:
-        targets = self.targets(
+        return next(
+            self._candidate_targets(
+                stub_id,
+                container_loads=container_loads,
+                max_inflight_per_container=max_inflight_per_container,
+            ),
+            None,
+        )
+
+    def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None:
+        """The least loaded running backend, without asking whether it serves.
+
+        For a caller whose own request answers that question. Concurrency limits
+        are not applied either: a health probe runs no handler, so a container
+        already at its limit can still answer one.
+        """
+
+        targets = self._ordered_targets(
             stub_id,
-            container_loads=container_loads,
-            max_inflight_per_container=max_inflight_per_container,
+            container_loads=None,
+            max_inflight_per_container=0,
         )
         return targets[0] if targets else None
 
@@ -387,6 +401,43 @@ class EndpointInstanceDispatcher:
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ) -> list[EndpointDispatchTarget]:
+        targets = self._ordered_targets(
+            stub_id,
+            container_loads=container_loads,
+            max_inflight_per_container=max_inflight_per_container,
+        )
+        return [target for target in targets if self._is_ready(target, stub_id)]
+
+    def _candidate_targets(
+        self,
+        stub_id: str,
+        *,
+        container_loads: Mapping[str, int] | None,
+        max_inflight_per_container: int,
+    ) -> Iterator[EndpointDispatchTarget]:
+        """Load-ordered candidates, probed one at a time as they are consumed.
+
+        A caller that needs only the first ready backend should not wait on a
+        probe of the ones behind it: the slowest to answer is the one that is not
+        answering, so probing the whole set eagerly would put an unreachable
+        container's full timeout in front of a healthy container's request.
+        """
+
+        for target in self._ordered_targets(
+            stub_id,
+            container_loads=container_loads,
+            max_inflight_per_container=max_inflight_per_container,
+        ):
+            if self._is_ready(target, stub_id):
+                yield target
+
+    def _ordered_targets(
+        self,
+        stub_id: str,
+        *,
+        container_loads: Mapping[str, int] | None,
+        max_inflight_per_container: int,
+    ) -> list[EndpointDispatchTarget]:
         states = [
             state
             for state in self.containers.list_by_stub(stub_id)
@@ -404,43 +455,31 @@ class EndpointInstanceDispatcher:
             target = self._target_for_state(state)
             if target is not None:
                 targets.append(target)
-        return self._ready_targets(targets, stub_id)
+        return targets
 
-    def _ready_targets(
-        self,
-        targets: list[EndpointDispatchTarget],
-        stub_id: str,
-    ) -> list[EndpointDispatchTarget]:
-        """Drop containers whose runner is not answering yet.
+    def _is_ready(self, target: EndpointDispatchTarget, stub_id: str) -> bool:
+        """Whether the runner in this container is answering yet.
 
         A container reaching `Running` has started, not bound its port, and the
-        sort above would otherwise hand a caller the least loaded backend
+        load sort would otherwise hand a caller the least loaded backend
         precisely because nothing has reached it.
         """
 
-        if not targets:
-            return targets
-        health_check = ContainerHealthCheck(
-            path=CONTAINER_HEALTH_PATH,
+        route = target.route
+        return self.readiness().is_ready(
+            container_id=target.container_id,
+            stub_id=stub_id,
+            address=target.address,
+            route_id=route.route_id if route is not None else "",
             port=self.endpoint_port,
+            health_path=CONTAINER_HEALTH_PATH,
         )
 
-        def ready(target: EndpointDispatchTarget) -> bool:
-            route = target.route
-            return self.readiness.is_ready(
-                container_id=target.container_id,
-                stub_id=stub_id,
-                address=target.address,
-                route_id=route.route_id if route is not None else "",
-                port=self.endpoint_port,
-                health_check=health_check,
-            )
-
-        if len(targets) == 1:
-            return targets if ready(targets[0]) else []
-        with ThreadPoolExecutor(max_workers=len(targets)) as pool:
-            verdicts = list(pool.map(ready, targets))
-        return [target for target, is_ready in zip(targets, verdicts, strict=True) if is_ready]
+    def readiness(self) -> ContainerReadiness:
+        if self.readiness_probe is None:
+            msg = "endpoint container readiness probe is not configured"
+            raise RuntimeError(msg)
+        return self.readiness_probe
 
     def _target_for_state(
         self,

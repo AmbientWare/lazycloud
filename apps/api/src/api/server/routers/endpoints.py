@@ -571,14 +571,10 @@ async def deployed_asgi_request_by_version(
     )
 
 
-async def _forward_endpoint_request(
-    stub: StubRecord,
-    service: EndpointApiService,
-    request: Request,
-    *,
-    subpath: str = "",
-) -> Response:
-    forwarded = EndpointForwardRequest(
+async def _forwarded_request(
+    stub: StubRecord, request: Request, subpath: str
+) -> EndpointForwardRequest:
+    return EndpointForwardRequest(
         stub_id=stub.id,
         method=request.method,
         path=forwarded_path(subpath),
@@ -586,12 +582,39 @@ async def _forward_endpoint_request(
         headers=request_headers(request),
         body=await request.body(),
     )
-    handler = (
-        service.forward_endpoint_health
-        if forwarded.path == CONTAINER_HEALTH_PATH
-        else service.forward_endpoint_request
+
+
+async def _health_probe_response(
+    service: EndpointApiService,
+    forwarded: EndpointForwardRequest,
+) -> Response | None:
+    """The probe path, which answers without opening an invocation.
+
+    Both endpoint kinds share it, and neither can serve it the ordinary way: the
+    ASGI path returns a stream it would have to metre, and the function path a
+    task the caller never asked to run.
+    """
+
+    if forwarded.path != CONTAINER_HEALTH_PATH:
+        return None
+    result = await run_in_threadpool(service.forward_endpoint_health, forwarded)
+    return forwarded_response(
+        status_code=result.status_code, headers=result.headers, body=result.body
     )
-    result = await run_in_threadpool(handler, forwarded)
+
+
+async def _forward_endpoint_request(
+    stub: StubRecord,
+    service: EndpointApiService,
+    request: Request,
+    *,
+    subpath: str = "",
+) -> Response:
+    forwarded = await _forwarded_request(stub, request, subpath)
+    probe = await _health_probe_response(service, forwarded)
+    if probe is not None:
+        return probe
+    result = await run_in_threadpool(service.forward_endpoint_request, forwarded)
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body
     )
@@ -604,19 +627,10 @@ async def _forward_asgi_http_request(
     *,
     subpath: str = "",
 ) -> Response:
-    forwarded = EndpointForwardRequest(
-        stub_id=stub.id,
-        method=request.method,
-        path=forwarded_path(subpath),
-        query_params=request_query_params(request),
-        headers=request_headers(request),
-        body=await request.body(),
-    )
-    if forwarded.path == CONTAINER_HEALTH_PATH:
-        result = await run_in_threadpool(service.forward_endpoint_health, forwarded)
-        return forwarded_response(
-            status_code=result.status_code, headers=result.headers, body=result.body
-        )
+    forwarded = await _forwarded_request(stub, request, subpath)
+    probe = await _health_probe_response(service, forwarded)
+    if probe is not None:
+        return probe
     session: EndpointIngressDispatchSession | None = None
     try:
         session = await run_in_threadpool(service.prepare_asgi_http, forwarded)
