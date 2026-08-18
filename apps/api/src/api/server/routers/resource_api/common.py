@@ -66,6 +66,7 @@ def usage_cost_list_response(
             UsageCostRowResponse(
                 app_id=row.app_id,
                 app_name=row.app_name,
+                workspace_id=row.workspace_id,
                 workspace_name=row.workspace_name,
                 workload_id=row.workload_id,
                 workload_name=row.workload_name,

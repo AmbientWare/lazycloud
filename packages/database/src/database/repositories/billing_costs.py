@@ -15,12 +15,17 @@ from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 _GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[InstrumentedAttribute[str], ...]] = {
-    UsageCostGroupKey.App: (BillingLedgerSegmentTable.app_id,),
+    UsageCostGroupKey.App: (
+        BillingLedgerSegmentTable.workspace_id,
+        BillingLedgerSegmentTable.app_id,
+    ),
     UsageCostGroupKey.Workload: (
+        BillingLedgerSegmentTable.workspace_id,
         BillingLedgerSegmentTable.app_id,
         BillingLedgerSegmentTable.workload_id,
     ),
     UsageCostGroupKey.Task: (
+        BillingLedgerSegmentTable.workspace_id,
         BillingLedgerSegmentTable.app_id,
         BillingLedgerSegmentTable.workload_id,
         BillingLedgerSegmentTable.task_id,
@@ -29,7 +34,12 @@ _GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[InstrumentedAttribute[str], ...]] 
 """Every level carries the ids above it, so a row names its own place in the
 product model. The whole tuple is what a row is grouped by and what distinguishes
 it: a container that is not a task carries an empty `task_id`, so the deepest
-column alone is shared by every such group."""
+column alone is shared by every such group.
+
+Workspace leads every level because a page may cover several. Grouped by app
+alone, usage that reached no app carries an empty `app_id` — real, and the same
+empty key in every workspace, so two accounts' unattributed spend would sum into
+one row that names neither."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,15 +79,10 @@ class LedgerCostRow:
     agreement.
     """
 
+    workspace_id: str
+    workspace_name: str
     app_id: str
     app_name: str
-    workspace_name: str
-    """Workspace the row's app belongs to, so an account-wide page reads.
-
-    Taken from the app rather than grouped on: an app belongs to exactly one
-    workspace, so grouping by both would split nothing and only lengthen the
-    cursor every page is ordered by.
-    """
 
     workload_id: str
     workload_name: str
@@ -310,18 +315,31 @@ class BillingLedgerCostRepository:
         no name rather than inventing one.
         """
 
-        app_ids = {key[0] for key in keys if key[0]}
-        workload_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
-        apps: dict[str, str] = {}
-        app_workspaces: dict[str, str] = {}
-        if app_ids:
-            for row in self.session.execute(
-                select(AppTable.id, AppTable.name, WorkspaceTable.name)
-                .join(WorkspaceTable, WorkspaceTable.id == AppTable.workspace_id)
-                .where(AppTable.id.in_(app_ids))
-            ).all():
-                apps[str(row[0])] = str(row[1])
-                app_workspaces[str(row[0])] = str(row[2])
+        workspace_ids = {key[0] for key in keys if key[0]}
+        app_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
+        workload_ids = {key[2] for key in keys if len(key) > 2 and key[2]}
+        workspaces = (
+            {
+                str(row[0]): str(row[1])
+                for row in self.session.execute(
+                    select(WorkspaceTable.id, WorkspaceTable.name).where(
+                        WorkspaceTable.id.in_(workspace_ids)
+                    )
+                ).all()
+            }
+            if workspace_ids
+            else {}
+        )
+        apps = (
+            {
+                str(row[0]): str(row[1])
+                for row in self.session.execute(
+                    select(AppTable.id, AppTable.name).where(AppTable.id.in_(app_ids))
+                ).all()
+            }
+            if app_ids
+            else {}
+        )
         workloads = (
             {
                 str(row[0]): (str(row[1]), str(row[2]))
@@ -334,13 +352,13 @@ class BillingLedgerCostRepository:
             if workload_ids
             else {}
         )
-        return _ResolvedNames(apps=apps, app_workspaces=app_workspaces, workloads=workloads)
+        return _ResolvedNames(workspaces=workspaces, apps=apps, workloads=workloads)
 
 
 @dataclass(frozen=True, slots=True)
 class _ResolvedNames:
+    workspaces: dict[str, str]
     apps: dict[str, str]
-    app_workspaces: dict[str, str]
     workloads: dict[str, tuple[str, str]]
 
 
@@ -394,12 +412,13 @@ def _cost_row(
 ) -> LedgerCostRow:
     # The key carries the ids above its level and stops there, so a shallower
     # grouping leaves the levels below it empty rather than absent.
-    app_id, workload_id, task_id = (*key, "", "")[:3]
+    workspace_id, app_id, workload_id, task_id = (*key, "", "")[:4]
     workload_name, workload_kind = names.workloads.get(workload_id, ("", ""))
     return LedgerCostRow(
+        workspace_id=workspace_id,
+        workspace_name=names.workspaces.get(workspace_id, ""),
         app_id=app_id,
         app_name=names.apps.get(app_id, ""),
-        workspace_name=names.app_workspaces.get(app_id, ""),
         workload_id=workload_id,
         workload_name=workload_name,
         workload_kind=workload_kind,
