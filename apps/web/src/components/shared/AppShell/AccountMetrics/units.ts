@@ -87,8 +87,24 @@ export function windowSummary(
 
 /** What a window nothing was measured in says, in the measure's own words. */
 export function emptyWindowMessage(measure: AccountActivityMeasure, rangeLabel: string): string {
-  const started = measure === "containers" || measure === "tasks";
-  return started
+  return countsEvents(measure)
     ? `No ${measureLabels[measure].toLowerCase()} started in the last ${rangeLabel}`
     : `Nothing was metered in the last ${rangeLabel}`;
+}
+
+/**
+ * What a window every reading is flat across says, written inside the plot.
+ *
+ * Not the empty-window message: this window was measured, every app in it
+ * answered, and the answer was zero. The scale and the clock stay drawn under
+ * this line, so what the reader sees is an instrument reading nothing rather
+ * than a panel that failed to load.
+ */
+export function flatWindowNote(measure: AccountActivityMeasure): string {
+  return countsEvents(measure) ? "Nothing started in this window" : "Nothing held in this window";
+}
+
+/** Whether the measure counts things that happened, rather than capacity held. */
+function countsEvents(measure: AccountActivityMeasure): boolean {
+  return measure === "containers" || measure === "tasks";
 }
