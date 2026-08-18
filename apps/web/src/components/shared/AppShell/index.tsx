@@ -192,34 +192,34 @@ function DesktopRail({
 
   return (
     <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[inset_-1px_0_0_oklch(1_0_0/0.02)] lg:flex">
-      <div className="flex h-14 shrink-0 items-center px-4">
+      {/* Each row below reaches less far than the one above it: the product,
+          then the workspace, then a search that only ever looks inside it, then
+          that workspace's sections. The readings are the one control that spans
+          workspaces, so they sit up here beside the mark rather than in the
+          sequence, where they would read as scoped to whatever is selected. */}
+      <div className="flex h-14 shrink-0 items-center justify-between gap-2 px-3">
         <Link
           to="/w/$workspace/apps"
           params={{ workspace: workspace.name }}
-          className="flex items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          className="flex min-w-0 items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
-          <img src="/lazycloud.png" alt="" className="size-8" />
-          <span className="text-xl font-bold text-brand">LazyCloud</span>
+          <img src="/lazycloud.png" alt="" className="size-8 shrink-0" />
+          <span className="truncate text-xl font-bold text-brand">LazyCloud</span>
         </Link>
+        <AccountMetricsControl />
       </div>
 
-      {/* Search leads, and the readings sit beside it: both are things done to
-          the account from wherever you already are, where the workspace below
-          them is what the whole rail underneath is scoped to. */}
-      <div className="px-3 pb-3">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onOpenSearch}
-            className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Search className="size-3.5" aria-hidden="true" />
-            <span className="flex-1">Search</span>
-            <kbd className="mono text-[10px] text-muted-foreground">⌘K</kbd>
-          </button>
-          <AccountMetricsControl />
-        </div>
-        <WorkspaceSwitcher className="mt-2 w-full" />
+      <div className="space-y-1.5 px-3 pb-3">
+        <WorkspaceSwitcher className="w-full" />
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          className="flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Search className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="flex-1 truncate">Search {workspace.name}</span>
+          <kbd className="mono shrink-0 text-[10px] text-muted-foreground">⌘K</kbd>
+        </button>
       </div>
 
       <nav aria-label="Main navigation" className="space-y-0.5 px-3">
