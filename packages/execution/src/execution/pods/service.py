@@ -1110,8 +1110,8 @@ class PodControlService:
         stub_id: str,
         request: PodProxyRequest,
         *,
-        health_path: str = "",
-        health_port: int = 0,
+        health_path: str,
+        health_port: int,
     ) -> PodProxyTarget:
         stub = self.control_plane.get_stub(stub_id)
         workspace = self.control_plane.get_workspace(stub.workspace_id)
@@ -1243,38 +1243,43 @@ class PodControlService:
         # Probing in series would make a stub's slowest unreachable backend set the
         # latency of every request that had a healthy one to go to.
         #
-        # Only a container that exposes the probe port is asked. One that does not
-        # is left ready: it cannot be selected anyway — `plan_pod_proxy` drops it
-        # for lacking the requested port — and calling it unready instead would
-        # turn "this port is not exposed", which is answerable immediately, into
-        # "nothing is serving yet", which the caller waits out the whole start
-        # timeout before hearing.
+        # A container with no address on the probe port cannot be asked. What that
+        # means depends on which port went missing. When the probe port is the
+        # requested one, the container is already excluded by the port check that
+        # follows, and calling it unready as well would turn "this port is not
+        # exposed" — answerable at once — into "nothing is serving yet", which the
+        # caller waits out the whole start timeout before hearing. When a declared
+        # health port is the one missing, nothing else excludes it, so an
+        # unaskable container is unready rather than silently routed to unprobed.
+        unprobed_verdict = probe_port == port
         readiness = self._probe_candidates(
             [target for _id, _map, target in candidates if target.address],
             stub_id=stub_id,
             port=probe_port,
             health_path=health_path,
         )
-        backend_containers = [
-            PodBackendContainer(
-                container_id=container_id,
-                address_map=address_map,
-                # Only a ready container is ever balanced across, so a lookup for one
-                # that is not costs a Redis round trip nobody reads — and during a
-                # cold start that is every container, on every 250ms poll.
-                active_connections=(
-                    self._pod_proxy_connections().container_connections(
-                        workspace_name,
-                        stub_id,
-                        container_id,
-                    )
-                    if readiness.get(container_id, True)
-                    else 0
-                ),
-                ready=readiness.get(container_id, True),
+        backend_containers = []
+        for container_id, address_map, _target in candidates:
+            ready = readiness.get(container_id, unprobed_verdict)
+            backend_containers.append(
+                PodBackendContainer(
+                    container_id=container_id,
+                    address_map=address_map,
+                    # Only a ready container is ever balanced across, so a lookup for
+                    # one that is not costs a Redis round trip nobody reads — and
+                    # during a cold start that is every container, every 250ms poll.
+                    active_connections=(
+                        self._pod_proxy_connections().container_connections(
+                            workspace_name,
+                            stub_id,
+                            container_id,
+                        )
+                        if ready
+                        else 0
+                    ),
+                    ready=ready,
+                )
             )
-            for container_id, address_map, _target in candidates
-        ]
         return backend_containers, targets
 
     def _probe_candidates(

@@ -9,18 +9,22 @@ Redis holds the window rather than a process-local dict: several API processes
 serve the same stub, and a per-process cache would multiply the probe rate by the
 number of them while giving each an independently stale view.
 
-The window is claimed before the dial, not after it. Writing the verdict on the
-way out leaves the whole probe duration uncovered, and that duration is longest
-for exactly the backend that is not answering — so during a cold start, the case
-this exists for, every waiting caller would dial every unready container and hold
-a thread for the full timeout doing it.
+A caller that finds no verdict probes rather than waiting on whichever caller is
+already probing. Suppressing the duplicate dial is tempting — it is the cold
+start, so every waiting caller misses at once — but the loser of that race has no
+verdict to report, and reporting "not ready" is read one layer up as "no capacity
+exists", which asks the scheduler for another container. Paying for a duplicate
+dial is cheaper than paying for a duplicate container, and the common cold-start
+failure is a refused connection, which returns at once rather than at the
+timeout.
 """
 
 from __future__ import annotations
 
+import http.client
 from dataclasses import dataclass
 
-from coordination.redis_client import RedisClient
+from coordination.redis_client import RedisClient, RedisWireScalar
 from execution.containers.readiness import (
     DEFAULT_READINESS_CACHE_TTL_MS,
     DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS,
@@ -30,17 +34,36 @@ from execution.pods.proxy import (
     PodProxyHttpRequest,
     PodProxySocketClient,
     PodProxyTarget,
+    PodProxyUnavailable,
 )
+from networking.dialer import BackendRouteUnavailable
 from shared.workload_keys import container_readiness_key
 
 _READY = "1"
 _NOT_READY = "0"
-_PROBING = "?"
 # The same range the checkpoint readiness probe accepts. A redirect is a serving
 # application answering, and a probe that demanded 200 would call a workload
 # unready for routing a request it would have handled.
 _HTTP_READY_MIN_STATUS = 200
 _HTTP_READY_MAX_STATUS = 400
+# What a backend that is not serving looks like from here. A route the resolver
+# cannot place is the ordinary shape of a container that registered and then died,
+# and a workload that accepts the connection without speaking HTTP answers the
+# question just as clearly — neither is this process malfunctioning, so neither
+# may escape a probe and turn a routing decision into a failed request.
+_UNREACHABLE = (
+    OSError,
+    BackendRouteUnavailable,
+    PodProxyUnavailable,
+    http.client.HTTPException,
+    # An address the parser rejects came from the address map, not from this code,
+    # and names a backend nothing can reach.
+    ValueError,
+)
+
+
+def _decoded(value: RedisWireScalar) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
 
 
 @dataclass(slots=True)
@@ -68,12 +91,7 @@ class RedisContainerReadiness:
         key = self.redis.key(container_readiness_key(container_id, port=port, path=health_path))
         cached = self.redis.get(key)
         if cached is not None:
-            return str(cached) == _READY
-        if not self._claim(key):
-            # Another caller is dialing this backend right now. Reporting it unready
-            # costs one poll interval and keeps the herd off a backend that is by
-            # definition slow to answer.
-            return False
+            return _decoded(cached) == _READY
         target = PodProxyTarget(
             container_id=container_id,
             address=address,
@@ -86,23 +104,13 @@ class RedisContainerReadiness:
         self.redis.set(key, _READY if ready else _NOT_READY, px=self.cache_ttl_ms)
         return ready
 
-    def _claim(self, key: str) -> bool:
-        """Take the right to probe, for no longer than the probe itself can take."""
-
-        return self.redis.set(
-            key,
-            _PROBING,
-            px=max(int(self.timeout_seconds * 1000), 1),
-            nx=True,
-        )
-
     def _connect_ready(self, target: PodProxyTarget) -> bool:
         try:
             connection = self.socket_client.open_socket(
                 target,
                 timeout_seconds=self.timeout_seconds,
             )
-        except OSError:
+        except _UNREACHABLE:
             return False
         connection.close()
         return True
@@ -128,7 +136,7 @@ class RedisContainerReadiness:
                 timeout_seconds=self.timeout_seconds,
                 connect_timeout_seconds=self.timeout_seconds,
             )
-        except OSError:
+        except _UNREACHABLE:
             return False
         return _HTTP_READY_MIN_STATUS <= response.status_code < _HTTP_READY_MAX_STATUS
 
