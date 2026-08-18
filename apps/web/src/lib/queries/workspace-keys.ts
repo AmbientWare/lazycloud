@@ -13,6 +13,12 @@ export type TaskListKeyParts = {
   rootOnly: boolean;
 };
 
+export type WorkspaceActivityKeyParts = {
+  measure: string;
+  range: string;
+  limit: number;
+};
+
 export type UsageCostKeyParts = {
   start: string;
   end: string;
@@ -133,6 +139,13 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "sandboxes", "processes", containerId] as const,
     urls: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "sandboxes", "urls", containerId] as const,
+  },
+  metrics: {
+    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "metrics"] as const,
+    containerCounts: (workspaceId: string) =>
+      [...workspaceRoot(workspaceId), "metrics", "container-counts"] as const,
+    activity: (workspaceId: string, scope: WorkspaceActivityKeyParts) =>
+      [...workspaceRoot(workspaceId), "metrics", "activity", scope] as const,
   },
   storage: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,

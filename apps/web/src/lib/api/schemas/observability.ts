@@ -93,3 +93,53 @@ export const taskLatencyTimeseriesSchema = z.object({
   buckets: z.array(taskLatencyBucketSchema).default([]),
 });
 export type TaskLatencyTimeseries = z.infer<typeof taskLatencyTimeseriesSchema>;
+
+// Synced to packages/shared/src/shared/http/observability.py
+// (WorkspaceContainerCountsResponse, WorkspaceActivityResponse).
+export const workspaceActivityMeasures = ["containers", "tasks"] as const;
+export type WorkspaceActivityMeasure = (typeof workspaceActivityMeasures)[number];
+
+export const workspaceActivitySeriesKinds = ["app", "unassigned", "other"] as const;
+export type WorkspaceActivitySeriesKind = (typeof workspaceActivitySeriesKinds)[number];
+
+/** Only the live statuses: what the workspace occupies now, not what it has run. */
+export const workspaceContainerCountsSchema = z.object({
+  workspace_id: z.string(),
+  pending: z.number().int().nonnegative().default(0),
+  running: z.number().int().nonnegative().default(0),
+});
+export type WorkspaceContainerCounts = z.infer<typeof workspaceContainerCountsSchema>;
+
+const workspaceActivityBucketSchema = z.object({
+  timestamp: z.string(),
+  count: z.number().int().nonnegative().default(0),
+});
+export type WorkspaceActivityBucket = z.infer<typeof workspaceActivityBucketSchema>;
+
+/**
+ * `app_name` is empty where the app has since been deleted, and for the
+ * `unassigned` and `other` rows, which stand for no single app.
+ */
+const workspaceActivitySeriesSchema = z.object({
+  kind: z.enum(workspaceActivitySeriesKinds),
+  app_id: z.string().default(""),
+  app_name: z.string().default(""),
+  total: z.number().int().nonnegative().default(0),
+  buckets: z.array(workspaceActivityBucketSchema).default([]),
+});
+export type WorkspaceActivitySeries = z.infer<typeof workspaceActivitySeriesSchema>;
+
+/**
+ * `total` is the whole window's count rather than the sum of the series shown;
+ * the two differ exactly when apps past the cap were folded into `other`.
+ */
+export const workspaceActivitySchema = z.object({
+  workspace_id: z.string(),
+  measure: z.enum(workspaceActivityMeasures),
+  window_seconds: z.number().int().positive(),
+  start: z.string(),
+  end: z.string(),
+  total: z.number().int().nonnegative().default(0),
+  series: z.array(workspaceActivitySeriesSchema).default([]),
+});
+export type WorkspaceActivity = z.infer<typeof workspaceActivitySchema>;

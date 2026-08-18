@@ -10,6 +10,9 @@ from shared.errors import InvalidInputError
 from shared.http.observability import (
     ContainerMetricsTimeseriesResponse,
     TaskLatencyTimeseriesResponse,
+    WorkspaceActivityMeasure,
+    WorkspaceActivityResponse,
+    WorkspaceContainerCountsResponse,
 )
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery
@@ -46,6 +49,47 @@ def api_v1_task_latency_timeseries(
             window_seconds=window_seconds,
             start=_parse_time(start),
             end=_parse_time(end),
+        )
+    )
+
+
+@router.get(
+    "/api/v1/metrics/workspace/containers",
+    response_model=WorkspaceContainerCountsResponse,
+    operation_id="get_workspace_container_counts",
+)
+def api_v1_workspace_container_counts(
+    workspace_id: read_workspace,
+    services: ApiServices = Depends(current_services),
+) -> WorkspaceContainerCountsResponse:
+    return WorkspaceContainerCountsResponse.model_validate(
+        _management(services).workspace_container_counts(workspace_id)
+    )
+
+
+@router.get(
+    "/api/v1/metrics/workspace/activity",
+    response_model=WorkspaceActivityResponse,
+    operation_id="get_workspace_activity",
+)
+def api_v1_workspace_activity(
+    measure: WorkspaceActivityMeasure = WorkspaceActivityMeasure.Containers,
+    window_seconds: int = Query(default=3600, ge=60),
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = Query(default=5, ge=1, le=20),
+    *,
+    workspace_id: read_workspace,
+    services: ApiServices = Depends(current_services),
+) -> WorkspaceActivityResponse:
+    return WorkspaceActivityResponse.model_validate(
+        _management(services).workspace_activity(
+            workspace_id,
+            measure=measure,
+            window_seconds=window_seconds,
+            start=_parse_time(start),
+            end=_parse_time(end),
+            limit=limit,
         )
     )
 

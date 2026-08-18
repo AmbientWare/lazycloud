@@ -20,7 +20,11 @@ from control.deployments import CronJobService, DeploymentService
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.context import ServiceContext
 from database.records.apps import AppRecord
-from database.repositories.apps import AppSummaryRepository, DeploymentRepository
+from database.repositories.apps import (
+    AppActivityCountResult,
+    AppSummaryRepository,
+    DeploymentRepository,
+)
 from database.repositories.execution import (
     LogRepository,
     RelatedTaskRecord,
@@ -51,6 +55,8 @@ from shared.http.observability import (
     LogObjectType,
     LogQueryResponse,
     LogRecord,
+    WorkspaceActivityMeasure,
+    WorkspaceActivitySeriesKind,
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
@@ -166,6 +172,44 @@ class TaskLatencyTimeseries(ContractModel):
 class TaskStopResult(ContractModel):
     stopped: tuple[str, ...]
     skipped: tuple[str, ...]
+
+
+MAX_ACTIVITY_BUCKETS = 500
+"""How many intervals one activity window may be cut into.
+
+A ceiling rather than a preference: every interval is a point in every series a
+reader gets back, so an unbounded one turns a chart request into a response
+nothing can draw and a query nothing can serve.
+"""
+
+
+class WorkspaceContainerCounts(ContractModel):
+    workspace_id: str
+    pending: int = 0
+    running: int = 0
+
+
+class WorkspaceActivityBucket(ContractModel):
+    timestamp: datetime
+    count: int = 0
+
+
+class WorkspaceActivitySeries(ContractModel):
+    kind: WorkspaceActivitySeriesKind
+    app_id: str = ""
+    app_name: str = ""
+    total: int = 0
+    buckets: tuple[WorkspaceActivityBucket, ...] = ()
+
+
+class WorkspaceActivity(ContractModel):
+    workspace_id: str
+    measure: WorkspaceActivityMeasure
+    window_seconds: int
+    start: datetime
+    end: datetime
+    total: int = 0
+    series: tuple[WorkspaceActivitySeries, ...] = ()
 
 
 class AppOperationalSummary(ContractModel):
@@ -337,6 +381,90 @@ def _local_package_path(path: str) -> Path | None:
     if "://" in path:
         return None
     return Path(path).expanduser().resolve()
+
+
+@dataclass(slots=True)
+class _ActivityGroup:
+    kind: WorkspaceActivitySeriesKind
+    app_id: str
+    app_name: str
+    counts: list[int]
+
+
+def _workspace_activity_series(
+    rows: tuple[AppActivityCountResult, ...],
+    *,
+    start: datetime,
+    window_seconds: int,
+    bucket_count: int,
+    limit: int,
+) -> tuple[WorkspaceActivitySeries, ...]:
+    """Sparse per-app counts as dense series, capped at what a reader was asked for.
+
+    Everything past the cap is summed into one `Other` series rather than
+    dropped, so the stacks a reader sees still add up to the window they are
+    told they are looking at.
+    """
+
+    groups: dict[str, _ActivityGroup] = {}
+    for row in rows:
+        if row.index < 0 or row.index >= bucket_count:
+            continue
+        app_id = row.app_id or ""
+        group = groups.get(app_id)
+        if group is None:
+            group = _ActivityGroup(
+                kind=(
+                    WorkspaceActivitySeriesKind.App
+                    if app_id
+                    else WorkspaceActivitySeriesKind.Unassigned
+                ),
+                app_id=app_id,
+                app_name=row.app_name or "",
+                counts=[0] * bucket_count,
+            )
+            groups[app_id] = group
+        group.counts[row.index] += row.count
+
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: (-sum(group.counts), group.app_name, group.app_id),
+    )
+    series = [
+        WorkspaceActivitySeries(
+            kind=group.kind,
+            app_id=group.app_id,
+            app_name=group.app_name,
+            total=sum(group.counts),
+            buckets=_activity_buckets(group.counts, start, window_seconds),
+        )
+        for group in ordered[:limit]
+    ]
+    folded = ordered[limit:]
+    if folded:
+        counts = [sum(values) for values in zip(*(group.counts for group in folded), strict=True)]
+        series.append(
+            WorkspaceActivitySeries(
+                kind=WorkspaceActivitySeriesKind.Other,
+                total=sum(counts),
+                buckets=_activity_buckets(counts, start, window_seconds),
+            )
+        )
+    return tuple(series)
+
+
+def _activity_buckets(
+    counts: list[int],
+    start: datetime,
+    window_seconds: int,
+) -> tuple[WorkspaceActivityBucket, ...]:
+    return tuple(
+        WorkspaceActivityBucket(
+            timestamp=start + timedelta(seconds=window_seconds * index),
+            count=count,
+        )
+        for index, count in enumerate(counts)
+    )
 
 
 def _bucket_start(value: datetime, window_seconds: int) -> datetime:
@@ -994,6 +1122,97 @@ class ManagementService:
                 status_counts=dict(counter),
             )
             for timestamp, counter in sorted(buckets.items())
+        )
+
+    def workspace_container_counts(self, workspace: str) -> WorkspaceContainerCounts:
+        """What this workspace is holding right now, per live status.
+
+        Workspace-scoped on purpose. The concurrency ceiling an account is
+        refused against spans every workspace it owns, so that figure and this
+        one answer different questions and neither stands in for the other.
+        """
+
+        workspace_record = self.control_plane.get_workspace(workspace)
+        with self.services.context.database.session() as session:
+            counts = ContainerRepository(session).live_counts_for_workspace(
+                workspace_id=workspace_record.id
+            )
+        return WorkspaceContainerCounts(
+            workspace_id=workspace_record.id,
+            pending=counts.get(ContainerStatus.Pending, 0),
+            running=counts.get(ContainerStatus.Running, 0),
+        )
+
+    def workspace_activity(
+        self,
+        workspace: str,
+        *,
+        measure: WorkspaceActivityMeasure = WorkspaceActivityMeasure.Containers,
+        window_seconds: int = 3600,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 5,
+    ) -> WorkspaceActivity:
+        """A workspace's starts over a window, split by the app they belong to.
+
+        Both ends are aligned to interval boundaries so the same wall-clock
+        intervals come back on every read: unaligned, every refresh would slide
+        the window by however long the last one took and redraw a chart that had
+        not changed.
+
+        Series are densified over the whole window here rather than in the
+        reader, because an interval a workspace started nothing in is a real
+        zero and a reader filling one in has no way to tell it from an interval
+        nobody measured.
+        """
+
+        if window_seconds <= 0:
+            msg = "window_seconds must be greater than zero"
+            raise InvalidInputError(msg)
+        if limit <= 0:
+            msg = "limit must be greater than zero"
+            raise InvalidInputError(msg)
+        aligned_end = _bucket_start(end or utc_now(), window_seconds) + timedelta(
+            seconds=window_seconds
+        )
+        aligned_start = _bucket_start(
+            start if start is not None else aligned_end - timedelta(seconds=window_seconds * 24),
+            window_seconds,
+        )
+        if aligned_start >= aligned_end:
+            msg = "the activity window must end after it starts"
+            raise InvalidInputError(msg)
+        bucket_count = int((aligned_end - aligned_start).total_seconds()) // window_seconds
+        if bucket_count > MAX_ACTIVITY_BUCKETS:
+            msg = (
+                f"an activity window holds at most {MAX_ACTIVITY_BUCKETS} intervals; "
+                f"this one asks for {bucket_count}"
+            )
+            raise InvalidInputError(msg)
+
+        workspace_record = self.control_plane.get_workspace(workspace)
+        with self.services.context.database.session() as session:
+            rows = AppSummaryRepository(session).activity_by_app(
+                workspace_id=workspace_record.id,
+                measure=measure,
+                start=aligned_start,
+                end=aligned_end,
+                window_seconds=window_seconds,
+            )
+        return WorkspaceActivity(
+            workspace_id=workspace_record.id,
+            measure=measure,
+            window_seconds=window_seconds,
+            start=aligned_start,
+            end=aligned_end,
+            total=sum(row.count for row in rows),
+            series=_workspace_activity_series(
+                rows,
+                start=aligned_start,
+                window_seconds=window_seconds,
+                bucket_count=bucket_count,
+                limit=limit,
+            ),
         )
 
     def task_latency_timeseries(

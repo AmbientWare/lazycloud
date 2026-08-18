@@ -194,6 +194,76 @@ class ContainerMetricsTimeseriesResponse(HttpModel):
     points: tuple[ContainerMetricsPointResponse, ...] = ()
 
 
+class WorkspaceActivityMeasure(StringEnum):
+    """What one workspace activity series counts, one row per start."""
+
+    Containers = "containers"
+    Tasks = "tasks"
+
+
+class WorkspaceActivitySeriesKind(StringEnum):
+    """Which of a workspace's work a series stands for.
+
+    `Unassigned` is work that belongs to no app — a sandbox opened outside one,
+    a shell — and is a real share of the workspace rather than a gap. `Other` is
+    every app past the requested cap, summed, so a stacked reading still totals
+    the window.
+    """
+
+    App = "app"
+    Unassigned = "unassigned"
+    Other = "other"
+
+
+class WorkspaceContainerCountsResponse(HttpModel):
+    """What one workspace is holding right now, by live container status.
+
+    Only the live statuses, because these count what the workspace currently
+    occupies rather than what it has ever run.
+    """
+
+    workspace_id: str
+    pending: int = 0
+    running: int = 0
+
+
+class WorkspaceActivityBucketResponse(HttpModel):
+    timestamp: datetime
+    count: int = 0
+
+
+class WorkspaceActivitySeriesResponse(HttpModel):
+    """One stack of a workspace activity chart.
+
+    Every series carries the same bucket timestamps over the whole window,
+    zeros included, so a reader never has to decide whether a missing interval
+    is quiet or unmeasured.
+    """
+
+    kind: WorkspaceActivitySeriesKind
+    app_id: str = ""
+    app_name: str = ""
+    total: int = 0
+    buckets: tuple[WorkspaceActivityBucketResponse, ...] = ()
+
+
+class WorkspaceActivityResponse(HttpModel):
+    """A workspace's starts over a window, split by the app they belong to.
+
+    `total` is the whole window's count and not the sum of the series shown:
+    the two agree only when nothing was folded into `Other`, and the figure a
+    reader is given for the window never depends on how many stacks fit.
+    """
+
+    workspace_id: str
+    measure: WorkspaceActivityMeasure
+    window_seconds: int
+    start: datetime
+    end: datetime
+    total: int = 0
+    series: tuple[WorkspaceActivitySeriesResponse, ...] = ()
+
+
 class TaskLatencyBucketResponse(HttpModel):
     timestamp: datetime
     count: int = 0
@@ -223,4 +293,10 @@ __all__ = [
     "LogRecord",
     "TaskLatencyBucketResponse",
     "TaskLatencyTimeseriesResponse",
+    "WorkspaceActivityBucketResponse",
+    "WorkspaceActivityMeasure",
+    "WorkspaceActivityResponse",
+    "WorkspaceActivitySeriesKind",
+    "WorkspaceActivitySeriesResponse",
+    "WorkspaceContainerCountsResponse",
 ]

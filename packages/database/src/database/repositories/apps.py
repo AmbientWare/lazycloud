@@ -38,6 +38,7 @@ from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.errors import ConflictError
+from shared.http.observability import WorkspaceActivityMeasure
 from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
 from sqlalchemy import Integer, and_, case, cast, delete, extract, func, or_, select
@@ -64,6 +65,15 @@ class AppTaskBucketResult(BaseModel):
     bucket: int
     runs: int
     failed: int | None
+
+
+class AppActivityCountResult(BaseModel):
+    """One app's starts inside one interval of an activity window."""
+
+    app_id: str | None = None
+    app_name: str | None = None
+    index: int
+    count: int
 
 
 class AppExecutionSummary(BaseModel):
@@ -450,6 +460,54 @@ class AppSummaryRepository:
                 summary.runs_24h += run_count
                 summary.failed_runs_24h += failure_count
         return summaries
+
+    def activity_by_app(
+        self,
+        *,
+        workspace_id: str,
+        measure: WorkspaceActivityMeasure,
+        start: datetime,
+        end: datetime,
+        window_seconds: int,
+    ) -> tuple[AppActivityCountResult, ...]:
+        """How many things this workspace started per app, per interval.
+
+        Placed into intervals by whole seconds elapsed from `start`, never by
+        `date_trunc` or `func.date`: those read the session `TimeZone`, which
+        nothing here sets, so the interval a start belonged to would depend on
+        which connection answered the request.
+
+        Both measures are counted by `created_at` — the instant the workspace
+        asked for the work — so a long-running container is one start in the
+        interval it began, not a smear across every interval it survived.
+
+        Rows come back sparse and unordered beyond the grouping; densifying the
+        window and deciding which apps a reader sees belong to the caller, not
+        to the query.
+        """
+
+        source: type[ContainerTable] | type[TaskTable] = (
+            ContainerTable if measure is WorkspaceActivityMeasure.Containers else TaskTable
+        )
+        elapsed = extract("epoch", source.created_at) - int(start.timestamp())
+        index = cast(func.floor(elapsed / window_seconds), Integer).label("index")
+        rows = self.session.execute(
+            select(
+                source.app_id.label("app_id"),
+                AppTable.name.label("app_name"),
+                index,
+                func.count(source.id).label("count"),
+            )
+            .select_from(source)
+            .outerjoin(AppTable, AppTable.id == source.app_id)
+            .where(
+                source.workspace_id == workspace_id,
+                source.created_at >= start,
+                source.created_at < end,
+            )
+            .group_by(source.app_id, AppTable.name, index)
+        ).mappings()
+        return tuple(AppActivityCountResult.model_validate(row) for row in rows)
 
 
 def _app_execution_summary(app_id: str, bucket_count: int) -> AppExecutionSummary:

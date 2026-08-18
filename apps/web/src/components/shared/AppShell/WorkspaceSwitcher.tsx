@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { Check, ChevronDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Check, ChevronDown, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { workspaceLandingPath } from "@/components/shared/AppShell/navigation";
+import { CreateWorkspaceSheet } from "@/components/shared/AppShell/CreateWorkspaceSheet";
+import { useSession } from "@/components/shared/AuthGate/session";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +29,9 @@ export function WorkspaceSwitcher({
   compact?: boolean;
 }) {
   const { workspace, workspaces } = useWorkspace();
+  const { user } = useSession();
   const [renaming, setRenaming] = useState<Workspace | null>(null);
+  const [creating, setCreating] = useState(false);
   const router = useRouter();
   const deletion = useWorkspaceDeletion();
   const path = useRouterState({ select: (state) => state.location.pathname });
@@ -68,6 +72,16 @@ export function WorkspaceSwitcher({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64 p-1.5">
+          {/* Creating a workspace is an account-level action rather than one of
+              the workspaces below it, so it leads the menu instead of joining
+              that list. Administrators only, which is who the platform lets
+              create one at all. */}
+          {user.role === "administrator" ? (
+            <DropdownMenuItem className="min-h-10" onSelect={() => setCreating(true)}>
+              <Plus className="text-muted-foreground" />
+              Create workspace
+            </DropdownMenuItem>
+          ) : null}
           <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium text-muted-foreground">
             Workspaces
           </div>
@@ -128,6 +142,7 @@ export function WorkspaceSwitcher({
       {renaming ? (
         <WorkspaceRenameDialog workspace={renaming} onClose={() => setRenaming(null)} />
       ) : null}
+      {creating ? <CreateWorkspaceSheet onClose={() => setCreating(false)} /> : null}
     </>
   );
 }
