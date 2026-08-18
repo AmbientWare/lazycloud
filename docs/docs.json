@@ -41,7 +41,7 @@
           "concepts/apps",
           "concepts/functions",
           "concepts/endpoints",
-          "concepts/cron",
+          "concepts/schedules",
           "concepts/pods",
           "concepts/sandboxes",
           "concepts/images"

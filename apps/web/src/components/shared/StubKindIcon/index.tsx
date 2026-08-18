@@ -1,4 +1,4 @@
-import { Clock, Globe, Layers, Terminal, Zap, type LucideIcon } from "lucide-react";
+import { Globe, Layers, Terminal, Zap, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -7,7 +7,6 @@ const KIND_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
   command: { icon: Terminal, label: "Command" },
   endpoint: { icon: Globe, label: "Endpoint" },
   asgi: { icon: Globe, label: "ASGI endpoint" },
-  "cron-job": { icon: Clock, label: "Schedule" },
   pod: { icon: Layers, label: "Pod" },
   sandbox: { icon: Terminal, label: "Sandbox" },
   shell: { icon: Terminal, label: "Shell" },

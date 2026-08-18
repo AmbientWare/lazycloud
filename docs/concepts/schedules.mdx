@@ -1,0 +1,63 @@
+---
+title: "Schedules"
+description: "Run a function on a schedule with cron expressions, aliases, or interval shorthand."
+---
+
+A schedule is something a function has, not a different kind of workload. Pass
+`cron` to `@app.function` and every run is an ordinary invocation of it.
+
+```python
+from lazycloud import App, Image
+
+app = App("maintenance")
+image = Image(python_version="3.12")
+
+
+@app.function(cron="0 3 * * *", name="nightly-cleanup", image=image)
+def cleanup() -> dict[str, str]:
+    return {"status": "clean"}
+```
+
+Deploy it like any other resource:
+
+```bash
+lazycloud deploy maintenance.py:cleanup
+```
+
+## Schedule syntax
+
+Three forms are accepted:
+
+| Form | Examples |
+| --- | --- |
+| Five-field cron expression | `"*/15 * * * *"`, `"0 3 * * 1"` |
+| Cron alias | `"@hourly"`, `"@daily"`, `"@midnight"`, `"@weekly"`, `"@monthly"`, `"@yearly"`, `"@annually"` |
+| Interval shorthand | `"every 5m"` (max 59m), `"every 2h"` (max 23h), `"every 3d"` (max 31d) |
+
+Schedules are evaluated in UTC. An invalid expression is rejected at deploy
+time, in the same call that creates the deployment.
+
+## Options and behavior
+
+A scheduled function accepts everything any other function does — resources,
+image, timeouts, `retries`/`retry_policy`, `env`/`secrets`/`volumes`, lifecycle
+hooks, and the pool. Each run is a durable task: a failing one is retried per the
+retry configuration, and terminal failures show up in
+[task history](/concepts/tasks-and-logs) and the dashboard.
+
+It is still a function in every other respect. `.local(...)` runs it in-process,
+and `.remote(...)`/`.spawn(...)` trigger runs outside the schedule on the
+deployed compute.
+
+`keep_warm` defaults to `0` for a scheduled function, because the next run is
+usually further away than any window worth paying for. Set it explicitly if runs
+are close enough together to reuse a warm container.
+
+Deploying again replaces the schedule: one fires per resource, whatever version
+it came from. Pause or remove it through its deployment.
+
+```bash
+lazycloud deployment list --app maintenance
+lazycloud deployment stop <deployment-id-or-name>
+lazycloud deployment delete <deployment-id-or-name>
+```

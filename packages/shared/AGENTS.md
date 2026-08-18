@@ -35,3 +35,12 @@ second copy of every price maintained by hand, and the drift a customer finds by
 being charged something the page did not say. It is a deterministic function of
 the card and nothing else—no clock, no locale, no environment—because the check
 that keeps the generated file current is a byte comparison against it.
+
+A workload's defaults are resolved by kind, and a schedule is not a kind. It is
+answered separately, in `resolve_keep_warm_seconds`, because it says something
+about one deployment rather than about a category of them: a scheduled function
+keeps no idle window unless its author names one.
+
+That only works while an omitted value stays distinguishable from a chosen one,
+which is why the SDK sends nothing rather than the default it would have picked.
+A client that fills in defaults leaves the resolver with nothing to resolve.

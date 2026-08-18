@@ -107,7 +107,7 @@ function WorkloadDetailPage() {
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="flex items-center gap-1.5">
             <StubKindIcon kind={group.kind} className="size-3.5" />
-            {kindLabel(group.kind)}
+            {kindLabel(group)}
           </span>
           <span aria-hidden="true">·</span>
           <span className="mono">v{current.version}</span>
@@ -140,7 +140,7 @@ function WorkloadDetailPage() {
         className="grid min-h-0 shrink-0 gap-3 lg:grid-cols-3"
       >
         <Panel
-          title={operationTitle(group.kind)}
+          title={operationTitle(group)}
           description="Current deployment configuration and capacity"
           contentClassName="overflow-auto p-0 lg:overflow-visible"
           className="min-h-[18rem] lg:col-span-2 lg:min-h-0"
@@ -301,21 +301,23 @@ function WorkloadSkeleton() {
   );
 }
 
-function kindLabel(kind: string): string {
+function kindLabel(group: WorkloadGroup): string {
+  // A scheduled function still reads as a schedule here: it is what the person
+  // looking at the list is scanning for, even though it is a function.
+  if (group.latest.spec?.cron) return "Schedule";
   const labels: Record<string, string> = {
     function: "Function",
     endpoint: "Endpoint",
     asgi: "ASGI",
-    "cron-job": "Cron job",
     pod: "Pod",
   };
-  return labels[kind] ?? "Workload";
+  return labels[group.kind] ?? "Workload";
 }
 
-function operationTitle(kind: string): string {
-  if (kind === "cron-job") return "Schedule";
-  if (kind === "pod") return "Pod configuration";
-  if (kind === "endpoint" || kind === "asgi") return "HTTP configuration";
+function operationTitle(group: WorkloadGroup): string {
+  if (group.latest.spec?.cron) return "Schedule";
+  if (group.kind === "pod") return "Pod configuration";
+  if (group.kind === "endpoint" || group.kind === "asgi") return "HTTP configuration";
   return "Function configuration";
 }
 

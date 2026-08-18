@@ -1,6 +1,6 @@
 # Control Package
 
-Workspace, app, stub, deployment, resource, route, cron, and concurrency
+Workspace, app, stub, deployment, resource, route, schedule, and concurrency
 workflows—the control plane's decisions.
 
 Services decide, database repositories persist, apps format. Use typed domain
