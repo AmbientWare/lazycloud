@@ -1,9 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { TooltipValueType } from "recharts";
 
-import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import {
   ChartContainer,
   ChartTooltip,
@@ -11,8 +9,19 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { TaskLatencyBucket } from "@/lib/api/schemas";
 import { formatDuration } from "@/lib/format";
-import { taskLatencyQueryOptions } from "@/lib/queries/stubs";
+
+/**
+ * Whether the window holds anything to plot.
+ *
+ * The caller decides with this rather than the panel reporting emptiness where
+ * the chart would be: the region beneath it already says a workload has run
+ * nothing, and one silence stated twice reads as two separate findings.
+ */
+export function latencyHasSignal(buckets: TaskLatencyBucket[] | undefined): boolean {
+  return (buckets ?? []).some((bucket) => bucket.count > 0 || bucket.cold_starts > 0);
+}
 
 /**
  * Function-level latency: task-duration p50/p95 per hour over the last 24h
@@ -20,36 +29,31 @@ import { taskLatencyQueryOptions } from "@/lib/queries/stubs";
  * container creations for the function's stubs in the same window.
  */
 export function LatencyPanel({
-  workspaceId,
-  stubIds,
+  buckets,
+  pending,
+  error,
   kind,
 }: {
-  workspaceId: string;
-  stubIds: string[];
+  buckets: TaskLatencyBucket[] | undefined;
+  pending: boolean;
+  error: Error | null;
   kind: string;
 }) {
-  const latency = useQuery(taskLatencyQueryOptions(workspaceId, stubIds));
-
-  if (latency.isPending) {
+  if (pending || !buckets) {
     return <LatencySkeleton />;
   }
-  if (latency.isError) {
+  if (error) {
     return (
-      <div className="flex h-full items-center text-sm text-destructive">
-        {latency.error.message}
-      </div>
+      <p className="flex h-full items-center text-sm text-destructive" role="alert">
+        {error.message}
+      </p>
     );
   }
 
-  const buckets = latency.data.buckets;
   const tasks = buckets.reduce((total, bucket) => total + bucket.count, 0);
   const coldStarts = buckets.reduce((total, bucket) => total + bucket.cold_starts, 0);
   const failures = buckets.reduce((total, bucket) => total + (bucket.status_counts.failed ?? 0), 0);
   const latest = [...buckets].reverse().find((bucket) => bucket.count > 0);
-
-  if (tasks === 0 && coldStarts === 0) {
-    return <PanelEmpty message="No tasks in the last 24 hours" className="h-full min-h-32" />;
-  }
 
   const data = buckets.map((bucket) => ({
     label: formatBucketTime(bucket.timestamp),
@@ -63,7 +67,9 @@ export function LatencyPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-2">
+      {/* One line so the plot keeps the height: the readings qualify the chart,
+          they are not a second panel above it. */}
+      <div className="flex shrink-0 flex-wrap items-end gap-x-8 gap-y-2">
         <LatencyReadout
           label="Latest p50"
           value={latest?.p50_ms == null ? "—" : formatDuration(latest.p50_ms)}
@@ -74,7 +80,7 @@ export function LatencyPanel({
           value={latest?.p95_ms == null ? "—" : formatDuration(latest.p95_ms)}
           series="p95"
         />
-        <dl className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <dl className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 pb-0.5 text-[11px] text-muted-foreground">
           <LatencyFact label={volumeLabel(kind)} value={Intl.NumberFormat().format(tasks)} />
           <LatencyFact
             label={kind === "endpoint" || kind === "asgi" ? "Errors (24h)" : "Failed tasks"}
@@ -148,14 +154,14 @@ export function LatencyPanel({
 function LatencySkeleton() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-2" aria-hidden="true">
-      <div className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-2">
+      <div className="flex shrink-0 flex-wrap items-end gap-x-8 gap-y-2">
         {["p50", "p95"].map((series) => (
           <div key={series} className="space-y-1">
             <Skeleton className="h-2.5 w-16" />
             <Skeleton className="h-4 w-12" />
           </div>
         ))}
-        <Skeleton className="col-span-2 h-3 w-4/5" />
+        <Skeleton className="h-3 w-64" />
       </div>
       <Skeleton className="min-h-16 flex-1" />
     </div>
