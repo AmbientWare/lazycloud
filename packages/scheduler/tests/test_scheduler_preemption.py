@@ -100,9 +100,15 @@ def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
     )
     workers.enqueue_worker_request("worker-1", _request("queued"))
     workers.enqueue_worker_request("worker-1", _request("cancelled"))
+    # Two requests the worker acted on without acknowledging. Neither may come
+    # back: the second's container has already run, and requeueing a request on
+    # the strength of its container having finished runs that work twice.
+    workers.enqueue_worker_request("worker-1", _request("running"))
+    workers.enqueue_worker_request("worker-1", _request("finished"))
     containers.set_container_state(_container("queued", SchedulerContainerStatus.Pending))
     containers.set_container_state(_container("cancelled", SchedulerContainerStatus.Pending))
     containers.set_container_state(_container("running", SchedulerContainerStatus.Running))
+    containers.set_container_state(_container("finished", SchedulerContainerStatus.Complete))
     containers.cancel_container_request("cancelled")
     service = SchedulerWorkerPreemptionService(workers, containers, stopper)
     interruption = CapacityInterruption(

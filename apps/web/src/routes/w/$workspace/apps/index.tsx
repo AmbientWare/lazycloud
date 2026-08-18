@@ -31,7 +31,9 @@ function AppsPage() {
     <WorkspacePage
       title="Apps"
       description={
-        apps.isPending ? null : (
+        // Gated on the data rather than on pending alone: reported as three
+        // zeroes, a failed read of the workspace reads as an empty workspace.
+        apps.data ? (
           <PageFacts
             items={[
               countLabel(items.length, "app"),
@@ -45,7 +47,7 @@ function AppsPage() {
               ),
             ]}
           />
-        )
+        ) : null
       }
       contentClassName="overflow-y-auto pr-1"
     >

@@ -10,6 +10,7 @@ from billing.costs import (
     UsageCostSeries,
     UsageCostService,
 )
+from database.repositories.billing_costs import PayerCostScope
 from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan
 from shared.errors import InvalidInputError
@@ -34,7 +35,7 @@ from shared.timestamps import utc_now
 
 from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
-from api.server.routers.resource_api.common import member_workspaces, usage_cost_list_response
+from api.server.routers.resource_api.common import usage_cost_list_response
 from api.server.services import ApiServices
 from billing import BillingAccountService, BillingPlanChangeService, owned_workspace_id
 
@@ -84,23 +85,22 @@ def account_costs(
     and prod wants one figure covering the three, and reaching it a workspace at
     a time leaves them adding up their own bill.
 
-    Scoped to the workspaces this person is a member of, resolved here rather
-    than named by the caller — an account-wide total assembled from ids a
-    request supplied would be a total of whatever it asked for.
+    Scoped to the rows this account is invoiced for, which is what the ledger's
+    `owner_user_id` records and what the allowance and the invoice are summed
+    over. Resolving the same scope through workspace membership would answer
+    "what do I owe" with the spend of every workspace somebody added this person
+    to, and leave off the workspaces they pay for but no longer belong to.
 
     `app_id` narrows to one app, which is how a caller reads what the workloads
-    inside it cost without a second scope to authorize: membership still decides
-    which workspaces are summed, so an id belonging to somebody else's app
-    selects rows this account has none of and totals nothing. An empty value is
-    a filter rather than an absent one, and selects the usage that reached no
-    app at all.
+    inside it cost without a second scope to authorize: the payer still decides
+    which rows are summed, so an id belonging to somebody else's app selects
+    rows this account has none of and totals nothing. An empty value is a filter
+    rather than an absent one, and selects the usage that reached no app at all.
     """
 
-    workspaces = member_workspaces(services, user_id)
     with services.context.database.session() as session:
         page = UsageCostService(session).costs(
-            workspace_ids=list(workspaces),
-            workspace_names=workspaces,
+            scope=PayerCostScope(user_id),
             start=start,
             end=end,
             group_by=group_by,
@@ -139,15 +139,15 @@ def account_cost_series(
     and two of them reading either side of a metering write would draw a shape
     the total does not add up to.
 
-    Scoped to the workspaces this person is a member of, the same way the total
-    beside it is, and for the same reason: a shape assembled from ids a request
-    supplied would be the shape of whatever it asked for.
+    Scoped to what this account is invoiced for, the same way the total beside
+    it is and for the same reason: the two are read off one page, so a shape
+    drawn over a different set of rows from the figure above it is a chart that
+    does not add up to its own total.
     """
 
-    workspace_ids = list(member_workspaces(services, user_id))
     with services.context.database.session() as session:
         series = UsageCostService(session).series(
-            workspace_ids=workspace_ids,
+            scope=PayerCostScope(user_id),
             start=start,
             end=end,
             bucket=bucket,

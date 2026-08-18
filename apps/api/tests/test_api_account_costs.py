@@ -28,22 +28,24 @@ _WINDOW_AT = timedelta(minutes=2)
 _WINDOW = timedelta(seconds=60)
 
 
-def test_account_costs_sum_the_caller_workspaces_and_nobody_else_s(
+def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    """One figure for the account, and only for the workspaces it is invoiced for.
+    """One figure for the account, over exactly the rows it is invoiced for.
 
     The provider invoices an account, so someone running dev, staging and prod
     holds several workspaces against one payment relationship and wants the
     total across them — reaching it a workspace at a time leaves them adding up
     their own bill.
 
-    The same scope is the authorization boundary: this resolves the workspaces
-    from the membership rows naming the caller rather than from anything the
-    request supplied, so a third workspace's spend is absent here whatever the
-    request asks for. A total that reached beyond membership would disclose one
-    customer's spend to another.
+    Which rows those are is decided by the payer on the ledger row, never by
+    workspace membership. Somebody added to a colleague's workspace can watch
+    everything in it and pays for none of it, so a total scoped by membership
+    reads that colleague's spend into their bill — and disagrees with the
+    allowance line on the same page and with the invoice, both of which are
+    summed over the payer. A workspace nothing connects them to is absent under
+    either rule, and stays here as the coarser half of the boundary.
     """
 
     now = utc_now()
@@ -60,15 +62,16 @@ def test_account_costs_sum_the_caller_workspaces_and_nobody_else_s(
         held = isolated_services.context.default_workspace_id(session)
     owner_user_id = workspace_owner_user_id(isolated_services.context, held)
 
-    # A second workspace the same person owns, and a third they do not.
-    second = owned_workspace(control, f"second-{uuid4().hex[:8]}")
+    # A workspace somebody else pays for and this person was added to, and one
+    # they cannot reach at all.
+    colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
     stranger = owned_workspace(control, f"stranger-{uuid4().hex[:8]}")
     with isolated_services.context.database.session() as session:
         WorkspaceMemberRepository(session).add(
-            workspace_id=second.id, user_id=owner_user_id, role=WorkspaceRole.Member
+            workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
         )
 
-    for workspace_id, quantity in ((held, 300), (second.id, 200), (stranger.id, 900)):
+    for workspace_id, quantity in ((held, 300), (colleague.id, 200), (stranger.id, 900)):
         isolated_services.usage.append(
             UsageRecord(
                 id=str(uuid4()),
@@ -105,14 +108,18 @@ def test_account_costs_sum_the_caller_workspaces_and_nobody_else_s(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["cost_nanos"] == 500, (
-        "the account total is not the sum of the workspaces this person holds: "
-        f"{body['cost_nanos']} against 300 + 200"
+    assert body["cost_nanos"] == 300, (
+        "the account total is not the sum of what this account is invoiced for: "
+        f"{body['cost_nanos']} against 300"
     )
     assert body["workspace_id"] == "", "an account-wide page named one of its workspaces"
+    assert [(row["workspace_id"], row["cost_nanos"]) for row in body["data"]] == [(held, 300)], (
+        "an account page's rows no longer name the workspace each cost arose in: "
+        f"{body['data']}"
+    )
 
 
-def test_account_cost_series_buckets_the_window_and_stops_at_membership(
+def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
@@ -123,9 +130,11 @@ def test_account_cost_series_buckets_the_window_and_stops_at_membership(
     hours draws two spends an hour apart as two spends side by side, and the
     reader takes a flat week for a busy one.
 
-    Scoped the way the total beside it is, and proven the same way — a third
-    workspace's spend is absent from every interval, because a shape assembled
-    from beyond membership would disclose one customer's activity to another.
+    Scoped the way the total beside it is, and proven the same way: the spend of
+    a workspace this person was added to but does not pay for is absent from
+    every interval. The chart and the figure above it are read off one page, so
+    a shape drawn over a wider set of rows than the total is a chart that does
+    not add up to itself.
     """
 
     now = utc_now()
@@ -142,12 +151,16 @@ def test_account_cost_series_buckets_the_window_and_stops_at_membership(
         )
         held = isolated_services.context.default_workspace_id(session)
     owner_user_id = workspace_owner_user_id(isolated_services.context, held)
-    stranger = owned_workspace(control, f"stranger-{uuid4().hex[:8]}")
+    colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
+    with isolated_services.context.database.session() as session:
+        WorkspaceMemberRepository(session).add(
+            workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
+        )
 
     for workspace_id, hour, quantity in (
         (held, 0, 300),
         (held, 2, 500),
-        (stranger.id, 1, 900),
+        (colleague.id, 1, 900),
     ):
         started_at = origin + timedelta(hours=hour)
         isolated_services.usage.append(
