@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   Outlet,
@@ -23,7 +23,6 @@ import {
   Sun,
 } from "lucide-react";
 
-import { shellBreadcrumbs } from "@/components/shared/AppShell/navigation";
 import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitcher";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { SettingsDialog } from "@/components/shared/SettingsDialog";
@@ -31,8 +30,6 @@ import { settingsView, type SettingsView } from "@/components/shared/SettingsDia
 import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { appQueryOptions } from "@/lib/queries/apps";
-import { containerQueryOptions } from "@/lib/queries/containers";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -150,7 +147,6 @@ export function AppShell() {
           onOpenSettings={() => setSettings("general")}
           onLogout={logout}
         />
-        <ContextBar path={path} basePath={basePath} onOpenSearch={openSearch} />
         <main
           id="workspace-content"
           data-workspace-shell-main=""
@@ -420,79 +416,6 @@ function ThemeToggle({ className }: { className?: string }) {
   );
 }
 
-function ContextBar({
-  path,
-  basePath,
-  onOpenSearch,
-}: {
-  path: string;
-  basePath: string;
-  onOpenSearch: () => void;
-}) {
-  const { workspace } = useWorkspace();
-  const router = useRouter();
-  const appId = appIdFromPath(path, basePath);
-  const app = useQuery({ ...appQueryOptions(workspace.id, appId ?? ""), enabled: appId !== null });
-  const sandboxId = sandboxIdFromPath(path, basePath);
-  const sandbox = useQuery({
-    ...containerQueryOptions(workspace.id, sandboxId ?? ""),
-    enabled: sandboxId !== null,
-  });
-  const breadcrumbs = shellBreadcrumbs(path, workspace.name, app.data?.name, sandbox.data?.name);
-  // Rendered on every workspace route, however short the trail. Hiding it where
-  // the trail was one crumb long put the bar on two pages out of a dozen, moved
-  // the content 48px whenever you crossed between them, and took the search
-  // control — which lives in here — with it.
-
-  return (
-    <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-3 sm:px-4 lg:h-12 lg:px-5">
-      <nav
-        aria-label="Breadcrumb"
-        className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-      >
-        {breadcrumbs.map((crumb, index) => (
-          <span key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1.5">
-            {index > 0 ? (
-              <span aria-hidden="true" className="text-border">
-                /
-              </span>
-            ) : null}
-            {crumb.href ? (
-              <a
-                href={crumb.href}
-                onClick={(event) => {
-                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  router.history.push(crumb.href as string);
-                }}
-                className="interactive-link max-w-40 truncate text-muted-foreground hover:text-foreground"
-              >
-                {crumb.label}
-              </a>
-            ) : (
-              <span
-                aria-current={index === breadcrumbs.length - 1 ? "page" : undefined}
-                className="mono max-w-52 truncate text-foreground"
-              >
-                {crumb.label}
-              </span>
-            )}
-          </span>
-        ))}
-      </nav>
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={onOpenSearch}
-        className="ml-auto hidden h-8 gap-2 px-2 text-xs lg:flex"
-      >
-        <Search className="size-3.5" aria-hidden="true" />
-        Search workspace
-      </Button>
-    </div>
-  );
-}
-
 function MobileNavigation({ path, basePath }: { path: string; basePath: string }) {
   const { workspace } = useWorkspace();
   return (
@@ -602,16 +525,6 @@ function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
 function navItemActive(path: string, basePath: string, segment: string): boolean {
   const target = `${basePath}/${segment}`;
   return path === target || path.startsWith(`${target}/`);
-}
-
-function appIdFromPath(path: string, basePath: string): string | null {
-  const [section, appId] = path.slice(basePath.length).split("/").filter(Boolean);
-  return section === "apps" && appId ? decodeURIComponent(appId) : null;
-}
-
-function sandboxIdFromPath(path: string, basePath: string): string | null {
-  const [section, containerId] = path.slice(basePath.length).split("/").filter(Boolean);
-  return section === "sandboxes" && containerId ? decodeURIComponent(containerId) : null;
 }
 
 function SettingsRailButton({ active, onOpen }: { active: boolean; onOpen: () => void }) {
