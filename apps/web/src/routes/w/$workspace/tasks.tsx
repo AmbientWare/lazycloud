@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Pause, Play, Search, X } from "lucide-react";
+import { Pause, Play } from "lucide-react";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -32,7 +32,6 @@ type TasksSearch = {
   app?: string;
   workload?: string;
   deployment?: string;
-  q?: string;
   root?: boolean;
 };
 
@@ -44,7 +43,6 @@ export const Route = createFileRoute("/w/$workspace/tasks")({
     workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
     deployment:
       typeof search.deployment === "string" && search.deployment ? search.deployment : undefined,
-    q: typeof search.q === "string" && search.q.trim() ? search.q.trim() : undefined,
     root: search.root === true || search.root === "true" ? true : undefined,
   }),
   component: TasksPage,
@@ -72,7 +70,6 @@ function TasksPage() {
       stubIds: search.workload ? [search.workload] : undefined,
       deploymentId: search.deployment,
       kind: search.kind,
-      search: search.q,
       rootOnly: search.root,
       live,
     }),
@@ -125,40 +122,7 @@ function TasksPage() {
             data-tasks-toolbar=""
             className="flex min-h-12 shrink-0 items-center gap-3 overflow-x-auto border-b border-border px-3 py-2"
           >
-            <form
-              className="flex h-8 w-64 shrink-0 items-center gap-2 rounded-md border border-border bg-background/60 px-2.5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const form = new FormData(event.currentTarget);
-                const query = String(form.get("q") ?? "").trim();
-                setSearch({ q: query || undefined });
-              }}
-            >
-              <Search className="size-3.5 shrink-0 text-muted-foreground" />
-              <input
-                key={search.q ?? ""}
-                name="q"
-                type="search"
-                defaultValue={search.q}
-                aria-label="Search tasks"
-                placeholder="Search name or ID"
-                className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-              />
-              {search.q ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Clear task search"
-                  title="Clear search"
-                  className="size-6"
-                  onClick={() => setSearch({ q: undefined })}
-                >
-                  <X className="size-3.5" />
-                </Button>
-              ) : null}
-            </form>
-            <div data-tasks-filters="" className="ml-auto flex shrink-0 items-center gap-2">
+            <div data-tasks-filters="" className="flex shrink-0 items-center gap-2">
               <label className="flex h-7 shrink-0 items-center gap-2 px-1 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -236,7 +200,6 @@ function TasksPage() {
                   search.app ||
                   search.workload ||
                   search.deployment ||
-                  search.q ||
                   search.root
                     ? "No tasks match these filters"
                     : "No tasks yet"

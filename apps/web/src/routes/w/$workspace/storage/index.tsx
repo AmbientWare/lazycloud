@@ -64,72 +64,78 @@ function StoragePage() {
         ) : null
       }
     >
-      <Tabs
-        value={search.view}
-        onValueChange={(view) => {
-          setCreating(null);
-          void navigate({ search: { view: view as StorageTab }, replace: true });
-        }}
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden"
-      >
-        <LinearTabsList
-          ariaLabel="Storage resources"
-          listClassName="sm:flex-none"
-          action={
-            createView ? (
-              <Button
-                size="sm"
-                className="px-2 sm:px-3"
-                aria-label={createLabel}
-                title={createLabel}
-                disabled={creating === createView}
-                onClick={() => setCreating(createView)}
-              >
-                <Plus />
-                <span className="hidden sm:inline">{createLabel}</span>
-              </Button>
-            ) : null
-          }
+      {/* The tab strip is the card's header row, the way the tasks toolbar is:
+          the tabs and the button that acts on the selected one belong to the
+          thing they are steering, not to the space above it. */}
+      <section className="panel flex h-full min-h-0 flex-col overflow-hidden rounded-md">
+        <Tabs
+          value={search.view}
+          onValueChange={(view) => {
+            setCreating(null);
+            void navigate({ search: { view: view as StorageTab }, replace: true });
+          }}
+          className="flex h-full min-h-0 w-full flex-col overflow-hidden"
         >
-          {STORAGE_TABS.map((tab) => (
-            <LinearTab key={tab.key} value={tab.key}>
-              {tab.title}
-            </LinearTab>
-          ))}
-        </LinearTabsList>
-
-        <TabsContent
-          value="volumes"
-          className="mt-3 min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
-        >
-          <VolumesTab
-            workspaceId={workspace.id}
-            workspaceName={workspace.name}
-            creating={creating === "volumes"}
-            onCreatingChange={(open) => setCreating(open ? "volumes" : null)}
-          />
-        </TabsContent>
-        <TabsContent
-          value="secrets"
-          className="mt-3 min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
-        >
-          <SecretsTab
-            workspaceId={workspace.id}
-            workspaceName={workspace.name}
-            creating={creating === "secrets"}
-            onCreatingChange={(open) => setCreating(open ? "secrets" : null)}
-          />
-        </TabsContent>
-        {collectionResources.map((config) => (
-          <TabsContent
-            key={config.key}
-            value={config.key}
-            className="mt-3 min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
+          <LinearTabsList
+            ariaLabel="Storage resources"
+            className="px-3 py-2"
+            listClassName="sm:flex-none"
+            action={
+              createView ? (
+                <Button
+                  size="sm"
+                  className="px-2 sm:px-3"
+                  aria-label={createLabel}
+                  title={createLabel}
+                  disabled={creating === createView}
+                  onClick={() => setCreating(createView)}
+                >
+                  <Plus />
+                  <span className="hidden sm:inline">{createLabel}</span>
+                </Button>
+              ) : null
+            }
           >
-            <CollectionAccordion config={config} workspaceId={workspace.id} />
+            {STORAGE_TABS.map((tab) => (
+              <LinearTab key={tab.key} value={tab.key}>
+                {tab.title}
+              </LinearTab>
+            ))}
+          </LinearTabsList>
+
+          <TabsContent
+            value="volumes"
+            className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
+          >
+            <VolumesTab
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+              creating={creating === "volumes"}
+              onCreatingChange={(open) => setCreating(open ? "volumes" : null)}
+            />
           </TabsContent>
-        ))}
-      </Tabs>
+          <TabsContent
+            value="secrets"
+            className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
+          >
+            <SecretsTab
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+              creating={creating === "secrets"}
+              onCreatingChange={(open) => setCreating(open ? "secrets" : null)}
+            />
+          </TabsContent>
+          {collectionResources.map((config) => (
+            <TabsContent
+              key={config.key}
+              value={config.key}
+              className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
+            >
+              <CollectionAccordion config={config} workspaceId={workspace.id} />
+            </TabsContent>
+          ))}
+        </Tabs>
+      </section>
     </WorkspacePage>
   );
 }
