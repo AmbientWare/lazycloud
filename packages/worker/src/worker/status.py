@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
+from shared.scheduling import SchedulerContainerStatus
 
 CONTAINER_STATE_TTL_SECONDS = 120
 CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS = 600
@@ -41,10 +42,12 @@ class WorkerStatusHeartbeatAction(StrEnum):
     Error = "error"
 
 
-class WorkerCancelledRequestAction(StrEnum):
-    Continue = "continue"
+class WorkerDeliveredRequestAction(StrEnum):
+    Execute = "execute"
     DropMissingState = "drop-missing-state"
     DropStoppingState = "drop-stopping-state"
+    DropFinishedState = "drop-finished-state"
+    SkipStartedContainer = "skip-started-container"
 
 
 class WorkerSpindownAction(StrEnum):
@@ -69,8 +72,8 @@ class WorkerStatusHeartbeatPlan(ContractModel):
     reason: str = ""
 
 
-class WorkerCancelledRequestPlan(ContractModel):
-    action: WorkerCancelledRequestAction
+class WorkerDeliveredRequestPlan(ContractModel):
+    action: WorkerDeliveredRequestAction
     drop: bool
     delete_state: bool = False
     release_capacity: bool = False
@@ -184,29 +187,54 @@ def plan_worker_status_heartbeat(
     )
 
 
-def plan_worker_cancelled_request(
+def plan_delivered_container_request(
     *,
-    state_status: WorkerContainerStatus | str | None = None,
+    state_status: SchedulerContainerStatus | None = None,
     state_missing: bool = False,
-) -> WorkerCancelledRequestPlan:
+) -> WorkerDeliveredRequestPlan:
+    """What the worker should do with a request it has just been handed.
+
+    Delivery is at least once, so this has to answer for a request the worker has
+    already acted on as well as for a fresh one, and the container's own state is
+    what separates them. A dispatch writes `pending` before the request is queued
+    and only the worker that took it writes anything later, so `running` means
+    this worker already started it and a terminal status means it already ran.
+    Neither may run again, and neither may hand capacity back a second time: the
+    reservation for that container was made once and is released once by the
+    execution that actually holds it.
+    """
+
     if state_missing:
-        return WorkerCancelledRequestPlan(
-            action=WorkerCancelledRequestAction.DropMissingState,
+        return WorkerDeliveredRequestPlan(
+            action=WorkerDeliveredRequestAction.DropMissingState,
             drop=True,
             release_capacity=True,
             reason="container state is missing",
         )
-    status = normalize_worker_container_status(state_status)
-    if status is WorkerContainerStatus.Stopping:
-        return WorkerCancelledRequestPlan(
-            action=WorkerCancelledRequestAction.DropStoppingState,
+    if state_status is SchedulerContainerStatus.Stopping:
+        return WorkerDeliveredRequestPlan(
+            action=WorkerDeliveredRequestAction.DropStoppingState,
             drop=True,
             delete_state=True,
             release_capacity=True,
             reason="container state is already stopping",
         )
-    return WorkerCancelledRequestPlan(
-        action=WorkerCancelledRequestAction.Continue,
+    if state_status is SchedulerContainerStatus.Running:
+        return WorkerDeliveredRequestPlan(
+            action=WorkerDeliveredRequestAction.SkipStartedContainer,
+            drop=True,
+            reason="container has already been started by this worker",
+        )
+    if state_status is SchedulerContainerStatus.Complete or (
+        state_status is SchedulerContainerStatus.Failed
+    ):
+        return WorkerDeliveredRequestPlan(
+            action=WorkerDeliveredRequestAction.DropFinishedState,
+            drop=True,
+            reason=f"container has already finished as {state_status.value}",
+        )
+    return WorkerDeliveredRequestPlan(
+        action=WorkerDeliveredRequestAction.Execute,
         drop=False,
         reason="container request should run",
     )

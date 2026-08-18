@@ -105,6 +105,15 @@ class GetNextContainerRequestResponse(WorkerRepositoryResponse):
     container_request: SchedulerWorkerRequest | None = None
 
 
+class AcknowledgeContainerRequestRequest(ContractModel):
+    worker_id: str
+    container_id: str
+
+
+class AcknowledgeContainerRequestResponse(WorkerRepositoryResponse):
+    acknowledged: bool = False
+
+
 class StreamWorkerEventsRequest(ContractModel):
     worker_id: str = ""
     event_ids: list[str] = Field(default_factory=list)

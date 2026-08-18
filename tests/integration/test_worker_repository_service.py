@@ -120,6 +120,7 @@ from worker.origin_access import (
     ImageArchiveUploadCredentialRequest,
 )
 from worker.repository_payloads import (
+    AcknowledgeContainerRequestRequest,
     AcquireAutomaticCheckpointLeaseRequest,
     DeleteContainerStateRequest,
     GetCacheOriginCredentialsResponse,
@@ -1144,6 +1145,12 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
 
     assert response.container_request is not None
     assert response.container_request.container_id == container_id
+    # Delivered, not destroyed: the request stays reachable until the worker says
+    # it holds the container, and the acknowledgement is what retires it.
+    assert workers.has_recoverable_container_request(container_id, worker_id=worker_id)
+    assert service.acknowledge_container_request(
+        AcknowledgeContainerRequestRequest(worker_id=worker_id, container_id=container_id)
+    ).acknowledged
     assert workers.get_next_container_request(worker_id) is None
     with pytest.raises(StopIteration):
         next(stream)

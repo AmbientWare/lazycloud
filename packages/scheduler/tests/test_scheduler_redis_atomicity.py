@@ -156,6 +156,10 @@ def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
     assert dispatched.count(True) == 1
     assert dispatched.count(False) == 1
     assert repositories[0].get_next_container_request("worker-1") == request
+    # Delivery is at least once: a take nobody acknowledged is handed out again
+    # rather than destroyed, and only the acknowledgement retires it.
+    assert repositories[1].get_next_container_request("worker-1") == request
+    assert repositories[0].acknowledge_worker_request("worker-1", request.container_id)
     assert repositories[1].get_next_container_request("worker-1") is None
 
     cancellable = _request("cancel-1", now=now)
@@ -175,12 +179,14 @@ def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
         dequeued = executor.submit(dequeue)
         cancel_won = cancelled.result()
         delivered = dequeued.result()
-    assert cancel_won is (delivered is None)
+    # The cancellation reaches the request on whichever of the worker's two lists
+    # it is on, so a request already handed out is still cancellable.
+    assert cancel_won
     assert delivered is None or delivered.container_id == cancellable.container_id
     assert repositories[0].get_next_container_request("worker-1") is None
 
 
-def test_real_redis_blocking_take_delivers_payload_once(
+def test_real_redis_unacknowledged_take_survives_the_consumer(
     real_redis_actors: RealRedisActors,
 ) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -189,16 +195,24 @@ def test_real_redis_blocking_take_delivers_payload_once(
     ]
     request = _request("take-1", now=now)
     repositories[0].enqueue_worker_request("worker-1", request)
-    barrier = Barrier(2)
 
-    def take(repository: RedisSchedulerWorkerRepository) -> SchedulerWorkerRequest | None:
-        barrier.wait()
-        return repository.wait_for_next_container_request("worker-1", timeout_seconds=0.2)
+    taken = repositories[0].wait_for_next_container_request("worker-1", timeout_seconds=1.0)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(take, repositories))
-    assert results.count(request) == 1
-    assert results.count(None) == 1
+    assert taken == request
+    assert repositories[0].has_recoverable_container_request(
+        request.container_id,
+        worker_id="worker-1",
+    )
+    assert repositories[1].wait_for_next_container_request("worker-1", timeout_seconds=1.0) == (
+        request
+    )
+    assert repositories[1].acknowledge_worker_request("worker-1", request.container_id)
+    assert not repositories[0].acknowledge_worker_request("worker-1", request.container_id)
+    assert not repositories[0].has_recoverable_container_request(
+        request.container_id,
+        worker_id="worker-1",
+    )
+    assert repositories[0].wait_for_next_container_request("worker-1", timeout_seconds=1.0) is None
 
 
 def test_real_redis_concurrency_reserve_and_release_are_bounded_and_idempotent(

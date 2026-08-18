@@ -48,6 +48,7 @@ from shared.workload_keys import (
     pod_total_connections_key,
 )
 
+from coordination import redis_serialization
 from scheduler.autoscaling_guardrails import (
     AutoscalerGuardrailPlan,
     plan_autoscaler_start_guardrails,
@@ -1263,7 +1264,9 @@ def _scheduler_status(
     if raw is None:
         return None
     try:
-        return SchedulerContainerStatus(_redis_text(raw))
+        # The hash holds JSON per field, so the raw value carries its quotes and
+        # reading it as text matched no status at all.
+        return SchedulerContainerStatus(str(redis_serialization.loads_field(raw)))
     except ValueError:
         return None
 

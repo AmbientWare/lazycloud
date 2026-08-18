@@ -101,6 +101,8 @@ from worker.origin_access import (
     ImageArchiveUploadCredentialRequest,
 )
 from worker.repository_payloads import (
+    AcknowledgeContainerRequestRequest,
+    AcknowledgeContainerRequestResponse,
     AcknowledgeWorkerEventRequest,
     AcknowledgeWorkerEventResponse,
     AcquireAutomaticCheckpointLeaseRequest,
@@ -524,7 +526,8 @@ class WorkerRepositoryService:
         forever.
         """
 
-        self.workers.enqueue_container_request(
+        self.workers.return_worker_request(
+            worker_id,
             request.model_copy(update={"retry_count": request.retry_count + 1}),
             ready_at=utc_now(),
         )
@@ -594,6 +597,30 @@ class WorkerRepositoryService:
             response = GetNextContainerRequestResponse(container_request=container_request)
             emitted += 1
             yield response
+            # One request per stream. It is in flight until the worker
+            # acknowledges it, and the take returns an unacknowledged request
+            # ahead of the queue, so continuing here would hand the same one back
+            # in a loop instead of waiting for the worker to resolve it.
+            return
+
+    def acknowledge_container_request(
+        self,
+        request: AcknowledgeContainerRequestRequest,
+    ) -> AcknowledgeContainerRequestResponse:
+        """Record that the worker has taken the container this request names.
+
+        Delivery is at least once up to this call and nothing after it: the
+        request is redeliverable until the worker says it holds the container, and
+        the durable row's start deadline covers a worker that says so and then
+        dies before starting.
+        """
+
+        return AcknowledgeContainerRequestResponse(
+            acknowledged=self.workers.acknowledge_worker_request(
+                request.worker_id,
+                request.container_id,
+            )
+        )
 
     def stream_worker_events(
         self,
