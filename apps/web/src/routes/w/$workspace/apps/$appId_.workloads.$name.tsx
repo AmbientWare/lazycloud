@@ -4,23 +4,27 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Panel } from "@/components/shared/Panel";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
+import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
-import { stubsQueryOptions } from "@/lib/queries/stubs";
+import { stubsQueryOptions, taskLatencyQueryOptions } from "@/lib/queries/stubs";
+import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { currentDeployment, findWorkloadGroup, type WorkloadGroup } from "./-workloads/grouping";
-import { LatencyPanel } from "./-workloads/LatencyPanel";
+import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
 import {
@@ -29,7 +33,7 @@ import {
   type PodInstanceStatusFilter,
 } from "./-workloads/PodInstances";
 import { VersionHistory } from "./-workloads/VersionHistory";
-import { WorkloadActivity } from "./-workloads/WorkloadActivity";
+import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
 
 export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name")({
@@ -48,6 +52,13 @@ function WorkloadDetailRoute() {
   );
 }
 
+/**
+ * One workload, in two regions: where it answers from, and one inspector
+ * holding everything a reader looks at one at a time. Five panels competing for
+ * the same viewport meant the chart, the versions and the task table were each
+ * given a third of the room they needed and shown whether or not anyone was
+ * reading them.
+ */
 function WorkloadDetailPage() {
   const { appId, name } = Route.useParams();
   const { workspace } = useWorkspace();
@@ -69,13 +80,17 @@ function WorkloadDetailPage() {
     containersQueryOptions(workspace.id, {
       appId,
       stubIds: containerStubIds,
-      statuses:
-        group?.kind === "pod" && podInstanceStatus === "active"
-          ? [...ACTIVE_POD_CONTAINER_STATUSES]
-          : undefined,
+      // Only a Pod lists its containers; every other kind reports how many are
+      // running, and asking the server for those is what makes the count right
+      // rather than right about the newest page of a long history.
+      statuses: podContainerStatuses(group?.kind, podInstanceStatus),
       enabled: Boolean(group),
     }),
   );
+  const latency = useQuery({
+    ...taskLatencyQueryOptions(workspace.id, group?.stubIds ?? []),
+    enabled: Boolean(group) && OBSERVABLE_KINDS.has(group?.kind ?? ""),
+  });
 
   if (deployments.isPending || stubs.isPending || app.isPending) return <WorkloadSkeleton />;
   const loadError = deployments.error ?? stubs.error ?? app.error;
@@ -98,9 +113,13 @@ function WorkloadDetailPage() {
     (container) => container.status === "running",
   );
   const isPublic = Boolean(app.data?.public || currentStub?.public);
+  const isPod = group.kind === "pod";
   const showsInvoke = group.active && PLAYGROUND_KINDS.has(group.kind);
-  const showsPerformance = OBSERVABLE_KINDS.has(group.kind);
-  const showsControls = showsInvoke || showsPerformance;
+  // The chart earns its band only where there is something in the window to
+  // plot; otherwise the task table below states the same silence once.
+  const showsLatency =
+    OBSERVABLE_KINDS.has(group.kind) &&
+    (latency.isPending || latency.isError || latencyHasSignal(latency.data?.buckets));
 
   return (
     <WorkspacePage
@@ -115,6 +134,7 @@ function WorkloadDetailPage() {
             <span key="version" className="mono">
               v{current.version}
             </span>,
+            isPublic ? "Public" : "Token required",
             countLabel(runningContainers.length, "running", "running"),
           ]}
         />
@@ -132,55 +152,41 @@ function WorkloadDetailPage() {
           </Link>
         </>
       }
-      contentClassName="flex flex-col gap-3 overflow-y-auto lg:grid lg:overflow-hidden"
-      contentStyle={{
-        gridTemplateRows: showsControls
-          ? "max-content minmax(0, 1.25fr) minmax(0, 0.75fr)"
-          : "max-content minmax(0, 1fr)",
-      }}
+      contentClassName="flex flex-col gap-3 overflow-y-auto lg:overflow-hidden"
     >
-      <section
-        aria-label="Workload configuration and versions"
-        className="grid min-h-0 shrink-0 gap-3 lg:grid-cols-3"
+      <Panel
+        title={operationTitle(group)}
+        contentClassName="overflow-hidden p-0"
+        className="shrink-0"
       >
-        <Panel
-          title={operationTitle(group)}
-          contentClassName="overflow-auto p-0 lg:overflow-visible"
-          className="min-h-[18rem] lg:col-span-2 lg:min-h-0"
-        >
-          <WorkloadOperation
-            workspaceId={workspace.id}
-            deployment={current}
-            group={group}
-            isPublic={isPublic}
-            runningContainers={runningContainers.length}
-          />
-        </Panel>
-        <div className="relative min-h-[18rem] lg:min-h-0">
-          <VersionsPanel
-            workspaceId={workspace.id}
-            group={group}
-            appId={appId}
-            workspaceName={workspace.name}
-            nextCursor={deploymentList.nextCursor}
-            loadingMore={deployments.isFetchingNextPage}
-            loadMoreError={deployments.isFetchNextPageError}
-            onLoadMore={() => void deployments.fetchNextPage()}
-          />
-        </div>
-      </section>
+        <WorkloadOperation workspaceId={workspace.id} deployment={current} group={group} />
+      </Panel>
 
-      {showsControls ? (
-        <section
-          aria-label="Workload controls and performance"
-          className={`grid min-h-0 shrink-0 gap-3 ${controlGridClass(showsInvoke, showsPerformance)}`}
+      <Tabs
+        key={`${appId}:${group.name}`}
+        defaultValue={defaultInspectorTab(group, showsInvoke)}
+        /* Below `lg` the region takes the height of whichever view is open and
+           the page scrolls once; above it, the region fills the viewport and
+           each view scrolls inside itself. */
+        className="panel flex flex-col overflow-hidden rounded-md max-lg:shrink-0 lg:min-h-0 lg:flex-1"
+      >
+        <LinearTabsList
+          ariaLabel="Workload inspector views"
+          className="min-h-11 shrink-0 bg-card px-2"
         >
-          {showsInvoke ? (
-            <Panel
-              title="Invoke"
-              contentClassName="overflow-hidden p-0"
-              className="h-[18rem] min-h-0 lg:h-full"
-            >
+          {showsInvoke ? <LinearTab value="invoke">Invoke</LinearTab> : null}
+          {isPod ? (
+            <LinearTab value="instances">Instances</LinearTab>
+          ) : (
+            <LinearTab value="activity">Activity</LinearTab>
+          )}
+          <LinearTab value="versions">Versions</LinearTab>
+          <LinearTab value="configuration">Configuration</LinearTab>
+        </LinearTabsList>
+
+        {showsInvoke ? (
+          <TabsContent value="invoke" className="m-0 min-h-0 flex-1 overflow-hidden">
+            <PanelErrorBoundary title="Invoke could not be displayed">
               <Playground
                 workspaceId={workspace.id}
                 workspaceName={workspace.name}
@@ -188,94 +194,106 @@ function WorkloadDetailPage() {
                 workloadName={group.name}
                 deploymentId={current.id}
               />
-            </Panel>
-          ) : null}
+            </PanelErrorBoundary>
+          </TabsContent>
+        ) : null}
 
-          {showsPerformance ? (
-            <Panel
-              title="Performance"
-              description="Latency and outcomes over the last 24 hours"
-              contentClassName="overflow-hidden p-3"
-              className="min-h-[18rem] lg:h-full lg:min-h-0"
-            >
-              <PanelErrorBoundary title="Performance could not be displayed">
-                <LatencyPanel
-                  workspaceId={workspace.id}
-                  stubIds={group.stubIds}
-                  kind={group.kind}
-                />
-              </PanelErrorBoundary>
-            </Panel>
-          ) : null}
-        </section>
-      ) : null}
+        {isPod ? (
+          <TabsContent value="instances" className="m-0 min-h-0 flex-1 overflow-hidden">
+            <PodInstances
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+              appId={appId}
+              workloadName={group.name}
+              deployment={current}
+              statusFilter={podInstanceStatus}
+              onStatusFilterChange={setPodInstanceStatus}
+              containers={workloadContainers}
+              loading={containers.isPending}
+              error={containers.error}
+              nextCursor={containerList.nextCursor}
+              loadingMore={containers.isFetchingNextPage}
+              loadMoreError={containers.isFetchNextPageError}
+              onLoadMore={() => void containers.fetchNextPage()}
+            />
+          </TabsContent>
+        ) : (
+          <TabsContent
+            value="activity"
+            className="m-0 flex min-h-0 flex-1 flex-col overflow-hidden"
+          >
+            {showsLatency ? (
+              <div className="h-52 shrink-0 border-b border-border/80 p-3">
+                <PanelErrorBoundary title="Performance could not be displayed">
+                  <LatencyPanel
+                    buckets={latency.data?.buckets}
+                    pending={latency.isPending}
+                    error={latency.error}
+                    kind={group.kind}
+                  />
+                </PanelErrorBoundary>
+              </div>
+            ) : null}
+            <WorkloadRuns
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+              appId={appId}
+              workloadName={group.name}
+              stubIds={group.stubIds}
+            />
+          </TabsContent>
+        )}
 
-      {group.kind === "pod" ? (
-        <PodInstances
-          workspaceId={workspace.id}
-          workspaceName={workspace.name}
-          appId={appId}
-          workloadName={group.name}
-          deployment={current}
-          statusFilter={podInstanceStatus}
-          onStatusFilterChange={setPodInstanceStatus}
-          containers={workloadContainers}
-          loading={containers.isPending}
-          error={containers.error}
-          nextCursor={containerList.nextCursor}
-          loadingMore={containers.isFetchingNextPage}
-          loadMoreError={containers.isFetchNextPageError}
-          onLoadMore={() => void containers.fetchNextPage()}
-        />
-      ) : (
-        <WorkloadActivity
-          workspaceId={workspace.id}
-          workspaceName={workspace.name}
-          appId={appId}
-          workloadName={group.name}
-          stubIds={group.stubIds}
-        />
-      )}
+        <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
+          <VersionHistory
+            group={group}
+            appId={appId}
+            workspaceId={workspace.id}
+            workspaceName={workspace.name}
+            nextCursor={deploymentList.nextCursor}
+            loadingMore={deployments.isFetchingNextPage}
+            loadMoreError={deployments.isFetchNextPageError}
+            onLoadMore={() => void deployments.fetchNextPage()}
+          />
+        </TabsContent>
+
+        <TabsContent value="configuration" className="m-0 min-h-0 flex-1 overflow-auto">
+          <WorkloadConfiguration deployment={current} kind={group.kind} />
+        </TabsContent>
+      </Tabs>
     </WorkspacePage>
   );
 }
 
-function VersionsPanel({
+function WorkloadRuns({
   workspaceId,
-  group,
-  appId,
   workspaceName,
-  nextCursor,
-  loadingMore,
-  loadMoreError,
-  onLoadMore,
+  appId,
+  workloadName,
+  stubIds,
 }: {
   workspaceId: string;
-  group: WorkloadGroup;
-  appId: string;
   workspaceName: string;
-  nextCursor: string | undefined;
-  loadingMore: boolean;
-  loadMoreError: boolean;
-  onLoadMore: () => void;
+  appId: string;
+  workloadName: string;
+  stubIds: string[];
 }) {
+  const tasks = useQuery(tasksQueryOptions(workspaceId, { limit: 50, appId, stubIds }));
+  if (tasks.isError) {
+    return <PanelError message={tasks.error.message} />;
+  }
   return (
-    <Panel
-      title="Versions"
-      contentClassName="overflow-auto p-0"
-      className="min-h-[18rem] lg:absolute lg:inset-0 lg:min-h-0"
-    >
-      <VersionHistory
-        group={group}
-        appId={appId}
-        workspaceId={workspaceId}
-        workspaceName={workspaceName}
-        nextCursor={nextCursor}
-        loadingMore={loadingMore}
-        loadMoreError={loadMoreError}
-        onLoadMore={onLoadMore}
-      />
-    </Panel>
+    <TaskTable
+      tasks={tasks.isPending ? undefined : tasks.data?.data}
+      showApp={false}
+      showWorkload={false}
+      taskLink={(taskId) => ({
+        to: "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId",
+        params: { workspace: workspaceName, appId, name: workloadName, taskId },
+      })}
+      emptyMessage="No tasks recorded yet"
+      className="min-h-0 flex-1"
+    />
   );
 }
 
@@ -283,22 +301,31 @@ function WorkloadSkeleton() {
   return (
     <WorkspacePage
       title={<Skeleton className="h-7 w-64" />}
-      contentClassName="flex flex-col gap-3 overflow-y-auto lg:grid lg:overflow-hidden"
-      contentStyle={{
-        gridTemplateRows: "max-content minmax(0, 1.25fr) minmax(0, 0.75fr)",
-      }}
+      contentClassName="flex flex-col gap-3 overflow-y-auto lg:overflow-hidden"
     >
-      <div className="grid min-h-0 gap-3 lg:h-48 lg:grid-cols-3" aria-hidden="true">
-        <Skeleton className="h-72 w-full lg:col-span-2 lg:h-full" />
-        <Skeleton className="h-72 w-full lg:h-full" />
-      </div>
-      <div className="grid min-h-0 gap-3 lg:grid-cols-2" aria-hidden="true">
-        <Skeleton className="h-72 w-full lg:h-full" />
-        <Skeleton className="h-72 w-full lg:h-full" />
-      </div>
-      <Skeleton className="h-80 w-full lg:h-full" aria-hidden="true" />
+      <Skeleton className="h-28 w-full shrink-0" aria-hidden="true" />
+      <Skeleton className="h-[30rem] w-full lg:h-auto lg:min-h-0 lg:flex-1" aria-hidden="true" />
     </WorkspacePage>
   );
+}
+
+/**
+ * The view a reader lands on is whatever the workload does without being asked:
+ * a schedule and a Pod are already working, so their record is the answer,
+ * while a function or endpoint waits to be called.
+ */
+function defaultInspectorTab(group: WorkloadGroup, showsInvoke: boolean): string {
+  if (group.kind === "pod") return "instances";
+  if (showsInvoke && !group.latest.spec?.cron) return "invoke";
+  return "activity";
+}
+
+function podContainerStatuses(
+  kind: string | undefined,
+  filter: PodInstanceStatusFilter,
+): ("pending" | "running")[] | undefined {
+  if (kind !== "pod") return ["running"];
+  return filter === "active" ? [...ACTIVE_POD_CONTAINER_STATUSES] : undefined;
 }
 
 function kindLabel(group: WorkloadGroup): string {
@@ -316,11 +343,7 @@ function kindLabel(group: WorkloadGroup): string {
 
 function operationTitle(group: WorkloadGroup): string {
   if (group.latest.spec?.cron) return "Schedule";
-  if (group.kind === "pod") return "Pod configuration";
-  if (group.kind === "endpoint" || group.kind === "asgi") return "HTTP configuration";
-  return "Function configuration";
-}
-
-function controlGridClass(showsInvoke: boolean, showsPerformance: boolean): string {
-  return showsInvoke && showsPerformance ? "lg:grid-cols-2" : "lg:grid-cols-1";
+  if (group.kind === "pod") return "Pod";
+  if (group.kind === "endpoint" || group.kind === "asgi") return "HTTP endpoint";
+  return "Function";
 }

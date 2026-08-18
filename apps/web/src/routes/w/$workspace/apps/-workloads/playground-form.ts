@@ -171,16 +171,25 @@ export function curlSnippet(url: string, body: JsonValue): string {
   ].join("\n");
 }
 
-/** Working Python (requests) equivalent of the playground invoke. */
+/**
+ * Working Python (requests) equivalent of the playground invoke.
+ *
+ * The token is bound before the call rather than read inline: the inline form
+ * put the longest line in the snippet at 71 columns, which is what the panel
+ * had to scroll sideways to show, and a named binding is what a reader would
+ * have written anyway.
+ */
 export function pythonSnippet(url: string, body: JsonValue): string {
   return [
     "import os",
     "",
     "import requests",
     "",
+    `token = os.environ["LAZYCLOUD_TOKEN"]`,
+    "",
     "response = requests.post(",
     `    ${JSON.stringify(url)},`,
-    `    headers={"Authorization": f"Bearer {os.environ['LAZYCLOUD_TOKEN']}"},`,
+    `    headers={"Authorization": f"Bearer {token}"},`,
     `    json=${pythonLiteral(body, 4)},`,
     ")",
     "response.raise_for_status()",
@@ -188,20 +197,46 @@ export function pythonSnippet(url: string, body: JsonValue): string {
   ].join("\n");
 }
 
-/** Render a JSON value as a Python literal (True/False/None differ from JSON). */
-export function pythonLiteral(value: JsonValue, indent: number): string {
+/**
+ * Longest single-line Python literal the snippet renders inline. Past it the
+ * literal is expanded one entry per line: a payload with a dozen arguments is
+ * one unreadable line otherwise, and the snippet column is what has to hold it.
+ */
+const PYTHON_LITERAL_WIDTH = 58;
+
+/**
+ * Render a JSON value as a Python literal (True/False/None differ from JSON),
+ * expanded across lines once the one-line form outruns the snippet column.
+ */
+function pythonLiteral(value: JsonValue, indent: number): string {
+  const flat = flatPythonLiteral(value);
+  if (value === null || typeof value !== "object") return flat;
+  if (indent + flat.length <= PYTHON_LITERAL_WIDTH) return flat;
+
+  const entries = Array.isArray(value)
+    ? value.map((item) => pythonLiteral(item, indent + 4))
+    : Object.entries(value).map(
+        ([key, item]) => `${JSON.stringify(key)}: ${pythonLiteral(item, indent + 4)}`,
+      );
+  const [open, close] = Array.isArray(value) ? ["[", "]"] : ["{", "}"];
+  const inner = entries.map((entry) => `${" ".repeat(indent + 4)}${entry},`).join("\n");
+  return `${open}\n${inner}\n${" ".repeat(indent)}${close}`;
+}
+
+/** The one-line form, which is what the width is measured against. */
+function flatPythonLiteral(value: JsonValue): string {
   if (value === null) return "None";
   if (typeof value === "boolean") return value ? "True" : "False";
   if (typeof value === "number") return JSON.stringify(value);
   if (typeof value === "string") return JSON.stringify(value);
   if (Array.isArray(value)) {
     if (value.length === 0) return "[]";
-    return `[${value.map((item) => pythonLiteral(item, indent)).join(", ")}]`;
+    return `[${value.map((item) => flatPythonLiteral(item)).join(", ")}]`;
   }
   const entries = Object.entries(value);
   if (entries.length === 0) return "{}";
   const inner = entries
-    .map(([key, item]) => `${JSON.stringify(key)}: ${pythonLiteral(item, indent)}`)
+    .map(([key, item]) => `${JSON.stringify(key)}: ${flatPythonLiteral(item)}`)
     .join(", ");
   return `{${inner}}`;
 }

@@ -113,4 +113,26 @@ describe("snippets", () => {
     const snippet = curlSnippet(url, { label: "it's" });
     expect(snippet).toContain(`-d '{"label":"it'\\''s"}'`);
   });
+
+  // A snippet is code someone pastes and runs, so a payload too wide for one
+  // line has to break into Python that is still Python.
+  it("breaks a wide payload across lines at the call's indentation", () => {
+    const python = pythonSnippet(url, {
+      value: 123456789,
+      fail: false,
+      delay_seconds: 12.5,
+      label: "a reasonably long label",
+    });
+    expect(python).toContain(
+      [
+        "    json={",
+        '        "value": 123456789,',
+        '        "fail": False,',
+        '        "delay_seconds": 12.5,',
+        '        "label": "a reasonably long label",',
+        "    },",
+      ].join("\n"),
+    );
+    expect(python.split("\n").every((line) => line.length <= 72)).toBe(true);
+  });
 });

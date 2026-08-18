@@ -37,8 +37,9 @@ export function VersionHistory({
   onLoadMore: () => void;
 }) {
   return (
-    <div className="min-w-0 p-4 lg:p-5">
-      <div className="divide-y divide-border">
+    <div className="min-w-0">
+      <VersionListHeader />
+      <div className="divide-y divide-border/70">
         {group.deployments.map((deployment) => (
           <VersionRow
             key={deployment.id}
@@ -58,6 +59,24 @@ export function VersionHistory({
         onLoadMore={onLoadMore}
         resourceLabel="deployment versions"
       />
+    </div>
+  );
+}
+
+/** The same column rule the instance list follows, so two lists on one page
+    do not read as two different kinds of list. */
+const VERSION_COLUMNS = "lg:grid lg:grid-cols-[7rem_7rem_minmax(0,1fr)_auto] lg:items-center";
+
+function VersionListHeader() {
+  return (
+    <div
+      className={`hidden min-h-9 shrink-0 gap-3 border-b border-border/80 px-3 text-[10px] font-medium text-muted-foreground ${VERSION_COLUMNS}`}
+      aria-hidden="true"
+    >
+      <span>Version</span>
+      <span>State</span>
+      <span>Deployed</span>
+      <span />
     </div>
   );
 }
@@ -116,11 +135,17 @@ function VersionRow({
     deployment.actions.can_start || deployment.actions.can_stop || deployment.actions.can_delete;
 
   return (
-    <div className="flex min-h-11 flex-wrap items-center gap-2 py-2 text-sm">
-      <span className="mono w-8 shrink-0 font-medium">v{deployment.version}</span>
-      <StatusChip status={deployment.active ? "active" : "stopped"} live={deployment.active} />
-      {latest ? <span className="micro-label text-muted-foreground">Latest</span> : null}
-      <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+    <div
+      className={`flex min-h-12 flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-sm ${VERSION_COLUMNS}`}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="mono font-medium">v{deployment.version}</span>
+        {latest ? <span className="micro-label text-muted-foreground">Latest</span> : null}
+      </span>
+      <span className="flex min-w-0">
+        <StatusChip status={deployment.active ? "active" : "stopped"} live={deployment.active} />
+      </span>
+      <span className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
         <time dateTime={deployment.created_at} title={deployment.created_at}>
           {relativeTime(deployment.created_at)}
         </time>
@@ -128,13 +153,13 @@ function VersionRow({
           to="/w/$workspace/tasks"
           params={{ workspace: workspaceName }}
           search={{ app: appId, deployment: deployment.id }}
-          className="text-brand hover:underline"
+          className="interactive-link text-brand"
         >
           Tasks
         </Link>
       </span>
       {hasActions ? (
-        <span className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
+        <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
           {confirmingDelete ? (
             <>
               <Button
@@ -201,9 +226,14 @@ function VersionRow({
             </>
           )}
         </span>
-      ) : null}
+      ) : (
+        <span />
+      )}
       {error ? (
-        <span className="basis-full text-right text-xs text-destructive" role="alert">
+        <span
+          className="basis-full text-xs text-destructive lg:col-span-4 lg:text-right"
+          role="alert"
+        >
           {error.message}
         </span>
       ) : null}

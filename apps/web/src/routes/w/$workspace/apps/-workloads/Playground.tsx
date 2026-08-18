@@ -4,11 +4,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, Play } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
-import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { invokeDeployment, type InvokeResult } from "@/lib/api/invoke";
 import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
@@ -119,69 +117,70 @@ function PlaygroundForm({
   const snippetBody: JsonValue = snippetParsed.ok ? snippetParsed.body : exampleBody(manifest);
 
   return (
-    <Tabs defaultValue="request" className="flex h-full min-h-0 flex-col">
-      <LinearTabsList ariaLabel="Playground views" className="px-4">
-        <LinearTab value="request">Request</LinearTab>
-        <LinearTab value="curl">curl</LinearTab>
-        <LinearTab value="python">Python</LinearTab>
-      </LinearTabsList>
-
-      <TabsContent value="request" className="m-0 min-h-0 flex-1 overflow-auto p-4">
-        <div className="space-y-3">
-          {fields !== null && fields.length > 0 ? (
-            <div className="space-y-2.5">
-              {fields.map((field) => (
-                <FieldInput
-                  key={field.name}
-                  field={field}
-                  value={values[field.name] ?? ""}
-                  onChange={(next) => setValues((prev) => ({ ...prev, [field.name]: next }))}
-                />
-              ))}
-            </div>
-          ) : fields !== null ? (
-            <p className="text-sm text-muted-foreground">This target takes no arguments.</p>
-          ) : (
-            <div>
-              <div className="micro-label mb-1">JSON payload</div>
-              <textarea
-                value={rawText}
-                onChange={(event) => setRawText(event.target.value)}
-                spellCheck={false}
-                aria-label="JSON payload"
-                className="mono h-24 w-full resize-none rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs outline-none focus:border-ring"
+    <div className="flex h-full min-h-0 flex-col lg:flex-row lg:overflow-hidden">
+      <div className="min-w-0 space-y-3 p-4 lg:min-h-0 lg:w-1/2 lg:overflow-y-auto">
+        {fields !== null && fields.length > 0 ? (
+          <div className="space-y-2.5">
+            {fields.map((field) => (
+              <FieldInput
+                key={field.name}
+                field={field}
+                value={values[field.name] ?? ""}
+                onChange={(next) => setValues((prev) => ({ ...prev, [field.name]: next }))}
               />
-            </div>
-          )}
-          <div className="flex items-center gap-3">
-            <Button size="sm" onClick={submit} disabled={invoke.isPending}>
-              {invoke.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Play className="size-3.5" />
-              )}
-              Invoke
-            </Button>
-            {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
+            ))}
           </div>
-          <InvokeOutcome
-            kind={manifest.kind}
-            result={invoke.data}
-            error={invoke.isError ? invoke.error : null}
-            workspaceName={workspaceName}
-            appId={appId}
-            workloadName={workloadName}
-          />
+        ) : fields !== null ? (
+          <p className="text-sm text-muted-foreground">This target takes no arguments.</p>
+        ) : (
+          <div>
+            <div className="micro-label mb-1">JSON payload</div>
+            <textarea
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              spellCheck={false}
+              aria-label="JSON payload"
+              className="mono h-24 w-full resize-none rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs outline-none focus:border-ring"
+            />
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <Button size="sm" onClick={submit} disabled={invoke.isPending}>
+            {invoke.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            Invoke
+          </Button>
+          {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
         </div>
-      </TabsContent>
+        <InvokeOutcome
+          kind={manifest.kind}
+          result={invoke.data}
+          error={invoke.isError ? invoke.error : null}
+          workspaceName={workspaceName}
+          appId={appId}
+          workloadName={workloadName}
+        />
+      </div>
 
-      <TabsContent value="curl" className="m-0 min-h-0 flex-1 overflow-auto p-4">
-        <Snippet text={curlSnippet(manifest.invoke_url, snippetBody)} label="curl snippet" />
-      </TabsContent>
-      <TabsContent value="python" className="m-0 min-h-0 flex-1 overflow-auto p-4">
-        <Snippet text={pythonSnippet(manifest.invoke_url, snippetBody)} label="Python snippet" />
-      </TabsContent>
-    </Tabs>
+      {/* Both snippets are shown rather than switched between: each is a dozen
+          lines, and the tab strip that hid one of them was also what pinned the
+          other to a height it did not fit in. */}
+      <div className="min-w-0 space-y-4 border-t border-border/80 bg-muted/10 p-4 lg:min-h-0 lg:w-1/2 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+        <Snippet
+          title="curl"
+          text={curlSnippet(manifest.invoke_url, snippetBody)}
+          label="curl snippet"
+        />
+        <Snippet
+          title="Python"
+          text={pythonSnippet(manifest.invoke_url, snippetBody)}
+          label="Python snippet"
+        />
+      </div>
+    </div>
   );
 }
 
@@ -302,13 +301,21 @@ function prettyBody(result: InvokeResult): string {
   return result.bodyText || "(empty response)";
 }
 
-function Snippet({ text, label }: { text: string; label: string }) {
+/**
+ * A snippet is sized by the code in it. Python indentation carries meaning, so
+ * a long line scrolls sideways in its own region rather than wrapping into
+ * something that would not run if it were pasted.
+ */
+function Snippet({ title, text, label }: { title: string; text: string; label: string }) {
   return (
-    <div className="relative">
-      <pre className="mono max-h-40 overflow-auto rounded-md border border-border bg-muted/40 p-2.5 pr-9 text-xs">
-        {text}
-      </pre>
-      <CopyButton value={text} label={label} className="absolute top-1.5 right-1.5 size-7" />
-    </div>
+    <section className="min-w-0">
+      <div className="micro-label mb-1.5">{title}</div>
+      <div className="relative min-w-0">
+        <pre className="mono overflow-x-auto rounded-md border border-border bg-card p-2.5 pr-9 text-xs leading-relaxed">
+          {text}
+        </pre>
+        <CopyButton value={text} label={label} className="absolute top-1.5 right-1.5 size-7" />
+      </div>
+    </section>
   );
 }

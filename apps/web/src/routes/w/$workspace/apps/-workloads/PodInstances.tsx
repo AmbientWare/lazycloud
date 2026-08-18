@@ -5,10 +5,10 @@ import { Check, ChevronRight, Loader2, Minus, Plus, Server } from "lucide-react"
 import { toast } from "sonner";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
-import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { countLabel } from "@/components/shared/WorkspacePage/countLabel";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -60,24 +60,19 @@ export function PodInstances({
   onLoadMore: () => void;
 }) {
   const instances = useMemo(() => orderInstances(containers), [containers]);
-  const running = instances.filter((container) => container.status === "running").length;
   const active = instances.filter((container) =>
     ACTIVE_CONTAINER_STATUSES.has(container.status),
   ).length;
-  const configured = configuredReplicaLabel(deployment);
+  const running = instances.filter((container) => container.status === "running").length;
 
   return (
-    <Panel
-      title="Instances"
-      description={
-        <>
-          <span className="sm:hidden">{running} running</span>
-          <span className="hidden sm:inline">
-            {running} running · {active} active · {configured} configured
-          </span>
-        </>
-      }
-      action={
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/80 px-3 py-2">
+        {/* The header already states how many are running; what it cannot say is
+            how many the Pod was told to hold. */}
+        <p className="text-[11px] text-muted-foreground">
+          {countLabel(active, "active", "active")} · {configuredReplicaLabel(deployment)} configured
+        </p>
         <InstanceControls
           workspaceId={workspaceId}
           appId={appId}
@@ -86,12 +81,8 @@ export function PodInstances({
           statusFilter={statusFilter}
           onStatusFilterChange={onStatusFilterChange}
         />
-      }
-      headerClassName="flex-wrap gap-y-2 sm:flex-nowrap"
-      contentClassName="overflow-hidden p-0"
-      className="min-h-[14rem] shrink-0 lg:h-full lg:min-h-0"
-    >
-      <div className="flex h-full min-h-0 flex-col bg-muted/10">
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col bg-muted/10">
         <InstanceListHeader />
         <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Pod instances">
           {loading ? (
@@ -131,7 +122,7 @@ export function PodInstances({
           )}
         </div>
       </div>
-    </Panel>
+    </div>
   );
 }
 

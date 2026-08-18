@@ -7,56 +7,56 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { CronJob, Deployment } from "@/lib/api/schemas";
 import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
 import { cronJobsQueryOptions } from "@/lib/queries/cron";
-import { formatDuration, relativeTime } from "@/lib/format";
+import { relativeTime } from "@/lib/format";
 
 import type { WorkloadGroup } from "./grouping";
 
+const INVOKABLE_KINDS = new Set(["function", "endpoint", "asgi"]);
+
+/**
+ * Where the workload answers from, and what governs reaching it there.
+ *
+ * Only that: how the container is provisioned is reference a reader consults
+ * once, so it sits in the inspector's configuration view rather than competing
+ * with the address for the top of the page.
+ */
 export function WorkloadOperation({
   workspaceId,
   deployment,
   group,
-  isPublic,
-  runningContainers,
 }: {
   workspaceId: string;
   deployment: Deployment;
   group: WorkloadGroup;
-  isPublic: boolean;
-  runningContainers: number;
 }) {
   const kind = group.kind;
-  const isInvokable = ["function", "endpoint", "asgi"].includes(kind);
   // A schedule is a property of the workload, not a kind of it.
   const isScheduled = Boolean(group.latest.spec?.cron);
 
   return (
-    <div className="grid grid-cols-1 divide-y divide-border/80 lg:grid-cols-[minmax(0,1fr)_minmax(24rem,1.35fr)] lg:divide-x lg:divide-y-0">
-      <div className="min-w-0 space-y-4 p-4">
-        {isInvokable && group.active ? (
+    <div className="min-w-0 space-y-4 p-4">
+      {INVOKABLE_KINDS.has(kind) ? (
+        group.active ? (
           <InvokeTarget workspaceId={workspaceId} deploymentId={deployment.id} />
-        ) : isInvokable ? (
-          <div className="text-sm text-muted-foreground">
+        ) : (
+          <p className="text-sm text-muted-foreground">
             This version is stopped and is not accepting requests.
-          </div>
-        ) : null}
-        {isScheduled ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
-        {kind === "pod" ? <PodFacts deployment={deployment} /> : null}
-        {(kind === "endpoint" || kind === "asgi") && (
-          <HttpFacts deployment={deployment} isPublic={isPublic} />
-        )}
-      </div>
-      <RuntimeFacts
-        deployment={deployment}
-        isPublic={isPublic}
-        runningContainers={runningContainers}
-        showRunning={kind !== "pod"}
-        showExecutionLimits={kind !== "pod"}
-        showAccess={kind !== "endpoint" && kind !== "asgi"}
-      />
+          </p>
+        )
+      ) : null}
+      {isScheduled ? <ScheduleFacts workspaceId={workspaceId} group={group} /> : null}
+      {kind === "pod" ? <PodFacts deployment={deployment} /> : null}
+      {kind === "endpoint" || kind === "asgi" ? <HttpFacts deployment={deployment} /> : null}
     </div>
   );
 }
 
+/**
+ * The address gets the page's whole measure. Fitted into a column beside other
+ * readings it truncated to its hostname, which is the half a reader already
+ * knows — and a copy control beside an elided value reads as copying the
+ * elision.
+ */
 function InvokeTarget({
   workspaceId,
   deploymentId,
@@ -66,72 +66,31 @@ function InvokeTarget({
 }) {
   const query = useQuery(deploymentUrlQueryOptions(workspaceId, deploymentId));
 
-  if (query.isPending) return <Skeleton className="h-8 w-full" />;
-  if (query.isError) return <div className="text-sm text-destructive">{query.error.message}</div>;
+  if (query.isPending) return <Skeleton className="h-14 w-full" />;
+  if (query.isError) {
+    return (
+      <p className="text-sm text-destructive" role="alert">
+        {query.error.message}
+      </p>
+    );
+  }
 
   return (
-    <div>
+    <div className="min-w-0">
       <div className="micro-label mb-1.5">Invoke URL</div>
-      <div className="flex min-w-0 items-center gap-1.5">
-        <code className="mono min-w-0 flex-1 truncate rounded bg-muted/60 px-2.5 py-1.5 text-xs">
+      <div className="flex min-w-0 items-start gap-1.5">
+        <code className="mono min-w-0 flex-1 rounded bg-muted/60 px-2.5 py-1.5 text-xs break-all">
           {query.data.url}
         </code>
-        <CopyButton value={query.data.url} label="invoke URL" />
+        <CopyButton value={query.data.url} label="invoke URL" className="shrink-0" />
       </div>
     </div>
   );
 }
 
-function RuntimeFacts({
-  deployment,
-  isPublic,
-  runningContainers,
-  showRunning,
-  showExecutionLimits,
-  showAccess,
-}: {
-  deployment: Deployment;
-  isPublic: boolean;
-  runningContainers: number;
-  showRunning: boolean;
-  showExecutionLimits: boolean;
-  showAccess: boolean;
-}) {
-  const resources = deployment.spec.resources;
+function HttpFacts({ deployment }: { deployment: Deployment }) {
   return (
-    <FactGrid columns={5} className="content-start gap-x-4 p-4">
-      <Fact label="Version" value={`v${deployment.version}`} />
-      <Fact label="Pool" value={poolLabel(deployment)} />
-      {showRunning ? (
-        <Fact label="Running" value={Intl.NumberFormat().format(runningContainers)} />
-      ) : null}
-      {showExecutionLimits ? (
-        <Fact label="Concurrency" value={Intl.NumberFormat().format(resources.concurrency)} />
-      ) : null}
-      <Fact label="Warm retention" value={retentionLabel(resources.keep_warm)} />
-      {showExecutionLimits ? (
-        <Fact label="Timeout" value={durationLabel(resources.timeout_seconds)} />
-      ) : null}
-      {showAccess ? <Fact label="Access" value={isPublic ? "Public" : "Token required"} /> : null}
-      <Fact label="CPU" value={resources.cpu == null ? "Default" : `${resources.cpu} cores`} />
-      <Fact label="Memory" value={resources.memory ?? "Default"} />
-      {resources.gpu ? (
-        <Fact
-          label="GPU"
-          value={`${resources.gpu}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
-        />
-      ) : null}
-    </FactGrid>
-  );
-}
-
-function poolLabel(deployment: Deployment): string {
-  return deployment.spec.pool || "Not reported";
-}
-
-function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic: boolean }) {
-  return (
-    <FactGrid columns={2}>
+    <FactGrid columns={2} className="max-w-xl">
       <Fact label="Route" value={deployment.spec.route || "/"} mono />
       <Fact
         label="Methods"
@@ -140,7 +99,6 @@ function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic:
         }
         mono
       />
-      <Fact label="Authentication" value={isPublic ? "Public" : "Bearer token"} />
     </FactGrid>
   );
 }
@@ -148,7 +106,7 @@ function HttpFacts({ deployment, isPublic }: { deployment: Deployment; isPublic:
 function PodFacts({ deployment }: { deployment: Deployment }) {
   const ports = Object.entries(deployment.spec.ports);
   return (
-    <FactGrid columns={2}>
+    <FactGrid columns={2} className="max-w-3xl">
       <Fact
         label="Ports"
         value={ports.length ? ports.map(([name, port]) => `${name}:${port}`).join(", ") : "None"}
@@ -170,13 +128,17 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
     deploymentIds.has(item.deployment_id),
   );
 
-  if (cronJobs.isPending) return <Skeleton className="h-24 w-full" />;
+  if (cronJobs.isPending) return <Skeleton className="h-12 w-full" />;
   if (cronJobs.isError) {
-    return <div className="text-sm text-destructive">{cronJobs.error.message}</div>;
+    return (
+      <p className="text-sm text-destructive" role="alert">
+        {cronJobs.error.message}
+      </p>
+    );
   }
 
   return (
-    <FactGrid columns={2} className="gap-y-5">
+    <FactGrid columns={4} className="max-w-3xl">
       <Fact label="Schedule" value={job?.cron ?? "Not registered"} mono />
       <Fact label="Timezone" value="UTC" />
       <Fact
@@ -192,15 +154,4 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
       <Fact label="Last run" value={job?.last_run_at ? relativeTime(job.last_run_at) : "-"} />
     </FactGrid>
   );
-}
-
-function retentionLabel(seconds: number | null | undefined): string {
-  if (seconds == null) return "Default";
-  if (seconds === 0) return "Scale to zero";
-  return formatDuration(seconds * 1_000);
-}
-
-function durationLabel(seconds: number | null | undefined): string {
-  if (seconds == null || seconds === 0) return "No limit";
-  return formatDuration(seconds * 1_000);
 }
