@@ -557,7 +557,7 @@ class GatewayControlService:
             container = self._container_for_workspace(request.container_id, workspace_id)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
-        output = container_output(self.services, container)
+        output = container_output(self.services, container, logs=self.event_streams)
         done = container.finished_at is not None
         return AttachToContainerResponse(
             output=output,
