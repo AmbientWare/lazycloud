@@ -53,20 +53,24 @@ export function WorkspaceSwitcher({
             size="sm"
             aria-label="Workspace"
             className={cn(
-              "h-9 w-full justify-between border-transparent px-2 text-xs font-medium text-foreground shadow-none",
-              compact && "max-w-44",
+              // A surface rather than a ghost: this is what every row beneath it
+              // is scoped to, and at the same weight as those rows it read as
+              // one of them.
+              "h-10 w-full justify-between rounded-md border border-sidebar-border bg-sidebar-accent/50 px-2.5 text-sm font-medium text-foreground shadow-none hover:bg-sidebar-accent",
+              compact && "h-9 max-w-44 text-xs",
               className,
             )}
           >
             <span className="flex min-w-0 items-center gap-2">
-              <span
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  workspace.status === "active" ? "bg-positive" : "bg-muted-foreground",
-                )}
-                aria-hidden="true"
-              />
               <span className="truncate">{workspace.name}</span>
+              {/* Named rather than shaded. Four statuses collapsed into two dot
+                  colours, so a workspace mid-delete looked like a disabled one,
+                  and the dot carried it for sighted readers alone. */}
+              {workspace.status === "active" ? null : (
+                <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                  {workspace.status}
+                </span>
+              )}
             </span>
             <ChevronDown className="size-3.5 text-muted-foreground" />
           </Button>
@@ -93,14 +97,12 @@ export function WorkspaceSwitcher({
                   className="min-h-10 min-w-0 flex-1"
                   onSelect={() => switchWorkspace(item.name)}
                 >
-                  <span
-                    className={cn(
-                      "size-1.5 shrink-0 rounded-full",
-                      item.status === "active" ? "bg-positive" : "bg-muted-foreground",
-                    )}
-                    aria-hidden="true"
-                  />
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  {item.status === "active" ? null : (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {item.status}
+                    </span>
+                  )}
                   {item.id === workspace.id ? (
                     <Check className="text-brand" aria-label="Selected" />
                   ) : null}

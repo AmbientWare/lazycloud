@@ -192,12 +192,7 @@ function DesktopRail({
 
   return (
     <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[inset_-1px_0_0_oklch(1_0_0/0.02)] lg:flex">
-      {/* Each row below reaches less far than the one above it: the product,
-          then the workspace, then a search that only ever looks inside it, then
-          that workspace's sections. The readings are the one control that spans
-          workspaces, so they sit up here beside the mark rather than in the
-          sequence, where they would read as scoped to whatever is selected. */}
-      <div className="flex h-14 shrink-0 items-center justify-between gap-2 px-3">
+      <div className="flex h-14 shrink-0 items-center px-3">
         <Link
           to="/w/$workspace/apps"
           params={{ workspace: workspace.name }}
@@ -206,23 +201,34 @@ function DesktopRail({
           <img src="/lazycloud.png" alt="" className="size-8 shrink-0" />
           <span className="truncate text-xl font-bold text-brand">LazyCloud</span>
         </Link>
-        <AccountMetricsControl />
       </div>
 
-      <div className="space-y-1.5 px-3 pb-3">
-        <WorkspaceSwitcher className="w-full" />
+      {/* Three weights for three kinds of thing, because a column of one weight
+          reads as one thing. These two open something over the page and are
+          drawn as controls; the workspace below them is a surface, because it is
+          what everything under it is scoped to; the sections are quietest, since
+          a destination you are already looking at needs no emphasis to be found. */}
+      <div className="space-y-1.5 px-3">
+        <AccountMetricsControl />
         <button
           type="button"
           onClick={onOpenSearch}
           className="flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Search className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="flex-1 truncate">Search {workspace.name}</span>
+          <span className="flex-1 truncate">Search</span>
           <kbd className="mono shrink-0 text-[10px] text-muted-foreground">⌘K</kbd>
         </button>
       </div>
 
-      <nav aria-label="Main navigation" className="space-y-0.5 px-3">
+      <div className="px-3 pt-3">
+        <WorkspaceSwitcher className="w-full" />
+      </div>
+
+      <nav
+        aria-label="Main navigation"
+        className="mt-3 space-y-0.5 border-t border-sidebar-border px-3 pt-3"
+      >
         {primaryNav.map((item) => (
           <RailLink
             key={item.segment}
@@ -426,16 +432,16 @@ function AccountMetricsControl() {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon"
+      <button
+        type="button"
         aria-label="Account metrics"
         title="Account metrics"
-        className="size-8 text-muted-foreground"
         onClick={() => setOpen(true)}
+        className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <Gauge className="size-3.5" />
-      </Button>
+        <Gauge className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="flex-1 truncate">Metrics</span>
+      </button>
       {open ? (
         <Suspense fallback={null}>
           <AccountMetricsDrawer onClose={() => setOpen(false)} />
