@@ -43,6 +43,9 @@ function AppDetailPage() {
   const activeWorkloads = workloadGroups.filter((group) => group.active).length;
   const latestDeployment = newestDeployment(deploymentRows, appId);
   const containerList = selectContainerList(containers.data, containers.hasNextPage);
+  const runningContainers = containerList.items.filter(
+    (item) => item.container.status === "running",
+  ).length;
   const continuingDeployments = Boolean(deploymentList.nextCursor);
   const continuationCursor = continuingDeployments
     ? `deployments:${deploymentList.nextCursor}`
@@ -106,6 +109,7 @@ function AppDetailPage() {
             <div className="grid min-h-0 gap-3 lg:grid-rows-[minmax(7rem,0.8fr)_minmax(10rem,1.25fr)_minmax(7rem,0.9fr)] lg:overflow-hidden">
               <AppActivitySection
                 buckets={activity.data?.items}
+                runningContainers={runningContainers}
                 pending={activity.isPending}
                 error={queryError(activity.error)}
               />
