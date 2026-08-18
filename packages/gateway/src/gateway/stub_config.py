@@ -134,6 +134,16 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
                 "checkpoint_readiness_interval_seconds",
                 default=1.0,
             ),
+            health_check_path=_metadata_string(
+                metadata,
+                "health_check_path",
+                default="",
+            ),
+            health_check_port=_metadata_int(
+                metadata,
+                "health_check_port",
+                default=0,
+            ),
             docker_enabled=request.docker_enabled,
             block_network=request.block_network,
             allow_list=request.allow_list,
@@ -254,6 +264,8 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             "checkpoint_readiness_interval_seconds": (
                 runtime_config.checkpoint_readiness_interval_seconds
             ),
+            "health_check_path": runtime_config.health_check_path,
+            "health_check_port": runtime_config.health_check_port,
             "schema": config.schema_config.model_dump(mode="json"),
             "autoscaler": QueueDepthAutoscaler(
                 min_containers=config.autoscaler.min_containers,

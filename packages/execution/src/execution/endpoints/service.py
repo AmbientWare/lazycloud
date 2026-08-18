@@ -78,6 +78,10 @@ from execution.mounts import (
 from execution.services import ExecutionServices
 
 ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS = 0.05
+ENDPOINT_HEALTH_PROBE_TIMEOUT_SECONDS = 10.0
+# A health probe runs no handler, so a container already serving its
+# concurrency limit can still answer one.
+ENDPOINT_HEALTH_PROBE_CONCURRENCY = 2**31
 ENDPOINT_BACKPRESSURE_STATUS_CODE = 429
 ENDPOINT_CANCELLED_STATUS_CODE = 499
 ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE = "endpoint request buffer is full"
@@ -286,6 +290,45 @@ class EndpointControlService:
             return error_response(404, "endpoint not found")
         except Exception as exc:
             return error_response(500, str(exc))
+
+    def forward_endpoint_health(
+        self,
+        request: EndpointForwardRequest,
+    ) -> EndpointForwardResponse:
+        """Answer a health probe without opening an invocation.
+
+        Every other path here creates a task and meters it, which is right for a
+        request the workload runs and wrong for one asking whether it could. An
+        uptime check left pointing at this path would otherwise accrue task rows
+        and billable usage for work nobody asked for.
+
+        No ready container is reported as unavailable rather than waited out: the
+        caller asked for the current answer, and a probe that blocks until
+        capacity arrives has stopped being a probe.
+        """
+
+        try:
+            stub = self.control_plane.get_stub(request.stub_id)
+            if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
+                return error_response(404, f"stub is not an endpoint: {stub.id}")
+            dispatcher = self.dispatcher
+            if dispatcher is None:
+                return error_response(503, "endpoint dispatcher is not configured")
+            target = dispatcher.select_target(
+                stub.id,
+                max_inflight_per_container=ENDPOINT_HEALTH_PROBE_CONCURRENCY,
+            )
+            if target is None:
+                return error_response(503, "no ready endpoint containers")
+            return dispatcher.forward_target(
+                target,
+                request,
+                timeout_seconds=ENDPOINT_HEALTH_PROBE_TIMEOUT_SECONDS,
+            )
+        except NotFoundError:
+            return error_response(404, "endpoint not found")
+        except Exception as exc:
+            return error_response(502, str(exc))
 
     def prepare_asgi_http(
         self,

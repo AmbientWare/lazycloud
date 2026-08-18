@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import uvicorn
 from foundation.handler_loading import evict_user_code_modules, load_callable
 from pydantic import TypeAdapter, ValidationError
+from shared.container_requests import CONTAINER_HEALTH_PATH
 from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
@@ -62,7 +63,6 @@ CONTAINER_INNER_PORT = 8001
 ENDPOINT_SERVE_PORT_ENV = "BIND_PORT"
 ENDPOINT_HANDLER_ENV = "HANDLER"
 ASGI_STUB_TYPE = "asgi"
-HEALTH_PATH = "/health"
 _ASGI_HEADERS_ADAPTER = TypeAdapter(list[tuple[bytes, bytes]])
 
 
@@ -237,7 +237,7 @@ class RunnerASGIApplication:
         receive: ASGIReceive,
         send: ASGISend,
     ) -> None:
-        if scope.get("type") == "http" and scope.get("path") == HEALTH_PATH:
+        if scope.get("type") == "http" and scope.get("path") == CONTAINER_HEALTH_PATH:
             await send(
                 {
                     "type": "http.response.start",
@@ -297,7 +297,7 @@ class _EndpointServeHTTPHandler(BaseHTTPRequestHandler):
 
     def _serve(self, *, send_body: bool = True) -> None:
         path = urlsplit(self.path).path or "/"
-        if path == HEALTH_PATH:
+        if path == CONTAINER_HEALTH_PATH:
             self._write(EndpointForwardResponse(body=b"ok"), send_body=send_body)
             return
         request = EndpointForwardRequest(

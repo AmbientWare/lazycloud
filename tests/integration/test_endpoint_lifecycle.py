@@ -888,3 +888,74 @@ def _auth_headers(
         workspace_id=workspace,
     )
     return {"Authorization": f"Bearer {raw_token}"}
+
+
+def test_health_probe_reaches_the_container_without_opening_an_invocation(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+) -> None:
+    """A probe asks whether the workload could run something, and runs nothing.
+
+    Every other public path here creates a task and meters it. An uptime check
+    left pointing at this URL would otherwise bill the workspace once per poll
+    for work no handler ever saw, so the absence of both records is the contract.
+    """
+
+    handler_file = tmp_path / "asgi_health.py"
+    handler_file.write_text(
+        """
+async def app(scope, receive, send):
+    if scope["type"] == "lifespan":
+        await receive()
+        await send({"type": "lifespan.startup.complete"})
+        await receive()
+        await send({"type": "lifespan.shutdown.complete"})
+        return
+    await receive()
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"handler ran"})
+""".strip(),
+        encoding="utf-8",
+    )
+    deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="health-probe-asgi",
+            kind=DeploymentKind.Asgi,
+            handler=f"{handler_file}:app",
+        )
+    )
+    stub = _stub_for_deployment(isolated_services, deployment.id)
+    _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=2)
+    container_id = "00000000-0000-4000-8000-0000000003b1"
+
+    with _serve_asgi_handler(f"{handler_file}:app") as served:
+        containers = _EndpointContainers(
+            states=[
+                SchedulerContainerState(
+                    container_id=container_id,
+                    stub_id=stub.id,
+                    workspace_id=stub.workspace_id,
+                    status=SchedulerContainerStatus.Running,
+                )
+            ],
+            addresses={container_id: served.address},
+        )
+        service = EndpointControlService(
+            isolated_services,
+            dispatcher=EndpointInstanceDispatcher(containers),
+        )
+        task_ids_before = {task.id for task in isolated_services.tasks.list()}
+        usage_before = len(isolated_services.usage.list(workspace_id=stub.workspace_id))
+
+        with TestClient(create_app(isolated_services, endpoint_service=service)) as client:
+            response = client.get(
+                f"/api/v1/asgi/id/{stub.id}/health",
+                headers=_auth_headers(isolated_services),
+            )
+
+            assert response.status_code == 200
+            # The runner answers this itself, so reaching it proves the request
+            # was forwarded to the container rather than answered in the API.
+            assert response.content == b"ok"
+            assert {task.id for task in isolated_services.tasks.list()} == task_ids_before
+            assert len(isolated_services.usage.list(workspace_id=stub.workspace_id)) == usage_before

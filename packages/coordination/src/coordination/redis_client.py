@@ -79,6 +79,7 @@ class RedisTransport(Protocol):
         value: RedisWireScalar,
         *,
         ex: int | None = None,
+        px: int | None = None,
         nx: bool = False,
     ) -> RedisCommandResponse: ...
 
@@ -421,9 +422,10 @@ class RedisClient:
         value: RedisWireScalar,
         *,
         ex: int | None = None,
+        px: int | None = None,
         nx: bool = False,
     ) -> bool:
-        raw = self._transport.set(key, value, ex=ex, nx=nx)
+        raw = self._transport.set(key, value, ex=ex, px=px, nx=nx)
         if raw is None:
             return False
         return _redis_bool(raw, "SET")

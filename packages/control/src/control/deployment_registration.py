@@ -264,6 +264,8 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                     )
                     or 1.0
                 ),
+                "health_check_path": _metadata_optional_string(metadata, "health_check_path"),
+                "health_check_port": (_metadata_optional_int(metadata, "health_check_port") or 0),
                 "docker_enabled": (_metadata_optional_bool(metadata, "docker_enabled") or False),
                 "block_network": _metadata_optional_bool(metadata, "block_network") or False,
                 "allow_list": _metadata_string_list(metadata, "allow_list"),
