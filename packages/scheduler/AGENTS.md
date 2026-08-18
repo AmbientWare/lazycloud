@@ -59,6 +59,11 @@ else may start one — the ceiling is enforced where the container is reserved,
 in the transaction that both counts what is live and inserts the row that adds
 to it.
 
+A fired schedule invokes the stub its deployment published, read off the
+deployment the tick just resolved rather than off anything the schedule row
+carries: the deployment is what a redeploy updates, so it is the only one of the
+two that cannot be stale.
+
 ## A function's warm floor
 
 `min_containers` is held with nothing queued, and it is the only way to ask this

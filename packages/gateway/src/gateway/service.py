@@ -54,7 +54,7 @@ from compute.telemetry import (
 )
 from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
-from control.deployments import CronJobService, DeploymentService
+from control.deployments import DeploymentService
 from control.service import ControlPlaneService, StubKind
 from database.context import ServiceContext
 from database.repositories.compute import (
@@ -250,9 +250,6 @@ class GatewayServices(Protocol):
 
     @property
     def deployment_resources(self) -> DeploymentResourceService: ...
-
-    @property
-    def cron_jobs(self) -> CronJobService: ...
 
     @property
     def compute(self) -> ComputeService: ...

@@ -356,12 +356,7 @@ class FunctionControlService:
         """
 
         with self.services.context.database.session() as session:
-            repository = TaskRepository(session)
-            return {
-                container_id
-                for container_id in container_ids
-                if repository.list_inflight_for_container(container_id)
-            }
+            return TaskRepository(session).containers_with_inflight_work(container_ids)
 
     def start_function_container(self, stub_id: str) -> bool:
         """Start one more container for this stub, because the autoscaler said so.
@@ -445,8 +440,7 @@ class FunctionControlService:
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
         # A task with nothing to run cannot be served by any container, so it
-        # fails here rather than after one has been started for it. A warm start
-        # carries no task and nothing to check.
+        # fails here rather than after one has been started for it.
         if task is not None and task.invocation is None:
             self.services.tasks.transition(
                 task,

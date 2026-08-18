@@ -12,7 +12,6 @@ from pydantic import field_validator
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsData
 from shared.scheduling import (
-    ContainerStatusUpdatePlan,
     SchedulerContainerState,
     SchedulerContainerStatus,
 )
@@ -24,6 +23,7 @@ from worker.container_metrics import (
     WorkerContainerMetricsService,
 )
 from worker.events import ContainerLifecyclePayload, ContainerRequestContext, WorkerUsageEvidence
+from worker.finalization import ContainerStatusUpdater
 from worker.status import (
     WorkerStatusHeartbeatAction,
     normalize_worker_container_status,
@@ -38,24 +38,15 @@ class ContainerRuntimeMonitorHandle(Protocol):
     def stop(self) -> ContainerRuntimeMonitoringResult: ...
 
 
-class ContainerStateHeartbeatRepository(Protocol):
+class ContainerStateHeartbeatRepository(ContainerStatusUpdater, Protocol):
     """The scheduler's view of a container, read and re-armed by its worker.
 
-    Split from the finalization repository because this is the only consumer
-    that both reads a container's state and writes it back on a timer; the
-    protocol names exactly that pair so nothing wider has to be injected to get
-    it.
+    The write is `ContainerStatusUpdater`, which every finalization path already
+    speaks; the read is what makes this a heartbeat rather than a report, since
+    a state the platform has dropped must not be recreated.
     """
 
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
-
-    def update_container_status(
-        self,
-        container_id: str,
-        status: SchedulerContainerStatus,
-        *,
-        ttl_seconds: int,
-    ) -> ContainerStatusUpdatePlan: ...
 
 
 class ContainerRuntimeMonitor(Protocol):

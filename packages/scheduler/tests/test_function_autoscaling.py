@@ -108,7 +108,9 @@ def test_function_autoscaler_records_what_it_decided(
     # first, and the autoscaler owns every one after it.
     assert result.current_containers == 1
     assert result.desired_containers == 3
-    assert [action.action for action in result.actions] == ["scale-up", "scale-up"]
+    # "start" for every kind: the action is a metric label, and one event that
+    # carried two names could not be counted.
+    assert [action.action for action in result.actions] == ["start", "start"]
 
     metric_labels = {
         "source": "function.autoscaler",

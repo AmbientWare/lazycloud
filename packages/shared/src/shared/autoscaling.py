@@ -59,9 +59,7 @@ class ScaleDecisionKind(StringEnum):
 
     One enum for all three because the conclusion is the same conclusion: a
     count is above, below, or equal to what is wanted, or the sample it was read
-    from could not be trusted. Written per kind it was three identical copies
-    with identical wire values, which reads as three vocabularies an operator
-    has to learn and gives three places for one of them to drift.
+    from could not be trusted.
     """
 
     ScaleUp = "scale-up"

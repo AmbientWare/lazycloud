@@ -309,19 +309,18 @@ class TaskService:
             # caller waiting on a container that is gone. It happens when a stop
             # releases the claim while the container is still alive enough to
             # report the start it had already begun.
-            if (
-                claim
-                and resolved_container_id
-                and _container_is_terminal(session, resolved_container_id)
-            ):
+            container = (
+                ContainerRepository(session).records.get_across_workspaces(resolved_container_id)
+                if resolved_container_id
+                else None
+            )
+            if claim and container is not None and container.status in TERMINAL_CONTAINER_STATUSES:
                 msg = (
                     f"container {resolved_container_id} is no longer running and "
                     f"cannot claim task {current.id}"
                 )
                 raise ConflictError(msg)
-            persisted_container_id = (
-                resolved_container_id if _container_exists(session, resolved_container_id) else None
-            )
+            persisted_container_id = resolved_container_id if container is not None else None
             attempt_repository = TaskAttemptRepository(session)
             latest = attempt_repository.latest_for_task(current.id)
             active_attempt = latest is not None and latest.status in {
@@ -672,13 +671,6 @@ def _container_exists(session: DatabaseSession, container_id: str | None) -> boo
     if not container_id:
         return False
     return ContainerRepository(session).records.get_across_workspaces(container_id) is not None
-
-
-def _container_is_terminal(session: DatabaseSession, container_id: str) -> bool:
-    record = ContainerRepository(session).records.get_across_workspaces(container_id)
-    if record is None:
-        return False
-    return record.status in TERMINAL_CONTAINER_STATUSES
 
 
 def _task_retry_policy(

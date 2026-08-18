@@ -19,10 +19,11 @@ from pathlib import Path
 
 from lazycloud.cli.control import resource_client
 from lazycloud.session.task import FunctionCall
+from shared.tasks import TERMINAL_TASK_STATUSES
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
 SOURCE_ROOT = Path(__file__).resolve().parent
-TERMINAL_STATUSES = {"complete", "failed", "cancelled", "timeout", "expired"}
+_TERMINAL = {status.value for status in TERMINAL_TASK_STATUSES}
 
 
 def _delete_app(name: str, workspace: str) -> None:
@@ -40,7 +41,7 @@ def _await_running(call: FunctionCall[str], *, timeout_seconds: float) -> None:
         status = call.task.view().status.value
         if status == "running":
             return
-        if status in TERMINAL_STATUSES:
+        if status in _TERMINAL:
             raise RuntimeError(f"Function reached {status} before cancellation")
         time.sleep(0.25)
     raise RuntimeError("Function did not reach running before cancellation")

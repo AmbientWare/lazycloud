@@ -1087,12 +1087,10 @@ class ManagementService:
     def _cancel_task(self, task: Task) -> None:
         """Cancel one task through whatever owns stopping its kind of work.
 
-        Writing `cancelled` on the row is all a cancel used to be, and for a
-        function that left the handler running to completion: the caller was
-        told their work had stopped while it went on producing side effects and
-        being billed. Nothing inside the container watches the row, so reaching
-        the work means going through the service that knows what stopping this
-        workload does to the invocations beside it.
+        Nothing inside a container watches the task row, so writing `cancelled`
+        on it stops no work. Reaching the handler means going through the service
+        that knows what stopping this workload does to the invocations beside
+        it.
 
         Built here the way this service builds its control plane, and safe to
         build without a gateway origin because cancelling only settles work: it

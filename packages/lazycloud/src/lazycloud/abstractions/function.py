@@ -267,7 +267,8 @@ class Function(Generic[P, R]):
             self.preemptible = preemptible
         return self
 
-    def spec(self, *, kind: DeploymentKind = DeploymentKind.Function) -> DeploymentSpec:
+    def spec(self) -> DeploymentSpec:
+        kind = DeploymentKind.Function
         client_contract = build_client_contract(
             self.func,
             kind=kind,
