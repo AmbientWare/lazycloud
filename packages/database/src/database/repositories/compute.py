@@ -51,7 +51,7 @@ from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.timestamps import utc_now
-from sqlalchemy import Select, delete, func, or_, select
+from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
@@ -1171,6 +1171,51 @@ class ComputeMachineEnrollmentRepository:
             select(ComputeMachineEnrollmentTable)
             .where(ComputeMachineEnrollmentTable.user_id == user_id)
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
+        )
+        return [
+            ComputeMachineEnrollmentRecord.model_validate(row.payload)
+            for row in self.session.scalars(statement)
+        ]
+
+    def list_silent_since(
+        self,
+        *,
+        cutoff: datetime,
+        limit: int,
+    ) -> list[ComputeMachineEnrollmentRecord]:
+        """Active machines last seen before `cutoff` and not already marked gone.
+
+        Control-plane-wide rather than workspace-scoped: a machine going quiet is
+        found by sweeping every enrollment, not by a tenant asking.
+
+        Last-seen is the later of the join and the heartbeat, spelled out column
+        by column because the multi-argument `greatest` is PostgreSQL-only and
+        this schema is also built on SQLite. `last_join_at` is not nullable, so
+        the pair reduces to: the join is old, and any heartbeat is older still.
+
+        Rows already carrying a disconnect at or after their last-seen are left
+        out. They are the ones a sweep would decide nothing about, and excluding
+        them here keeps each pass proportional to the machines actually leaving
+        rather than to the fleet.
+        """
+
+        heartbeat = ComputeMachineEnrollmentTable.last_heartbeat_at
+        joined = ComputeMachineEnrollmentTable.last_join_at
+        disconnected = ComputeMachineEnrollmentTable.last_disconnect_at
+        statement = (
+            select(ComputeMachineEnrollmentTable)
+            .where(
+                ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
+                or_(heartbeat.is_(None), heartbeat < cutoff),
+                joined < cutoff,
+                or_(
+                    disconnected.is_(None),
+                    disconnected < joined,
+                    and_(heartbeat.is_not(None), disconnected < heartbeat),
+                ),
+            )
+            .order_by(joined.asc(), ComputeMachineEnrollmentTable.id.asc())
+            .limit(max(limit, 1))
         )
         return [
             ComputeMachineEnrollmentRecord.model_validate(row.payload)

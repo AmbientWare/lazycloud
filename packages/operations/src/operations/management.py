@@ -1771,9 +1771,11 @@ class ManagementService:
             resource_type = None
             resource_id = None
         offset = _parse_cursor(cursor)
+        # Workspace rows only. A cluster-scoped event carries no workspace
+        # because it belongs to the platform rather than to a customer, so
+        # folding those in hands every workspace every other workspace's.
         data = self.services.events.list(
             workspace_id=workspace_record.id,
-            include_cluster=True,
             resource_type=resource_type,
             resource_id=resource_id,
             container_id=container_id,
@@ -1782,7 +1784,6 @@ class ManagementService:
         )
         total = self.services.events.count(
             workspace_id=workspace_record.id,
-            include_cluster=True,
             resource_type=resource_type,
             resource_id=resource_id,
             container_id=container_id,

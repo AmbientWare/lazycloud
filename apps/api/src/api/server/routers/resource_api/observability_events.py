@@ -65,7 +65,6 @@ def list_events(
     return EventListResponse(
         events=services.events.list(
             workspace_id=workspace_id,
-            include_cluster=True,
             limit=limit,
         )
     )

@@ -5,6 +5,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
@@ -43,14 +44,20 @@ from compute.state import (
     RedisComputeStateRepository,
 )
 from compute.telemetry import (
-    AgentMetricSnapshot as AgentMetricSnapshotProtocol,
-)
-from compute.telemetry import (
+    AGENT_HEARTBEAT_TIMEOUT_SECONDS,
+    AgentDisconnectAction,
     AgentMetricUpdatePlan,
+    AgentTelemetryState,
     PoolTelemetryState,
+    agent_machine_last_seen,
+    agent_silence_description,
+    plan_agent_disconnect,
     plan_agent_metric_update,
     redact_telemetry_line,
     validate_agent_telemetry_token,
+)
+from compute.telemetry import (
+    AgentMetricSnapshot as AgentMetricSnapshotProtocol,
 )
 from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
@@ -314,6 +321,14 @@ def _request_with_workload_defaults(
 
 SELF_HOSTED_FLEET_POOL_NAME = "self-hosted"
 """Server-owned name of each workspace's single implicit self-hosted machine fleet."""
+
+DISCONNECT_SWEEP_LIMIT = 200
+"""Machines one disconnect sweep will mark.
+
+A bound on the work a single pass does, not on how many machines can be marked:
+each pass writes a disconnect that takes those rows out of the next scan, so a
+larger backlog drains over consecutive passes instead of holding one lease for
+the whole fleet."""
 
 
 def _domain_error(exc: KeyError | ValueError) -> DomainError:
@@ -1789,10 +1804,10 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent joined pool {agent_state.pool}",
                 data={
-                    "workspace_id": agent_state.workspace_id,
                     "pool": agent_state.pool,
                     "machine_id": agent_state.machine_id,
                 },
+                workspace_id=agent_state.workspace_id,
             )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
@@ -2044,6 +2059,7 @@ class GatewayControlService:
                     resource_id=request.route_id,
                     message=f"agent route {request.route_id} changed state",
                     data=event_data,
+                    workspace_id=state.workspace_id,
                 )
             if plan.should_prewarm:
                 self._prewarm_route(plan.updated, state)
@@ -2181,13 +2197,13 @@ class GatewayControlService:
                 resource_id=state.machine_id,
                 message=f"agent capacity changed to {state.capacity_state.value}",
                 data={
-                    "workspace_id": state.workspace_id,
                     "pool": state.pool,
                     "machine_id": state.machine_id,
                     "state": state.capacity_state.value,
                     "reason": state.capacity_reason,
                     "credential_generation": state.credential_generation,
                 },
+                workspace_id=state.workspace_id,
             )
         return AgentCapacityInterruptionResponse(
             machine_id=state.machine_id,
@@ -2275,11 +2291,11 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent worker slot created for {worker.worker_id}",
                 data={
-                    "workspace_id": agent_state.workspace_id,
                     "pool": agent_state.pool,
                     "machine_id": agent_state.machine_id,
                     "worker_id": worker.worker_id,
                 },
+                workspace_id=agent_state.workspace_id,
             )
         return [saved]
 
@@ -2403,11 +2419,11 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent worker slot pruned for {slot.worker_id}",
                 data={
-                    "workspace_id": agent_state.workspace_id,
                     "pool": agent_state.pool,
                     "machine_id": agent_state.machine_id,
                     "worker_id": slot.worker_id,
                 },
+                workspace_id=agent_state.workspace_id,
             )
 
     def _revoke_agent_worker_token(self, workspace_id: str, token_id: str) -> None:
@@ -2464,6 +2480,7 @@ class GatewayControlService:
                     resource_id=state.machine_id,
                     message=f"agent metrics received for {state.machine_id}",
                     data=event_data,
+                    workspace_id=state.workspace_id,
                 )
             for log in request.logs:
                 redacted_line = redact_telemetry_line(log.line)
@@ -2473,6 +2490,7 @@ class GatewayControlService:
                     resource_id=updated_state.machine_id,
                     message=redacted_line,
                     data=log.model_copy(update={"line": redacted_line}).model_dump(mode="json"),
+                    workspace_id=updated_state.workspace_id,
                 )
             for event in request.events:
                 self.services.events.emit(
@@ -2481,6 +2499,7 @@ class GatewayControlService:
                     resource_id=updated_state.machine_id,
                     message=event.message,
                     data=event.model_dump(mode="json"),
+                    workspace_id=updated_state.workspace_id,
                 )
         except (KeyError, ValueError) as exc:
             return AgentTelemetryResponse(ok=False, err_msg=str(exc))
@@ -2614,6 +2633,83 @@ class GatewayControlService:
         if state is not None:
             self.compute_states.save_agent_token_state(state)
         return state
+
+    def sweep_disconnected_agents(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = DISCONNECT_SWEEP_LIMIT,
+    ) -> list[str]:
+        """Record the machines that stopped reporting, and tell their owners.
+
+        Every other write to an enrollment happens because a heartbeat arrived.
+        That is the one thing a machine that has gone does not do, so without
+        this sweep the row keeps saying `Ready` for a host that is switched off,
+        and the only place the truth appears is a view that recomputes it per
+        request and writes nothing down.
+
+        Returns the machine ids newly marked, so the caller can log a real
+        number rather than that it ran.
+        """
+
+        current_time = now or utc_now()
+        cutoff = current_time - timedelta(seconds=AGENT_HEARTBEAT_TIMEOUT_SECONDS)
+        with self.services.context.database.session() as session:
+            candidates = ComputeMachineEnrollmentRepository(session).list_silent_since(
+                cutoff=cutoff,
+                limit=limit,
+            )
+        marked: list[str] = []
+        for enrollment in candidates:
+            state = _agent_state_from_enrollment(enrollment)
+            if state is None:
+                continue
+            telemetry = agent_telemetry_state(state)
+            plan = plan_agent_disconnect(telemetry, now=current_time)
+            if plan.action is not AgentDisconnectAction.MarkDisconnected:
+                continue
+            try:
+                self._persist_agent_state(
+                    state.model_copy(update={"last_disconnect_at": plan.disconnected_at})
+                )
+            except ValueError:
+                # The machine re-joined or was revoked between the scan and the
+                # write. Either way the row now says something newer than this
+                # plan, and the next sweep decides again from what it says.
+                continue
+            self._emit_agent_disconnected(state, telemetry, plan.reason, now=current_time)
+            marked.append(state.machine_id)
+        return marked
+
+    def _emit_agent_disconnected(
+        self,
+        state: ComputeAgentTokenState,
+        telemetry: AgentTelemetryState,
+        reason: str,
+        *,
+        now: datetime,
+    ) -> None:
+        last_seen = agent_machine_last_seen(telemetry)
+        silence = agent_silence_description(telemetry, now=now)
+        self.services.events.emit(
+            "agent.disconnected",
+            resource_type="agent",
+            resource_id=state.machine_id,
+            message=(
+                f"machine {state.machine_id} stopped reporting {silence} ago"
+                if silence
+                else f"machine {state.machine_id} stopped reporting"
+            ),
+            level=EventLevel.Warning,
+            data={
+                "machine_id": state.machine_id,
+                "pool": state.pool,
+                "capacity_owner_id": state.capacity_owner_id,
+                "last_seen_at": last_seen.isoformat() if last_seen is not None else "",
+                "reason": reason,
+            },
+            workspace_id=state.workspace_id,
+        )
 
     def _persist_agent_state(self, state: ComputeAgentTokenState) -> ComputeAgentTokenState:
         readiness_phase = _agent_readiness_phase(state)

@@ -236,6 +236,7 @@ from api.server.worker_repository_service import (
     WorkerRepositoryService,
 )
 from api.settings import (
+    AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
     PublicIngressSettings,
     TcpIngressSettings,
@@ -436,6 +437,7 @@ class ApiServiceCore:
     auth_token_cache: AuthTokenCache
     tcp_ingress_settings: TcpIngressSettings
     agent_route_reconciliation_settings: AgentRouteReconciliationSettings
+    agent_disconnect_reconciliation_settings: AgentDisconnectReconciliationSettings
     gateway_settings: GatewaySettings
     stripe_settings: StripeSettings
     payment_provider: Callable[[], PaymentProvider]
@@ -540,6 +542,9 @@ class ApiServices(ApiServiceCore):
         *,
         tcp_ingress_settings: TcpIngressSettings | None = None,
         agent_route_reconciliation_settings: AgentRouteReconciliationSettings | None = None,
+        agent_disconnect_reconciliation_settings: (
+            AgentDisconnectReconciliationSettings | None
+        ) = None,
         gateway_settings: GatewaySettings | None = None,
         stripe_settings: StripeSettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
@@ -597,6 +602,9 @@ class ApiServices(ApiServiceCore):
         tcp_ingress_config = tcp_ingress_settings or TcpIngressSettings()
         agent_route_reconciliation_config = (
             agent_route_reconciliation_settings or AgentRouteReconciliationSettings()
+        )
+        agent_disconnect_reconciliation_config = (
+            agent_disconnect_reconciliation_settings or AgentDisconnectReconciliationSettings()
         )
         gateway_config = gateway_settings or GatewaySettings()
         stripe_config = stripe_settings or StripeSettings()
@@ -968,6 +976,7 @@ class ApiServices(ApiServiceCore):
             auth_token_cache=auth_token_cache,
             tcp_ingress_settings=tcp_ingress_config,
             agent_route_reconciliation_settings=agent_route_reconciliation_config,
+            agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_config,
             gateway_settings=gateway_config,
             stripe_settings=stripe_config,
             payment_provider=payment_provider,
@@ -1300,6 +1309,7 @@ def _compose_api_services(
         auth_token_cache=core.auth_token_cache,
         tcp_ingress_settings=core.tcp_ingress_settings,
         agent_route_reconciliation_settings=core.agent_route_reconciliation_settings,
+        agent_disconnect_reconciliation_settings=core.agent_disconnect_reconciliation_settings,
         gateway_settings=core.gateway_settings,
         stripe_settings=core.stripe_settings,
         payment_provider=core.payment_provider,

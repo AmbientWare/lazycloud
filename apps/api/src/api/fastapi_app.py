@@ -196,6 +196,21 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                     cleanup_failures,
                     route_reconciliation,
                 )
+                disconnect_reconciliation = _create_background_task(
+                    _reconcile_agent_disconnects(
+                        api_services.gateway_service,
+                        api_services.redis_client,
+                        interval_seconds=(
+                            api_services.agent_disconnect_reconciliation_settings.interval_seconds
+                        ),
+                        event_sink=api_services.events,
+                    )
+                )
+                cleanup.push_async_callback(
+                    _capture_task_cleanup_failure,
+                    cleanup_failures,
+                    disconnect_reconciliation,
+                )
                 if api_services.aws_connections is not None:
                     reconciliation = api_services.aws_capacity_reconciliation_settings
                     aws_connection_reconciliation = _create_background_task(
@@ -433,6 +448,52 @@ async def _reconcile_agent_routes(
             holding = False
             logger.exception("agent route registry reconciliation failed")
             _emit_reconciliation_failure(event_sink, "agent-routes", exc)
+        await asyncio.sleep(max(interval_seconds, 0.1))
+
+
+async def _reconcile_agent_disconnects(
+    gateway: GatewayControlService,
+    redis: RedisClient,
+    *,
+    interval_seconds: float,
+    event_sink: GatewayEventSink | None = None,
+) -> None:
+    """Write off machines that stopped reporting, from one control plane at a time.
+
+    Every other enrollment write happens because a heartbeat arrived, which is
+    the one thing a machine that has gone will not do. This is the writer for
+    its absence.
+
+    The lease is what makes the telling happen once. The plan's own
+    `last_disconnect_at` guard survives a restart, but not two control planes
+    that both read a still-`Ready` row before either writes: each would decide
+    to mark it and each would emit. Renewed rather than released, so the winner
+    keeps the work while it is alive.
+    """
+    lease_key = redis.key("control-plane", "leases", "agent-disconnects")
+    holder = str(uuid4())
+    lease_seconds = max(int(interval_seconds * 3), 2)
+    holding = False
+    while True:
+        try:
+            holding = holding and renew_token_lock(
+                redis, lease_key, holder, ttl_seconds=lease_seconds
+            )
+            if not holding:
+                holding = try_acquire_token_lock(
+                    redis, lease_key, holder, ttl_seconds=lease_seconds
+                )
+            if holding:
+                marked = await asyncio.to_thread(gateway.sweep_disconnected_agents)
+                if marked:
+                    logger.info(
+                        "marked agent machines disconnected: %s",
+                        ", ".join(marked),
+                    )
+        except Exception as exc:
+            holding = False
+            logger.exception("agent disconnect reconciliation failed")
+            _emit_reconciliation_failure(event_sink, "agent-disconnects", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 

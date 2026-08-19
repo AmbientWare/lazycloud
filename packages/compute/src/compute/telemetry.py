@@ -52,7 +52,7 @@ class AgentMachineStatus(StrEnum):
 class AgentDisconnectAction(StrEnum):
     Ignore = "ignore"
     MarkDisconnected = "mark-disconnected"
-    DisableMachineWorker = "disable-machine-worker"
+    AlreadyMarked = "already-marked"
 
 
 class NodeType(StrEnum):
@@ -234,8 +234,15 @@ class AgentMetricUpdatePlan(ContractModel):
 
 
 class AgentDisconnectPlan(ContractModel):
+    """What to do about a machine that stopped reporting.
+
+    Nothing here disables the machine's worker. The scheduler's agent-pool
+    controller does that from the same heartbeat rule on every pass, and a
+    second disabler reached on a different cadence would be two owners for one
+    transition. This plan owns the durable record and the telling.
+    """
+
     action: AgentDisconnectAction
-    should_disable_machine_worker: bool = False
     should_emit_event: bool = False
     disconnected_at: datetime | None = None
     status: AgentMachineStatus = AgentMachineStatus.Disconnected
@@ -539,6 +546,38 @@ def agent_machine_last_seen(state: AgentTelemetryState) -> datetime | None:
     return state.last_join_at
 
 
+def agent_silence_description(
+    state: AgentTelemetryState,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """How long this machine has been quiet, coarsely, for a person to read.
+
+    Coarse on purpose: the number goes in a message somebody reads to decide
+    whether to go and look at a host, and to the second it would imply the
+    platform knows the moment the machine stopped. It knows the last time one
+    arrived.
+
+    Empty when the machine has never reported, which is a different sentence.
+    """
+
+    last_seen = agent_machine_last_seen(state)
+    if last_seen is None:
+        return ""
+    elapsed = ((now or utc_now()) - last_seen).total_seconds()
+    if elapsed < 60:
+        return _plural(max(int(elapsed), 0), "second")
+    if elapsed < 3600:
+        return _plural(int(elapsed // 60), "minute")
+    if elapsed < 86400:
+        return _plural(int(elapsed // 3600), "hour")
+    return _plural(int(elapsed // 86400), "day")
+
+
+def _plural(count: int, unit: str) -> str:
+    return f"{count} {unit}" if count == 1 else f"{count} {unit}s"
+
+
 def agent_machine_connected(
     state: AgentTelemetryState,
     *,
@@ -583,14 +622,12 @@ def plan_agent_disconnect(
     status = agent_machine_status(state, now=current)
     if state.last_disconnect_at is not None and state.last_disconnect_at >= last_seen:
         return AgentDisconnectPlan(
-            action=AgentDisconnectAction.DisableMachineWorker,
-            should_disable_machine_worker=True,
+            action=AgentDisconnectAction.AlreadyMarked,
             status=status,
             reason="disconnect-already-marked",
         )
     return AgentDisconnectPlan(
         action=AgentDisconnectAction.MarkDisconnected,
-        should_disable_machine_worker=True,
         should_emit_event=True,
         disconnected_at=current,
         status=status,

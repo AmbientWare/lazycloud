@@ -13,6 +13,7 @@ from compute.state import (
 from compute.telemetry import (
     agent_machine_connected,
     agent_machine_last_seen,
+    agent_silence_description,
     agent_telemetry_state,
 )
 from control.service import ControlPlaneService, StubRecord
@@ -111,7 +112,7 @@ def machine_view(
         readiness_message=(
             agent_state.capacity_reason
             if agent_state is not None and agent_state.capacity_reason
-            else _machine_readiness_message(readiness_phase, preflight_checks)
+            else _machine_readiness_message(readiness_phase, preflight_checks, agent_state)
         ),
         schedulable=(
             readiness_phase is MachineReadinessPhase.Ready
@@ -169,16 +170,37 @@ def _machine_readiness_phase(
 def _machine_readiness_message(
     phase: MachineReadinessPhase,
     preflight: list[ComputePreflightCheck],
+    agent_state: ComputeAgentTokenState | None = None,
 ) -> str:
+    """Why the machine is in this phase, in terms its owner can act on.
+
+    The fleet is hardware this platform does not own and cannot reach, so the
+    message is the whole of the support channel. "Agent heartbeat is stale"
+    named the symptom and left the reader with nowhere to go; how long it has
+    been quiet is what distinguishes a host that rebooted from one that has
+    been off for a week, and it is the platform's last true observation.
+    """
+
     if phase is MachineReadinessPhase.Ready:
         return "Ready for workloads"
     if phase is MachineReadinessPhase.Blocked:
         failed = [check.message for check in preflight if check.required and not check.ok]
-        return "; ".join(item for item in failed if item) or "Host preflight failed"
+        named = "; ".join(item for item in failed if item)
+        if named:
+            return named
+        return (
+            "Host preflight failed without naming a check; restart the agent to run preflight again"
+        )
     if phase is MachineReadinessPhase.Offline:
-        return "Agent heartbeat is stale"
+        silence = (
+            agent_silence_description(agent_telemetry_state(agent_state))
+            if agent_state is not None
+            else ""
+        )
+        quiet = f"No heartbeat for {silence}" if silence else "No heartbeat from the agent"
+        return f"{quiet}; check the host is powered on and the agent service is running"
     if phase is MachineReadinessPhase.Revoked:
-        return "Machine access was revoked"
+        return "Machine access was revoked; join the machine again to use it"
     return "Waiting for the agent to connect"
 
 

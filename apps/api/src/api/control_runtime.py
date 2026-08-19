@@ -54,6 +54,7 @@ from api.server.services import (
 )
 from api.server.worker_repository_service import WorkerRepositoryService
 from api.settings import (
+    AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
     TcpIngressSettings,
 )
@@ -204,6 +205,7 @@ class ControlPlaneRuntime:
 def _production_api_services() -> ApiServices:
     tcp_ingress_settings = TcpIngressSettings()
     agent_route_reconciliation_settings = AgentRouteReconciliationSettings()
+    agent_disconnect_reconciliation_settings = AgentDisconnectReconciliationSettings()
     gateway_settings = GatewaySettings()
     workspace_change_stream_settings = WorkspaceChangeStreamSettings()
     # The install routes serve exactly the agent artifact this names, so the
@@ -269,6 +271,7 @@ def _production_api_services() -> ApiServices:
             create_schema=False,
             tcp_ingress_settings=tcp_ingress_settings,
             agent_route_reconciliation_settings=agent_route_reconciliation_settings,
+            agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_settings,
             gateway_settings=gateway_settings,
             workspace_change_stream_settings=workspace_change_stream_settings,
             agent_binary_settings=agent_binary_settings,

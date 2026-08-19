@@ -144,12 +144,11 @@ def test_agent_liveness_and_disconnect_decisions_match_heartbeat_rules() -> None
 
     ignore = plan_agent_disconnect(fresh, now=now)
     mark = plan_agent_disconnect(stale, now=now)
-    disable = plan_agent_disconnect(repeated, now=now)
+    repeat = plan_agent_disconnect(repeated, now=now)
 
     assert ignore.action is AgentDisconnectAction.Ignore
     assert mark.action is AgentDisconnectAction.MarkDisconnected
-    assert mark.should_disable_machine_worker
     assert mark.should_emit_event
     assert mark.disconnected_at == now
-    assert disable.action is AgentDisconnectAction.DisableMachineWorker
-    assert disable.should_disable_machine_worker
+    assert repeat.action is AgentDisconnectAction.AlreadyMarked
+    assert not repeat.should_emit_event
