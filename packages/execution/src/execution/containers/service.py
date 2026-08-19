@@ -592,12 +592,13 @@ class ContainerService:
     ) -> ContainerRecord:
         """Stop a container, recording why if the caller said.
 
-        `None` is not the same as `User`. Settlement has always treated an
-        unstated reason as a user stop, and still does, but that default was
-        only ever choosing whether to cancel the claim or release it. Told to
-        the person whose container it was, it would assert they stopped it
-        themselves — so a caller that named no reason states none, all the way
-        out to the worker, which reports back whatever it was told.
+        `None` is not the same as `User` for the customer, who would otherwise
+        be told they stopped something they had nothing to do with. It is the
+        same for everything else: the reason on the wire decides how the worker
+        normalizes an exit and how claimed work settles, and `Unknown` there
+        means the container died on its own rather than that nobody said why.
+        So an unstated stop still travels as `User` and only declines to make a
+        claim about who did it.
         """
 
         record = self.get(container_id)
@@ -612,10 +613,7 @@ class ContainerService:
             self._send_stop_event(
                 record.id,
                 worker_id=cancellation.worker_id,
-                # Not the settlement default: the worker echoes this back as the
-                # row's reason, so sending `User` here would put the customer's
-                # name on a stop nobody attributed to them.
-                reason=StopContainerReason.Unknown if reason is None else reason,
+                reason=settlement_reason,
             )
         with self.context.database.session() as session:
             containers = ContainerRepository(session)
@@ -623,31 +621,37 @@ class ContainerService:
             if current is None:
                 raise NotFoundError(f"container not found: {container_id}")
             if current.status in TERMINAL_CONTAINER_STATUSES:
-                # The worker finished it while this was deciding. Its report is
-                # what actually happened, and a full-payload write from the read
-                # above would put back a stale exit code over the top of it.
-                return current
-            current.status = ContainerStatus.Stopped
-            current.finished_at = utc_now()
-            # Written here rather than left to the worker's exit report. A
-            # container that never reached a worker — still pending, or its
-            # worker already gone — is never reported on, and the reason it was
-            # stopped for is the one its owner most needs.
-            if reason is not None:
-                current.termination_reason = reason
-            updated = containers.records.upsert(
-                current,
-                workspace_id=current.workspace_id,
-                name=current.name,
-                status=current.status.value,
-            )
+                # The worker's report landed while this was deciding, and it
+                # says what actually happened: a full-payload write from the
+                # read above would put a stale exit code back over it.
+                updated = current
+            else:
+                current.status = ContainerStatus.Stopped
+                current.finished_at = utc_now()
+                # Written here rather than left to the worker's exit report. A
+                # container that never reached a worker — still pending, or its
+                # worker already gone — is never reported on, and the reason it
+                # was stopped for is the one its owner most needs. Never back to
+                # Unknown, matching the worker-report writer.
+                if reason is not None and reason is not StopContainerReason.Unknown:
+                    current.termination_reason = reason
+                updated = containers.records.upsert(
+                    current,
+                    workspace_id=current.workspace_id,
+                    name=current.name,
+                    status=current.status.value,
+                )
+        # Settlement runs whether or not this call was the one that wrote the
+        # terminal row. It is the only thing that cancels the claims a `User`,
+        # `Admin` or `Unfunded` stop is asked to cancel, and losing the race to
+        # the worker — which only ever releases them — would put the work back
+        # in the pool for the stop to fail to stop.
+        #
         # After the row is terminal, never before. A claim is refused from a
         # container the record calls terminal, so settling first opens a
         # window where the work is free and this container still reads as
         # live — it takes back what it just gave up and then goes away
-        # holding it. The other two settlement paths write the terminal
-        # status in the same session as the release; this one cannot, so it
-        # orders them instead.
+        # holding it.
         self._settle_claimed_work(updated, reason=settlement_reason)
         self._release_runtime_state(updated)
         cause = "" if reason is None else reason.describe()
@@ -656,11 +660,14 @@ class ContainerService:
             resource_type="container",
             resource_id=updated.id,
             message=f"stopped container {updated.name}" + (f": {cause}" if cause else ""),
+            level=(
+                EventLevel.Warning if reason is StopContainerReason.Unfunded else EventLevel.Info
+            ),
             # What the stop was asked for, which is not always what the row
             # settles on: the worker reports what it actually observed. Absent
-            # when the caller named nothing, so this never invents a cause the
-            # message declines to give.
-            data={"stop_reason": "" if reason is None else reason.value},
+            # when the caller named nothing, rather than naming the settlement
+            # default the message declines to give.
+            data={} if reason is None else {"stop_reason": reason.value},
             workspace_id=updated.workspace_id,
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)

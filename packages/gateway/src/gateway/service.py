@@ -557,11 +557,13 @@ class GatewayControlService:
 
     def _stop_container_by_id(self, container_id: str) -> None:
         container = self.services.containers.get(container_id)
-        # Named the same as the API composition of this operation: draining a
-        # worker is an operator stopping it, whichever process ran the drain.
+        # `Scheduler`, not `Admin`: a drained container is usually also serving
+        # calls nobody cancelled, and `Admin` settles their claims the way it
+        # settles an operator's intent — cancelled, terminal, no retry. Saying
+        # the platform stopped it releases them to run somewhere else.
         stopped = self.services.containers.stop(
             container.id,
-            reason=StopContainerReason.Admin,
+            reason=StopContainerReason.Scheduler,
         )
         self._stop_worker_container(stopped)
 

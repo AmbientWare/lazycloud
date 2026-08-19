@@ -94,9 +94,9 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
     StopContainerReason.Unknown: "",
 }
 
-if set(_STOP_REASON_DESCRIPTIONS) != set(StopContainerReason):
-    _missing = sorted(set(StopContainerReason) - set(_STOP_REASON_DESCRIPTIONS))
-    raise RuntimeError(f"stop reasons without a description: {_missing}")
+_missing_descriptions = sorted(set(StopContainerReason) - set(_STOP_REASON_DESCRIPTIONS))
+if _missing_descriptions:
+    raise RuntimeError(f"stop reasons without a description: {_missing_descriptions}")
 
 
 class ContainerShutdownTarget(ContractModel):
