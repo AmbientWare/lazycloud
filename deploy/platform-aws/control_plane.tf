@@ -66,7 +66,7 @@ locals {
     install -d -m 0755 /usr/local/lib/docker/cli-plugins
     ARCH="$(uname -m)"
     curl -fsSL \
-      "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux_$${ARCH}" \
+      "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-$${ARCH}" \
       -o /usr/local/lib/docker/cli-plugins/docker-compose
     chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
 

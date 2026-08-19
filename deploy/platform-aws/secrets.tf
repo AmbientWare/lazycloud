@@ -52,5 +52,8 @@ locals {
     LAZYCLOUD_STRIPE_WEBHOOK_SECRET       = aws_secretsmanager_secret.runtime["stripe-webhook-secret"].name
     LAZYCLOUD_GITHUB_CLIENT_ID            = aws_secretsmanager_secret.runtime["github-client-id"].name
     LAZYCLOUD_GITHUB_CLIENT_SECRET        = aws_secretsmanager_secret.runtime["github-client-secret"].name
+    LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT  = aws_secretsmanager_secret.runtime["telemetry-backend-endpoint"].name
+    LAZYCLOUD_TELEMETRY_BACKEND_USERNAME  = aws_secretsmanager_secret.runtime["telemetry-backend-username"].name
+    LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD  = aws_secretsmanager_secret.runtime["telemetry-backend-password"].name
   }
 }
