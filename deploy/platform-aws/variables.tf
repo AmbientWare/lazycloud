@@ -33,9 +33,19 @@ variable "planetscale_major_version" {
 }
 
 variable "planetscale_cluster_size" {
-  description = "Cluster size for the production branch."
+  description = <<-EOT
+    Cluster size for the branch.
+
+    `PS_10_AWS_ARM` is the smallest production tier in AWS: 1/8 vCPU, 1 GiB. The
+    name carries the provider and the host architecture, which is PlanetScale's
+    hardware and has nothing to do with what connects to it. `PS_DEV_AWS_ARM` is
+    smaller still and is the right choice for a non-production deployment.
+
+    The organization's SKU list spells these without the suffix; the provider
+    rejects that form, and an invalid one fails at plan rather than at apply.
+  EOT
   type        = string
-  default     = "PS-10"
+  default     = "PS_10_AWS_ARM"
 }
 
 variable "planetscale_region" {
