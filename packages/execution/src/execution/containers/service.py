@@ -619,11 +619,20 @@ class ContainerService:
             # orders them instead.
             self._settle_claimed_work(updated, reason=reason)
             self._release_runtime_state(updated)
+        # The reason comes from the argument, never from the row. The worker
+        # reports it back when it has actually killed the container, which is
+        # after this, so the row still reads `Unknown` here.
+        cause = reason.describe()
         self.events.emit(
             "container.stopped",
             resource_type="container",
             resource_id=record.id,
-            message=f"stopped container {record.name}",
+            message=(
+                f"stopped container {record.name}: {cause}"
+                if cause
+                else f"stopped container {record.name}"
+            ),
+            data={"termination_reason": reason.value},
             workspace_id=record.workspace_id,
         )
         if state_changed:

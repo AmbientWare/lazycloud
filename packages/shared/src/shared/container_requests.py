@@ -64,6 +64,32 @@ class StopContainerReason(StringEnum):
 
     Unknown = "UNKNOWN"
 
+    def describe(self) -> str:
+        """Why the container stopped, for the person whose container it was.
+
+        The fleet is not the audience. Someone reading this wants to know
+        whether their work was interrupted by them, by us, or by their bill,
+        and each answer sends them somewhere different.
+
+        `Unknown` describes nothing on purpose. It is the column default, so it
+        also means the reason has not arrived yet, and a container that is
+        simply still running would otherwise be given a cause.
+        """
+
+        return _STOP_REASON_DESCRIPTIONS.get(self, "")
+
+
+_STOP_REASON_DESCRIPTIONS = {
+    StopContainerReason.Ttl: "it reached the time limit set for it",
+    StopContainerReason.User: "it was stopped from this account",
+    StopContainerReason.Scheduler: "the platform moved the work elsewhere",
+    StopContainerReason.Preempted: "the machine running it was reclaimed",
+    StopContainerReason.Admin: "an operator stopped it",
+    StopContainerReason.Unfunded: (
+        "the account has no payment method and has spent its included usage"
+    ),
+}
+
 
 class ContainerShutdownTarget(ContractModel):
     container_id: str
