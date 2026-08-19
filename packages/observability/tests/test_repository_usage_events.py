@@ -62,7 +62,8 @@ def test_event_prune_uses_short_telemetry_and_long_audit_retention(
     pruned = events.prune()
 
     assert pruned == 2
-    remaining = events.list(workspace_id=workspace_id, include_cluster=True)
+    # Across scopes: the pruned rows were one cluster-scoped and one workspace-scoped.
+    remaining = events.list(workspace_id=None)
     assert [item.id for item in remaining] == [recent_audit.id]
 
 

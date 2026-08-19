@@ -432,8 +432,7 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
     assert spent is not None
     assert spent.spent_nanos == 4_096
     reported = isolated_services.events.list(
-        workspace_id=workspace_id,
-        include_cluster=True,
+        workspace_id=None,
         actions=(REPRICE_REFUSED_ACTION,),
     )
     assert len(reported) == 1
@@ -473,8 +472,7 @@ def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
     with isolated_services.context.database.session() as session:
         assert session.get(UsageRecordTable, saved.id) is not None
     reported = isolated_services.events.list(
-        workspace_id=workspace_id,
-        include_cluster=True,
+        workspace_id=None,
         actions=(UNPRICED_SPAN_ACTION,),
     )
     assert len(reported) == 1

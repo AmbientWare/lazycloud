@@ -180,7 +180,6 @@ def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
     assert after == before
     reported = isolated_services.events.list(
         workspace_id=None,
-        include_cluster=True,
         actions=[RECONCILIATION_DIVERGENCE_ACTION],
     )
     assert [(event.level, event.resource_id) for event in reported] == [(EventLevel.Error, user_id)]
@@ -194,7 +193,6 @@ def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
         len(
             isolated_services.events.list(
                 workspace_id=None,
-                include_cluster=True,
                 actions=[RECONCILIATION_DIVERGENCE_ACTION],
             )
         )
@@ -260,8 +258,7 @@ def test_usage_nobody_will_ever_be_charged_for_is_reported_rather_than_balanced(
         event
         for event in isolated_services.events.list(
             workspace_id=None,
-            include_cluster=True,
-            actions=[RECONCILIATION_DIVERGENCE_ACTION],
+                actions=[RECONCILIATION_DIVERGENCE_ACTION],
         )
         if event.resource_id == user_id
     ]
