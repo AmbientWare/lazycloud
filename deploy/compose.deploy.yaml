@@ -40,6 +40,18 @@ services:
   control-plane:
     image: "${LAZYCLOUD_IMAGE_API:?set by images.env}"
     build: !reset null
+    # Credentials come from the instance profile through the SDK's own chain.
+    # The Compose environment names a role-chain profile in a mounted config
+    # directory, which is how a developer's stack reaches AWS; on an instance
+    # there is no such file and botocore fails at startup with ProfileNotFound.
+    #
+    # `!reset` because absent and empty are different here: botocore reads an
+    # empty AWS_PROFILE as the name of a profile called "" and fails the same way.
+    environment:
+      AWS_PROFILE: !reset null
+      AWS_CONFIG_FILE: !reset null
+      AWS_SHARED_CREDENTIALS_FILE: !reset null
+
     # No published host ports. The tunnel reaches the origin over the Compose
     # network and workers reach it over the tailnet, so nothing binds the host.
     ports: !reset null
@@ -59,6 +71,18 @@ services:
   scheduler:
     image: "${LAZYCLOUD_IMAGE_SCHEDULER:?set by images.env}"
     build: !reset null
+    # Credentials come from the instance profile through the SDK's own chain.
+    # The Compose environment names a role-chain profile in a mounted config
+    # directory, which is how a developer's stack reaches AWS; on an instance
+    # there is no such file and botocore fails at startup with ProfileNotFound.
+    #
+    # `!reset` because absent and empty are different here: botocore reads an
+    # empty AWS_PROFILE as the name of a profile called "" and fails the same way.
+    environment:
+      AWS_PROFILE: !reset null
+      AWS_CONFIG_FILE: !reset null
+      AWS_SHARED_CREDENTIALS_FILE: !reset null
+
     depends_on: !override
       control-plane:
         condition: service_healthy
