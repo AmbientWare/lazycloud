@@ -100,7 +100,10 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
                 ),
               )}
             </nav>
-            <GetStartedButton className="marketing-action-primary stamp border-brand/45 max-[479px]:hidden" label="Sign in" />
+            <GetStartedButton
+              className="marketing-action-primary stamp border-brand/45 max-[479px]:hidden"
+              label="Sign in"
+            />
             <MobileNavigation />
           </div>
         </div>
@@ -259,7 +262,10 @@ function MobileNavigation() {
                 </a>
               ),
             )}
-            <GetStartedButton className="marketing-action-primary stamp mt-3 border-brand/45" label="Sign in" />
+            <GetStartedButton
+              className="marketing-action-primary stamp mt-3 border-brand/45"
+              label="Sign in"
+            />
           </div>
         </nav>
       ) : null}

@@ -20,8 +20,7 @@ import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 export function accountContainerCountsQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.metrics.containerCounts(),
-    queryFn: () =>
-      apiRequest("/api/v1/metrics/account/containers", accountContainerCountsSchema),
+    queryFn: () => apiRequest("/api/v1/metrics/account/containers", accountContainerCountsSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }
