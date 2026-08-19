@@ -46,7 +46,11 @@ from observability.metrics import MetricsService
 from observability.usage import UsageService
 from pydantic import Field
 from shared.billing_quotes import LedgerComponent
-from shared.container_requests import ContainerShutdownTarget, WorkerStartupKind
+from shared.container_requests import (
+    ContainerShutdownTarget,
+    StopContainerReason,
+    WorkerStartupKind,
+)
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
@@ -1605,7 +1609,9 @@ class ManagementService:
         container_id: str,
     ) -> ContainerRecord:
         self.get_container(container_id, workspace=workspace)
-        return self.services.containers.stop(container_id)
+        # A person asked for this one, so it says so. Left unstated the stop
+        # would settle the same way and tell its owner nothing.
+        return self.services.containers.stop(container_id, reason=StopContainerReason.User)
 
     def delete_container(self, workspace: str, container_id: str) -> None:
         self.get_container(container_id, workspace=workspace)
