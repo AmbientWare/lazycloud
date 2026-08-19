@@ -72,11 +72,6 @@ locals {
 
     install -d -m 0700 /opt/lazycloud
 
-    cat >/opt/lazycloud/secret-map <<'SECRETS'
-    ${join("\n", [for variable, secret in local.secret_environment : "${variable}=${secret}"])}
-    SECRETS
-    chmod 0600 /opt/lazycloud/secret-map
-
     cat >/usr/local/bin/lazycloud-deploy <<'DEPLOY'
     #!/bin/bash
     # Fetch the current converge script and run it. The logic lives in the

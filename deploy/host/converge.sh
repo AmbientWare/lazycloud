@@ -17,7 +17,7 @@ REGISTRY="${LAZYCLOUD_REGISTRY:?LAZYCLOUD_REGISTRY is required}"
 
 cd /opt/lazycloud
 
-for artifact in compose.yaml compose.deploy.yaml collector.deploy.yaml images.env runtime.env services; do
+for artifact in compose.yaml compose.deploy.yaml collector.deploy.yaml images.env runtime.env services secret-map; do
   aws s3 cp "$BUNDLE/$artifact" "$artifact"
 done
 
@@ -39,7 +39,7 @@ while IFS='=' read -r variable secret; do
     printf '%s=\n' "$variable" >>secrets.env
     missing+=("$variable")
   fi
-done </opt/lazycloud/secret-map
+done <secret-map
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "secrets with no value: ${missing[*]}" >&2

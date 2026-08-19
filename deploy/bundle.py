@@ -115,11 +115,15 @@ def publish(args: argparse.Namespace) -> None:
     (staged / "images.env").write_text(_images_env(args.registry, args.deployment, digests))
     (staged / "runtime.env").write_text(_runtime_env(runtime))
     (staged / "services").write_text(" ".join(DEPLOYMENT_SERVICES) + "\n")
+    secret_map = _string_map(Path(args.secret_map), "secret map")
+    (staged / "secret-map").write_text(
+        "".join(f"{variable}={secret}\n" for variable, secret in sorted(secret_map.items()))
+    )
 
     prefix = f"s3://{args.bucket}/current"
     for source in (_COMPOSE, _OVERLAY, _COLLECTOR, _CONVERGE):
         _upload(source, f"{prefix}/{source.name}", aws_cli=args.aws_cli)
-    for name in ("images.env", "runtime.env", "services"):
+    for name in ("images.env", "runtime.env", "services", "secret-map"):
         _upload(staged / name, f"{prefix}/{name}", aws_cli=args.aws_cli)
 
     print(json.dumps({"bucket": args.bucket, "services": list(DEPLOYMENT_SERVICES)}, indent=2))
@@ -134,6 +138,7 @@ def _parser() -> argparse.ArgumentParser:
         "--digests", required=True, help="JSON file of image name to sha256 digest."
     )
     parser.add_argument("--runtime", default="", help="JSON file of non-secret runtime values.")
+    parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
     parser.add_argument("--stage-dir", required=True, help="Directory to assemble the bundle in.")
     parser.add_argument("--aws-cli", default="aws")
     return parser

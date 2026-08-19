@@ -117,12 +117,14 @@ jobs:
             -backend-config="key=platform-aws/$DEPLOYMENT.tfstate" \
             -backend-config="region=$AWS_REGION"
           terraform -chdir=deploy/platform-aws output -json runtime_configuration >runtime.json
+          terraform -chdir=deploy/platform-aws output -json secret_environment >secret-map.json
           uv run --group workspace python deploy/bundle.py \
             --bucket "$(terraform -chdir=deploy/platform-aws output -raw deploy_bucket)" \
             --registry "${{ steps.ecr.outputs.registry }}" \
             --deployment "$DEPLOYMENT" \
             --digests digests.json \
             --runtime runtime.json \
+            --secret-map secret-map.json \
             --stage-dir bundle
 
       - name: Converge the control plane host

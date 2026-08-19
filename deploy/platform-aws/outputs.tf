@@ -102,3 +102,13 @@ output "deploy_role_arn" {
   description = "Set as the AWS_DEPLOY_ROLE_ARN repository secret."
   value       = aws_iam_role.deploy.arn
 }
+
+output "secret_environment" {
+  description = <<-EOT
+    Which Secrets Manager entry each environment variable is read from.
+
+    Published so the release can put it in the bundle. It used to be written by
+    user data, which meant changing the map required replacing the machine.
+  EOT
+  value       = local.secret_environment
+}
