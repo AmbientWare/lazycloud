@@ -1,47 +1,50 @@
 # Platform AWS
 
-The AWS infrastructure this platform runs on: the control plane host, its
-identity, the registries and buckets it reads, and the secret containers its
-credentials live in.
+Everything this platform runs on, declared. The control plane host and its
+identity, the control principal, the shared fleet's network and connection role,
+the registries and buckets, and the containers the credentials live in.
 
-The split across `deploy/` is by ownership, not by provider. Terraform owns
-everything we operate — this module, `cloudflare`, `stripe`, `tailnet`.
-CloudFormation owns only what runs inside an account we do not have credentials
-for: `connected-aws/customer_stack.py` and the template the control plane
-generates for it.
+## Two deployment models
 
-## What this module does not own, and why
+**Ours.** This module. Declared, repeatable, and overwritten on apply. There is
+nothing to import and nothing to adopt: an apply against an empty account
+produces the whole deployment, and an apply against an existing one converges it.
 
-**The shared fleet's network.** The VPC, its two subnets, the security group and
-the node instance profile are created by the account connection stack, and its
-outputs are what a pool launches into. The platform account connects to itself
-through the same managed flow a customer uses, which is what
-`connected-aws/control-stack.yaml` already anticipates: *"a customer account can
-be this account."*
+**A customer's.** `deploy/connected-aws` — a CloudFormation template the customer
+deploys in their own account, from a console link, with no credentials shared and
+no tooling required on their side. It is CloudFormation for exactly one reason:
+we hold no credentials for that account, so we cannot run Terraform there.
 
-Declaring that network here would mean declaring the connection role beside it,
-and that role's policy is generated in `provider_aws/account_connection.py`
-against CloudFormation refs. A hand-written copy would drift from its owner the
-first time the generator changed, and the drift would show up as a launch that
-fails in a way the policy no longer explains.
+The line is ownership, not provider. Nothing about our account is CloudFormation
+any more.
 
-**`connected-aws/control-stack.yaml`.** The control principal stays
-CloudFormation. Its `ControlRole` carries `DeletionPolicy: Retain` because AWS
-rewrites a role-ARN principal in a customer's trust policy to that role's unique
-ID: delete the role and recreating the same name does not restore the trust, and
-every live connection needs a new authorization generation. A resource whose
-defining property is that it must outlive its own manager is a poor fit for a
-tool that converges to declared state. It is provisioned once and essentially
-never changes.
+## One definition of the permission set
 
-**The database.** PlanetScale's Terraform provider is MySQL-only. At 0.6.1 there
-is no resource that creates a PlanetScale Postgres database, and
-`planetscale_database` has no engine selector. See `database.tf`, and the manual
-step below.
+Three consumers need the same list of what the control plane may do inside a
+connected account: the customer's template, our own connection role, and the
+document a customer needs when bringing their own role.
 
-**Secret values.** This module declares the containers and who may read them.
-Every value is written by `lazycloud-admin bootstrap publish` or by an operator.
-A secret whose value is in Terraform is a secret in the state file.
+`provider_aws/connection_policy.py` owns it. The customer template renders it at
+request time. Terraform cannot run Python, so `connection-role-policy.json` is
+rendered by `deploy/render_connection_policy.py` and committed, and CI runs that
+script with `--check` so a stale file fails the build.
+
+That check is not ceremony. A second copy of a permission set drifts into a role
+missing an action the control plane started calling, and that surfaces as a
+launch denial naming an API call rather than the policy behind it.
+
+## What this module still does not own
+
+**Secret values.** It declares the containers and who may read them. Values are
+written by an operator or by bootstrap. A secret whose value is in Terraform is a
+secret in the state file. The one exception is the fleet connection's external
+ID, which both sides must agree on and nothing else can create consistently;
+`fleet.tf` says why that is acceptable.
+
+There is no second exception for the database. Terraform creates the branch and
+the role it connects as, so that role's password is in state. State lives in an
+encrypted bucket and should be treated as holding a database credential, because
+it does.
 
 ## Bring-up
 
@@ -53,43 +56,24 @@ terraform -chdir=deploy/platform-aws init \
 terraform -chdir=deploy/platform-aws apply
 ```
 
-Then, in order:
+Every remaining secret has a container but no value. Write the ones the
+deployment needs — the GitHub App pair, Stripe, Cloudflare, Tailscale, telemetry
+— then:
 
-1. **Create the Postgres database** in the PlanetScale console. It must permit
-   `CREATE EXTENSION btree_gist` and `pgcrypto`; both are supported and neither
-   needs a restart or superuser.
+1. **Publish a release.** `deploy/release.py` builds every source-bearing image in
+   one invocation, then `deploy/bundle.py` publishes what the host converges onto.
+   Do not perform the steps by hand: a release assembled from two source states is
+   rejected at container start as a package-digest mismatch naming a digest rather
+   than the stale artifact.
 
-2. **Write `database-url`** into Secrets Manager, using the **direct endpoint on
-   5432**, not the PgBouncer one. `database.tf` explains what breaks otherwise,
-   and it breaks silently.
-
-   ```sh
-   aws secretsmanager put-secret-value \
-     --secret-id "$(terraform -chdir=deploy/platform-aws output -raw deployment)/database-url" \
-     --secret-string 'postgresql+psycopg://...:5432/...'
-   ```
-
-3. **Trust the control plane role** in the connected-AWS control stack, so the
-   control plane can assume it:
-
-   ```sh
-   uv run python deploy/connected-aws/bootstrap.py \
-     --trusted-principal "$(terraform -chdir=deploy/platform-aws output -raw control_plane_role_arn)"
-   ```
-
-4. **Publish the release**, which builds every source-bearing image in one
-   invocation and writes the deploy bundle. Do not perform the steps by hand;
-   `deploy/release.py` exists because the documented sequence was still performed
-   wrong, and a release assembled from two source states is rejected at container
-   start as a package-digest mismatch that names a digest rather than the stale
-   artifact.
-
-5. **Bootstrap the deployment** and connect the platform account to itself. See
-   `deploy/RUNBOOK.md`.
+2. **Register the platform account's own capacity.** The fleet is a connection in
+   existing-role mode, using `fleet_connection_role_arn`, the `fleet-external-id`
+   secret, and the `fleet_network` output. That output is exactly two subnets in
+   two zones, which is what `AwsAccountNetwork` accepts.
 
 ## Redeploying
 
-Nothing changes what this host runs except the bundle in the deploy bucket.
+Nothing changes what the host runs except the bundle in the deploy bucket.
 
 ```sh
 aws ssm send-command \
@@ -101,9 +85,19 @@ aws ssm send-command \
 No SSH key exists and no inbound rule is open. Operator access is SSM Session
 Manager, which the host dials outbound.
 
+## The control principal's name
+
+`control_role_name` is pinned and must stay pinned. A customer's authorization
+template writes this role's ARN into every connection role's trust policy, so the
+name is a durable external contract. `prevent_destroy` guards the role for the
+same reason: AWS rewrites a role-ARN principal to the role's unique ID, so
+recreating the same name does not restore trust that already exists.
+
+That guard matters once customers exist. Before then an apply is free.
+
 ## One host
 
 The API is replica-safe and advertises a Tailscale Service, so a second host is a
-second advertiser rather than a load balancer. Redis is the thing that has to
-move to ElastiCache first: it lives on this host, and it holds the leases the
-scheduler serialises capacity work on.
+second advertiser rather than a load balancer. Redis has to move to ElastiCache
+first: it lives on this host and holds the leases the scheduler serialises
+capacity work on.

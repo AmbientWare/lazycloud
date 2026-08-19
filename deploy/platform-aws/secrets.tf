@@ -17,6 +17,7 @@ locals {
     stripe-webhook-secret         = "Stripe webhook signing secret. Returned only at endpoint creation."
     github-client-id              = "GitHub App client id for dashboard sign-in."
     github-client-secret          = "GitHub App client secret."
+    fleet-external-id             = "External ID the platform's own connection role enforces."
     telemetry-backend-endpoint    = "OTLP endpoint the collector exports to."
     telemetry-backend-username    = "Telemetry backend basic-auth username."
     telemetry-backend-password    = "Telemetry backend basic-auth password."

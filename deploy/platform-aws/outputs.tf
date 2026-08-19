@@ -58,3 +58,37 @@ output "deployment" {
   description = "Prefix every globally-named resource and secret path carries."
   value       = var.deployment
 }
+
+output "control_principal_arn" {
+  description = "Set as LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN in the deployment."
+  value       = aws_iam_role.control_principal.arn
+}
+
+output "fleet_network" {
+  description = <<-EOT
+    The network the platform's own pools launch into.
+
+    Supplied to the connection as `network` when registering this account in
+    existing-role mode. Exactly two subnets, in two zones, because that is what
+    `AwsAccountNetwork` accepts.
+  EOT
+  value = {
+    vpc_id            = aws_vpc.fleet.id
+    subnet_ids        = aws_subnet.fleet[*].id
+    security_group_id = aws_security_group.fleet_node.id
+  }
+}
+
+output "fleet_connection_role_arn" {
+  description = "Role the control plane assumes to manage the platform's own capacity."
+  value       = aws_iam_role.fleet_connection.arn
+}
+
+output "acceptance_role_arns" {
+  description = "Acceptance roles, when this account creates them."
+  value = var.create_acceptance_roles ? {
+    operator         = aws_iam_role.acceptance_operator[0].arn
+    stack_execution  = aws_iam_role.customer_stack_execution[0].arn
+    node_diagnostics = aws_iam_role.node_diagnostics[0].arn
+  } : {}
+}

@@ -1,26 +1,51 @@
-# The database is deliberately not declared here.
+# The control plane's Postgres.
 #
-# PlanetScale's Terraform provider is MySQL-only. At 0.6.1 the resource set is
-# `planetscale_database`, `planetscale_branch`, `planetscale_backup`,
-# `planetscale_password` and `planetscale_branch_safe_migrations`, and
-# `planetscale_database` has no engine selector — its optional arguments are
-# Vitess concepts like `migration_framework` and `automatic_migrations`. There is
-# no resource that creates a PlanetScale Postgres database.
+# Applying a branch creates the parent database if it does not exist, so this one
+# resource is the database. `major_version` is pinned rather than tracking latest:
+# the schema declares `btree_gist` and `pgcrypto` and uses a GiST exclusion
+# constraint over `tstzrange` to make overlapping billing rate windows
+# impossible, and a major version is not something to discover during an apply.
+resource "planetscale_postgres_branch" "control_plane" {
+  organization  = var.planetscale_organization
+  database      = var.deployment
+  name          = "main"
+  major_version = var.planetscale_major_version
+  cluster_size  = var.planetscale_cluster_size
+  region        = var.planetscale_region
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# The role the control plane connects as. Its password exists only here and in
+# Secrets Manager.
+resource "planetscale_postgres_branch_role" "control_plane" {
+  organization = var.planetscale_organization
+  database     = planetscale_postgres_branch.control_plane.database
+  branch       = planetscale_postgres_branch.control_plane.name
+}
+
+# No `planetscale_postgres_bouncer`, and this is not an omission.
 #
-# So the database is created once through the PlanetScale console or API, and the
-# only thing that crosses into this configuration is its connection string, which
-# an operator writes into the `database-url` secret. `README.md` carries the step.
+# PlanetScale's managed PgBouncer runs in transaction pooling mode only, and
+# `ControlPlaneRecoveryFence.start_serving` takes `pg_advisory_lock_shared` and
+# holds it for the entire lifetime of a serving process. There is no transaction
+# to scope that to. Behind a transaction pooler the lock is released when the
+# backend is recycled, the fence stops fencing without erroring, and offline
+# recovery can mint an administrator credential while replicas are still serving.
+# `WorkspaceDeletionFence` has the same shape.
 #
-# Two things about that connection string are not free choices:
-#
-#   * It must be the direct endpoint on 5432, never the PgBouncer one. PlanetScale's
-#     managed PgBouncer is transaction-pooling only, and `ControlPlaneRecoveryFence`
-#     takes `pg_advisory_lock_shared` and holds it for the lifetime of a serving
-#     process. There is no transaction to scope that to. Behind a transaction pooler
-#     the lock is released when the backend is recycled, the fence stops fencing
-#     without erroring, and offline recovery can mint an administrator credential
-#     while replicas are still serving. `WorkspaceDeletionFence` has the same shape.
-#
-#   * The role it names must be able to `CREATE EXTENSION btree_gist` and `pgcrypto`.
-#     `database/tables/base.py` requires both, and the schema cannot be created on
-#     any path without them.
+# So the control plane connects direct, on `access_host_url`. Adding a bouncer
+# here and pointing the URL at it would look like a performance change and behave
+# like a correctness one.
+resource "aws_secretsmanager_secret_version" "database_url" {
+  secret_id = aws_secretsmanager_secret.runtime["database-url"].id
+  secret_string = format(
+    "postgresql+psycopg://%s:%s@%s:5432/%s",
+    planetscale_postgres_branch_role.control_plane.username,
+    planetscale_postgres_branch_role.control_plane.password,
+    planetscale_postgres_branch_role.control_plane.access_host_url,
+    planetscale_postgres_branch_role.control_plane.database_name,
+  )
+}
