@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import Response
 from shared.custom_domains import CustomDomain, CustomDomainPhase
@@ -13,6 +15,8 @@ from shared.http.custom_domains import (
 from api.server.auth import read_user, write_user
 from api.server.dependencies import current_services
 from api.server.services import ApiServices
+
+LOGGER = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -42,6 +46,10 @@ def _refreshed(services: ApiServices, domain: CustomDomain) -> CustomDomain:
     try:
         return services.custom_domains.refresh(domain)
     except Exception:
+        # The read still answers, with the last state rather than an error, but
+        # an edge that cannot be reached is not nothing: without the traceback
+        # the only symptom is a certificate that never appears to progress.
+        LOGGER.exception("custom domain refresh failed, returning last known state: %s", domain.id)
         return domain
 
 
