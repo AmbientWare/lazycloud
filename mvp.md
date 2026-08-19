@@ -95,6 +95,17 @@ compute providers) is answering a problem this product does not have.
   today, so nothing observable changes yet. It states the rule where the next
   reader will find it rather than fixing a live symptom.
 
+- [x] **Hot-path metrics.** Recording one wrote a database row, so nothing
+  frequent could be instrumented and the readiness probe shipped without any.
+  Done: `MetricsService` records through an OpenTelemetry meter, aggregates in
+  the process, and pushes over OTLP on an interval. The durable path is gone —
+  table, repository, records, the admin `/metrics` route nothing scraped, and
+  `usage_to_prometheus`, whose only caller was that route. The scheduler now
+  bootstraps telemetry for itself, without which the `autoscaler_*` and
+  `worker_pool_*` metrics — most of them — would have gone quietly nowhere.
+  Verified end to end against a collector in the local stack, on a metric the
+  scheduler records rather than only one the API does.
+
 ## Verify
 
 - [x] **A self-hosted machine only ever runs its own account's workloads.**
@@ -129,15 +140,18 @@ compute providers) is answering a problem this product does not have.
   hardware we can only explain it. Cheap, and disproportionately what determines
   support load.
 
+- [ ] **A skipped test says so.** Three env vars gate skips —
+  `LAZYCLOUD_TEST_REDIS_URL`, `LAZYCLOUD_TEST_DATABASE_URL` and
+  `LAZYCLOUD_TEST_POSTGRES_URL` — and all three skip silently, so a run reads as
+  green while proving less than it looks like it proves. This has hidden a
+  broken assertion twice. Two of the three name the same PostgreSQL instance and
+  should not both exist.
+
 
 ## Deferred, deliberately
 
 Recorded so they are not rediscovered as gaps.
 
-- [ ] **Hot-path metrics.** `observability.metrics` writes a database row per
-  observation, so anything frequent cannot be instrumented — which is why the
-  readiness probe ships without any. Not blocking, but it is the reason the
-  restart work above will be debugged by reading logs instead of a graph.
 - [ ] **Durable block disks with snapshots.** A primitive this platform lacks: a
   sized block device with a filesystem and a restore point, which is what
   anything stateful wants and a shared volume mount is not. Under
