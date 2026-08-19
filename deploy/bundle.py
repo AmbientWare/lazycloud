@@ -2,7 +2,8 @@
 
 The bundle is what `lazycloud-deploy` reads on the host: `compose.yaml`, the
 production overlay, the image digests, the non-secret runtime values, and the
-list of services a deployment runs. It carries no credentials — those are read
+list of services a deployment runs, and the script that applies all of it. It
+carries no credentials — those are read
 from Secrets Manager on the host, so that a bundle sitting in a versioned bucket
 is not a credential that outlives every rotation.
 
@@ -32,6 +33,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 _COMPOSE = _REPOSITORY_ROOT / "compose.yaml"
 _OVERLAY = _REPOSITORY_ROOT / "deploy" / "compose.deploy.yaml"
 _COLLECTOR = _REPOSITORY_ROOT / "deploy" / "telemetry" / "collector.deploy.yaml"
+_CONVERGE = _REPOSITORY_ROOT / "deploy" / "host" / "converge.sh"
 _STRING_MAP = TypeAdapter(dict[str, str])
 
 # The services a deployment runs. Everything absent is served by something else:
@@ -115,7 +117,7 @@ def publish(args: argparse.Namespace) -> None:
     (staged / "services").write_text(" ".join(DEPLOYMENT_SERVICES) + "\n")
 
     prefix = f"s3://{args.bucket}/current"
-    for source in (_COMPOSE, _OVERLAY, _COLLECTOR):
+    for source in (_COMPOSE, _OVERLAY, _COLLECTOR, _CONVERGE):
         _upload(source, f"{prefix}/{source.name}", aws_cli=args.aws_cli)
     for name in ("images.env", "runtime.env", "services"):
         _upload(staged / name, f"{prefix}/{name}", aws_cli=args.aws_cli)

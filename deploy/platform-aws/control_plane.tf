@@ -52,15 +52,15 @@ resource "aws_eip" "control_plane" {
 }
 
 locals {
-  # Secrets are rendered on the host from Secrets Manager, never carried in the
-  # bundle. The bundle is a build artifact that lands in a versioned bucket and
-  # is read by anything with s3:GetObject on it; a credential in there outlives
-  # every rotation and shows up in access logs.
+  # Deliberately thin. User data runs once, at first boot, so anything written
+  # here can only be corrected by replacing the machine — and every defect so far
+  # has been in the converge logic, not in this. That logic now ships in the
+  # bundle, so a fix reaches the host the way an image does.
   control_plane_user_data = <<-EOT
     #!/bin/bash
     set -euo pipefail
 
-    dnf install -y docker jq
+    dnf install -y docker
     systemctl enable --now docker
 
     install -d -m 0755 /usr/local/lib/docker/cli-plugins
@@ -72,56 +72,28 @@ locals {
 
     install -d -m 0700 /opt/lazycloud
 
-    cat >/usr/local/bin/lazycloud-deploy <<'DEPLOY'
-    #!/bin/bash
-    # Converge this host onto the current bundle. Run at boot and again by SSM on
-    # every release; nothing else changes what runs here.
-    set -euo pipefail
-    umask 077
-    cd /opt/lazycloud
-
-    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/compose.yaml" compose.yaml
-    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/compose.deploy.yaml" compose.deploy.yaml
-    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/collector.deploy.yaml" collector.deploy.yaml
-    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/images.env" images.env
-    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/runtime.env" runtime.env
-    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/services" services
-
-    # One Secrets Manager read per secret, written to a mode-0600 file the compose
-    # invocation reads and nothing else does.
-    : >secrets.env
-    chmod 0600 secrets.env
-    while IFS='=' read -r variable secret; do
-      variable="$(printf '%s' "$variable" | tr -d '[:space:]')"
-      secret="$(printf '%s' "$secret" | tr -d '[:space:]')"
-      [ -n "$variable" ] || continue
-      value="$(aws secretsmanager get-secret-value \
-        --secret-id "$secret" --query SecretString --output text)"
-      printf '%s=%s\n' "$variable" "$value" >>secrets.env
-    done </opt/lazycloud/secret-map
-
-    aws ecr get-login-password --region ${var.region} \
-      | docker login --username AWS --password-stdin \
-        ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com
-
-    COMPOSE=(docker compose -f compose.yaml -f compose.deploy.yaml
-      --env-file images.env --env-file runtime.env --env-file secrets.env
-      --profile public-ingress)
-    # shellcheck disable=SC2046
-    "$${COMPOSE[@]}" pull $(cat services)
-    # shellcheck disable=SC2046
-    "$${COMPOSE[@]}" up -d --remove-orphans $(cat services)
-    DEPLOY
-    chmod 0755 /usr/local/bin/lazycloud-deploy
-
     cat >/opt/lazycloud/secret-map <<'SECRETS'
     ${join("\n", [for variable, secret in local.secret_environment : "${variable}=${secret}"])}
     SECRETS
     chmod 0600 /opt/lazycloud/secret-map
 
-    # Absent on a first apply: Terraform creates the bucket, the release writes the
-    # first bundle into it. Boot must not fail because that has not happened yet.
-    if aws s3 ls "s3://${aws_s3_bucket.deploy.id}/current/compose.yaml" >/dev/null 2>&1; then
+    cat >/usr/local/bin/lazycloud-deploy <<'DEPLOY'
+    #!/bin/bash
+    # Fetch the current converge script and run it. The logic lives in the
+    # bundle; this only knows where to find it.
+    set -euo pipefail
+    export LAZYCLOUD_BUNDLE_URI="s3://${aws_s3_bucket.deploy.id}/current"
+    export LAZYCLOUD_REGION="${var.region}"
+    export LAZYCLOUD_REGISTRY="${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+    aws s3 cp "$LAZYCLOUD_BUNDLE_URI/converge.sh" /opt/lazycloud/converge.sh
+    chmod 0755 /opt/lazycloud/converge.sh
+    exec /opt/lazycloud/converge.sh
+    DEPLOY
+    chmod 0755 /usr/local/bin/lazycloud-deploy
+
+    # Absent on a first apply: Terraform creates the bucket, the release writes
+    # the first bundle. Boot must not fail because that has not happened yet.
+    if aws s3 ls "s3://${aws_s3_bucket.deploy.id}/current/converge.sh" >/dev/null 2>&1; then
       /usr/local/bin/lazycloud-deploy
     fi
   EOT
