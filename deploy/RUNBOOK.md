@@ -281,5 +281,13 @@ Confirm the target belongs to the task before each of these. None can be undone.
 - **A metrics backend, and alerting on it.** The processes aggregate metrics in
   memory and push them over OTLP on an interval, to whatever
   `LAZYCLOUD_TELEMETRY_ENDPOINT` names, with `LAZYCLOUD_TELEMETRY_ENABLED` off by
-  default. Nothing receives them yet. Standing up a collector is the first step;
-  alert meanings come after there is somewhere for them to live.
+  default. The local stack runs a collector that prints what arrives, which
+  answers whether a metric left its process and nothing else. A deployment
+  points the same variable at a real backend and replaces the debug exporter in
+  `deploy/telemetry/collector.yaml`; alert meanings come after the numbers are
+  somewhere queryable.
+
+  Only `control-plane` and `scheduler` export. They are the two processes that
+  call `setup_telemetry`, and between them they record every platform metric —
+  the container worker publishes its container metrics through the worker
+  repository instead, on a path that does not use the meter.

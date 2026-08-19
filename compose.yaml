@@ -15,6 +15,13 @@ x-database-env: &database-env
   LAZYCLOUD_DATABASE_URL: "postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud"
 x-redis-env: &redis-env
   LAZYCLOUD_REDIS_URL: "redis://redis:6379/0"
+
+# Metrics and traces are counted in each process and pushed to the collector on
+# an interval. Nothing durable holds them, so a stack without a receiver records
+# into instruments that go nowhere rather than failing.
+x-telemetry-env: &telemetry-env
+  LAZYCLOUD_TELEMETRY_ENABLED: "${LAZYCLOUD_TELEMETRY_ENABLED:-true}"
+  LAZYCLOUD_TELEMETRY_ENDPOINT: "${LAZYCLOUD_TELEMETRY_ENDPOINT:-http://otel-collector:4318}"
 x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://localhost:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
   LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane:9000}"
@@ -229,6 +236,16 @@ x-lazycloud-role-depends: &lazycloud-role-depends
     condition: service_healthy
 
 services:
+  # No health check: the image carries no shell and no HTTP client, so there is
+  # nothing to exec. Nothing depends on this service either — a process whose
+  # exporter cannot reach a receiver drops the batch and keeps serving.
+  otel-collector:
+    image: otel/opentelemetry-collector:0.119.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./deploy/telemetry/collector.yaml:/etc/otel/config.yaml:ro
+
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -386,6 +403,7 @@ services:
           *process-env,
           *database-env,
           *redis-env,
+          *telemetry-env,
           *gateway-env,
           *cloudflare-env,
           *stripe-env,
@@ -681,6 +699,7 @@ services:
           *process-env,
           *database-env,
           *redis-env,
+          *telemetry-env,
           *gateway-env,
           *cloudflare-env,
           # The scheduler drains the meter outbox, so it holds the payment
