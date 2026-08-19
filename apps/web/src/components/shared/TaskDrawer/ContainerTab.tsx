@@ -14,6 +14,18 @@ import { durationBetween, exactTime, formatBytes, relativeTime } from "@/lib/for
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
+// Why a container stopped, in the words its owner needs. UNKNOWN is absent on
+// purpose: it is the column default, so it also means the reason has not
+// arrived yet, and a running container would otherwise be given a cause.
+const STOP_REASONS: Record<string, string | undefined> = {
+  TTL: "It reached the time limit set for it",
+  USER: "It was stopped from this account",
+  SCHEDULER: "The platform moved the work elsewhere",
+  PREEMPTED: "The machine running it was reclaimed",
+  ADMIN: "An operator stopped it",
+  UNFUNDED: "The account has no payment method and has spent its included usage",
+};
+
 export function ContainerTab({
   record,
   workspaceId,
@@ -71,6 +83,7 @@ function ContainerDetails({
   }, [live, queryClient, workspaceId, containerId]);
 
   const running = container.status === "running";
+  const stopCause = STOP_REASONS[container.termination_reason];
   const command = container.command.join(" ");
   const ports = [...new Set(Object.values(container.ports))].sort((a, b) => a - b);
   const facts = [
@@ -97,6 +110,7 @@ function ContainerDetails({
           : String(container.exit_code),
       mono: true,
     },
+    ...(stopCause ? [{ label: "Stopped because", value: stopCause }] : []),
     {
       label: "Created",
       value: relativeTime(container.created_at),
