@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -8,7 +7,6 @@ from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
 
-import pytest
 from database.context import ServiceContext
 from database.recovery import ControlPlaneRecoveryFence
 from database.repositories.identity import (
@@ -26,15 +24,14 @@ from shared.http.workspaces import WorkspaceAuditAction
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
+from tests.backing_services import postgres_dsn
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 @contextmanager
 def _postgres_test_schema() -> Iterator[str]:
-    database_url = os.environ.get("LAZYCLOUD_TEST_POSTGRES_URL")
-    if not database_url:
-        pytest.skip("LAZYCLOUD_TEST_POSTGRES_URL is required for PostgreSQL concurrency proof")
+    database_url = postgres_dsn()
 
     schema = f"atomic_auth_{uuid4().hex}"
     admin_engine = create_engine(database_url)

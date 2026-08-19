@@ -10,7 +10,6 @@ an unlocked read looks correct.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -20,7 +19,6 @@ from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
 
-import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.tables.orchestration import ContainerTable
@@ -33,7 +31,7 @@ from shared.scheduling import (
     SchedulerWorkerRequest,
 )
 from sqlalchemy import func, select, text
-from sqlalchemy.engine import make_url
+from tests.backing_services import postgres_url
 from tests.service_fixtures import service_graph
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -150,12 +148,7 @@ def _container_count(services: ApiServices, *, stub_id: str) -> int:
 
 @contextmanager
 def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
-    base_url_value = os.getenv("LAZYCLOUD_TEST_DATABASE_URL")
-    if base_url_value is None:
-        pytest.skip("LAZYCLOUD_TEST_DATABASE_URL is not configured")
-    base_url = make_url(base_url_value)
-    if base_url.get_backend_name() != "postgresql":
-        pytest.skip("LAZYCLOUD_TEST_DATABASE_URL is not PostgreSQL")
+    base_url = postgres_url()
     database_name = f"function_capacity_{uuid4().hex}"
     admin = DatabaseClient.from_settings(
         DatabaseSettings(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
 from uuid import uuid4
@@ -26,6 +25,7 @@ from shared.timestamps import utc_now
 from sqlalchemy import delete
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
+from tests.backing_services import postgres_dsn
 
 from database import (
     DatabaseApplicationName,
@@ -279,9 +279,7 @@ def _prove_deletion_before_writer(
 
 
 def _postgres_database() -> DatabaseClient:
-    database_url = os.environ.get("LAZYCLOUD_TEST_POSTGRES_URL")
-    if not database_url:
-        pytest.skip("LAZYCLOUD_TEST_POSTGRES_URL is required for PostgreSQL concurrency proof")
+    database_url = postgres_dsn()
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url,

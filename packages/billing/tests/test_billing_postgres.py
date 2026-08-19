@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
@@ -39,8 +38,8 @@ from shared.payments import (
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from sqlalchemy import text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from tests.backing_services import postgres_url
 
 from billing import (
     BillingAccountService,
@@ -341,12 +340,7 @@ def _subscription(plan: BillingPlanId) -> ProviderSubscription:
 
 @contextmanager
 def _postgres_database() -> Iterator[DatabaseClient]:
-    base_url_value = os.getenv("LAZYCLOUD_TEST_DATABASE_URL")
-    if base_url_value is None:
-        pytest.skip("LAZYCLOUD_TEST_DATABASE_URL is not configured")
-    base_url = make_url(base_url_value)
-    if base_url.get_backend_name() != "postgresql":
-        pytest.skip("LAZYCLOUD_TEST_DATABASE_URL is not PostgreSQL")
+    base_url = postgres_url()
     database_name = f"billing_invariants_{uuid4().hex}"
     admin = DatabaseClient.from_settings(
         DatabaseSettings(

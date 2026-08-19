@@ -145,12 +145,16 @@ compute providers) is answering a problem this product does not have.
   machine has been quiet and what to check on the host. Blocked no longer falls
   back to a bare "Host preflight failed", and Revoked says how to undo it.
 
-- [ ] **A skipped test says so.** Three env vars gate skips —
-  `LAZYCLOUD_TEST_REDIS_URL`, `LAZYCLOUD_TEST_DATABASE_URL` and
-  `LAZYCLOUD_TEST_POSTGRES_URL` — and all three skip silently, so a run reads as
-  green while proving less than it looks like it proves. This has hidden a
-  broken assertion twice. Two of the three name the same PostgreSQL instance and
-  should not both exist.
+- [x] **A skipped test says so — and mostly does not have to.** Three env vars
+  gated skips, all silently, so a run read as green while proving less than it
+  looked; two of them named the same PostgreSQL instance, which is how a run
+  could set one and not the other. Done, but the useful half was not the
+  announcement: CI had a Redis service and no PostgreSQL one, so every
+  `*_postgres.py` proof — `FOR UPDATE SKIP LOCKED`, unique constraints, advisory
+  locks — had never run there. It runs now. The two variables are one, both
+  services are declared, and a run without them ends by naming what it did not
+  prove rather than leaving it in the dots: 186 of 1641 tests, which is what the
+  silence was worth.
 
 
 ## Deferred, deliberately
