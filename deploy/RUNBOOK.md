@@ -351,16 +351,21 @@ Confirm the target belongs to the task before each of these. None can be undone.
 
 ## Not yet covered
 
-- **A metrics backend, and alerting on it.** The processes aggregate metrics in
-  memory and push them over OTLP on an interval, to whatever
-  `LAZYCLOUD_TELEMETRY_ENDPOINT` names, with `LAZYCLOUD_TELEMETRY_ENABLED` off by
-  default. The local stack runs a collector that prints what arrives, which
-  answers whether a metric left its process and nothing else. A deployment
-  points the same variable at a real backend and replaces the debug exporter in
-  `deploy/telemetry/collector.yaml`; alert meanings come after the numbers are
-  somewhere queryable.
+- **Alerting.** A deployment now exports to a real backend:
+  `deploy/telemetry/collector.deploy.yaml` replaces the debug exporter with an
+  OTLP one, and the collector holds the backend credential because
+  `TelemetrySettings` has no headers field — a process can push OTLP but cannot
+  authenticate to a hosted backend. Set `telemetry-backend-endpoint`,
+  `-username` and `-password` in Secrets Manager.
+
+  What is still missing is what the numbers should mean. Alert thresholds come
+  after there is history to read them against.
 
   Only `control-plane` and `scheduler` export. They are the two processes that
   call `setup_telemetry`, and between them they record every platform metric —
   the container worker publishes its container metrics through the worker
   repository instead, on a path that does not use the meter.
+
+  A missing telemetry credential is deliberately not fatal. The collector cannot
+  export and says so; the control plane keeps serving, because an exporter that
+  cannot reach a receiver drops the batch rather than failing the process.

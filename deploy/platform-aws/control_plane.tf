@@ -79,6 +79,7 @@ locals {
 
     aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/compose.yaml" compose.yaml
     aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/compose.deploy.yaml" compose.deploy.yaml
+    aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/collector.deploy.yaml" collector.deploy.yaml
     aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/images.env" images.env
     aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/runtime.env" runtime.env
     aws s3 cp "s3://${aws_s3_bucket.deploy.id}/current/services" services

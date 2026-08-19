@@ -17,6 +17,9 @@ locals {
     stripe-webhook-secret         = "Stripe webhook signing secret. Returned only at endpoint creation."
     github-client-id              = "GitHub App client id for dashboard sign-in."
     github-client-secret          = "GitHub App client secret."
+    telemetry-backend-endpoint    = "OTLP endpoint the collector exports to."
+    telemetry-backend-username    = "Telemetry backend basic-auth username."
+    telemetry-backend-password    = "Telemetry backend basic-auth password."
     object-store-access-key       = "Empty when the platform role vends S3 access through the SDK chain."
     object-store-secret-key       = "Empty when the platform role vends S3 access through the SDK chain."
   }

@@ -31,6 +31,7 @@ from pydantic import TypeAdapter, ValidationError
 _REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 _COMPOSE = _REPOSITORY_ROOT / "compose.yaml"
 _OVERLAY = _REPOSITORY_ROOT / "deploy" / "compose.deploy.yaml"
+_COLLECTOR = _REPOSITORY_ROOT / "deploy" / "telemetry" / "collector.deploy.yaml"
 _STRING_MAP = TypeAdapter(dict[str, str])
 
 # The services a deployment runs. Everything absent is served by something else:
@@ -47,6 +48,7 @@ DEPLOYMENT_SERVICES = (
     "cache-token",
     "cache-server",
     "public-ingress",
+    "otel-collector",
 )
 
 # Compose variable per image, matching `deploy/compose.deploy.yaml`.
@@ -113,7 +115,7 @@ def publish(args: argparse.Namespace) -> None:
     (staged / "services").write_text(" ".join(DEPLOYMENT_SERVICES) + "\n")
 
     prefix = f"s3://{args.bucket}/current"
-    for source in (_COMPOSE, _OVERLAY):
+    for source in (_COMPOSE, _OVERLAY, _COLLECTOR):
         _upload(source, f"{prefix}/{source.name}", aws_cli=args.aws_cli)
     for name in ("images.env", "runtime.env", "services"):
         _upload(staged / name, f"{prefix}/{name}", aws_cli=args.aws_cli)

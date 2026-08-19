@@ -12,7 +12,7 @@
 #
 #   postgres, database volume     PlanetScale, through LAZYCLOUD_DATABASE_URL
 #   object-store, -bucket         S3, through the platform role
-#   otel-collector                the real backend LAZYCLOUD_TELEMETRY_ENDPOINT names
+#   (otel-collector runs, exporting to a real backend instead of printing)
 #   container-worker              the connected-AWS pool, launched by the scheduler
 #   agent, agent-join-token       a joined machine; the local stack's simulated customer
 #   platform-unit, worker-token   the compose fleet's capacity owner and credential
@@ -85,3 +85,19 @@ services:
     depends_on: !override
       control-plane:
         condition: service_healthy
+
+  # The image is upstream and unpinned by this overlay on purpose: it carries no
+  # repository source, so it is not one of the artifacts a package-digest
+  # mismatch can be about.
+  otel-collector:
+    volumes: !override
+      - ./collector.deploy.yaml:/etc/otel/config.yaml:ro
+    # Not `:?`. A missing telemetry credential must not stop the control plane
+    # from serving, and `:?` fails the whole compose invocation at parse time
+    # rather than this one container at start. An unset endpoint leaves the
+    # collector unable to export, which the processes already survive: an
+    # exporter that cannot reach a receiver drops the batch and keeps serving.
+    environment:
+      LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT: "${LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT-}"
+      LAZYCLOUD_TELEMETRY_BACKEND_USERNAME: "${LAZYCLOUD_TELEMETRY_BACKEND_USERNAME-}"
+      LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD: "${LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD-}"
