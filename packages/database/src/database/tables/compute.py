@@ -320,6 +320,16 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             "status",
         ),
         Index("ix_compute_machine_enrollments_user_status", "user_id", "status"),
+        # The disconnect sweep asks the whole fleet, on an interval, whether any
+        # machine has gone quiet. It supplies no workspace and no account, so the
+        # two indexes above lead with a column it does not have; without this one
+        # every control plane scans the table sequentially every few seconds
+        # whether or not a single machine is silent.
+        Index(
+            "ix_compute_machine_enrollments_status_last_join",
+            "status",
+            "last_join_at",
+        ),
     )
 
     user_id: Mapped[str] = mapped_column(

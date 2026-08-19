@@ -46,8 +46,8 @@ from compute.state import (
 from compute.telemetry import (
     AGENT_HEARTBEAT_TIMEOUT_SECONDS,
     AgentDisconnectAction,
+    AgentDisconnectPlan,
     AgentMetricUpdatePlan,
-    AgentTelemetryState,
     PoolTelemetryState,
     agent_machine_last_seen,
     agent_silence_description,
@@ -321,6 +321,15 @@ def _request_with_workload_defaults(
 
 SELF_HOSTED_FLEET_POOL_NAME = "self-hosted"
 """Server-owned name of each workspace's single implicit self-hosted machine fleet."""
+
+MACHINE_STATUS_FOR_READINESS = {
+    MachineReadinessPhase.Ready: ResourceStatus.Running,
+    MachineReadinessPhase.Blocked: ResourceStatus.Failed,
+    MachineReadinessPhase.Offline: ResourceStatus.Stopped,
+    MachineReadinessPhase.Joining: ResourceStatus.Created,
+    MachineReadinessPhase.Revoked: ResourceStatus.Deleted,
+}
+"""What a readiness phase means for the machine row both writers keep in step."""
 
 DISCONNECT_SWEEP_LIMIT = 200
 """Machines one disconnect sweep will mark.
@@ -2642,14 +2651,12 @@ class GatewayControlService:
     ) -> list[str]:
         """Record the machines that stopped reporting, and tell their owners.
 
-        Every other write to an enrollment happens because a heartbeat arrived.
-        That is the one thing a machine that has gone does not do, so without
-        this sweep the row keeps saying `Ready` for a host that is switched off,
-        and the only place the truth appears is a view that recomputes it per
-        request and writes nothing down.
+        The scan is a shortlist, never the decision. Each machine is decided
+        again under its own row lock, so a heartbeat that lands between the two
+        keeps the machine, and two control planes sweeping at once still write
+        and tell once.
 
-        Returns the machine ids newly marked, so the caller can log a real
-        number rather than that it ran.
+        Returns the machine ids newly marked.
         """
 
         current_time = now or utc_now()
@@ -2660,52 +2667,137 @@ class GatewayControlService:
                 limit=limit,
             )
         marked: list[str] = []
-        for enrollment in candidates:
-            state = _agent_state_from_enrollment(enrollment)
-            if state is None:
-                continue
-            telemetry = agent_telemetry_state(state)
-            plan = plan_agent_disconnect(telemetry, now=current_time)
-            if plan.action is not AgentDisconnectAction.MarkDisconnected:
-                continue
+        for candidate in candidates:
+            # One machine that cannot be written must not cost the rest their
+            # sweep. An enrollment whose workspace is no longer active raises
+            # from the machine write, and it stays a candidate, so letting it
+            # escape would put it at the head of every later scan and stop the
+            # fleet being swept at all.
             try:
-                self._persist_agent_state(
-                    state.model_copy(update={"last_disconnect_at": plan.disconnected_at})
-                )
-            except ValueError:
-                # The machine re-joined or was revoked between the scan and the
-                # write. Either way the row now says something newer than this
-                # plan, and the next sweep decides again from what it says.
+                disconnected = self._mark_agent_disconnected(candidate, now=current_time)
+            except (DomainError, ValueError) as exc:
+                self._record_disconnect_failure(candidate, exc)
                 continue
-            self._emit_agent_disconnected(state, telemetry, plan.reason, now=current_time)
+            if disconnected is None:
+                continue
+            state, plan = disconnected
+            self._emit_agent_disconnected(state, plan.reason, now=current_time)
             marked.append(state.machine_id)
         return marked
+
+    def _mark_agent_disconnected(
+        self,
+        candidate: ComputeMachineEnrollmentRecord,
+        *,
+        now: datetime,
+    ) -> tuple[ComputeAgentTokenState, AgentDisconnectPlan] | None:
+        """Write the disconnect if the locked row still says the machine is gone.
+
+        Narrow on purpose: only the disconnect and the phase it implies. The
+        heartbeat path re-states the whole enrollment from what the machine
+        reported, and re-stating it from a row read seconds ago would put back a
+        heartbeat that arrived in between, writing off a machine that had just
+        come back.
+
+        The row lock plus the re-plan is what makes the telling exactly once.
+        Whichever caller commits the disconnect is the one that saw a plan
+        asking for it; the next reads the row it wrote and has nothing to do.
+        """
+
+        with self.services.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(
+                candidate.workspace_id,
+                candidate.machine_id,
+                pool=candidate.pool,
+                for_update=True,
+            )
+            if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
+                return None
+            state = _agent_state_from_enrollment(enrollment)
+            if state is None:
+                return None
+            plan = plan_agent_disconnect(agent_telemetry_state(state), now=now)
+            if plan.action is not AgentDisconnectAction.MarkDisconnected:
+                return None
+            state = state.model_copy(update={"last_disconnect_at": plan.disconnected_at})
+            readiness_phase = _agent_readiness_phase(state)
+            enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "last_disconnect_at": plan.disconnected_at,
+                        "readiness_phase": readiness_phase,
+                        "updated_at": now,
+                    }
+                )
+            )
+            machines = MachineRepository(session)
+            machine = machines.get(state.machine_id, workspace_id=state.workspace_id)
+            if machine is not None:
+                machines.upsert(
+                    machine.model_copy(
+                        update={
+                            "status": MACHINE_STATUS_FOR_READINESS[readiness_phase],
+                            "updated_at": now,
+                        }
+                    ),
+                    workspace_id=state.workspace_id,
+                )
+        self.compute_states.save_agent_token_state(state)
+        return state, plan
+
+    def _record_disconnect_failure(
+        self,
+        candidate: ComputeMachineEnrollmentRecord,
+        exc: Exception,
+    ) -> None:
+        """Say that a machine could not be written off, without saying it to the customer.
+
+        Cluster-scoped: failing to record a disconnect is a defect in this
+        platform, and the workspace feed belongs to the customer whose machine
+        it failed to describe.
+        """
+
+        # Recording the failure must never replace the failure being recorded.
+        with suppress(Exception):
+            self.services.events.emit(
+                "agent.disconnect.failed",
+                resource_type="agent",
+                resource_id=candidate.machine_id,
+                message=(
+                    f"could not mark machine {candidate.machine_id} disconnected "
+                    f"({type(exc).__name__})"
+                ),
+                level=EventLevel.Error,
+                data={
+                    "machine_id": candidate.machine_id,
+                    "pool": candidate.pool,
+                    "workspace_id": candidate.workspace_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     def _emit_agent_disconnected(
         self,
         state: ComputeAgentTokenState,
-        telemetry: AgentTelemetryState,
         reason: str,
         *,
         now: datetime,
     ) -> None:
+        telemetry = agent_telemetry_state(state)
         last_seen = agent_machine_last_seen(telemetry)
         silence = agent_silence_description(telemetry, now=now)
         self.services.events.emit(
             "agent.disconnected",
             resource_type="agent",
             resource_id=state.machine_id,
-            message=(
-                f"machine {state.machine_id} stopped reporting {silence} ago"
-                if silence
-                else f"machine {state.machine_id} stopped reporting"
-            ),
+            message=f"machine {state.machine_id} stopped reporting {silence} ago",
             level=EventLevel.Warning,
             data={
                 "machine_id": state.machine_id,
                 "pool": state.pool,
                 "capacity_owner_id": state.capacity_owner_id,
-                "last_seen_at": last_seen.isoformat() if last_seen is not None else "",
+                "last_seen_at": last_seen.isoformat() if last_seen is not None else None,
                 "reason": reason,
             },
             workspace_id=state.workspace_id,
@@ -2754,13 +2846,7 @@ class GatewayControlService:
             machine = machines.get(state.machine_id, workspace_id=state.workspace_id)
             if machine is None:
                 raise ValueError("agent machine no longer exists")
-            machine_status = {
-                MachineReadinessPhase.Ready: ResourceStatus.Running,
-                MachineReadinessPhase.Blocked: ResourceStatus.Failed,
-                MachineReadinessPhase.Offline: ResourceStatus.Stopped,
-                MachineReadinessPhase.Joining: ResourceStatus.Created,
-                MachineReadinessPhase.Revoked: ResourceStatus.Deleted,
-            }[readiness_phase]
+            machine_status = MACHINE_STATUS_FOR_READINESS[readiness_phase]
             machines.upsert(
                 Machine(
                     id=machine.id,

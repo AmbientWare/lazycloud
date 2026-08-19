@@ -11,6 +11,7 @@ from compute.state import (
     ComputeUnitState,
 )
 from compute.telemetry import (
+    AgentTelemetryState,
     agent_machine_connected,
     agent_machine_last_seen,
     agent_silence_description,
@@ -85,7 +86,8 @@ def machine_view(
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or machine.labels.get("gpu", "")
     gpu_count = int(machine.labels.get("gpu_count", "1") or 1) if gpu else 0
-    readiness_phase = _machine_readiness_phase(machine, agent_state)
+    telemetry = agent_telemetry_state(agent_state) if agent_state is not None else None
+    readiness_phase = _machine_readiness_phase(machine, agent_state, telemetry)
     preflight_checks = [
         ComputePreflightCheck(
             name=check.name,
@@ -112,7 +114,7 @@ def machine_view(
         readiness_message=(
             agent_state.capacity_reason
             if agent_state is not None and agent_state.capacity_reason
-            else _machine_readiness_message(readiness_phase, preflight_checks, agent_state)
+            else _machine_readiness_message(readiness_phase, preflight_checks, telemetry)
         ),
         schedulable=(
             readiness_phase is MachineReadinessPhase.Ready
@@ -129,9 +131,7 @@ def machine_view(
         preflight_checks=preflight_checks,
         remediation=list(dict.fromkeys(remediation)),
         last_seen_at=(
-            agent_machine_last_seen(agent_telemetry_state(agent_state))
-            if agent_state is not None
-            else machine.updated_at
+            agent_machine_last_seen(telemetry) if telemetry is not None else machine.updated_at
         ),
         created_at=machine.created_at,
         agent_version=agent_state.agent_version if agent_state is not None else "",
@@ -147,13 +147,14 @@ def machine_view(
 def _machine_readiness_phase(
     machine: Machine,
     agent_state: ComputeAgentTokenState | None,
+    telemetry: AgentTelemetryState | None,
 ) -> MachineReadinessPhase:
-    if agent_state is not None:
+    if agent_state is not None and telemetry is not None:
         if not agent_state.preflight_passed:
             return MachineReadinessPhase.Blocked
         if not agent_state.heartbeat_confirmed:
             return MachineReadinessPhase.Joining
-        if agent_machine_connected(agent_telemetry_state(agent_state)):
+        if agent_machine_connected(telemetry):
             return MachineReadinessPhase.Ready
         if agent_state.last_heartbeat_at is None:
             return MachineReadinessPhase.Joining
@@ -170,15 +171,14 @@ def _machine_readiness_phase(
 def _machine_readiness_message(
     phase: MachineReadinessPhase,
     preflight: list[ComputePreflightCheck],
-    agent_state: ComputeAgentTokenState | None = None,
+    telemetry: AgentTelemetryState | None,
 ) -> str:
     """Why the machine is in this phase, in terms its owner can act on.
 
-    The fleet is hardware this platform does not own and cannot reach, so the
-    message is the whole of the support channel. "Agent heartbeat is stale"
-    named the symptom and left the reader with nowhere to go; how long it has
-    been quiet is what distinguishes a host that rebooted from one that has
-    been off for a week, and it is the platform's last true observation.
+    The fleet is hardware this platform does not own and cannot reach, so this
+    message is the whole of the support channel. How long a machine has been
+    quiet is what separates a host that rebooted from one that has been off for
+    a week, and it is the last thing the platform actually observed.
     """
 
     if phase is MachineReadinessPhase.Ready:
@@ -192,11 +192,7 @@ def _machine_readiness_message(
             "Host preflight failed without naming a check; restart the agent to run preflight again"
         )
     if phase is MachineReadinessPhase.Offline:
-        silence = (
-            agent_silence_description(agent_telemetry_state(agent_state))
-            if agent_state is not None
-            else ""
-        )
+        silence = agent_silence_description(telemetry) if telemetry is not None else ""
         quiet = f"No heartbeat for {silence}" if silence else "No heartbeat from the agent"
         return f"{quiet}; check the host is powered on and the agent service is running"
     if phase is MachineReadinessPhase.Revoked:

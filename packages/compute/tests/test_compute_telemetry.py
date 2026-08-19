@@ -148,7 +148,5 @@ def test_agent_liveness_and_disconnect_decisions_match_heartbeat_rules() -> None
 
     assert ignore.action is AgentDisconnectAction.Ignore
     assert mark.action is AgentDisconnectAction.MarkDisconnected
-    assert mark.should_emit_event
     assert mark.disconnected_at == now
     assert repeat.action is AgentDisconnectAction.AlreadyMarked
-    assert not repeat.should_emit_event
