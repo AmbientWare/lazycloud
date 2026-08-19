@@ -74,17 +74,21 @@ compute providers) is answering a problem this product does not have.
   `test_a_joined_machine_cannot_register_itself_into_the_shared_fleet` proving a
   joined machine that registers itself public is stored private.
 
-- [ ] **Tell the owner their machine went away.** Recovery works and is silent.
-  No event is emitted, the durable enrollment row and machine status stay `Ready`
-  and `Running` indefinitely because they are only written when a heartbeat
-  arrives, and nothing connects the container that moved to the machine that lost
-  it. The live view does recompute — a machine list shows Offline with "Agent
-  heartbeat is stale" about 60s in, and the dashboard renders it — so this is
-  pull-only rather than absent. `plan_agent_disconnect` is the piece that would
-  emit the event, write the disconnect, and disable the machine's worker; it is
-  declared, unit-tested, and has no production caller.
-  *Done when:* a machine going silent produces a workspace-scoped event its owner
-  can see without asking us.
+- [x] **Tell the owner their machine went away.** Recovery worked and said
+  nothing: the enrollment and machine rows are written when a heartbeat arrives,
+  which is what a machine that has gone stops doing, so the record said `Ready`
+  for a host that was off and only a per-request view knew otherwise. Done — a
+  leader-leased sweep in the control plane gives `plan_agent_disconnect` the
+  production caller it never had, writes the disconnect, and emits a
+  workspace-scoped `agent.disconnected`. Verified live: 65s after the agent
+  stopped, phase `Offline`, machine `Stopped`, one event, and still one across
+  four more sweeps; the first heartbeat back cleared it.
+
+  It also had to fix where the event lands. Every `agent.*` emit named its
+  workspace inside the event data, which scopes nothing, so all eight wrote
+  cluster-scoped rows — and every customer read folded cluster rows in. A
+  workspace feed was carrying other tenants' machine ids and host metrics, and
+  `billing.span.unpriced`. Both halves landed together.
 
 - [x] **A pod hitting its TTL names the platform as the reason.** The TTL stop
   passes no reason, so it takes the `User` default, which is in the set that
@@ -135,10 +139,11 @@ compute providers) is answering a problem this product does not have.
 
 ## Small
 
-- [ ] **Every Blocked/Offline machine message names a cause the user can act on.**
-  Customers cannot read our control plane, and when the fault is their own
-  hardware we can only explain it. Cheap, and disproportionately what determines
-  support load.
+- [x] **Every Blocked/Offline machine message names a cause the user can act on.**
+  Done with the item above. Offline said "Agent heartbeat is stale", which names
+  a symptom and leaves the reader nowhere to go; it now names how long the
+  machine has been quiet and what to check on the host. Blocked no longer falls
+  back to a bare "Host preflight failed", and Revoked says how to undo it.
 
 - [ ] **A skipped test says so.** Three env vars gate skips —
   `LAZYCLOUD_TEST_REDIS_URL`, `LAZYCLOUD_TEST_DATABASE_URL` and
