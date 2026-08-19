@@ -1,0 +1,31 @@
+# Local collector for the Compose stack. It receives what every process pushes
+# and prints it, which is enough to answer "did this metric leave the process"
+# without running a time-series database beside the stack.
+#
+# A deployment replaces the debug exporter with a real backend. Nothing else in
+# this file has to change: the processes push OTLP to whatever
+# LAZYCLOUD_TELEMETRY_ENDPOINT names, and the receiver below is the standard
+# OTLP HTTP port.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
