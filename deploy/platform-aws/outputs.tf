@@ -97,3 +97,8 @@ output "acceptance_role_arns" {
     node_diagnostics = aws_iam_role.node_diagnostics[0].arn
   } : {}
 }
+
+output "deploy_role_arn" {
+  description = "Set as the AWS_DEPLOY_ROLE_ARN repository secret."
+  value       = aws_iam_role.deploy.arn
+}

@@ -77,6 +77,17 @@ variable "acceptance_trusted_principal_arns" {
   default     = []
 }
 
+variable "github_repository" {
+  description = "owner/repo the Deploy workflow runs from, for the OIDC trust condition."
+  type        = string
+  default     = "AmbientWare/lazycloud"
+}
+
+variable "state_bucket" {
+  description = "Bucket holding this module's Terraform state, which the workflow reads for outputs."
+  type        = string
+}
+
 variable "control_role_name" {
   description = <<-EOT
     Name of the platform control principal.
