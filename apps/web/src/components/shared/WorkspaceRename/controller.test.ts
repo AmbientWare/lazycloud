@@ -160,10 +160,9 @@ function renderController({
   workspace: Workspace;
   onRenamed: (name: string) => void;
 }) {
-  return renderHook(
-    () => useWorkspaceRenameController({ workspace: workspaceValue, onRenamed }),
-    { wrapper: controllerWrapper(queryClient) },
-  );
+  return renderHook(() => useWorkspaceRenameController({ workspace: workspaceValue, onRenamed }), {
+    wrapper: controllerWrapper(queryClient),
+  });
 }
 
 function controllerWrapper(queryClient: QueryClient) {

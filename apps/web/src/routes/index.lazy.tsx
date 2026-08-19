@@ -138,10 +138,7 @@ const platformStories: PlatformStory[] = [
     label: "Applications + APIs",
     title: "Ship an API the minute it is written.",
     body: "APIs and model endpoints with explicit resources, autoscaling, and scale-to-zero. No load balancer, no image to push.",
-    notes: [
-      "Scales to zero when idle.",
-      "Keep-warm holds capacity when you want it ready.",
-    ],
+    notes: ["Scales to zero when idle.", "Keep-warm holds capacity when you want it ready."],
     visual: "application",
   },
   {
@@ -280,9 +277,9 @@ function MarketingHome() {
                 Deploy as fast as you <em>develop.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Code arrives in seconds, then waits on Dockerfiles, registries, load balancers,
-                IAM. One decorator makes a Python function a deployed API, job, queue, or GPU
-                workload. It still runs on your laptop.
+                Code arrives in seconds, then waits on Dockerfiles, registries, load balancers, IAM.
+                One decorator makes a Python function a deployed API, job, queue, or GPU workload.
+                It still runs on your laptop.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <GetStartedButton className="marketing-action-primary stamp border-brand/45" />

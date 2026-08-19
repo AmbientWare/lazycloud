@@ -76,4 +76,3 @@ export function createToken(input: CreateTokenInput): Promise<TokenCreateRespons
 export function revokeToken(tokenId: string): Promise<AuthToken> {
   return apiRequest(`${tokenPath(tokenId)}/revoke`, authTokenSchema, { method: "POST" });
 }
-

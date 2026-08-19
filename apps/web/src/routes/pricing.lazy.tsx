@@ -219,20 +219,13 @@ function MarketingPricing() {
                 <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
                   Resource costs
                 </h2>
-                <MeterToggle
-                  controls={fleetRatesId}
-                  meter={meter}
-                  onChange={setMeter}
-                />
+                <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
               </div>
               <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
                 On LazyCloud capacity — machines we buy, run, and price whole.
               </p>
 
-              <RateList
-                groups={[...computeGroups(meter), ...platformGroups]}
-                id={fleetRatesId}
-              />
+              <RateList groups={[...computeGroups(meter), ...platformGroups]} id={fleetRatesId} />
             </div>
           </div>
         </section>
