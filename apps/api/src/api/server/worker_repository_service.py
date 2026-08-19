@@ -755,6 +755,13 @@ class WorkerRepositoryService:
                 # registration's own value would let a worker name any workspace and
                 # be scheduled that workspace's work.
                 "workspace_id": principal.workspace_id,
+                # The switch the owner comparison hangs on, so it answers to the
+                # token like the others. Left to the registration, a machine its
+                # customer holds root on can call itself public, and placement
+                # then skips the owner check entirely and offers it every
+                # account's work — the default pool carries one name for every
+                # workspace, so it does not even have to guess which.
+                "private_worker": principal.is_private_worker,
                 # Stamped with it, because placement compares accounts: a private
                 # worker whose owner is unset serves nobody, so registering without
                 # one refuses the machine every request until a reconcile repairs it.

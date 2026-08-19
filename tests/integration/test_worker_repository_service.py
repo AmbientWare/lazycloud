@@ -122,6 +122,7 @@ from worker.origin_access import (
 from worker.repository_payloads import (
     AcknowledgeContainerRequestRequest,
     AcquireAutomaticCheckpointLeaseRequest,
+    AddWorkerRequest,
     DeleteContainerStateRequest,
     GetCacheOriginCredentialsResponse,
     GetCheckpointRestoreRequest,
@@ -2407,6 +2408,72 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     assert resolved is not None
     assert resolved.state == BackendRouteState.Ready.value
     assert resolved.proxy_target == "tailnet-host:34399"
+
+
+def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
+    isolated_services: ApiServices,
+) -> None:
+    """The record answers to the token, not to the host that sent it.
+
+    A customer holds root on the machine they joined, so every tenancy field in a
+    registration is something they can edit. `private_worker` is the switch the
+    owner comparison hangs on: a worker registered public is compared against no
+    account at all, and every workspace's default pool carries the same name, so
+    claiming one is enough to be offered another account's work.
+    """
+
+    redis = RedisClient(FakeRedis(), key_prefix="shared-fleet-claim")
+    gateway = replace(
+        isolated_services.gateway_service,
+        compute_state=RedisComputeStateRepository(redis),
+        scheduler_workers=RedisSchedulerWorkerRepository(redis),
+        scheduler_containers=RedisSchedulerContainerRepository(redis),
+        scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
+        tailnet=TailnetConfig(),
+        tailnet_control=_WorkerRepositoryTailnetControl(),
+    )
+    workspace_id, machine_id, _agent_token = _join_gateway_agent(
+        isolated_services,
+        gateway,
+        pool=MachinePool("shared-fleet-claim"),
+        machine_fingerprint="shared-fleet-claim-machine",
+    )
+    worker_id = agent_machine_worker_id(machine_id)
+    joined_unit = gateway.unit_state_coordinator.unit_by_name(
+        UnitName(MachinePool("shared-fleet-claim")),
+        workspace_id=workspace_id,
+    )
+    workers = RedisSchedulerWorkerRepository(redis)
+
+    _worker_repository_service(isolated_services, redis).add_worker(
+        AddWorkerRequest(
+            worker=SchedulerWorkerRecord(
+                capacity_owner_id=joined_unit.capacity_owner_id,
+                worker_id=worker_id,
+                machine_id=machine_id,
+                pool=MachinePool("shared-fleet-claim"),
+                status=SchedulerWorkerStatus.Available,
+                private_worker=False,
+                requires_pool_selector=True,
+                total_cpu_millicores=1000,
+                total_memory_mib=1024,
+                free_cpu_millicores=1000,
+                free_memory_mib=1024,
+            ),
+            cache_generation_id=str(uuid4()),
+            cache_storage_id=f"machine:{machine_id}",
+        ),
+        principal=WorkerRepositoryPrincipal(
+            workspace_id=workspace_id,
+            worker_id=worker_id,
+            token_kind=TokenKind.WorkerPrivate,
+        ),
+    )
+
+    stored = workers.get_worker(worker_id)
+    assert stored is not None
+    assert stored.private_worker is True
+    assert stored.owner_user_id == workspace_owner_user_id(isolated_services.context, workspace_id)
 
 
 def _join_gateway_agent(
