@@ -24,6 +24,15 @@ resource "planetscale_postgres_branch_role" "control_plane" {
   organization = var.planetscale_organization
   database     = planetscale_postgres_branch.control_plane.database
   branch       = planetscale_postgres_branch.control_plane.name
+
+  # A branch role inherits nothing by default, and a role that cannot CREATE in
+  # `public` fails on the very first DDL the schema bootstrap issues. The schema
+  # also declares `btree_gist` and `pgcrypto`, so this needs to create extensions
+  # and not only tables.
+  #
+  # `postgres`, not `pscale_admin`: the API takes the role to inherit, and the
+  # `pscale_*` names that `pg_roles` lists are rejected as invalid values.
+  inherited_roles = ["postgres"]
 }
 
 # No `planetscale_postgres_bouncer`, and this is not an omission.
