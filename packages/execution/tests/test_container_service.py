@@ -288,13 +288,13 @@ def test_container_stop_targets_only_assigned_worker(
 
     assert cancellation.container_ids == [container.id]
     assert len(events.events) == 1
-    # UNKNOWN, not USER. The worker writes back whatever it is told, so sending
-    # the settlement default would put the customer's name on a stop nobody
-    # attributed to them.
+    # The wire reason is the settlement one. `UNKNOWN` there does not mean
+    # "nobody said" — it means the container died on its own, which turns a
+    # SIGTERM into a clean exit and charges other callers for the stop.
     assert events.events[0].args == {
         "container_id": container.id,
         "force": False,
-        "reason": "UNKNOWN",
+        "reason": "USER",
         "worker_id": "worker-1",
     }
 
