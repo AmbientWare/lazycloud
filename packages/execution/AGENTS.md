@@ -64,6 +64,20 @@ free is what turns an invocation that kills its interpreter into a loop nothing
 bounds, because a claim returning to an attempt still marked running never
 advances the counter that `max_attempts` reads.
 
+`StopContainerReason` is how that is decided, and it carries three separate
+weights that nothing in its own module shows. Settlement reads it to choose
+whether a claim is cancelled or released. The worker reads it to normalize an
+exit, where `Unknown` on a SIGTERM means the container died on its own and
+scores the run a success. And the customer reads a phrase derived from it. A
+reason picked for how it reads therefore moves money, and `Unknown` in
+particular is not a way of saying nobody stated one — an unstated stop travels
+as `User` and declines to describe itself instead.
+
+That is also why a stop that a container is serving other callers through says
+`Scheduler` rather than `User` or `Admin`. Those two cancel, which is terminal
+and carries no retry, and the calls a drain or an app stop interrupts belong to
+people who asked for none of it.
+
 ## Cancelling reaches the work, and stops there
 
 Nothing inside a container watches the task row, so writing `cancelled` on it
