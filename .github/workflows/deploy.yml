@@ -67,7 +67,6 @@ jobs:
           set: |
             *.cache-from=type=gha,scope=deploy-control-plane
             *.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            *.platform=linux/arm64
             api.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/api:${{ github.sha }}
             scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/scheduler:${{ github.sha }}
             cache-server.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cache-server:${{ github.sha }}
@@ -107,7 +106,7 @@ jobs:
           set -euo pipefail
           terraform -chdir=deploy/platform-aws init -input=false \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=platform-aws/terraform.tfstate" \
+            -backend-config="key=platform-aws/$DEPLOYMENT.tfstate" \
             -backend-config="region=$AWS_REGION"
           terraform -chdir=deploy/platform-aws output -json runtime_configuration >runtime.json
           uv run --group workspace python deploy/bundle.py \

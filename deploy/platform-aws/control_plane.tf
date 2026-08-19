@@ -1,5 +1,8 @@
-data "aws_ssm_parameter" "al2023_arm64" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+# x86_64, matching everything else. The release agent is published amd64 only and
+# the node AMIs are baked amd64, so a Graviton control plane would be the single
+# arm64 surface in the system and the only image that has to cross-build.
+data "aws_ssm_parameter" "al2023" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 }
 
 # One instance, deliberately. The API is replica-safe and advertises a Tailscale
@@ -8,7 +11,7 @@ data "aws_ssm_parameter" "al2023_arm64" {
 # Redis lives on this host and is the thing that has to move first when a second
 # one is wanted.
 resource "aws_instance" "control_plane" {
-  ami                    = data.aws_ssm_parameter.al2023_arm64.value
+  ami                    = data.aws_ssm_parameter.al2023.value
   instance_type          = var.control_plane_instance_type
   subnet_id              = aws_subnet.control_plane.id
   vpc_security_group_ids = [aws_security_group.control_plane.id]
@@ -89,6 +92,8 @@ locals {
     : >secrets.env
     chmod 0600 secrets.env
     while IFS='=' read -r variable secret; do
+      variable="$(printf '%s' "$variable" | tr -d '[:space:]')"
+      secret="$(printf '%s' "$secret" | tr -d '[:space:]')"
       [ -n "$variable" ] || continue
       value="$(aws secretsmanager get-secret-value \
         --secret-id "$secret" --query SecretString --output text)"
@@ -110,7 +115,7 @@ locals {
     chmod 0755 /usr/local/bin/lazycloud-deploy
 
     cat >/opt/lazycloud/secret-map <<'SECRETS'
-    ${indent(4, join("\n", [for variable, secret in local.secret_environment : "${variable}=${secret}"]))}
+    ${join("\n", [for variable, secret in local.secret_environment : "${variable}=${secret}"])}
     SECRETS
     chmod 0600 /opt/lazycloud/secret-map
 

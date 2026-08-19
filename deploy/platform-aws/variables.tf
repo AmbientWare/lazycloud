@@ -103,9 +103,9 @@ variable "fleet_cidr" {
 }
 
 variable "control_plane_instance_type" {
-  description = "Instance type running the Compose stack. Graviton; the images are multi-arch."
+  description = "Instance type running the Compose stack. x86_64, like the rest of the system."
   type        = string
-  default     = "t4g.medium"
+  default     = "t3.medium"
 }
 
 variable "control_plane_root_volume_gib" {
