@@ -7,7 +7,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field, JsonValue, model_validator
 
-from shared.app_identity import METRICS_NAMESPACE, METRICS_SOURCE
+from shared.app_identity import METRICS_SOURCE
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.timestamps import utc_now
@@ -146,28 +146,6 @@ class UsageAggregation(ContractModel):
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-def usage_to_prometheus(records: list[UsageRecord]) -> str:
-    lines: list[str] = []
-    for record in records:
-        labels = {
-            "workspace": record.workspace_id,
-            "resource_type": record.resource_type,
-            "resource_id": record.resource_id,
-            **record.labels,
-        }
-        label_text = ",".join(
-            f'{key}="{_escape_prometheus_label(value)}"' for key, value in sorted(labels.items())
-        )
-        lines.append(
-            f"{METRICS_NAMESPACE}_usage_{record.metric.value}{{{label_text}}} {record.quantity}"
-        )
-    return "\n".join(lines) + ("\n" if lines else "")
-
-
-def _escape_prometheus_label(value: str) -> str:
-    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
-
-
 __all__ = [
     "METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY",
     "METERING_OBSERVATION_QUALITY_METADATA_KEY",
@@ -182,5 +160,4 @@ __all__ = [
     "UsageRecordIdentityPart",
     "UsageUnit",
     "usage_record_id",
-    "usage_to_prometheus",
 ]

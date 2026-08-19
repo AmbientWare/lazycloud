@@ -6,7 +6,6 @@ from typing import Annotated
 from control.service import ControlPlaneService
 from database.records.identity import DeviceAuthorizationRecord
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import PlainTextResponse
 from identity.auth import AuthError
 from identity.authz import AuthzRequirement, AuthzResourceKind
 from identity.device_auth import DeviceAuthorizationService
@@ -38,7 +37,6 @@ from shared.http.system import (
 from shared.identity import (
     AuthTokenRecord,
 )
-from shared.usage import usage_to_prometheus
 
 from api.server.auth import (
     admin_access,
@@ -58,7 +56,6 @@ from api.server.dependencies import (
 from api.server.services import ApiServices
 
 router = APIRouter()
-USAGE_METRICS_RECORD_LIMIT = 5000
 
 
 def _public_token(record: AuthTokenRecord) -> AuthTokenResponse:
@@ -104,19 +101,6 @@ def _health_check(check: Callable[[], bool]) -> HealthCheckResult:
     if not ok:
         return HealthCheckResult(ok=False, error="unhealthy")
     return HealthCheckResult(ok=True)
-
-
-@router.get("/metrics", response_class=PlainTextResponse)
-def metrics(
-    services: ApiServices = Depends(current_services),
-    *,
-    _auth: admin_access,
-) -> PlainTextResponse:
-    body = services.metrics.prometheus_text()
-    usage_records = services.usage.list()[:USAGE_METRICS_RECORD_LIMIT]
-    if usage_records:
-        body += usage_to_prometheus(usage_records)
-    return PlainTextResponse(body)
 
 
 @router.get("/api/v1/tokens/all", response_model=TokenListResponse, operation_id="list_tokens")

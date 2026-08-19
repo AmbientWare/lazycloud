@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import lazycloud.config
 import pytest
+from tests.metric_helpers import install_metric_reader
 from tests.real_redis import RealRedisActors
 
 TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
@@ -47,6 +48,17 @@ def _test_environment() -> dict[str, str]:
         name, _, value = entry.partition("=")
         values[name.strip()] = value.strip()
     return values
+
+
+@pytest.fixture(scope="session", autouse=True)
+def metric_reader() -> None:
+    """Install the session's meter provider before anything records.
+
+    Once, because the API refuses a second one. Tests that assert on metrics read
+    through `tests.metric_helpers.metric_value`.
+    """
+
+    install_metric_reader()
 
 
 @pytest.fixture(autouse=True)

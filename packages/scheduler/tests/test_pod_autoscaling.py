@@ -74,7 +74,6 @@ def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
     assert result.desired_containers == 0
     assert result.actions == []
     assert scheduler.requests == []
-    snapshot = isolated_services.metrics.latest()
     metric_labels = {
         "source": "pod.autoscaler",
         "workspace_id": stub.workspace_id,
@@ -83,18 +82,16 @@ def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
     }
     assert (
         metric_value(
-            snapshot.counters,
             "autoscaler_decisions_total",
             **metric_labels,
             decision="hold",
         )
         == 1
     )
-    assert metric_value(snapshot.gauges, "autoscaler_current_containers", **metric_labels) == 0
-    assert metric_value(snapshot.gauges, "autoscaler_desired_containers", **metric_labels) == 0
+    assert metric_value("autoscaler_current_containers", **metric_labels) == 0
+    assert metric_value("autoscaler_desired_containers", **metric_labels) == 0
     assert (
         metric_value(
-            snapshot.gauges,
             "autoscaler_signal",
             **metric_labels,
             signal="total_connections",

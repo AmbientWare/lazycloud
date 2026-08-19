@@ -87,7 +87,6 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
     containers = _endpoint_containers(isolated_services, stub)
     assert len(containers) == 3
     assert {container.status for container in containers} == {ContainerStatus.Pending}
-    snapshot = isolated_services.metrics.latest()
     metric_labels = {
         "source": "endpoint.autoscaler",
         "workspace_id": stub.workspace_id,
@@ -96,18 +95,16 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
     }
     assert (
         metric_value(
-            snapshot.counters,
             "autoscaler_decisions_total",
             **metric_labels,
             decision="scale-up",
         )
         == 1
     )
-    assert metric_value(snapshot.gauges, "autoscaler_current_containers", **metric_labels) == 0
-    assert metric_value(snapshot.gauges, "autoscaler_desired_containers", **metric_labels) == 3
+    assert metric_value("autoscaler_current_containers", **metric_labels) == 0
+    assert metric_value("autoscaler_desired_containers", **metric_labels) == 3
     assert (
         metric_value(
-            snapshot.gauges,
             "autoscaler_signal",
             **metric_labels,
             signal="active_requests",

@@ -252,7 +252,6 @@ connectivity fault.
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
 | Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Terraform owns this client (`deploy/tailnet/main.tf`). Change its tag list and apply; the replacement re-exports both outputs. Minting one in the admin console instead creates a client Terraform does not know about, and the next apply fights it. |
-| Admin scrape token | `.env` | Reissue through the CLI; `/metrics` is admin-gated and must stay so |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
 | Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
 | Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
@@ -279,6 +278,8 @@ Confirm the target belongs to the task before each of these. None can be undone.
 
 ## Not yet covered
 
-- **Prometheus, Alertmanager, alert meanings** — alerting is deferred. Metrics
-  are exposed at the admin-gated `/metrics` and are correctly typed for a
-  scraper; nothing scrapes them yet.
+- **A metrics backend, and alerting on it.** The processes aggregate metrics in
+  memory and push them over OTLP on an interval, to whatever
+  `LAZYCLOUD_TELEMETRY_ENDPOINT` names, with `LAZYCLOUD_TELEMETRY_ENABLED` off by
+  default. Nothing receives them yet. Standing up a collector is the first step;
+  alert meanings come after there is somewhere for them to live.

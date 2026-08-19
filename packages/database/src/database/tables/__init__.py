@@ -69,7 +69,6 @@ from database.tables.images import (
     ImageTable,
 )
 from database.tables.observability import (
-    MetricTable,
     UsageRecordTable,
     WorkerEventTable,
 )
@@ -129,7 +128,6 @@ __all__ = [
     "ImageTable",
     "LogTable",
     "MachineTable",
-    "MetricTable",
     "NamedWorkspacePayloadTable",
     "ObjectTable",
     "PayloadMixin",

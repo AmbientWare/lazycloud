@@ -16,7 +16,7 @@ everything except two prefixes refused before the origin is dialed:
 
 | Refused at the edge | Why |
 | --- | --- |
-| `/metrics` | Admin scrape surface. Prometheus reads it inside the Compose network. |
+| `/metrics` | No route serves this. The rule stays so the path cannot be exposed if one returns. |
 | `/worker-repository/` | Worker RPC. Workers dial the internal or tailnet origin, never the public one. |
 
 Both are also authorized at the origin — the edge rule removes the surface, it
@@ -24,7 +24,7 @@ does not replace the check. Verify with a request that the origin would answer
 differently:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://lazycloud.dev/metrics   # 404 at edge; origin answers 401
+curl -s -o /dev/null -w '%{http_code}\n' https://lazycloud.dev/metrics   # 404 at edge, and 404 at the origin too
 ```
 
 `*.lazycloud.dev` forwards **all** paths: the control plane's host-routing

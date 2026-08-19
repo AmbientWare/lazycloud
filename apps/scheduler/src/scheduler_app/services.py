@@ -364,7 +364,7 @@ class SchedulerAppServices:
             context=context,
             events=events,
             workspace_changes=workspace_changes,
-            metrics=MetricsService(context),
+            metrics=MetricsService(),
             autoscaler_states=AutoscalerStateService(context),
             apps=apps,
             deployments=deployments,

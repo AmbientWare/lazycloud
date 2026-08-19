@@ -2,15 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
 
-from database.records.metrics import (
-    MetricHistogramSample,
-    MetricKind,
-    MetricSample,
-    MetricsLatest,
-    metric_labels_key,
-)
 from database.repositories.common import (
     GlobalTableRepository,
     TableRepositoryConfig,
@@ -18,14 +10,12 @@ from database.repositories.common import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.observability import (
-    MetricTable,
     UsageRecordTable,
     WorkerEventTable,
 )
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
-from shared.timestamps import utc_now
 from shared.usage import (
     UsageAggregation,
     UsageGroupKey,
@@ -431,105 +421,3 @@ def _usage_json_text(session: Session, *path: str) -> ColumnElement[str]:
 
 def _optional_text(value: JsonValue) -> str:
     return value if isinstance(value, str) else ""
-
-
-@dataclass(slots=True)
-class MetricRepository:
-    """Latest metric state for Prometheus exposition and control-loop inspection."""
-
-    session: Session
-
-    def increment_counter(
-        self,
-        name: str,
-        amount: float = 1,
-        *,
-        labels: dict[str, str] | None = None,
-    ) -> MetricSample:
-        row = self._latest_row(MetricKind.Counter, name, metric_labels_key(labels))
-        sample = (
-            MetricSample.model_validate(row.payload)
-            if row is not None
-            else MetricSample(name=name, value=0, labels=labels or {})
-        )
-        sample.value += amount
-        sample.updated_at = utc_now()
-        self._store_latest(MetricKind.Counter, sample, row=row)
-        return sample
-
-    def set_gauge(
-        self,
-        name: str,
-        value: float,
-        *,
-        labels: dict[str, str] | None = None,
-    ) -> MetricSample:
-        row = self._latest_row(MetricKind.Gauge, name, metric_labels_key(labels))
-        sample = MetricSample(name=name, value=value, labels=labels or {}, updated_at=utc_now())
-        self._store_latest(MetricKind.Gauge, sample, row=row)
-        return sample
-
-    def observe_histogram(
-        self,
-        name: str,
-        value: float,
-        *,
-        labels: dict[str, str] | None = None,
-    ) -> MetricHistogramSample:
-        row = self._latest_row(MetricKind.Histogram, name, metric_labels_key(labels))
-        sample = (
-            MetricHistogramSample.model_validate(row.payload)
-            if row is not None
-            else MetricHistogramSample(name=name, labels=labels or {})
-        )
-        sample.count += 1
-        sample.total += value
-        sample.minimum = value if sample.minimum is None else min(sample.minimum, value)
-        sample.maximum = value if sample.maximum is None else max(sample.maximum, value)
-        sample.last = value
-        sample.updated_at = utc_now()
-        self._store_latest(MetricKind.Histogram, sample, row=row)
-        return sample
-
-    def latest(self) -> MetricsLatest:
-        latest = MetricsLatest()
-        for row in self.session.scalars(
-            select(MetricTable).order_by(MetricTable.name.asc(), MetricTable.labels_key.asc())
-        ):
-            match row.kind:
-                case MetricKind.Counter:
-                    latest.counters.append(MetricSample.model_validate(row.payload))
-                case MetricKind.Gauge:
-                    latest.gauges.append(MetricSample.model_validate(row.payload))
-                case MetricKind.Histogram:
-                    latest.histograms.append(MetricHistogramSample.model_validate(row.payload))
-        return latest
-
-    def _latest_row(self, kind: MetricKind, name: str, labels_key: str) -> MetricTable | None:
-        return self.session.scalars(
-            select(MetricTable).where(
-                MetricTable.kind == kind.value,
-                MetricTable.name == name,
-                MetricTable.labels_key == labels_key,
-            )
-        ).first()
-
-    def _store_latest(
-        self,
-        kind: MetricKind,
-        sample: MetricSample | MetricHistogramSample,
-        *,
-        row: MetricTable | None,
-    ) -> None:
-        payload = _JSON_OBJECT_ADAPTER.validate_json(sample.model_dump_json())
-        if row is None:
-            row = MetricTable(
-                id=str(uuid4()),
-                kind=kind.value,
-                name=sample.name,
-                labels_key=metric_labels_key(sample.labels),
-            )
-            self.session.add(row)
-        row.payload = payload
-        row.updated_at = utc_now()
-        self.session.flush()

@@ -146,20 +146,17 @@ def test_function_autoscaler_records_what_it_decided(
         "stub_id": stub.id,
         "kind": StubKind.Function.value,
     }
-    snapshot = services.metrics.latest()
     assert (
         metric_value(
-            snapshot.counters,
             "autoscaler_decisions_total",
             **metric_labels,
             decision="scale-up",
         )
         == 1
     )
-    assert metric_value(snapshot.gauges, "autoscaler_desired_containers", **metric_labels) == 3
+    assert metric_value("autoscaler_desired_containers", **metric_labels) == 3
     assert (
         metric_value(
-            snapshot.gauges,
             "autoscaler_signal",
             **metric_labels,
             signal="unclaimed_tasks",
