@@ -11,17 +11,56 @@ compute providers) is answering a problem this product does not have.
 
 ## Build
 
-- [ ] **Recover a container that stops serving.** Routing now refuses a container
-  that fails its readiness probe, and nothing ever acts on that: a wedged
-  workload stays wedged, silently, until a person notices. Silence is worse than
-  the old behaviour, which at least failed loudly. Decide the owner — the
-  scheduler is the candidate, since it already owns preemption, reclaim, and
-  orphan reconciliation, and is the only party that can also stop billing for a
-  container that is alive but useless. Matters more here than on a curated fleet:
-  a customer's desktop throttles, swaps, and shares its GPU.
-  *Done when:* a container that stops answering its probe is reaped and replaced
-  without a human, its billing stops, and the deployment's own containers are not
-  disturbed.
+- [x] **Readiness gates routing; nothing reaps.** Shipped, and the reaping half is
+  deliberately not built. Recorded at length because the reasoning is the
+  decision, and the obvious next contributor will otherwise rebuild what was
+  removed.
+
+  What ships: a container is asked whether it is serving before it receives
+  traffic. Pods dial the exposed port, or call an HTTP path when the Pod declares
+  `health_check_path`; endpoints and ASGI call the `/health` the runner serves.
+  The value is cold start and scale-up — before this, the first request to a
+  booting container hit a port nothing had bound and errored. Verified against
+  the local stack: a pod sleeping twenty seconds before binding holds the request
+  and then answers, and a declared path returning 404 withholds traffic entirely
+  rather than routing to a workload that is listening but not ready.
+
+  What does not ship, and why. Reaping an unresponsive container was built and
+  then removed. Three reasons, each sufficient:
+
+  - *The structure already reclaims almost everything.* A container that exits, a
+    worker that dies, a machine that vanishes, a start that never completes, a
+    stranded row — all are handled by the scheduler-state TTL, the start
+    deadline, and orphan reconciliation. A container that is merely idle is
+    retired by its keep-warm window and replaced on demand. What remains is only
+    a container wedged while still looking busy.
+  - *The probe cannot see that case where it matters most.* Endpoints and ASGI
+    are probed at `/health`, which the runner answers, so a hung handler with
+    requests piled up in flight replies `200` while serving nothing. The one
+    signal that observes user code is a declared health path, which today only
+    pods can express. So the need and the signal overlap in exactly one place: a
+    pod, with a declared path, wedged while holding connections.
+  - *The mechanism is easy to get dangerously wrong.* The attempt bypassed the
+    keep-warm and in-flight guards every other stop respects, could kill a
+    sandbox a user was attached to, released a poison invocation to wedge each
+    replacement without advancing its attempt count, and — writing the stop
+    reason where the container is stopped — would have corrupted preemption
+    settlement on a path that runs today.
+
+  beta9 (AGPL-3.0) draws the same line and stops earlier: on a failed check it
+  omits the container from the round and re-probes on the next tick
+  (`pkg/abstractions/endpoint/buffer.go`, `pkg/abstractions/pod/proxy.go`). It has
+  no user-declared health check at all; its deeper probes are platform-supplied
+  per workload type. This platform is ahead on the declarative signal and level
+  on gating.
+
+  If this is revisited, the next honest step is to surface a failing container
+  rather than reap it — the detection is the hard half, and enforcement should be
+  added to a signal already proven in production rather than trusted for the
+  first time while it deletes containers. Automatic recovery beyond that needs a
+  signal that does not depend on traffic arriving, which means the worker
+  probing locally and publishing readiness on the container state both routing
+  and scheduling already read.
 
 ## Verify
 
