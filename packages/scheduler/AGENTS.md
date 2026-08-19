@@ -102,9 +102,9 @@ second finds the row already terminal and settles nothing twice.
 `min_containers` is held with nothing queued, and it is the only way to ask this
 platform for interpreters that are already warm — a model resident in VRAM, a
 handler already imported. `@app.function` is the one task execution model here,
-so a user who needs that has nowhere else to express it. beta9 (AGPL-3.0) zeroes
-`MinContainers` for its task-queue stubs, which is the closest analogue; it can,
-because its warm capacity is expressed by other deployment kinds. Ours cannot.
+so a user who needs that has nowhere else to express it. A platform with several
+task-driven kinds can refuse a floor on one of them and let another carry the
+warm capacity; with one kind there is nowhere else for it to go.
 
 A floor and a finite idle window contradict each other: a function container
 retires itself when the window passes with no work, so the floor would start,

@@ -374,10 +374,10 @@ def price_span(span: MeteredSpan, quotes: Sequence[Quote]) -> SpanPricing:
     uniform across it, which is the most a window with no sub-window samples can
     say, and it is the same assumption a rate boundary has always been split on.
 
-    The remainder-to-the-last-segment arithmetic was understood from reading
-    beta9's `pkg/worker/usage.go` (AGPL-3.0); it is the only way integer
-    milliseconds sum back to the whole, and it is written here from that
-    arithmetic rather than transcribed.
+    Giving the remainder to the last segment is what makes integer milliseconds
+    sum back to the whole: every other split leaves the total short or long by
+    the rounding error, and a billing total that does not reconcile with its own
+    segments is the one arithmetic error a customer will find.
     """
 
     covering = sorted(

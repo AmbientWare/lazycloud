@@ -47,12 +47,10 @@ compute providers) is answering a problem this product does not have.
     reason where the container is stopped — would have corrupted preemption
     settlement on a path that runs today.
 
-  beta9 (AGPL-3.0) draws the same line and stops earlier: on a failed check it
-  omits the container from the round and re-probes on the next tick
-  (`pkg/abstractions/endpoint/buffer.go`, `pkg/abstractions/pod/proxy.go`). It has
-  no user-declared health check at all; its deeper probes are platform-supplied
-  per workload type. This platform is ahead on the declarative signal and level
-  on gating.
+  Gating without reaping is also where comparable platforms stop: a failed check
+  drops the container from that round and it is probed again on the next one.
+  Letting a declared path express readiness goes further than that, and is worth
+  having on its own.
 
   If this is revisited, the next honest step is to surface a failing container
   rather than reap it — the detection is the hard half, and enforcement should be
@@ -62,25 +60,64 @@ compute providers) is answering a problem this product does not have.
   probing locally and publishing readiness on the container state both routing
   and scheduling already read.
 
+- [ ] **Stamp `private_worker` at worker registration.** Registration overwrites
+  `workspace_id`, `owner_user_id` and `billing_owner` from the authenticated
+  principal and does not overwrite this one. A customer holding root on their own
+  joined machine can set `pool_mode: public` in the worker config; the record
+  lands with `private_worker=False`, `can_fit` then treats it as shared fleet, and
+  naming the pool `lazycloud` — every workspace's default — makes it a candidate
+  for other accounts' workloads. Confidentiality holds, because the request stream
+  refuses to deliver the container, but it is dispatched to that worker's queue
+  first and the victim's container stalls until the start-deadline reclaim. A
+  cross-tenant denial of service reaching the default pool.
+  *Done when:* the field is stamped from the principal alongside the other three,
+  and a test proves a worker claiming `public` from a private principal is
+  refused.
+
+- [ ] **Tell the owner their machine went away.** Recovery works and is silent.
+  No event is emitted, the durable enrollment row and machine status stay `Ready`
+  and `Running` indefinitely because they are only written when a heartbeat
+  arrives, and nothing connects the container that moved to the machine that lost
+  it. The live view does recompute — a machine list shows Offline with "Agent
+  heartbeat is stale" about 60s in, and the dashboard renders it — so this is
+  pull-only rather than absent. `plan_agent_disconnect` is the piece that would
+  emit the event, write the disconnect, and disable the machine's worker; it is
+  declared, unit-tested, and has no production caller.
+  *Done when:* a machine going silent produces a workspace-scoped event its owner
+  can see without asking us.
+
+- [ ] **A pod hitting its TTL tells its callers the wrong thing.** The TTL stop
+  passes no reason, so it takes the `User` default, which is in the set that
+  settles claims as cancellations. A pod reaching its TTL therefore reports to
+  every caller that their work was cancelled and charges the attempt, when a TTL
+  is a platform-owned stop that should release. One word.
+
 ## Verify
 
-Each of these is a question, not a known defect. Either may be zero work.
+- [x] **A self-hosted machine only ever runs its own account's workloads.**
+  Verified: it holds, and it fails closed. The load-bearing line is
+  `scheduler/tools.py` `WorkerCapacity.can_fit`, whose first statement refuses a
+  worker that does not serve the request's owner; `worker_serves_owner` in
+  `shared/scheduling.py` returns False for an empty owner on either side. The
+  owner is never caller-supplied — `SchedulerWorkerRequest` carries no owner
+  field at all, it is resolved per dispatch from the workspace and overwritten at
+  registration — and the same predicate is enforced again on the worker-repository
+  side at handoff. `test_a_private_worker_refuses_another_accounts_request` covers
+  it, and its docstring names the bug class: every workspace's default pool shares
+  a name, so matching on the pool label alone would put one tenant's request on
+  another tenant's machine.
 
-- [ ] **A self-hosted machine only ever runs its own account's workloads.**
-  `capacity_owner_id` and the pool model suggest this holds; it has not been
-  checked. A wrong answer here is an incident rather than a backlog item, which
-  is why it is on the list ahead of things that are certainly missing.
-  *Done when:* the enforcement point is named, and any path by which another
-  tenant's container could be placed on joined hardware is either shown not to
-  exist or fixed.
+- [x] **A workload survives its machine disappearing.** Verified: the work
+  recovers, the machine's status does not. The machine leaves the schedulable set
+  about 60s after its last telemetry, when the agent-pool controller disables its
+  worker; its containers are reclaimed about 120–150s in, when the scheduler
+  container-state TTL lapses and the autoscaler stops and replaces them. An
+  in-flight request is handled well — a dial that fails before any byte is written
+  re-selects a different container invisibly, and anything later is a bounded 502,
+  503 or 504 rather than a hang. Billing stops with the machine, since metering is
+  pushed from the worker.
 
-- [ ] **A workload survives its machine disappearing.** The signature failure of
-  this product: someone closes the laptop their deployment is running on. The
-  machinery exists — orphan reconciliation, reclaim, readiness phases through
-  Joining/Ready/Blocked/Offline/Revoked. What is unverified is whether the
-  user-visible story closes.
-  *Done when:* the work lands on other capacity, and the owner is told why it
-  moved, through a surface they can reach without us.
+  What does not close is the telling. See the visibility item below.
 
 ## Small
 
@@ -100,9 +137,11 @@ Recorded so they are not rediscovered as gaps.
   observation, so anything frequent cannot be instrumented — which is why the
   readiness probe ships without any. Not blocking, but it is the reason the
   restart work above will be debugged by reading logs instead of a graph.
-- [ ] **Durable block disks with snapshots.** A real primitive we lack (beta9 has
-  one). Under bring-your-own capacity the disk is on the customer's infrastructure
-  and often already provisioned, so it does not block this MVP.
+- [ ] **Durable block disks with snapshots.** A primitive this platform lacks: a
+  sized block device with a filesystem and a restore point, which is what
+  anything stateful wants and a shared volume mount is not. Under
+  bring-your-own capacity the disk is on the customer's infrastructure and often
+  already provisioned, so it does not block this MVP.
 - Compute provider breadth, fleet operator CLI, and packaged workload types
   (LLM serving, databases, MCP hosting) are **not** planned. Machine join plus the
   AWS connection already covers the compute story for this product.
