@@ -22,6 +22,7 @@ from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
     RuntimeContainerStatus,
+    StopContainerReason,
     WorkerStartupKind,
 )
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
@@ -447,7 +448,11 @@ class PodControlService:
             stub = self.control_plane.get_stub(container.stub_id)
             if stub.kind is not StubKind.Pod:
                 continue
-            record = self.services.containers.stop(container.id)
+            # Named, because the default is `User` and settles the invocations this
+            # container held as cancellations: the caller is told they stopped work
+            # they did not stop, and charged the attempt. A TTL is the platform's
+            # own deadline, so the work is released and runs somewhere else.
+            record = self.services.containers.stop(container.id, reason=StopContainerReason.Ttl)
             self._delete_keep_warm_lock(
                 pod_keep_warm_lock_key(container.workspace_id, stub.id, container.id)
             )
