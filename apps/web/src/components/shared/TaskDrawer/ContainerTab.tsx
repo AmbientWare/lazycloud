@@ -8,15 +8,10 @@ import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { StopCause } from "@/components/shared/StopCause";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, ContainerMetricsPoint, Task } from "@/lib/api/schemas";
-import {
-  durationBetween,
-  exactTime,
-  formatBytes,
-  relativeTime,
-  stopReasonLabel,
-} from "@/lib/format";
+import { durationBetween, exactTime, formatBytes, relativeTime } from "@/lib/format";
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
@@ -77,7 +72,6 @@ function ContainerDetails({
   }, [live, queryClient, workspaceId, containerId]);
 
   const running = container.status === "running";
-  const stopCause = stopReasonLabel(container.termination_reason, container.status);
   const command = container.command.join(" ");
   const ports = [...new Set(Object.values(container.ports))].sort((a, b) => a - b);
   const facts = [
@@ -141,15 +135,11 @@ function ContainerDetails({
             />
           ))}
         </FactGrid>
-        {stopCause ? (
-          // Its own full-width line rather than a cell in the grid above: a
-          // `Fact` truncates, and a third of a drawer clips this to its first
-          // few words — on a phone there is not even a hover to recover it.
-          <p className="mt-4 text-sm text-muted-foreground">
-            <span className="micro-label mr-2">Stopped because</span>
-            {stopCause}
-          </p>
-        ) : null}
+        <StopCause
+          terminationReason={container.termination_reason}
+          status={container.status}
+          className="mt-4"
+        />
       </section>
 
       <section className="border-t border-border pt-4" aria-labelledby="container-compute-heading">

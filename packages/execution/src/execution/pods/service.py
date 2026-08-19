@@ -761,7 +761,10 @@ class PodControlService:
 
     def sandbox_terminate(self, container_id: str) -> None:
         container, _stub = self._sandbox_container(container_id)
-        stopped = self.services.containers.stop(container.id)
+        stopped = self.services.containers.stop(
+            container.id,
+            reason=StopContainerReason.User,
+        )
         self._delete_keep_warm_lock(
             pod_keep_warm_lock_key(container.workspace_id, container.stub_id or "", container.id)
         )

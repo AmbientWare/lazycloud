@@ -120,6 +120,7 @@ from shared.compute_policy import (
     ComputeUnitRecord,
     MachinePool,
 )
+from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import resolve_authorized, resolve_max_pending_tasks, resolve_retries
 from shared.deployments import DeploymentKind
@@ -556,7 +557,12 @@ class GatewayControlService:
 
     def _stop_container_by_id(self, container_id: str) -> None:
         container = self.services.containers.get(container_id)
-        stopped = self.services.containers.stop(container.id)
+        # Named the same as the API composition of this operation: draining a
+        # worker is an operator stopping it, whichever process ran the drain.
+        stopped = self.services.containers.stop(
+            container.id,
+            reason=StopContainerReason.Admin,
+        )
         self._stop_worker_container(stopped)
 
     def _stop_worker_container(self, container: ContainerRecord) -> None:

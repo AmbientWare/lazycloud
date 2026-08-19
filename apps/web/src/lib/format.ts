@@ -155,7 +155,7 @@ function isTimestamp(value: string): boolean {
  * it also means the reason has not arrived, and a container still running
  * would otherwise be handed a cause.
  */
-const STOP_REASONS: Record<string, string> = {
+const STOP_REASONS: Record<string, string | undefined> = {
   TTL: "It reached its time limit",
   USER: "It was stopped from this account",
   SCHEDULER: "The platform moved the work",

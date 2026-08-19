@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Archive, Camera, Loader2, Square } from "lucide-react";
 
 import { CopyId } from "@/components/shared/CopyId";
+import { StopCause } from "@/components/shared/StopCause";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
@@ -16,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { ContainerDetail } from "@/lib/api/schemas";
-import { durationBetween, relativeTime, stopReasonLabel } from "@/lib/format";
+import { durationBetween, relativeTime } from "@/lib/format";
 import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
@@ -209,7 +210,6 @@ function SandboxActions({
 }
 
 function SandboxFacts({ record }: { record: ContainerDetail }) {
-  const stopCause = stopReasonLabel(record.termination_reason, record.status);
   return (
     <>
       <FactGrid columns={2} className="gap-x-5 gap-y-3 text-xs">
@@ -230,12 +230,11 @@ function SandboxFacts({ record }: { record: ContainerDetail }) {
         <Fact label="Created" value={relativeTime(record.created_at)} />
         <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
       </FactGrid>
-      {stopCause ? (
-        <p className="mt-3 text-xs text-muted-foreground">
-          <span className="micro-label mr-2">Stopped because</span>
-          {stopCause}
-        </p>
-      ) : null}
+      <StopCause
+        terminationReason={record.termination_reason}
+        status={record.status}
+        className="mt-3 text-xs"
+      />
     </>
   );
 }

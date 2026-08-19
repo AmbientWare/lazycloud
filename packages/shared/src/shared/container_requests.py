@@ -93,8 +93,10 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
     StopContainerReason.Unfunded: "the account has no payment method on file",
     StopContainerReason.Unknown: "",
 }
-"""Total by construction: a reason added without a phrase fails on first use
-rather than quietly reverting the message to naming no cause at all."""
+
+if set(_STOP_REASON_DESCRIPTIONS) != set(StopContainerReason):
+    _missing = sorted(set(StopContainerReason) - set(_STOP_REASON_DESCRIPTIONS))
+    raise RuntimeError(f"stop reasons without a description: {_missing}")
 
 
 class ContainerShutdownTarget(ContractModel):

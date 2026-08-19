@@ -596,40 +596,51 @@ class ContainerService:
         unstated reason as a user stop, and still does, but that default was
         only ever choosing whether to cancel the claim or release it. Told to
         the person whose container it was, it would assert they stopped it
-        themselves — so a caller that named no reason states none.
+        themselves — so a caller that named no reason states none, all the way
+        out to the worker, which reports back whatever it was told.
         """
 
         record = self.get(container_id)
-        settlement_reason = reason or StopContainerReason.User
-        state_changed = record.status not in TERMINAL_CONTAINER_STATUSES
-        if state_changed:
-            cancellation = self._cancel_scheduler_request(record.id)
-            if cancellation.worker_stop_required:
-                self._send_stop_event(
-                    record.id,
-                    worker_id=cancellation.worker_id,
-                    reason=settlement_reason,
-                )
-            record.status = ContainerStatus.Stopped
-            record.finished_at = utc_now()
+        settlement_reason = StopContainerReason.User if reason is None else reason
+        if record.status in TERMINAL_CONTAINER_STATUSES:
+            # Already over. Announcing would write a fresh cause across the one
+            # that actually ended it, and rewriting the row would cost a session
+            # to change nothing.
+            return record
+        cancellation = self._cancel_scheduler_request(record.id)
+        if cancellation.worker_stop_required:
+            self._send_stop_event(
+                record.id,
+                worker_id=cancellation.worker_id,
+                # Not the settlement default: the worker echoes this back as the
+                # row's reason, so sending `User` here would put the customer's
+                # name on a stop nobody attributed to them.
+                reason=StopContainerReason.Unknown if reason is None else reason,
+            )
+        with self.context.database.session() as session:
+            containers = ContainerRepository(session)
+            current = containers.get_across_workspaces(container_id)
+            if current is None:
+                raise NotFoundError(f"container not found: {container_id}")
+            if current.status in TERMINAL_CONTAINER_STATUSES:
+                # The worker finished it while this was deciding. Its report is
+                # what actually happened, and a full-payload write from the read
+                # above would put back a stale exit code over the top of it.
+                return current
+            current.status = ContainerStatus.Stopped
+            current.finished_at = utc_now()
             # Written here rather than left to the worker's exit report. A
             # container that never reached a worker — still pending, or its
             # worker already gone — is never reported on, and the reason it was
             # stopped for is the one its owner most needs.
             if reason is not None:
-                record.termination_reason = reason
-        with self.context.database.session() as session:
-            updated = ContainerRepository(session).records.upsert(
-                record,
-                workspace_id=record.workspace_id,
-                name=record.name,
-                status=record.status.value,
+                current.termination_reason = reason
+            updated = containers.records.upsert(
+                current,
+                workspace_id=current.workspace_id,
+                name=current.name,
+                status=current.status.value,
             )
-        if not state_changed:
-            # Nothing stopped, so nothing to announce. Saying otherwise would
-            # put a cause in the workspace history for a container that was
-            # already terminal, over the top of the one that actually ended it.
-            return updated
         # After the row is terminal, never before. A claim is refused from a
         # container the record calls terminal, so settling first opens a
         # window where the work is free and this container still reads as
@@ -639,19 +650,18 @@ class ContainerService:
         # orders them instead.
         self._settle_claimed_work(updated, reason=settlement_reason)
         self._release_runtime_state(updated)
-        cause = reason.describe() if reason is not None else ""
+        cause = "" if reason is None else reason.describe()
         self.events.emit(
             "container.stopped",
             resource_type="container",
-            resource_id=record.id,
-            message=f"stopped container {record.name}" + (f": {cause}" if cause else ""),
-            level=(
-                EventLevel.Warning if reason is StopContainerReason.Unfunded else EventLevel.Info
-            ),
-            # The reason the stop was asked for, which is not always the one the
-            # row settles on: the worker reports what it actually observed.
-            data={"stop_reason": settlement_reason.value},
-            workspace_id=record.workspace_id,
+            resource_id=updated.id,
+            message=f"stopped container {updated.name}" + (f": {cause}" if cause else ""),
+            # What the stop was asked for, which is not always what the row
+            # settles on: the worker reports what it actually observed. Absent
+            # when the caller named nothing, so this never invents a cause the
+            # message declines to give.
+            data={"stop_reason": "" if reason is None else reason.value},
+            workspace_id=updated.workspace_id,
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
         return updated
