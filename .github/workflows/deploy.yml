@@ -101,6 +101,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      # Not present on the runner image, and the failure is `command not found`
+      # rather than anything that names Terraform.
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
+
       - name: Publish the bundle
         run: |
           set -euo pipefail
