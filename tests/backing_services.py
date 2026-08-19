@@ -16,6 +16,7 @@ reports at the end what it did not prove, instead of printing a dot for it.
 from __future__ import annotations
 
 import os
+from typing import NoReturn
 
 import pytest
 from sqlalchemy.engine import URL, make_url
@@ -72,6 +73,6 @@ def unproven_services() -> list[str]:
     return sorted(_unproven)
 
 
-def _skip(variable: str, needs: str) -> None:
+def _skip(variable: str, needs: str) -> NoReturn:
     _unproven.add(variable)
     pytest.skip(f"{variable} is unset: this proof needs {needs}")

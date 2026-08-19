@@ -61,16 +61,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         failed = [index for index, answer in enumerate(answers) if answer is None]
         if failed:
             raise RuntimeError(f"map yielded no result for inputs {failed}")
-        for index, answer in enumerate(answers):
+        # Re-bound rather than asserted per use: `map` yields an optional result
+        # per input, and every read below is only reachable once none is missing.
+        results: list[dict[str, str | int | float]] = [
+            answer for answer in answers if answer is not None
+        ]
+        for index, answer in enumerate(results):
             if answer["value"] != index * index:
                 raise RuntimeError(
                     f"input {index} came back as {answer['value']}: map answered out of order"
                 )
 
-        containers = {str(answer["container_id"]) for answer in answers}
+        containers = {str(answer["container_id"]) for answer in results}
         # Paired with the container: pids are per namespace, so the same number
         # in two containers is two workers, not one.
-        workers = {(str(answer["container_id"]), int(answer["pid"])) for answer in answers}
+        workers = {(str(answer["container_id"]), int(answer["pid"])) for answer in results}
         if "" in containers:
             raise RuntimeError("an input was served by a container that did not name itself")
         if len(containers) > MAX_CONTAINERS:

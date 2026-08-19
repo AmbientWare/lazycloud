@@ -19,6 +19,10 @@ app = App(APP_NAME)
 # and every slot afterwards sees the same object. Its identity is the evidence —
 # a process per slot would report a different one from each.
 _LOADED: dict[str, object] = {}
+"""Whatever the loader put here, read back by the assertions below.
+
+`loaded_by` is the pid that ran the loader, which is what proves a warm
+interpreter served a later invocation rather than a fresh one."""
 
 
 def load_once(context: object) -> None:
@@ -32,6 +36,13 @@ def load_once(context: object) -> None:
     del context
     _LOADED["model"] = object()
     _LOADED["loaded_by"] = os.getpid()
+
+
+def _loaded_by() -> int:
+    """The pid that ran the loader, or 0 before it has."""
+
+    value = _LOADED.get("loaded_by")
+    return value if isinstance(value, int) else 0
 
 
 @app.function(
@@ -60,7 +71,7 @@ def shared(value: int) -> dict[str, str | int | float]:
         "pid": os.getpid(),
         "thread": threading.get_ident(),
         "model_id": id(_LOADED.get("model")),
-        "loaded_by": int(_LOADED.get("loaded_by") or 0),
+        "loaded_by": _loaded_by(),
         "container_id": os.environ.get("CONTAINER_ID", ""),
         "task_id": current_task_id(),
         # One interpreter means one clock, so these are directly comparable
