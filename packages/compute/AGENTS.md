@@ -23,6 +23,12 @@ coordination primitives.
   authenticates goes through the workspace secret cipher. Know what that cipher
   actually protects against before relying on it, and say so where it is used.
 
+Provider breadth, a fleet operator CLI, and packaged workload types — LLM
+serving, databases, MCP hosting — are deliberately not planned. Machine join
+plus the AWS connection covers the compute story this product sells, and each of
+those three answers a problem a self-hosted engine has and a hosted platform
+does not. Absence here is the shape of the product, not a backlog.
+
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
 `workspace -> owner -> connection` through `get_for_workspace_owner`, and anything
