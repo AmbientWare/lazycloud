@@ -84,6 +84,20 @@ class S3ObjectStoreSettings(BaseSettings):
             )
         return values
 
+    @field_validator("endpoint_url", "presigned_endpoint_url", mode="before")
+    @classmethod
+    def empty_endpoint_means_aws(cls, value: object) -> object:
+        """An empty endpoint names AWS itself, which boto3 spells as `None`.
+
+        A deployment says "this store is S3" by setting the variable to the empty
+        string: the value has to be present, because absence is rejected, and there
+        is no address to give. Passed through, boto3 reads the empty string as an
+        address and fails with `Invalid endpoint:` naming nothing at all.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("credential_expires_at", mode="before")
     @classmethod
     def normalize_optional_credential_expiration(
