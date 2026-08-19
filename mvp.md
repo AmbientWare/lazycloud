@@ -129,8 +129,6 @@ compute providers) is answering a problem this product does not have.
   hardware we can only explain it. Cheap, and disproportionately what determines
   support load.
 
-- [ ] **Give function endpoints a reachable `/health`.** The runner serves it; the
-  routes declare no subpath, so nothing can call it. ASGI endpoints already work.
 
 ## Deferred, deliberately
 
@@ -145,6 +143,13 @@ Recorded so they are not rediscovered as gaps.
   anything stateful wants and a shared volume mount is not. Under
   bring-your-own capacity the disk is on the customer's infrastructure and often
   already provisioned, so it does not block this MVP.
+- **A reachable `/health` on function endpoints** was considered and refused. The
+  runner serves the route; the endpoint router declares no subpath, so nothing
+  can call it. Reaching it means accepting arbitrary subpaths on a surface whose
+  contract is `POST /` with a payload — changing what a deployed endpoint answers
+  in order to expose a probe. ASGI routes a subpath already and does not have the
+  problem. `apps/api/src/api/server/routers/endpoints.py` records the limit where
+  a reader meets it.
 - Compute provider breadth, fleet operator CLI, and packaged workload types
   (LLM serving, databases, MCP hosting) are **not** planned. Machine join plus the
   AWS connection already covers the compute story for this product.
