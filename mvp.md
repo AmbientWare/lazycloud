@@ -60,7 +60,7 @@ compute providers) is answering a problem this product does not have.
   probing locally and publishing readiness on the container state both routing
   and scheduling already read.
 
-- [ ] **Stamp `private_worker` at worker registration.** Registration overwrites
+- [x] **Stamp `private_worker` at worker registration.** Registration overwrites
   `workspace_id`, `owner_user_id` and `billing_owner` from the authenticated
   principal and does not overwrite this one. A customer holding root on their own
   joined machine can set `pool_mode: public` in the worker config; the record
@@ -70,9 +70,9 @@ compute providers) is answering a problem this product does not have.
   refuses to deliver the container, but it is dispatched to that worker's queue
   first and the victim's container stalls until the start-deadline reclaim. A
   cross-tenant denial of service reaching the default pool.
-  *Done when:* the field is stamped from the principal alongside the other three,
-  and a test proves a worker claiming `public` from a private principal is
-  refused.
+  Done: stamped from the principal beside the other three, with
+  `test_a_joined_machine_cannot_register_itself_into_the_shared_fleet` proving a
+  joined machine that registers itself public is stored private.
 
 - [ ] **Tell the owner their machine went away.** Recovery works and is silent.
   No event is emitted, the durable enrollment row and machine status stay `Ready`
@@ -86,11 +86,14 @@ compute providers) is answering a problem this product does not have.
   *Done when:* a machine going silent produces a workspace-scoped event its owner
   can see without asking us.
 
-- [ ] **A pod hitting its TTL tells its callers the wrong thing.** The TTL stop
+- [x] **A pod hitting its TTL names the platform as the reason.** The TTL stop
   passes no reason, so it takes the `User` default, which is in the set that
   settles claims as cancellations. A pod reaching its TTL therefore reports to
   every caller that their work was cancelled and charges the attempt, when a TTL
-  is a platform-owned stop that should release. One word.
+  is a platform-owned stop that should release. Done — though narrower than it
+  reads: `stop` records no reason on the row and a pod holds no task claims
+  today, so nothing observable changes yet. It states the rule where the next
+  reader will find it rather than fixing a live symptom.
 
 ## Verify
 
