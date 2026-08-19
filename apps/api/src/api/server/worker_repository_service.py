@@ -2430,7 +2430,14 @@ class WorkerRepositoryService:
                 container.finished_at,
                 container.preemption_settled_at,
             )
-            container.termination_reason = termination_reason
+            # Never back to Unknown. Several worker paths report it as a
+            # placeholder, and the row may already hold the reason the stop was
+            # asked for — which is the one the customer is owed.
+            if (
+                termination_reason is not StopContainerReason.Unknown
+                or container.termination_reason is StopContainerReason.Unknown
+            ):
+                container.termination_reason = termination_reason
             if container.status is ContainerStatus.Stopped:
                 container.exit_code = exit_code
                 container.started_at = container.started_at or now

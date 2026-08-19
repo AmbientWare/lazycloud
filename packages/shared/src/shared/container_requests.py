@@ -71,24 +71,30 @@ class StopContainerReason(StringEnum):
         whether their work was interrupted by them, by us, or by their bill,
         and each answer sends them somewhere different.
 
+        Short, because it is read in a table cell as often as in a sentence.
+
         `Unknown` describes nothing on purpose. It is the column default, so it
         also means the reason has not arrived yet, and a container that is
         simply still running would otherwise be given a cause.
         """
 
-        return _STOP_REASON_DESCRIPTIONS.get(self, "")
+        return _STOP_REASON_DESCRIPTIONS[self]
 
 
-_STOP_REASON_DESCRIPTIONS = {
-    StopContainerReason.Ttl: "it reached the time limit set for it",
+_STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
+    StopContainerReason.Ttl: "it reached its time limit",
     StopContainerReason.User: "it was stopped from this account",
-    StopContainerReason.Scheduler: "the platform moved the work elsewhere",
-    StopContainerReason.Preempted: "the machine running it was reclaimed",
-    StopContainerReason.Admin: "an operator stopped it",
-    StopContainerReason.Unfunded: (
-        "the account has no payment method and has spent its included usage"
-    ),
+    StopContainerReason.Scheduler: "the platform moved the work",
+    StopContainerReason.Preempted: "its machine was reclaimed",
+    # Not "an operator stopped it". A worker taking SIGTERM for an ordinary
+    # redeploy stops everything it holds under this reason, and naming a person
+    # for routine churn tells the customer something untrue.
+    StopContainerReason.Admin: "the platform stopped it",
+    StopContainerReason.Unfunded: "the account has no payment method on file",
+    StopContainerReason.Unknown: "",
 }
+"""Total by construction: a reason added without a phrase fails on first use
+rather than quietly reverting the message to naming no cause at all."""
 
 
 class ContainerShutdownTarget(ContractModel):
