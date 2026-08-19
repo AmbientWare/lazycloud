@@ -46,7 +46,6 @@ from compute.state import (
 from compute.telemetry import (
     AGENT_HEARTBEAT_TIMEOUT_SECONDS,
     AgentDisconnectAction,
-    AgentDisconnectPlan,
     AgentMetricUpdatePlan,
     PoolTelemetryState,
     agent_machine_last_seen,
@@ -72,6 +71,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
 )
+from database.repositories.execution import EventRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.tailnet_cleanup import DatabaseTailnetCleanupStore
@@ -196,6 +196,7 @@ from shared.source_cache_cleanup import (
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record_id
+from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
 from worker.container_client import models
 from worker.container_client.scheduler import SchedulerContainerClientFactory
@@ -2680,9 +2681,7 @@ class GatewayControlService:
                 continue
             if disconnected is None:
                 continue
-            state, plan = disconnected
-            self._emit_agent_disconnected(state, plan.reason, now=current_time)
-            marked.append(state.machine_id)
+            marked.append(disconnected.machine_id)
         return marked
 
     def _mark_agent_disconnected(
@@ -2690,7 +2689,7 @@ class GatewayControlService:
         candidate: ComputeMachineEnrollmentRecord,
         *,
         now: datetime,
-    ) -> tuple[ComputeAgentTokenState, AgentDisconnectPlan] | None:
+    ) -> ComputeAgentTokenState | None:
         """Write the disconnect if the locked row still says the machine is gone.
 
         Narrow on purpose: only the disconnect and the phase it implies. The
@@ -2743,8 +2742,9 @@ class GatewayControlService:
                     ),
                     workspace_id=state.workspace_id,
                 )
+            self._write_agent_disconnected_event(session, state, plan.reason, now=now)
         self.compute_states.save_agent_token_state(state)
-        return state, plan
+        return state
 
     def _record_disconnect_failure(
         self,
@@ -2777,28 +2777,39 @@ class GatewayControlService:
                 },
             )
 
-    def _emit_agent_disconnected(
+    def _write_agent_disconnected_event(
         self,
+        session: Session,
         state: ComputeAgentTokenState,
         reason: str,
         *,
         now: datetime,
     ) -> None:
+        """Tell the owner in the transaction that writes the disconnect.
+
+        The disconnect is what takes this machine out of the next scan, so a
+        telling that failed after it committed is never retried by anything.
+        Written on the caller's session, the two land together or neither does.
+        """
+
         telemetry = agent_telemetry_state(state)
         last_seen = agent_machine_last_seen(telemetry)
         silence = agent_silence_description(telemetry, now=now)
-        self.services.events.emit(
-            "agent.disconnected",
-            resource_type="agent",
-            resource_id=state.machine_id,
-            message=f"machine {state.machine_id} stopped reporting {silence} ago",
-            level=EventLevel.Warning,
-            data={
-                "machine_id": state.machine_id,
-                "pool": state.pool,
-                "capacity_owner_id": state.capacity_owner_id,
-                "last_seen_at": last_seen.isoformat() if last_seen is not None else None,
-                "reason": reason,
+        data: dict[str, JsonValue] = {
+            "machine_id": state.machine_id,
+            "pool": state.pool,
+            "capacity_owner_id": state.capacity_owner_id,
+            "last_seen_at": last_seen.isoformat() if last_seen is not None else None,
+            "reason": reason,
+        }
+        EventRepository(session).records.create_across_workspaces(
+            {
+                "action": "agent.disconnected",
+                "level": EventLevel.Warning.value,
+                "resource_type": "agent",
+                "resource_id": state.machine_id,
+                "message": f"machine {state.machine_id} stopped reporting {silence} ago",
+                "data": data,
             },
             workspace_id=state.workspace_id,
         )
