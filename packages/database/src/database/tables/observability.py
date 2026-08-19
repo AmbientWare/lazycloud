@@ -6,7 +6,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
-    UniqueConstraint,
     literal_column,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -72,17 +71,3 @@ class UsageRecordTable(IdPayloadTable, DatabaseBase):
     resource_id: Mapped[str] = mapped_column(String(160), nullable=False)
     metric: Mapped[str] = mapped_column(String(120), nullable=False)
     quantity: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-
-
-class MetricTable(IdPayloadTable, DatabaseBase):
-    """Latest state per metric: one row per (kind, name, labels_key)."""
-
-    __tablename__ = "metrics"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("kind", "name", "labels_key", name="uq_metrics_kind_name_labels"),
-        Index("ix_metrics_kind_name", "kind", "name"),
-    )
-
-    kind: Mapped[str] = mapped_column(String(40), nullable=False)
-    name: Mapped[str] = mapped_column(String(240), nullable=False)
-    labels_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")

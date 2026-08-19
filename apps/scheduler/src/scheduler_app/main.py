@@ -15,9 +15,11 @@ from networking.settings import (
     TailnetRuntimeSettings,
 )
 from observability.settings import (
+    TelemetrySettings,
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
+from observability.telemetry import setup_telemetry
 from provider_clients.release import resolve_deployment_release
 from shared.app_identity import SCHEDULER_PROCESS_NAME
 from shared.process_liveness import HeartbeatFile, heartbeat_path
@@ -298,19 +300,28 @@ def build_scheduler_runtime(
 def main(argv: list[str] | None = None) -> None:
     args = parse_scheduler_args(argv)
     gateway_settings = GatewaySettings()
-    result = run_scheduler(
-        runtime=build_scheduler_runtime(
-            public_gateway_http_url=gateway_settings.public_http_url,
-            runtime_callback_http_url=gateway_settings.runtime_callback_http_url,
+    # The autoscalers record here, not in the API, so this process needs its own
+    # meter provider. Without one every `autoscaler_*` and `worker_pool_*` metric
+    # is written to a no-op instrument and never leaves the host.
+    telemetry = setup_telemetry(TelemetrySettings().to_config(service_name=SCHEDULER_PROCESS_NAME))
+    try:
+        result = run_scheduler(
+            runtime=build_scheduler_runtime(
+                public_gateway_http_url=gateway_settings.public_http_url,
+                runtime_callback_http_url=gateway_settings.runtime_callback_http_url,
+                interval_seconds=args.interval_seconds,
+            ),
             interval_seconds=args.interval_seconds,
-        ),
-        interval_seconds=args.interval_seconds,
-        container_limit=args.container_limit,
-        once=args.once,
-        include_cron_jobs=args.include_cron_jobs,
-        include_containers=args.include_containers,
-        heartbeat_file=args.heartbeat_file,
-    )
+            container_limit=args.container_limit,
+            once=args.once,
+            include_cron_jobs=args.include_cron_jobs,
+            include_containers=args.include_containers,
+            heartbeat_file=args.heartbeat_file,
+        )
+    finally:
+        # Flushes what the last interval has not exported yet, which is most of a
+        # `--once` run.
+        telemetry.shutdown()
     if result is not None:
         print(json.dumps(result.to_dict(), sort_keys=True))
 

@@ -945,7 +945,7 @@ class ApiServices(ApiServiceCore):
         volumes = VolumeService(context, workspace_changes=workspace_changes)
         scheduler_workloads = ApiSchedulerWorkloadControl(control_plane)
         agents = AgentService(context, workspace_changes=workspace_changes)
-        metrics = MetricsService(context)
+        metrics = MetricsService()
         worker_events = WorkerEventService(context)
         checkpoints = CheckpointService(
             context,

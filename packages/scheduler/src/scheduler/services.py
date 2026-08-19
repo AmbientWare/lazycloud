@@ -6,7 +6,6 @@ from typing import Protocol
 
 from compute.service import ComputeService
 from database.records.apps import AppRecord, StubRecord
-from database.records.metrics import MetricSample
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
@@ -73,7 +72,7 @@ class SchedulerMetricsService(Protocol):
         amount: float = 1,
         *,
         labels: dict[str, str] | None = None,
-    ) -> MetricSample: ...
+    ) -> None: ...
 
     def set_gauge(
         self,
@@ -81,7 +80,7 @@ class SchedulerMetricsService(Protocol):
         value: float,
         *,
         labels: dict[str, str] | None = None,
-    ) -> MetricSample: ...
+    ) -> None: ...
 
 
 class SchedulerAutoscalerStateService(Protocol):

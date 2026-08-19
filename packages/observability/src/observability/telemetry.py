@@ -13,6 +13,7 @@ from shared.contracts import ContractModel
 
 DEFAULT_OTLP_HTTP_ENDPOINT = "http://localhost:4318"
 DEFAULT_TRACE_EXPORT_PATH = "/v1/traces"
+DEFAULT_METRIC_EXPORT_PATH = "/v1/metrics"
 DEFAULT_METER_INTERVAL_SECONDS = 60.0
 DEFAULT_TRACE_INTERVAL_SECONDS = 5.0
 DEFAULT_EXPORT_TIMEOUT_SECONDS = 10.0
@@ -20,7 +21,7 @@ DEFAULT_EXPORT_TIMEOUT_SECONDS = 10.0
 
 class TelemetryExporterKind(StrEnum):
     OtlpHttpTrace = "otlp-http-trace"
-    ConsoleMetric = "console-metric"
+    OtlpHttpMetric = "otlp-http-metric"
     ConsoleLog = "console-log"
 
 
@@ -97,6 +98,7 @@ class TelemetryConfig(ContractModel):
 class TelemetryEndpointPlan(ContractModel):
     raw_endpoint: str
     trace_export_url: str
+    metric_export_url: str
     security: TelemetryTransportSecurity
     host: str
     port: int | None = None
@@ -167,7 +169,7 @@ def build_telemetry_plan(config: TelemetryConfig) -> TelemetrySetupPlan:
     if config.export_traces:
         exporters.append(TelemetryExporterKind.OtlpHttpTrace)
     if config.export_metrics:
-        exporters.append(TelemetryExporterKind.ConsoleMetric)
+        exporters.append(TelemetryExporterKind.OtlpHttpMetric)
     if config.export_logs:
         exporters.append(TelemetryExporterKind.ConsoleLog)
 
@@ -212,13 +214,23 @@ def plan_telemetry_endpoint(endpoint: str) -> TelemetryEndpointPlan:
         msg = "telemetry endpoint must be an http or https URL"
         raise ValueError(msg)
 
-    path = parsed.path.rstrip("/") or DEFAULT_TRACE_EXPORT_PATH
-    if path == "/" or path == "":
-        path = DEFAULT_TRACE_EXPORT_PATH
-    elif not path.endswith(DEFAULT_TRACE_EXPORT_PATH):
-        path = f"{path}{DEFAULT_TRACE_EXPORT_PATH}"
+    # Both signals hang off one base, so an endpoint already naming a signal path
+    # still yields the right URL for the other. Someone who configures the trace
+    # URL directly gets metrics at the sibling path rather than at
+    # `/v1/traces/v1/metrics`.
+    base = parsed.path.rstrip("/")
+    for signal_path in (DEFAULT_TRACE_EXPORT_PATH, DEFAULT_METRIC_EXPORT_PATH):
+        if base.endswith(signal_path):
+            base = base[: -len(signal_path)]
+            break
 
-    trace_url = urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
+    def signal_url(signal_path: str) -> str:
+        return urlunparse(
+            parsed._replace(path=f"{base}{signal_path}", params="", query="", fragment="")
+        )
+
+    trace_url = signal_url(DEFAULT_TRACE_EXPORT_PATH)
+    metric_url = signal_url(DEFAULT_METRIC_EXPORT_PATH)
     security = (
         TelemetryTransportSecurity.Https
         if parsed.scheme == "https"
@@ -227,6 +239,7 @@ def plan_telemetry_endpoint(endpoint: str) -> TelemetryEndpointPlan:
     return TelemetryEndpointPlan(
         raw_endpoint=endpoint,
         trace_export_url=trace_url,
+        metric_export_url=metric_url,
         security=security,
         host=parsed.hostname or "",
         port=parsed.port,
@@ -244,15 +257,13 @@ def setup_telemetry(
 
     from opentelemetry import _logs, metrics, propagate, trace
     from opentelemetry.baggage.propagation import W3CBaggagePropagator
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.propagators.composite import CompositePropagator
     from opentelemetry.sdk._logs import LoggerProvider
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogExporter
     from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import (
-        ConsoleMetricExporter,
-        PeriodicExportingMetricReader,
-    )
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -297,8 +308,15 @@ def setup_telemetry(
         callbacks.append(trace_provider.shutdown)
 
     if config.export_metrics:
+        if plan.endpoint is None:
+            msg = "metric endpoint plan is required when metric export is enabled"
+            raise RuntimeError(msg)
         metric_reader = PeriodicExportingMetricReader(
-            ConsoleMetricExporter(),
+            OTLPMetricExporter(
+                endpoint=plan.endpoint.metric_export_url,
+                headers=config.headers or None,
+                timeout=config.export_timeout_seconds,
+            ),
             export_interval_millis=plan.meter_interval_millis,
             export_timeout_millis=plan.export_timeout_millis,
         )

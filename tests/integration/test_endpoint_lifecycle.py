@@ -431,7 +431,6 @@ def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_fu
         assert _dispatch_record(existing).status is EndpointDispatchStatus.WaitingCapacity
         assert (
             metric_value(
-                isolated_services.metrics.latest().counters,
                 "endpoint_admission_rejected_total",
                 stub_id=stub.id,
                 kind=kind.value,
@@ -473,7 +472,6 @@ def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is_full(
     assert _dispatch_record(existing).status is EndpointDispatchStatus.WaitingCapacity
     assert (
         metric_value(
-            isolated_services.metrics.latest().counters,
             "endpoint_admission_rejected_total",
             stub_id=stub.id,
             kind=DeploymentKind.Asgi.value,
