@@ -745,7 +745,6 @@ class EventRepository:
         self,
         *,
         workspace_id: str,
-        include_cluster: bool = False,
         resource_type: str | None = None,
         resource_id: str | None = None,
         actions: Sequence[str] | None = None,
@@ -765,7 +764,6 @@ class EventRepository:
         """
         return self._list(
             workspace_id=workspace_id,
-            include_cluster=include_cluster,
             resource_type=resource_type,
             resource_id=resource_id,
             actions=actions,
@@ -793,7 +791,6 @@ class EventRepository:
         """Admin/system event stream over every workspace; operator surfaces only."""
         return self._list(
             workspace_id=None,
-            include_cluster=True,
             resource_type=resource_type,
             resource_id=resource_id,
             actions=actions,
@@ -809,7 +806,6 @@ class EventRepository:
         self,
         *,
         workspace_id: str,
-        include_cluster: bool = False,
         resource_type: str | None = None,
         resource_id: str | None = None,
         actions: Sequence[str] | None = None,
@@ -820,7 +816,6 @@ class EventRepository:
     ) -> int:
         return self._count(
             workspace_id=workspace_id,
-            include_cluster=include_cluster,
             resource_type=resource_type,
             resource_id=resource_id,
             actions=actions,
@@ -844,7 +839,6 @@ class EventRepository:
         """Admin/system event count over every workspace; operator surfaces only."""
         return self._count(
             workspace_id=None,
-            include_cluster=True,
             resource_type=resource_type,
             resource_id=resource_id,
             actions=actions,
@@ -858,7 +852,6 @@ class EventRepository:
         self,
         *,
         workspace_id: str | None,
-        include_cluster: bool,
         resource_type: str | None,
         resource_id: str | None,
         actions: Sequence[str] | None,
@@ -874,7 +867,6 @@ class EventRepository:
         base = self._filtered(
             select(EventTable),
             workspace_id=workspace_id,
-            include_cluster=include_cluster,
             resource_type=resource_type,
             resource_id=resource_id,
             actions=actions,
@@ -901,7 +893,6 @@ class EventRepository:
         self,
         *,
         workspace_id: str | None,
-        include_cluster: bool,
         resource_type: str | None,
         resource_id: str | None,
         actions: Sequence[str] | None,
@@ -913,7 +904,6 @@ class EventRepository:
         statement = self._filtered(
             select(func.count()).select_from(EventTable),
             workspace_id=workspace_id,
-            include_cluster=include_cluster,
             resource_type=resource_type,
             resource_id=resource_id,
             actions=actions,
@@ -944,7 +934,6 @@ class EventRepository:
         statement: TSelect,
         *,
         workspace_id: str | None,
-        include_cluster: bool,
         resource_type: str | None,
         resource_id: str | None,
         actions: Sequence[str] | None,
@@ -952,10 +941,7 @@ class EventRepository:
         until: datetime | None,
     ) -> TSelect:
         if workspace_id is not None:
-            scope = EventTable.workspace_id == workspace_id
-            if include_cluster:
-                scope = or_(scope, EventTable.workspace_id.is_(None))
-            statement = statement.where(scope)
+            statement = statement.where(EventTable.workspace_id == workspace_id)
         if resource_type is not None:
             statement = statement.where(EventTable.resource_type == resource_type)
         if resource_id is not None:

@@ -318,7 +318,6 @@ def test_a_plan_change_whose_subscription_ended_is_never_written_back(
     assert _intent(isolated_services).status == "abandoned"
     reported = isolated_services.events.list(
         workspace_id=None,
-        include_cluster=True,
         actions=[PLAN_CHANGE_ABANDONED_ACTION],
     )
     assert [event.level for event in reported] == [EventLevel.Error]

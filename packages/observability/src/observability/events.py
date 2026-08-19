@@ -61,7 +61,6 @@ class EventService:
         self,
         *,
         workspace_id: str | None = None,
-        include_cluster: bool = False,
         resource_type: str | None = None,
         resource_id: str | None = None,
         actions: Sequence[str] | None = None,
@@ -88,7 +87,6 @@ class EventService:
                 )
             return repository.list(
                 workspace_id=workspace_id,
-                include_cluster=include_cluster,
                 resource_type=resource_type,
                 resource_id=resource_id,
                 actions=actions,
@@ -104,7 +102,6 @@ class EventService:
         self,
         *,
         workspace_id: str | None = None,
-        include_cluster: bool = False,
         resource_type: str | None = None,
         resource_id: str | None = None,
         actions: Sequence[str] | None = None,
@@ -127,7 +124,6 @@ class EventService:
                 )
             return repository.count(
                 workspace_id=workspace_id,
-                include_cluster=include_cluster,
                 resource_type=resource_type,
                 resource_id=resource_id,
                 actions=actions,
