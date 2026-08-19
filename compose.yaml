@@ -63,6 +63,10 @@ x-api-env: &api-env
 
 x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET:-lazycloud-objects}"
+  # Names the bucket each workspace gets. A deployment sharing an AWS account with
+  # another one must differ here, because the grant that reaches `workspace-*`
+  # cannot otherwise tell two deployments' customers apart.
+  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: "${LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX:-workspace}"
   # Empty is meaningful and distinct from omitted: a connected-cloud deployment
   # sets these to "" so the object store resolves the platform role through the
   # SDK credential chain and presigns against the storage endpoint itself.
