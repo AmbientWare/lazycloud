@@ -1267,7 +1267,7 @@ class PodControlService:
             port=probe_port,
             health_path=health_path,
         )
-        backend_containers = []
+        backend_containers: list[PodBackendContainer] = []
         for container_id, address_map, _target in candidates:
             ready = readiness.get(container_id, unprobed_verdict)
             backend_containers.append(

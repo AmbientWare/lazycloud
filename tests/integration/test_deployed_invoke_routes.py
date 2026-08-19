@@ -27,6 +27,8 @@ from shared.http.endpoints import (
     StartEndpointServeResponse,
 )
 from shared.http.functions import (
+    FunctionClaimRequest,
+    FunctionClaimResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -101,6 +103,25 @@ class RecordingFunctionService:
     def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:
         raise AssertionError(f"unexpected function_monitor call: {request}")
 
+    # The rest of the protocol, refusing rather than answering. These routes
+    # never reach admission or claiming, and a fake that returned a plausible
+    # value would let a route that started calling one of them keep passing.
+
+    def assert_may_accept_invocation(self, stub_id: str) -> None:
+        raise AssertionError(f"unexpected assert_may_accept_invocation call: {stub_id}")
+
+    def unclaimed_task_count(self, stub_id: str) -> int:
+        raise AssertionError(f"unexpected unclaimed_task_count call: {stub_id}")
+
+    def start_function_container(self, stub_id: str) -> bool:
+        raise AssertionError(f"unexpected start_function_container call: {stub_id}")
+
+    def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
+        raise AssertionError(f"unexpected containers_holding_work call: {container_ids}")
+
+    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
+        raise AssertionError(f"unexpected function_claim call: {request}")
+
 
 class RecordingEndpointService:
     def __init__(self) -> None:
@@ -131,6 +152,14 @@ class RecordingEndpointService:
             },
             body=body,
         )
+
+    def forward_endpoint_health(
+        self,
+        request: EndpointForwardRequest,
+    ) -> EndpointForwardResponse:
+        # These routes forward invocations, never probes. Answering one would
+        # let a route that started asking for readiness pass without saying so.
+        raise AssertionError(f"unexpected forward_endpoint_health call: {request}")
 
     def start_endpoint_serve(
         self,

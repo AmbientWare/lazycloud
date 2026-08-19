@@ -15,6 +15,8 @@ assertions want and the shape the database-backed helper used to return.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
@@ -46,9 +48,11 @@ def _collect() -> None:
                     if value is None:
                         _SEEN_WITHOUT_VALUE.add(metric.name)
                         continue
-                    attributes = frozenset(
-                        (str(key), str(item)) for key, item in (point.attributes or {}).items()
-                    )
+                    # The SDK types attributes as a bare Mapping, so its keys and
+                    # values arrive untyped; naming the shape here keeps the rest
+                    # of the fold typed rather than spreading Unknown outward.
+                    recorded: Mapping[str, object] = point.attributes or {}
+                    attributes = frozenset((str(key), str(item)) for key, item in recorded.items())
                     _LATEST[(metric.name, attributes)] = float(value)
 
 

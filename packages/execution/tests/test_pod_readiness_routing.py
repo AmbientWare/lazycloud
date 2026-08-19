@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NoReturn
 from uuid import uuid4
 
 from api.server.services import ApiServices
@@ -28,7 +29,7 @@ class _RunningContainers:
     workspace_id: str
     stub_id: str
 
-    def client_for(self, container: ContainerRecord) -> object:
+    def client_for(self, container: ContainerRecord) -> NoReturn:
         raise AssertionError("routing must not open a container client")
 
     def state_for(self, container: ContainerRecord) -> SchedulerContainerState:
