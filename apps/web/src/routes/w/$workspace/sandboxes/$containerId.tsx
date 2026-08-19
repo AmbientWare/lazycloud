@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { ContainerDetail } from "@/lib/api/schemas";
-import { durationBetween, relativeTime } from "@/lib/format";
+import { durationBetween, relativeTime, stopReasonLabel } from "@/lib/format";
 import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
@@ -209,25 +209,34 @@ function SandboxActions({
 }
 
 function SandboxFacts({ record }: { record: ContainerDetail }) {
+  const stopCause = stopReasonLabel(record.termination_reason, record.status);
   return (
-    <FactGrid columns={2} className="gap-x-5 gap-y-3 text-xs">
-      <Fact label="Image" value={record.image} mono />
-      <Fact
-        label="Uptime"
-        value={durationBetween(record.started_at, record.finished_at) ?? "None"}
-      />
-      <Fact
-        label="Expires"
-        value={record.expires_at ? relativeTime(record.expires_at) : "No expiry"}
-      />
-      <Fact
-        label="Version"
-        value={record.deployment ? `v${record.deployment.version}` : "None"}
-        mono
-      />
-      <Fact label="Created" value={relativeTime(record.created_at)} />
-      <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
-    </FactGrid>
+    <>
+      <FactGrid columns={2} className="gap-x-5 gap-y-3 text-xs">
+        <Fact label="Image" value={record.image} mono />
+        <Fact
+          label="Uptime"
+          value={durationBetween(record.started_at, record.finished_at) ?? "None"}
+        />
+        <Fact
+          label="Expires"
+          value={record.expires_at ? relativeTime(record.expires_at) : "No expiry"}
+        />
+        <Fact
+          label="Version"
+          value={record.deployment ? `v${record.deployment.version}` : "None"}
+          mono
+        />
+        <Fact label="Created" value={relativeTime(record.created_at)} />
+        <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
+      </FactGrid>
+      {stopCause ? (
+        <p className="mt-3 text-xs text-muted-foreground">
+          <span className="micro-label mr-2">Stopped because</span>
+          {stopCause}
+        </p>
+      ) : null}
+    </>
   );
 }
 

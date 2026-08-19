@@ -146,3 +146,33 @@ export function startupBetween(
 function isTimestamp(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T/.test(value);
 }
+
+/**
+ * Why a container stopped, in the words its owner needs.
+ *
+ * Mirrors `StopContainerReason.describe` in `shared/container_requests.py`, and
+ * changes with it. UNKNOWN is absent on purpose: it is the column default, so
+ * it also means the reason has not arrived, and a container still running
+ * would otherwise be handed a cause.
+ */
+const STOP_REASONS: Record<string, string> = {
+  TTL: "It reached its time limit",
+  USER: "It was stopped from this account",
+  SCHEDULER: "The platform moved the work",
+  PREEMPTED: "Its machine was reclaimed",
+  ADMIN: "The platform stopped it",
+  UNFUNDED: "The account has no payment method on file",
+};
+
+/**
+ * The label for a terminal container's stop reason, or null when there is
+ * nothing truthful to say — still running, or a reason this build does not
+ * know, which renders nothing rather than a raw wire value.
+ */
+export function stopReasonLabel(
+  terminationReason: string | undefined,
+  status: string,
+): string | null {
+  if (status === "running" || status === "pending") return null;
+  return (terminationReason && STOP_REASONS[terminationReason]) || null;
+}

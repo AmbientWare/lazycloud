@@ -13,7 +13,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
-import { exactTime, relativeTime } from "@/lib/format";
+import { exactTime, relativeTime, stopReasonLabel } from "@/lib/format";
 import {
   containerMetricsTimeseriesQueryOptions,
   containerQueryOptions,
@@ -110,6 +110,7 @@ function PodInstanceDrawerBody({
   metrics: UseQueryResult<ContainerMetricsTimeseries, Error>;
 }) {
   const running = record.status === "running";
+  const stopCause = stopReasonLabel(record.termination_reason, record.status);
   const resources = deployment.spec.resources;
   const latestTimestamp = metrics.data?.points.at(-1)?.timestamp;
 
@@ -172,6 +173,12 @@ function PodInstanceDrawerBody({
               />
             ) : null}
           </FactGrid>
+          {stopCause ? (
+            <p className="border-t border-border/80 px-4 py-3 text-sm text-muted-foreground">
+              <span className="micro-label mr-2">Stopped because</span>
+              {stopCause}
+            </p>
+          ) : null}
           {record.actions.can_shell && running ? (
             <section
               aria-label="Terminal access"

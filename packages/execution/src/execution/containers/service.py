@@ -588,9 +588,19 @@ class ContainerService:
         self,
         container_id: str,
         *,
-        reason: StopContainerReason = StopContainerReason.User,
+        reason: StopContainerReason | None = None,
     ) -> ContainerRecord:
+        """Stop a container, recording why if the caller said.
+
+        `None` is not the same as `User`. Settlement has always treated an
+        unstated reason as a user stop, and still does, but that default was
+        only ever choosing whether to cancel the claim or release it. Told to
+        the person whose container it was, it would assert they stopped it
+        themselves — so a caller that named no reason states none.
+        """
+
         record = self.get(container_id)
+        settlement_reason = reason or StopContainerReason.User
         state_changed = record.status not in TERMINAL_CONTAINER_STATUSES
         if state_changed:
             cancellation = self._cancel_scheduler_request(record.id)
@@ -598,10 +608,16 @@ class ContainerService:
                 self._send_stop_event(
                     record.id,
                     worker_id=cancellation.worker_id,
-                    reason=reason,
+                    reason=settlement_reason,
                 )
             record.status = ContainerStatus.Stopped
             record.finished_at = utc_now()
+            # Written here rather than left to the worker's exit report. A
+            # container that never reached a worker — still pending, or its
+            # worker already gone — is never reported on, and the reason it was
+            # stopped for is the one its owner most needs.
+            if reason is not None:
+                record.termination_reason = reason
         with self.context.database.session() as session:
             updated = ContainerRepository(session).records.upsert(
                 record,
@@ -609,34 +625,35 @@ class ContainerService:
                 name=record.name,
                 status=record.status.value,
             )
-        if state_changed:
-            # After the row is terminal, never before. A claim is refused from a
-            # container the record calls terminal, so settling first opens a
-            # window where the work is free and this container still reads as
-            # live — it takes back what it just gave up and then goes away
-            # holding it. The other two settlement paths write the terminal
-            # status in the same session as the release; this one cannot, so it
-            # orders them instead.
-            self._settle_claimed_work(updated, reason=reason)
-            self._release_runtime_state(updated)
-        # The reason comes from the argument, never from the row. The worker
-        # reports it back when it has actually killed the container, which is
-        # after this, so the row still reads `Unknown` here.
-        cause = reason.describe()
+        if not state_changed:
+            # Nothing stopped, so nothing to announce. Saying otherwise would
+            # put a cause in the workspace history for a container that was
+            # already terminal, over the top of the one that actually ended it.
+            return updated
+        # After the row is terminal, never before. A claim is refused from a
+        # container the record calls terminal, so settling first opens a
+        # window where the work is free and this container still reads as
+        # live — it takes back what it just gave up and then goes away
+        # holding it. The other two settlement paths write the terminal
+        # status in the same session as the release; this one cannot, so it
+        # orders them instead.
+        self._settle_claimed_work(updated, reason=settlement_reason)
+        self._release_runtime_state(updated)
+        cause = reason.describe() if reason is not None else ""
         self.events.emit(
             "container.stopped",
             resource_type="container",
             resource_id=record.id,
-            message=(
-                f"stopped container {record.name}: {cause}"
-                if cause
-                else f"stopped container {record.name}"
+            message=f"stopped container {record.name}" + (f": {cause}" if cause else ""),
+            level=(
+                EventLevel.Warning if reason is StopContainerReason.Unfunded else EventLevel.Info
             ),
-            data={"termination_reason": reason.value},
+            # The reason the stop was asked for, which is not always the one the
+            # row settles on: the worker reports what it actually observed.
+            data={"stop_reason": settlement_reason.value},
             workspace_id=record.workspace_id,
         )
-        if state_changed:
-            self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
+        self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
         return updated
 
     def _release_runtime_state(self, record: ContainerRecord) -> None:
