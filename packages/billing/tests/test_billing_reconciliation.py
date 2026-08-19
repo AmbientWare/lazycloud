@@ -258,7 +258,7 @@ def test_usage_nobody_will_ever_be_charged_for_is_reported_rather_than_balanced(
         event
         for event in isolated_services.events.list(
             workspace_id=None,
-                actions=[RECONCILIATION_DIVERGENCE_ACTION],
+            actions=[RECONCILIATION_DIVERGENCE_ACTION],
         )
         if event.resource_id == user_id
     ]

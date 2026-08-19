@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -23,9 +22,9 @@ from shared.app_lifecycle import AppLifecycleState
 from shared.container_requests import ContainerShutdownTarget
 from shared.errors import ConflictError
 from sqlalchemy import func, select, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 from storage.volume_filesystem import LocalVolumeFilesystem
+from tests.backing_services import postgres_url
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import owned_workspace
 
@@ -183,12 +182,7 @@ def _execution_row_counts(services: ApiServices, *, app_id: str) -> tuple[int, i
 
 @contextmanager
 def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
-    base_url_value = os.getenv("LAZYCLOUD_TEST_DATABASE_URL")
-    if base_url_value is None:
-        pytest.skip("LAZYCLOUD_TEST_DATABASE_URL is not configured")
-    base_url = make_url(base_url_value)
-    if base_url.get_backend_name() != "postgresql":
-        pytest.skip("LAZYCLOUD_TEST_DATABASE_URL is not PostgreSQL")
+    base_url = postgres_url()
     database_name = f"app_admission_{uuid4().hex}"
     database_url = base_url.set(database=database_name)
     admin = DatabaseClient.from_settings(

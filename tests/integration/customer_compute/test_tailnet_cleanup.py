@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -31,6 +30,7 @@ from shared.compute_policy import (
 )
 from shared.identity import WorkspaceStatus
 from sqlalchemy import delete
+from tests.backing_services import postgres_dsn
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import administrator_credential, owned_workspace
 
@@ -229,9 +229,7 @@ def test_scheduler_reports_pending_cleanup_when_control_credentials_are_unavaila
 
 
 def test_postgresql_concurrent_first_schedules_merge_and_supersede_claim() -> None:
-    database_url = os.environ.get("LAZYCLOUD_TEST_POSTGRES_URL")
-    if not database_url:
-        pytest.skip("LAZYCLOUD_TEST_POSTGRES_URL is required for PostgreSQL concurrency proof")
+    database_url = postgres_dsn()
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url,

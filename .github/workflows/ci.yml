@@ -64,11 +64,16 @@ jobs:
   validate:
     name: Changed Python owners
     runs-on: ubuntu-latest
-    # Real Redis, because the properties that most need proving cannot be proven
-    # without it: single-winner races, expired-lease recovery, exactly-once
-    # delivery, and prefix sweeps matched against the real key layout. A fake
-    # passes all of them while production loses the race. Around 110 tests take
-    # this fixture and every one of them skipped here until now.
+    # Real Redis and real PostgreSQL, because the properties that most need
+    # proving cannot be proven without them: single-winner races, expired-lease
+    # recovery, exactly-once delivery, prefix sweeps matched against the real key
+    # layout, and on the database side `FOR UPDATE SKIP LOCKED`, unique
+    # constraints and advisory locks that SQLite has no equivalent for. A fake
+    # passes all of them while production loses the race.
+    #
+    # The PostgreSQL fixtures create a throwaway database per test off this URL
+    # and drop it after, so `postgres` here is only ever connected to in order to
+    # issue `CREATE DATABASE`.
     services:
       redis:
         image: redis:8-alpine
@@ -79,8 +84,22 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: lazycloud
+          POSTGRES_PASSWORD: lazycloud
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lazycloud"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       LAZYCLOUD_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      LAZYCLOUD_TEST_POSTGRES_URL: postgresql+psycopg://lazycloud:lazycloud@127.0.0.1:5432/postgres
     steps:
       - name: Checkout
         uses: actions/checkout@v6
