@@ -42,7 +42,7 @@ resource "aws_secretsmanager_secret" "runtime" {
 # by where the value comes from and not by what it is called.
 locals {
   secret_environment = {
-    LAZYCLOUD_DATABASE_URL                = aws_secretsmanager_secret.runtime["database-url"].name
+    LAZYCLOUD_COMPOSE_DATABASE_URL        = aws_secretsmanager_secret.runtime["database-url"].name
     LAZYCLOUD_TOKEN                       = aws_secretsmanager_secret.runtime["administrator-token"].name
     LAZYCLOUD_CACHE_SERVICE_TOKEN         = aws_secretsmanager_secret.runtime["cache-service-token"].name
     LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID     = aws_secretsmanager_secret.runtime["tailnet-oauth-client-id"].name

@@ -12,7 +12,11 @@ x-process-env: &process-env
 # password is not topology, and is the one Postgres itself is initialized with,
 # so it reads the same variable rather than a copy that can disagree with it.
 x-database-env: &database-env
-  LAZYCLOUD_DATABASE_URL: "postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud"
+  # The default names the Compose service; a deployment supplies its own, because
+  # the postgres container is not among the services it starts. Deliberately not
+  # named LAZYCLOUD_DATABASE_URL: that one is the host-side value the CLI uses and
+  # points at localhost, which resolves to the wrong thing inside a container.
+  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 x-redis-env: &redis-env
   LAZYCLOUD_REDIS_URL: "redis://redis:6379/0"
 
@@ -138,7 +142,11 @@ x-cache-origin-registry: &cache-origin-registry
 x-database-bootstrap-env: &database-bootstrap-env
   LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
   LAZYCLOUD_LOG_LEVEL: "${LAZYCLOUD_LOG_LEVEL:-INFO}"
-  LAZYCLOUD_DATABASE_URL: "postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud"
+  # The default names the Compose service; a deployment supplies its own, because
+  # the postgres container is not among the services it starts. Deliberately not
+  # named LAZYCLOUD_DATABASE_URL: that one is the host-side value the CLI uses and
+  # points at localhost, which resolves to the wrong thing inside a container.
+  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 
 x-lazycloud-build-args: &lazycloud-build-args
   TAILSCALE_IMAGE: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
