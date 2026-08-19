@@ -74,6 +74,11 @@ variable "control_role_name" {
     A durable external contract, not a label: a customer's authorization template
     writes this role's ARN into every connection role's trust policy. Change it
     only for a deployment that has no existing customer connections.
+
+    It is also the one name that does not carry the deployment prefix, so two
+    deployments sharing an AWS account must give it different values. A
+    non-production deployment can pick freely, because the contract only binds
+    where customers already connected.
   EOT
   type        = string
   default     = "lazycloud-compose-control"

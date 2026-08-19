@@ -4,6 +4,12 @@ data "aws_partition" "current" {}
 
 locals {
   arn_prefix = "arn:${data.aws_partition.current.partition}"
+
+  # Must match LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX in the deployment
+  # environment. The control plane names buckets with it and this policy is what
+  # permits them, so the two are one decision written twice; the runtime output
+  # below is the same value, so a deployment cannot set them differently.
+  workspace_bucket_prefix = "${var.deployment}-workspace"
 }
 
 # The identity the control plane and scheduler processes run as. It is also the
@@ -65,8 +71,10 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   # A bucket per workspace, created on demand by `control.service.create_workspace_storage`.
-  # The name is `workspace-<uuid>`, which is why this is scoped by prefix rather
-  # than enumerated: the set is not known until customers exist.
+  # Scoped by prefix rather than enumerated, because the set is not known until
+  # customers exist — and scoped by *this deployment's* prefix, because two
+  # deployments in one account share the bucket namespace and a grant on a bare
+  # `workspace-*` would reach the other one's customers.
   statement {
     sid = "OwnPlatformAndWorkspaceBuckets"
     actions = [
@@ -82,7 +90,10 @@ data "aws_iam_policy_document" "control_plane" {
     resources = concat(
       [for bucket in aws_s3_bucket.objects : bucket.arn],
       [for bucket in aws_s3_bucket.objects : "${bucket.arn}/*"],
-      ["${local.arn_prefix}:s3:::workspace-*", "${local.arn_prefix}:s3:::workspace-*/*"],
+      [
+        "${local.arn_prefix}:s3:::${local.workspace_bucket_prefix}-*",
+        "${local.arn_prefix}:s3:::${local.workspace_bucket_prefix}-*/*",
+      ],
     )
   }
 }

@@ -22,7 +22,12 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX, NAME, OBJECT_STORE_BUCKET
+from shared.app_identity import (
+    ENV_PREFIX,
+    NAME,
+    OBJECT_STORE_BUCKET,
+    WORKSPACE_BUCKET_PREFIX,
+)
 from shared.contracts import ContractModel
 from shared.deployment_settings import MissingDeploymentSettingError
 from typing_extensions import TypeVar
@@ -38,6 +43,15 @@ LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-local-secret"
 
 class S3ObjectStoreSettings(BaseSettings):
     bucket: str = OBJECT_STORE_BUCKET
+    workspace_bucket_prefix: str = WORKSPACE_BUCKET_PREFIX
+    """Prefix of the bucket each workspace gets.
+
+    A bucket name is global to the object store, and two deployments sharing one
+    AWS account share its namespace. Without a prefix per deployment, the grant
+    that lets a control plane reach `workspace-*` reaches every deployment's
+    workspaces in that account, and no policy written against the default name
+    can separate them.
+    """
     # Which store this talks to is a deployment fact, so absence is rejected
     # rather than defaulted. A caller whose store is AWS itself says so by
     # passing `None`; that is a statement, and silence is not.

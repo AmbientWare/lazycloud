@@ -49,12 +49,37 @@ it does.
 ## Bring-up
 
 ```sh
+DEPLOYMENT=lazycloud-prod
 terraform -chdir=deploy/platform-aws init \
   -backend-config="bucket=<state-bucket>" \
-  -backend-config="key=platform-aws/terraform.tfstate" \
+  -backend-config="key=platform-aws/$DEPLOYMENT.tfstate" \
   -backend-config="region=us-east-1"
-terraform -chdir=deploy/platform-aws apply
+terraform -chdir=deploy/platform-aws apply -var="deployment=$DEPLOYMENT"
 ```
+
+The state key carries the deployment name. Two deployments sharing one key share
+one state, and the second apply destroys the first.
+
+## Two deployments in one AWS account
+
+Supported. Every globally-named resource carries `var.deployment`: buckets, ECR
+repositories, secret paths, IAM roles, and the workspace bucket prefix that
+scopes the control plane's S3 grant.
+
+Three values need attention:
+
+- `control_role_name` is the one name without the prefix, because a customer's
+  trust policy embeds it. Give a non-production deployment a different value; the
+  contract only binds where customers already connected.
+- The Tailscale hostname carries the deployment name, from `runtime_configuration`.
+  A tailnet is shared across AWS accounts, so this would collide even if the
+  accounts did not.
+- `deploy/cloudflare` and `deploy/stripe` are separate modules with their own
+  state. A second deployment needs its own tunnel, its own hostnames, and test
+  mode for billing.
+
+The S3 bucket quota is per-account, defaults to 10,000, and every workspace
+consumes one. Two deployments share that ceiling.
 
 Every remaining secret has a container but no value. Write the ones the
 deployment needs — the GitHub App pair, Stripe, Cloudflare, Tailscale, telemetry

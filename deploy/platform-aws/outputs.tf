@@ -41,7 +41,12 @@ output "secret_arns" {
 output "runtime_configuration" {
   description = "Non-secret deployment values the Compose environment consumes."
   value = {
-    LAZYCLOUD_OBJECT_STORE_BUCKET      = aws_s3_bucket.objects["objects"].id
+    LAZYCLOUD_OBJECT_STORE_BUCKET                  = aws_s3_bucket.objects["objects"].id
+    LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX = local.workspace_bucket_prefix
+    # Carries the deployment name because a tailnet is shared across accounts.
+    # Two deployments advertising one hostname collide, and the loser keeps a
+    # "-1" suffix that every configured origin naming the old name then misses.
+    LAZYCLOUD_TAILNET_REPLICA_HOSTNAME = "${var.deployment}-control-plane"
     LAZYCLOUD_OBJECT_STORE_REGION_NAME = var.region
     # Empty is meaningful and distinct from omitted: it tells the object store to
     # resolve the platform role through the SDK credential chain and to presign
