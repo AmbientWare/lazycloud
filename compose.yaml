@@ -751,18 +751,9 @@ services:
         owner_path=/var/lib/lazycloud/tokens/worker-capacity-owner
         mkdir -p "$$(dirname "$$owner_path")"
         umask 077
-        # Looked up by name rather than by pool: a joined machine also files a unit
-        # feeding this pool, and the shared fleet must not register against the unit
-        # that belongs to somebody's hardware.
-        owner="$$(lazycloud-admin --json unit list \
-          | python -c 'import json,sys; name=sys.argv[1]; print(next((u["capacity_owner_id"] for u in json.load(sys.stdin) if u.get("name") == name), ""))' \
-          "$$pool-shared")"
-        if [ -z "$$owner" ]; then
-          owner="$$(lazycloud-admin --json unit create "$$pool-shared" --pool "$$pool" --provider local \
-            | python -c 'import json,sys; print(json.load(sys.stdin)["capacity_owner_id"])')"
-        fi
-        printf '%s' "$$owner" > "$$owner_path"
-        echo "shared fleet capacity owner ready: $$owner"
+        lazycloud-admin unit ensure "$$pool-shared" \
+          --pool "$$pool" --provider local --capacity-owner-output "$$owner_path"
+        echo "shared fleet capacity owner ready: $$(cat "$$owner_path")"
     environment:
       GATEWAY_HTTP_URL: "http://control-plane:9000"
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
