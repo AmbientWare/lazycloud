@@ -75,7 +75,25 @@ class AgentRouteReconciliationSettings(BaseSettings):
     )
 
 
+class AgentDisconnectReconciliationSettings(BaseSettings):
+    """How often to look for machines that stopped reporting.
+
+    Shorter than the route reconciliation because this one decides how far the
+    durable record trails the live view. The heartbeat timeout is 60s, so at
+    this interval a machine is written off within about a minute and a quarter
+    of its last report.
+    """
+
+    interval_seconds: float = Field(default=15.0, gt=0)
+
+    model_config = SettingsConfigDict(
+        env_prefix=f"{ENV_PREFIX}_AGENT_DISCONNECT_RECONCILIATION_",
+        extra="ignore",
+    )
+
+
 __all__ = [
+    "AgentDisconnectReconciliationSettings",
     "AgentRouteReconciliationSettings",
     "TcpIngressSettings",
 ]

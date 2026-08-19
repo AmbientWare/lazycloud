@@ -31,6 +31,7 @@ from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from networking.tailnet_control import TailnetAuthKey, TailnetDevice
 from observability.usage import UsageService
+from operations.management import ManagementService
 from pydantic import SecretStr
 from scheduler.capacity_reservations import (
     CapacityReservationService,
@@ -50,6 +51,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     PreflightSeverity,
 )
+from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
     MachinePool,
     UnitName,
@@ -791,3 +793,60 @@ def test_machine_join_command_owns_the_account_self_hosted_fleet(
     assert used.status is ComputeCredentialStatus.Revoked
     assert active.status is ComputeCredentialStatus.Active
     assert {credential.user_id for credential in credentials} == {user_id}
+
+
+def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_its_owner(
+    isolated_services: ApiServices,
+) -> None:
+    # Every other enrollment write happens because a heartbeat arrived, which is
+    # the one thing a machine that has gone does not do. Without the sweep the row
+    # keeps saying Ready for a host that is switched off, and the only place the
+    # truth appears is a view that recomputes it per request and writes nothing.
+    workspace_id = _workspace_id(isolated_services)
+    pool = MachinePool("silent-machines")
+    isolated_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
+    gateway = _gateway(isolated_services, key_prefix="agent-disconnect")
+    bootstrap = _create_join_token(gateway, pool, workspace_id)
+    joined = gateway.join_agent(_join_request(bootstrap.token))
+    _bind_tailnet(gateway, joined.agent_token, joined.machine_id)
+    assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
+    # A platform defect belongs to the platform, so it carries no workspace. It is
+    # here to prove the customer's feed does not fold those in.
+    isolated_services.events.emit(
+        "billing.span.unpriced",
+        resource_type="usage",
+        resource_id="span",
+        message="cluster event",
+    )
+    silent_at = utc_now() + timedelta(minutes=5)
+
+    marked = gateway.sweep_disconnected_agents(now=silent_at)
+    repeated = gateway.sweep_disconnected_agents(now=silent_at)
+
+    assert marked == [joined.machine_id]
+    assert repeated == []
+    with isolated_services.context.database.session() as session:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id,
+            joined.machine_id,
+            pool=pool,
+        )
+        machine = MachineRepository(session).get(joined.machine_id, workspace_id=workspace_id)
+    assert enrollment is not None
+    assert enrollment.readiness_phase is MachineReadinessPhase.Offline
+    assert enrollment.last_disconnect_at is not None
+    assert machine is not None
+    assert machine.status is ResourceStatus.Stopped
+
+    # Read the way every customer event route reads, rather than through the
+    # repository default: the leak this closes was a keyword the routes passed.
+    visible = ManagementService(isolated_services).event_history(workspace_id)
+    actions = [event.action for event in visible.data]
+    assert actions.count("agent.disconnected") == 1
+    assert "billing.span.unpriced" not in actions
+
+    # The heartbeat clears the disconnect, so a host that comes back is Ready again
+    # rather than staying written off until someone notices.
+    assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
+    recovered = _pool_machines(gateway, pool, workspace_id)[0]
+    assert recovered.readiness_phase is MachineReadinessPhase.Ready
