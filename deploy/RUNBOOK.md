@@ -247,6 +247,79 @@ Repeated `control stream encountered a failure while serving` with every
 network precheck passing means the tunnel no longer exists at Cloudflare, not a
 connectivity fault.
 
+## The hosted deployment
+
+The control plane runs on one EC2 instance declared by `deploy/platform-aws`.
+Nothing changes what that host runs except the bundle in the deploy bucket, and
+nothing writes that bundle except the `Deploy` workflow.
+
+```sh
+# Publish a release and converge the host.
+gh workflow run deploy.yml -f deployment=lazycloud-prod
+
+# Or converge it onto the bundle already published.
+aws ssm send-command --document-name AWS-RunShellScript \
+  --instance-ids "$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)" \
+  --parameters 'commands=["/usr/local/bin/lazycloud-deploy"]'
+```
+
+There is no SSH key and no inbound rule. Operator shell is
+`aws ssm start-session --target <instance-id>`.
+
+### What a deployment runs, and what it does not
+
+`deploy/compose.deploy.yaml` is an overlay on the same `compose.yaml` the local
+stack uses. It pins images to digests, drops the published host ports, and
+replaces the `depends_on` edges that point at services a deployment does not
+start. `deploy/bundle.py` carries the service list.
+
+| Not started | Served instead by |
+| --- | --- |
+| `postgres` | PlanetScale, through `LAZYCLOUD_DATABASE_URL` |
+| `object-store`, `object-store-bucket` | S3, through the platform role |
+| `otel-collector` | whatever `LAZYCLOUD_TELEMETRY_ENDPOINT` names |
+| `container-worker` | the connected-AWS pool the scheduler launches |
+| `agent`, `agent-join-token` | a real joined machine |
+| `platform-unit`, `worker-token` | not needed; those feed the Compose fleet |
+
+Redis stays on the host. It is also the reason there is one host: two would need
+it moved to ElastiCache first, because it holds the leases the scheduler
+serialises capacity work on.
+
+### The database connection string
+
+Use the **direct endpoint on 5432**, never PgBouncer. PlanetScale's managed
+PgBouncer is transaction-pooling only, and `ControlPlaneRecoveryFence` holds
+`pg_advisory_lock_shared` for the lifetime of a serving process. Behind a
+transaction pooler that lock is released when the backend is recycled, the fence
+stops fencing **without erroring**, and offline recovery can mint an
+administrator credential while replicas are still serving.
+
+### Secrets
+
+The host renders them from Secrets Manager on every deploy, into a mode-0600
+file that only the compose invocation reads. They are never in the bundle: the
+bundle is a build artifact in a versioned bucket, and a credential in there
+outlives every rotation.
+
+To rotate one, write the new value and converge the host:
+
+```sh
+aws secretsmanager put-secret-value --secret-id lazycloud-prod/<name> --secret-string '<value>'
+```
+
+### Connecting the platform account to its own fleet
+
+Shared capacity is a connected-AWS pool in the platform's own account, using the
+same managed flow a customer uses — which is what the control stack anticipates
+when it says a customer account can be this account. The connection stack creates
+the fleet VPC, its two subnets, the security group and the node instance profile,
+and the control plane reads them back from the stack outputs.
+
+`deploy/platform-aws` therefore declares no fleet network. Adding one there would
+mean declaring the connection role beside it, and that role's policy is generated
+in `provider_aws/account_connection.py`.
+
 ## Secrets and rotation
 
 | Secret | Where it lives | Rotate by |

@@ -32,3 +32,21 @@ resource "aws_secretsmanager_secret" "runtime" {
   # destroyed deployment cannot reuse its own secret names for a month.
   recovery_window_in_days = 0
 }
+
+# Which environment variable each secret becomes on the host. The names are the
+# ones `compose.yaml` already reads, so a deployment differs from the local stack
+# by where the value comes from and not by what it is called.
+locals {
+  secret_environment = {
+    LAZYCLOUD_DATABASE_URL                = aws_secretsmanager_secret.runtime["database-url"].name
+    LAZYCLOUD_TOKEN                       = aws_secretsmanager_secret.runtime["administrator-token"].name
+    LAZYCLOUD_CACHE_SERVICE_TOKEN         = aws_secretsmanager_secret.runtime["cache-service-token"].name
+    LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID     = aws_secretsmanager_secret.runtime["tailnet-oauth-client-id"].name
+    LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET = aws_secretsmanager_secret.runtime["tailnet-oauth-client-secret"].name
+    LAZYCLOUD_CLOUDFLARE_API_TOKEN        = aws_secretsmanager_secret.runtime["cloudflare-api-token"].name
+    LAZYCLOUD_STRIPE_API_KEY              = aws_secretsmanager_secret.runtime["stripe-api-key"].name
+    LAZYCLOUD_STRIPE_WEBHOOK_SECRET       = aws_secretsmanager_secret.runtime["stripe-webhook-secret"].name
+    LAZYCLOUD_GITHUB_CLIENT_ID            = aws_secretsmanager_secret.runtime["github-client-id"].name
+    LAZYCLOUD_GITHUB_CLIENT_SECRET        = aws_secretsmanager_secret.runtime["github-client-secret"].name
+  }
+}

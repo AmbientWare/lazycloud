@@ -1,0 +1,87 @@
+# Production overlay for the root compose.yaml.
+#
+# Not a second stack. Every service, command, health check and dependency stays
+# defined once in `compose.yaml`; this file pins images to what CI pushed and
+# removes the dependency edges pointing at services a deployment does not run.
+#
+# Applied as:
+#   docker compose -f compose.yaml -f deploy/compose.deploy.yaml \
+#     --env-file images.env --env-file deployment.env up -d <services>
+#
+# What a deployment does not run, and what serves it instead:
+#
+#   postgres, database volume     PlanetScale, through LAZYCLOUD_DATABASE_URL
+#   object-store, -bucket         S3, through the platform role
+#   otel-collector                the real backend LAZYCLOUD_TELEMETRY_ENDPOINT names
+#   container-worker              the connected-AWS pool, launched by the scheduler
+#   agent, agent-join-token       a joined machine; the local stack's simulated customer
+#   platform-unit, worker-token   the compose fleet's capacity owner and credential
+#   cli                           already behind the `tools` profile
+#
+# `!override` replaces the merged `depends_on` rather than adding to it. Compose
+# merges these maps by key, so without it every service would still wait on the
+# postgres and object-store containers this deployment never starts.
+
+services:
+  database-bootstrap:
+    image: "${LAZYCLOUD_IMAGE_DATABASE_BOOTSTRAP:?set by images.env}"
+    build: !reset null
+    depends_on: !override {}
+
+  administrator-bootstrap:
+    image: "${LAZYCLOUD_IMAGE_DATABASE_BOOTSTRAP:?set by images.env}"
+    depends_on: !override
+      database-bootstrap:
+        condition: service_completed_successfully
+
+  tcp-certificate:
+    image: "${LAZYCLOUD_IMAGE_API:?set by images.env}"
+
+  control-plane:
+    image: "${LAZYCLOUD_IMAGE_API:?set by images.env}"
+    build: !reset null
+    # No published host ports. The tunnel reaches the origin over the Compose
+    # network and workers reach it over the tailnet, so nothing binds the host.
+    ports: !reset null
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      database-bootstrap:
+        condition: service_completed_successfully
+      administrator-bootstrap:
+        condition: service_completed_successfully
+      tcp-certificate:
+        condition: service_completed_successfully
+    volumes: !override
+      - lazycloud-files:/var/lib/lazycloud
+      - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
+
+  scheduler:
+    image: "${LAZYCLOUD_IMAGE_SCHEDULER:?set by images.env}"
+    build: !reset null
+    depends_on: !override
+      control-plane:
+        condition: service_healthy
+    volumes: !override
+      - lazycloud-files:/var/lib/lazycloud
+
+  cache-token:
+    image: "${LAZYCLOUD_IMAGE_WORKER_BOOTSTRAP:?set by images.env}"
+    build: !reset null
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      database-bootstrap:
+        condition: service_completed_successfully
+
+  cache-server:
+    image: "${LAZYCLOUD_IMAGE_CACHE_SERVER:?set by images.env}"
+    build: !reset null
+    depends_on: !override
+      cache-token:
+        condition: service_completed_successfully
+
+  public-ingress:
+    depends_on: !override
+      control-plane:
+        condition: service_healthy
