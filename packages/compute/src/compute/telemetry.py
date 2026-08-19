@@ -243,9 +243,7 @@ class AgentDisconnectPlan(ContractModel):
     """
 
     action: AgentDisconnectAction
-    should_emit_event: bool = False
     disconnected_at: datetime | None = None
-    status: AgentMachineStatus = AgentMachineStatus.Disconnected
     reason: str = ""
 
 
@@ -619,18 +617,14 @@ def plan_agent_disconnect(
         return AgentDisconnectPlan(action=AgentDisconnectAction.Ignore, reason="never-seen")
     if last_seen >= current - timedelta(seconds=AGENT_HEARTBEAT_TIMEOUT_SECONDS):
         return AgentDisconnectPlan(action=AgentDisconnectAction.Ignore, reason="heartbeat-fresh")
-    status = agent_machine_status(state, now=current)
     if state.last_disconnect_at is not None and state.last_disconnect_at >= last_seen:
         return AgentDisconnectPlan(
             action=AgentDisconnectAction.AlreadyMarked,
-            status=status,
             reason="disconnect-already-marked",
         )
     return AgentDisconnectPlan(
         action=AgentDisconnectAction.MarkDisconnected,
-        should_emit_event=True,
         disconnected_at=current,
-        status=status,
         reason="heartbeat-stale",
     )
 

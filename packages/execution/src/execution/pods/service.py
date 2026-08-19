@@ -491,6 +491,7 @@ class PodControlService:
             resource_id=container_id,
             message=f"requested pod command {request.command}",
             data={"pid": response.pid},
+            workspace_id=self._container(container_id).workspace_id,
         )
         return PodSandboxExecResponse(pid=response.pid)
 

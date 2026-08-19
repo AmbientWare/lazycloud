@@ -460,15 +460,14 @@ async def _reconcile_agent_disconnects(
 ) -> None:
     """Write off machines that stopped reporting, from one control plane at a time.
 
-    Every other enrollment write happens because a heartbeat arrived, which is
-    the one thing a machine that has gone will not do. This is the writer for
-    its absence.
+    Every enrollment write on the live path happens because a heartbeat
+    arrived, which is the one thing a machine that has gone will not do. This is
+    the writer for its absence.
 
-    The lease is what makes the telling happen once. The plan's own
-    `last_disconnect_at` guard survives a restart, but not two control planes
-    that both read a still-`Ready` row before either writes: each would decide
-    to mark it and each would emit. Renewed rather than released, so the winner
-    keeps the work while it is alive.
+    The lease keeps the fleet from being scanned by every control plane at once;
+    it is not what makes the write safe, because each machine is re-decided
+    under its own row lock. Renewed rather than released, so the winner keeps
+    the work while it is alive.
     """
     lease_key = redis.key("control-plane", "leases", "agent-disconnects")
     holder = str(uuid4())
