@@ -17,6 +17,7 @@ locals {
     stripe-webhook-secret         = "Stripe webhook signing secret. Returned only at endpoint creation."
     github-client-id              = "GitHub App client id for dashboard sign-in."
     github-client-secret          = "GitHub App client secret."
+    backend-route-auth-key        = "Shared key authenticating backend routes. At least 32 bytes."
     fleet-external-id             = "External ID the platform's own connection role enforces."
     telemetry-backend-endpoint    = "OTLP endpoint the collector exports to."
     telemetry-backend-username    = "Telemetry backend basic-auth username."
@@ -55,5 +56,20 @@ locals {
     LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT  = aws_secretsmanager_secret.runtime["telemetry-backend-endpoint"].name
     LAZYCLOUD_TELEMETRY_BACKEND_USERNAME  = aws_secretsmanager_secret.runtime["telemetry-backend-username"].name
     LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD  = aws_secretsmanager_secret.runtime["telemetry-backend-password"].name
+    LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY      = aws_secretsmanager_secret.runtime["backend-route-auth-key"].name
   }
+}
+
+# Generated rather than configured, like the fleet external ID. It authenticates
+# backend routes between the control plane and the processes behind them, so both
+# sides must agree on it and nothing outside this deployment should know it. The
+# owner reads it at 32 bytes minimum and refuses to start below that.
+resource "random_password" "backend_route_auth_key" {
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret_version" "backend_route_auth_key" {
+  secret_id     = aws_secretsmanager_secret.runtime["backend-route-auth-key"].id
+  secret_string = random_password.backend_route_auth_key.result
 }
