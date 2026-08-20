@@ -21,6 +21,7 @@ from cli.components.errors import ADMIN_ERROR_POLICY
 from cli.control_plane import concurrency_app, stub_app, workspace_app
 from cli.database import database_app
 from cli.execution import events, invoke
+from cli.fleet import fleet_app
 from cli.identity import (
     profile_export,
     token_create,
@@ -60,6 +61,7 @@ _ADMIN_ROOT_ORDER = (
 )
 _ADMIN_GROUP_ORDER = (
     "profile",
+    "fleet",
     "user",
     "token",
     "task",
@@ -125,6 +127,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.replace_group("container", container_app)
     registry.extend_group("machine", register_machine_extensions)
 
+    registry.add_group("fleet", fleet_app)
     registry.add_group("unit", unit_app)
     registry.add_group("queue", queue_app)
     registry.add_group("map", map_app)

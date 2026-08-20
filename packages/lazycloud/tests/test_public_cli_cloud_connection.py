@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 from lazycloud.cli.main import build_public_cli
 from pydantic import JsonValue
+from shared.aws_connections import AwsAccountNetwork
 from shared.http.aws_connections import (
     AwsConnectionAuthorization,
     AwsConnectionAuthorizationResponse,
@@ -189,14 +190,17 @@ def test_cloud_disconnect_opens_only_terminal_recovery_action(
 @dataclass(slots=True)
 class _ConnectClient:
     requests: list[tuple[str, str | None]] = field(default_factory=list)
+    networks: list[AwsAccountNetwork | None] = field(default_factory=list)
 
     def connect_account(
         self,
         *,
         account_id: str,
         role_arn: str | None = None,
+        network: AwsAccountNetwork | None = None,
     ) -> AwsConnectionAuthorizationResponse:
         self.requests.append((account_id, role_arn))
+        self.networks.append(network)
         return AwsConnectionAuthorizationResponse(
             connection=_connection(phase="awaiting_authorization"),
             authorization=AwsConnectionAuthorization(

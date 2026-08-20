@@ -23,6 +23,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
+    AwsAccountNetwork,
     AwsAccountValidationResult,
     AwsAuthorizationCleanupStatus,
     AwsManagedAuthorizationReference,
@@ -50,6 +51,7 @@ class _Planner:
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
+        network: AwsAccountNetwork | None = None,
     ) -> AwsAccountAuthorizationPlan:
         del user_id, connection_id, external_id, active_authorization
         managed = role_arn is None

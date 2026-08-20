@@ -197,13 +197,9 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         ami_id = artifacts.gpu_ami_id if request.offer.gpu_count > 0 else artifacts.cpu_ami_id
         if ami_id is None:
             raise ValueError(f"AWS managed pool AMI is not configured for {request.offer.region!r}")
-        vpc_id = self.connection.vpc_id
-        subnet_ids = self.connection.subnet_ids
-        security_group_id = self.connection.security_group_id
-        if vpc_id is None or security_group_id is None or len(subnet_ids) != 2:
-            raise ValueError(
-                "AWS account connection has no stack-provisioned network for managed pools"
-            )
+        network = self.connection.network
+        if network is None:
+            raise ValueError("AWS account connection has no network for managed pools")
         return AwsManagedPoolSpec(
             workspace_id=request.workspace_id,
             unit_name=request.unit_name,
@@ -214,9 +210,9 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             max_nodes=request.max_machines,
             root_volume_gib=request.root_volume_gib,
             node_instance_profile_arn=self.connection.node_instance_profile_arn,
-            vpc_id=vpc_id,
-            subnet_ids=subnet_ids,
-            security_group_id=security_group_id,
+            vpc_id=network.vpc_id,
+            subnet_ids=network.subnet_ids,
+            security_group_id=network.security_group_id,
             bootstrap=AwsManagedPoolBootstrap(
                 control_plane_url=request.bootstrap.control_plane_url,
                 enrollment_request_id=request.bootstrap.enrollment_request_id,

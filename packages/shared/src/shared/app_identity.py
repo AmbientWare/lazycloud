@@ -32,6 +32,13 @@ CLI_NAME = NAME
 ADMIN_CLI_NAME = f"{NAME}-admin"
 REDIS_KEY_PREFIX = NAME
 OBJECT_STORE_BUCKET = f"{NAME}-objects"
+
+WORKSPACE_BUCKET_PREFIX = "workspace"
+"""Default prefix of a workspace's own bucket.
+
+A deployment sharing an AWS account with another one overrides this, because the
+grant that reaches `workspace-*` cannot otherwise tell two deployments apart.
+"""
 DATA_STORAGE_BUCKET = f"{NAME}-data"
 OBJECT_STORE_ACCESS_KEY_ID = NAME
 OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-secret"
@@ -132,6 +139,7 @@ __all__ = [
     "WORKER_BOOTSTRAP_PROCESS_NAME",
     "WORKER_BUNDLE_ROOT",
     "WORKER_CHECKPOINT_ROOT",
+    "WORKSPACE_BUCKET_PREFIX",
     "WORKSPACE_OBJECT_BUCKET",
     "WORKSPACE_UPLOAD_BUCKETS",
 ]

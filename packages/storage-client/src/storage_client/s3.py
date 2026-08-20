@@ -22,7 +22,12 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX, NAME, OBJECT_STORE_BUCKET
+from shared.app_identity import (
+    ENV_PREFIX,
+    NAME,
+    OBJECT_STORE_BUCKET,
+    WORKSPACE_BUCKET_PREFIX,
+)
 from shared.contracts import ContractModel
 from shared.deployment_settings import MissingDeploymentSettingError
 from typing_extensions import TypeVar
@@ -38,6 +43,15 @@ LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-local-secret"
 
 class S3ObjectStoreSettings(BaseSettings):
     bucket: str = OBJECT_STORE_BUCKET
+    workspace_bucket_prefix: str = WORKSPACE_BUCKET_PREFIX
+    """Prefix of the bucket each workspace gets.
+
+    A bucket name is global to the object store, and two deployments sharing one
+    AWS account share its namespace. Without a prefix per deployment, the grant
+    that lets a control plane reach `workspace-*` reaches every deployment's
+    workspaces in that account, and no policy written against the default name
+    can separate them.
+    """
     # Which store this talks to is a deployment fact, so absence is rejected
     # rather than defaulted. A caller whose store is AWS itself says so by
     # passing `None`; that is a statement, and silence is not.
@@ -69,6 +83,20 @@ class S3ObjectStoreSettings(BaseSettings):
                 purpose="the object store this process reads and writes objects through",
             )
         return values
+
+    @field_validator("endpoint_url", "presigned_endpoint_url", mode="before")
+    @classmethod
+    def empty_endpoint_means_aws(cls, value: object) -> object:
+        """An empty endpoint names AWS itself, which boto3 spells as `None`.
+
+        A deployment says "this store is S3" by setting the variable to the empty
+        string: the value has to be present, because absence is rejected, and there
+        is no address to give. Passed through, boto3 reads the empty string as an
+        address and fails with `Invalid endpoint:` naming nothing at all.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("credential_expires_at", mode="before")
     @classmethod

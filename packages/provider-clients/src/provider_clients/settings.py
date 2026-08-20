@@ -111,8 +111,8 @@ class AwsAccountConnectionSettings(BaseModel):
             )
         if not self.control_principal_arn:
             missing.append(
-                f"control principal ARN ({_CONTROL_PRINCIPAL_ENV}, which "
-                "deploy/connected-aws/bootstrap.py prints ready to paste)"
+                f"control principal ARN ({_CONTROL_PRINCIPAL_ENV}, the "
+                "control_principal_arn output of deploy/platform-aws)"
             )
         if missing:
             raise ValueError(

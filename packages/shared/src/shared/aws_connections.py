@@ -132,6 +132,28 @@ class AwsAccountComputeConfiguration(ContractModel):
         return self
 
 
+class AwsAccountNetwork(ContractModel):
+    """Where a managed pool launches its nodes in the connected account.
+
+    Exactly two subnets, because one Auto Scaling group spans one region's zones
+    and `AwsManagedPoolSpec` takes that pair. A managed-stack connection reads
+    this back from its authorization stack outputs; an existing-role connection
+    is given it, because nothing in that mode creates a network. Both modes carry
+    it in the same place so placement reads one field rather than branching on
+    how the account was authorized.
+    """
+
+    vpc_id: str = Field(min_length=1, max_length=128)
+    subnet_ids: tuple[str, str]
+    security_group_id: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_distinct_subnets(self) -> AwsAccountNetwork:
+        if self.subnet_ids[0] == self.subnet_ids[1]:
+            raise ValueError("AWS account network requires two distinct subnets")
+        return self
+
+
 class AwsManagedAuthorizationReference(ContractModel):
     stack_name: str = Field(min_length=1, max_length=128)
     region: str = Field(pattern=AWS_REGION_PATTERN)
@@ -139,9 +161,6 @@ class AwsManagedAuthorizationReference(ContractModel):
     stack_id: str | None = Field(default=None, min_length=1, max_length=2048)
     template_version: str = Field(min_length=1, max_length=128)
     template_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    vpc_id: str | None = Field(default=None, min_length=1, max_length=128)
-    subnet_ids: tuple[str, ...] = ()
-    security_group_id: str | None = Field(default=None, min_length=1, max_length=128)
     shared_ami_ids: tuple[str, ...] = ()
 
 
@@ -234,6 +253,14 @@ class AwsAccountConnection(ContractModel):
         default=None,
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:instance-profile/[A-Za-z0-9+=,.@_/-]{1,512}$",
     )
+    network: AwsAccountNetwork | None = None
+    """Where this account's managed pools launch, once the network is known.
+
+    Absent until an authorization is validated: a managed-stack connection has no
+    network before its stack reports outputs, and an existing-role connection has
+    none before the operator supplies one. A pool requested against a connection
+    without it is refused rather than launched somewhere chosen by default.
+    """
     drain_total_pools: int = Field(default=0, ge=0)
     drain_remaining_pools: int = Field(default=0, ge=0)
     customer_action_url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
@@ -478,6 +505,12 @@ class AwsAccountAuthorizationPlan(ContractModel):
     node_instance_profile_arn: str = Field(
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:instance-profile/[A-Za-z0-9+=,.@_/-]{1,512}$"
     )
+    network: AwsAccountNetwork | None = None
+    """Known at plan time only for an existing role, where the operator supplies it.
+
+    A managed stack has not been deployed yet at this point, so its network
+    arrives later, when validation reads the stack outputs.
+    """
 
     @model_validator(mode="after")
     def validate_authorization(self) -> AwsAccountAuthorizationPlan:
@@ -501,6 +534,7 @@ class AwsAccountValidationResult(ContractModel):
     node_instance_profile_arn: str = Field(
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:instance-profile/[A-Za-z0-9+=,.@_/-]{1,512}$"
     )
+    network: AwsAccountNetwork | None = None
     validated_at: datetime
 
 
@@ -515,6 +549,7 @@ __all__ = [
     "AwsAccountConnectionAvailableAction",
     "AwsAccountConnectionErrorCode",
     "AwsAccountConnectionPhase",
+    "AwsAccountNetwork",
     "AwsAccountValidationResult",
     "AwsAuthorizationCleanupStatus",
     "AwsAuthorizationCleanupTombstone",

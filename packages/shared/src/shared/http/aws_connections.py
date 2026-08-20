@@ -12,6 +12,7 @@ from shared.aws_connections import (
     AwsAccountConnectionAvailableAction,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
+    AwsAccountNetwork,
 )
 from shared.http.base import HttpModel
 
@@ -23,11 +24,14 @@ _AWS_ROLE_ARN_PATTERN = (
 class AwsConnectionCreateRequest(HttpModel):
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
+    network: AwsAccountNetwork | None = None
 
     @model_validator(mode="after")
     def validate_role_account(self) -> AwsConnectionCreateRequest:
         if self.role_arn is not None and self.role_arn.split(":", maxsplit=5)[4] != self.account_id:
             raise ValueError("AWS role ARN must belong to account_id")
+        if self.network is not None and self.role_arn is None:
+            raise ValueError("AWS network may only be supplied with an existing role")
         return self
 
 

@@ -1,0 +1,145 @@
+# Production overlay for the root compose.yaml.
+#
+# Not a second stack. Every service, command, health check and dependency stays
+# defined once in `compose.yaml`; this file pins images to what CI pushed and
+# removes the dependency edges pointing at services a deployment does not run.
+#
+# Applied as:
+#   docker compose -f compose.yaml -f deploy/compose.deploy.yaml \
+#     --env-file images.env --env-file deployment.env up -d <services>
+#
+# What a deployment does not run, and what serves it instead:
+#
+#   postgres, database volume     PlanetScale, through LAZYCLOUD_DATABASE_URL
+#   object-store, -bucket         S3, through the platform role
+#   (otel-collector runs, exporting to a real backend instead of printing)
+#   container-worker              the connected-AWS pool, launched by the scheduler
+#   agent, agent-join-token       a joined machine; the local stack's simulated customer
+#   platform-unit, worker-token   the compose fleet's capacity owner and credential
+#   cli                           already behind the `tools` profile
+#
+# `!override` replaces the merged `depends_on` rather than adding to it. Compose
+# merges these maps by key, so without it every service would still wait on the
+# postgres and object-store containers this deployment never starts.
+
+services:
+  database-bootstrap:
+    image: "${LAZYCLOUD_IMAGE_DATABASE_BOOTSTRAP:?set by images.env}"
+    build: !reset null
+    depends_on: !override {}
+
+  administrator-bootstrap:
+    image: "${LAZYCLOUD_IMAGE_DATABASE_BOOTSTRAP:?set by images.env}"
+    depends_on: !override
+      database-bootstrap:
+        condition: service_completed_successfully
+
+  tcp-certificate:
+    image: "${LAZYCLOUD_IMAGE_API:?set by images.env}"
+
+  control-plane:
+    image: "${LAZYCLOUD_IMAGE_API:?set by images.env}"
+    build: !reset null
+    # Two. The base file caps this at one solely because it publishes fixed host
+    # ports, which Compose cannot give a second container — and the ports are
+    # removed below. Nothing else about the process is singular: the tailnet
+    # state directory is container-local, each device is ephemeral, and the
+    # Tailscale Service takes as many advertisers as start.
+    #
+    # On one host this does not survive the host, but it does survive the thing
+    # that actually happens: one container dying on an unhandled exception while
+    # the other keeps serving. It also makes a deploy a rolling replace rather
+    # than a gap.
+    deploy:
+      replicas: 2
+    # Credentials come from the instance profile through the SDK's own chain.
+    # The Compose environment names a role-chain profile in a mounted config
+    # directory, which is how a developer's stack reaches AWS; on an instance
+    # there is no such file and botocore fails at startup with ProfileNotFound.
+    #
+    # `!reset` because absent and empty are different here: botocore reads an
+    # empty AWS_PROFILE as the name of a profile called "" and fails the same way.
+    environment:
+      AWS_PROFILE: !reset null
+      AWS_CONFIG_FILE: !reset null
+      AWS_SHARED_CREDENTIALS_FILE: !reset null
+
+    # No published host ports. The tunnel reaches the origin over the Compose
+    # network and workers reach it over the tailnet, so nothing binds the host.
+    ports: !reset null
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      database-bootstrap:
+        condition: service_completed_successfully
+      administrator-bootstrap:
+        condition: service_completed_successfully
+      tcp-certificate:
+        condition: service_completed_successfully
+    volumes: !override
+      - lazycloud-files:/var/lib/lazycloud
+      - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
+
+  scheduler:
+    image: "${LAZYCLOUD_IMAGE_SCHEDULER:?set by images.env}"
+    build: !reset null
+    # Credentials come from the instance profile through the SDK's own chain.
+    # The Compose environment names a role-chain profile in a mounted config
+    # directory, which is how a developer's stack reaches AWS; on an instance
+    # there is no such file and botocore fails at startup with ProfileNotFound.
+    #
+    # `!reset` because absent and empty are different here: botocore reads an
+    # empty AWS_PROFILE as the name of a profile called "" and fails the same way.
+    environment:
+      AWS_PROFILE: !reset null
+      AWS_CONFIG_FILE: !reset null
+      AWS_SHARED_CREDENTIALS_FILE: !reset null
+
+    depends_on: !override
+      control-plane:
+        condition: service_healthy
+    volumes: !override
+      - lazycloud-files:/var/lib/lazycloud
+
+  cache-token:
+    image: "${LAZYCLOUD_IMAGE_WORKER_BOOTSTRAP:?set by images.env}"
+    build: !reset null
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      database-bootstrap:
+        condition: service_completed_successfully
+
+  cache-server:
+    image: "${LAZYCLOUD_IMAGE_CACHE_SERVER:?set by images.env}"
+    build: !reset null
+    depends_on: !override
+      cache-token:
+        condition: service_completed_successfully
+
+  public-ingress:
+    depends_on: !override
+      control-plane:
+        condition: service_healthy
+    # Both paths come from the bundle rather than the repository, which is not on
+    # the host. A bind mount whose source does not exist is created as a
+    # directory, and cloudflared then reports its config file as one.
+    volumes: !override
+      - ./cloudflared.yml:/etc/cloudflared/cloudflared.yml:ro
+      - ./tunnel-credentials.json:/etc/cloudflared/credentials.json:ro
+
+  # The image is upstream and unpinned by this overlay on purpose: it carries no
+  # repository source, so it is not one of the artifacts a package-digest
+  # mismatch can be about.
+  otel-collector:
+    volumes: !override
+      - ./collector.deploy.yaml:/etc/otel/config.yaml:ro
+    # Not `:?`. A missing telemetry credential must not stop the control plane
+    # from serving, and `:?` fails the whole compose invocation at parse time
+    # rather than this one container at start. An unset endpoint leaves the
+    # collector unable to export, which the processes already survive: an
+    # exporter that cannot reach a receiver drops the batch and keeps serving.
+    environment:
+      LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT: "${LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT-}"
+      LAZYCLOUD_TELEMETRY_BACKEND_USERNAME: "${LAZYCLOUD_TELEMETRY_BACKEND_USERNAME-}"
+      LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD: "${LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD-}"

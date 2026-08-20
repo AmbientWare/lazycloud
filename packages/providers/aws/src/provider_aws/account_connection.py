@@ -21,9 +21,11 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from shared.aws_connections import AwsAccountNetwork
 
 from .account_connection_policy import validate_aws_account_connection_template_policy
 from .boto3_clients import has_operations, is_boto3_client_factory
+from .connection_policy import CloudFormationArns, connection_role_policy
 from .instance_catalog import aws_console_host, aws_partition_for_region
 from .provider_control import (
     AwsProviderControlError,
@@ -108,6 +110,13 @@ class AwsExistingAccountAuthorization(AwsAccountConnectionModel):
     role_arn: str
     external_id_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     node_identity: AwsManagedNodeIdentity
+    network: AwsAccountNetwork | None = None
+    """Supplied rather than discovered: this mode provisions no stack.
+
+    Validation confirms the VPC, both subnets, and the security group exist and
+    belong together before the connection is accepted, so a mistyped id fails
+    where it was entered rather than at the first launch attempt.
+    """
 
     @model_validator(mode="after")
     def validate_scope(self) -> AwsExistingAccountAuthorization:
@@ -205,15 +214,14 @@ class AwsAccountAuthorizationValidation(AwsAccountConnectionModel):
     authorization: AwsActiveAccountAuthorization
     caller_arn: str
     node_identity: AwsManagedNodeIdentity
-    vpc_id: str = Field(min_length=1)
-    subnet_ids: tuple[str, ...] = Field(min_length=2)
-    security_group_id: str = Field(min_length=1)
+    network: AwsAccountNetwork
 
 
 class AwsExistingAccountAuthorizationValidation(AwsAccountConnectionModel):
     authorization: AwsExistingAccountAuthorization
     caller_arn: str
     node_identity: AwsManagedNodeIdentity
+    network: AwsAccountNetwork | None = None
 
 
 class AwsAccountAuthorizationValidationErrorCode(StrEnum):
@@ -344,9 +352,7 @@ class AwsAccountConnectionTarget(AwsAccountConnectionModel):
     external_id: SecretStr = Field(min_length=32, max_length=256, repr=False)
     node_role_arn: str
     node_instance_profile_arn: str
-    vpc_id: str | None = Field(default=None, min_length=1)
-    subnet_ids: tuple[str, ...] = ()
-    security_group_id: str | None = Field(default=None, min_length=1)
+    network: AwsAccountNetwork | None = None
 
     @field_validator("role_arn", "node_role_arn", "node_instance_profile_arn")
     @classmethod
@@ -495,6 +501,10 @@ class AwsConnectionEc2Client(Protocol):
         Filters: list[dict[str, object]],
         MaxResults: int,
     ) -> Mapping[str, object]: ...
+
+    def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]: ...
+
+    def describe_security_groups(self, *, GroupIds: list[str]) -> Mapping[str, object]: ...
 
 
 class AwsConnectionCloudFormationClient(Protocol):
@@ -665,6 +675,25 @@ class _DescribeVolumesResponse(_AwsResponseModel):
     volumes: tuple[_Volume, ...] = Field(default=(), alias="Volumes")
 
 
+class _Subnet(_AwsResponseModel):
+    subnet_id: str = Field(alias="SubnetId")
+    vpc_id: str = Field(alias="VpcId")
+    availability_zone: str = Field(alias="AvailabilityZone")
+
+
+class _DescribeSubnetsResponse(_AwsResponseModel):
+    subnets: tuple[_Subnet, ...] = Field(default=(), alias="Subnets")
+
+
+class _SecurityGroup(_AwsResponseModel):
+    group_id: str = Field(alias="GroupId")
+    vpc_id: str = Field(alias="VpcId")
+
+
+class _DescribeSecurityGroupsResponse(_AwsResponseModel):
+    security_groups: tuple[_SecurityGroup, ...] = Field(default=(), alias="SecurityGroups")
+
+
 class _StackOutput(_AwsResponseModel):
     key: str = Field(alias="OutputKey")
     value: str = Field(alias="OutputValue")
@@ -831,9 +860,11 @@ class Boto3AwsAccountConnectionValidator:
             authorization=active,
             caller_arn=caller.arn,
             node_identity=node_identity,
-            vpc_id=vpc_id,
-            subnet_ids=subnet_ids,
-            security_group_id=security_group_id,
+            network=AwsAccountNetwork(
+                vpc_id=vpc_id,
+                subnet_ids=(subnet_ids[0], subnet_ids[1]),
+                security_group_id=security_group_id,
+            ),
         )
 
     def validate_existing_authorization(
@@ -879,10 +910,76 @@ class Boto3AwsAccountConnectionValidator:
             session.client("iam"),
             authorization.node_identity,
         )
+        if authorization.network is not None:
+            try:
+                _validate_account_network(session.client("ec2"), authorization.network)
+            except ClientError as exc:
+                raise _client_error(exc, operation="validate existing account network") from exc
+            except BotoCoreError as exc:
+                raise upstream_error(exc, operation="validate existing account network") from exc
         return AwsExistingAccountAuthorizationValidation(
             authorization=authorization,
             caller_arn=caller.arn,
             node_identity=node_identity,
+            network=authorization.network,
+        )
+
+
+def _validate_account_network(
+    client: AwsConnectionEc2Client,
+    network: AwsAccountNetwork,
+) -> None:
+    """Confirm a supplied network is real, coherent, and spread across two zones.
+
+    An Auto Scaling group spanning one zone cannot replace a node when that zone
+    is the thing that failed, so two zones is a requirement rather than a
+    preference. Every mismatch here is a value somebody typed, so each one names
+    which value was wrong rather than reporting that the network is invalid.
+    """
+    subnets = _validated(
+        _DescribeSubnetsResponse,
+        client.describe_subnets(SubnetIds=list(network.subnet_ids)),
+        operation="validate AWS account network subnets",
+    ).subnets
+    found = {subnet.subnet_id: subnet for subnet in subnets}
+    missing = tuple(subnet_id for subnet_id in network.subnet_ids if subnet_id not in found)
+    if missing:
+        raise invalid_response_error(
+            "validate AWS account network subnets",
+            f"subnets do not exist in this account: {', '.join(missing)}",
+        )
+    outside = tuple(
+        subnet_id for subnet_id in network.subnet_ids if found[subnet_id].vpc_id != network.vpc_id
+    )
+    if outside:
+        raise invalid_response_error(
+            "validate AWS account network subnets",
+            f"subnets are not in {network.vpc_id}: {', '.join(outside)}",
+        )
+    zones = {found[subnet_id].availability_zone for subnet_id in network.subnet_ids}
+    if len(zones) < 2:
+        raise invalid_response_error(
+            "validate AWS account network subnets",
+            "both subnets are in one availability zone",
+        )
+    groups = _validated(
+        _DescribeSecurityGroupsResponse,
+        client.describe_security_groups(GroupIds=[network.security_group_id]),
+        operation="validate AWS account network security group",
+    ).security_groups
+    group = next(
+        (item for item in groups if item.group_id == network.security_group_id),
+        None,
+    )
+    if group is None:
+        raise invalid_response_error(
+            "validate AWS account network security group",
+            f"security group does not exist in this account: {network.security_group_id}",
+        )
+    if group.vpc_id != network.vpc_id:
+        raise invalid_response_error(
+            "validate AWS account network security group",
+            f"security group {network.security_group_id} is not in {network.vpc_id}",
         )
 
 
@@ -1147,6 +1244,7 @@ class AwsAccountConnectionPlanner:
         account_id: str,
         role_arn: str,
         external_id: SecretStr,
+        network: AwsAccountNetwork | None = None,
     ) -> AwsExistingAccountAuthorization:
         owner = user_id.strip()
         connection = connection_id.strip()
@@ -1166,6 +1264,7 @@ class AwsAccountConnectionPlanner:
                 region=self.region,
                 suffix=suffix,
             ),
+            network=network,
         )
 
     def _plan(
@@ -1291,8 +1390,6 @@ def plan_aws_account_connection_authorization(
 
 
 def _connection_template() -> dict[str, object]:
-    ec2_managed_tag = {"StringEquals": {"ec2:ResourceTag/cloud-pool:managed-by": "control-plane"}}
-    request_tag = {"StringEquals": {"aws:RequestTag/cloud-pool:managed-by": "control-plane"}}
     return {
         "AWSTemplateFormatVersion": "2010-09-09",
         "Description": "One-time authorization for customer-owned compute management.",
@@ -1410,282 +1507,10 @@ def _connection_template() -> dict[str, object]:
                     "Policies": [
                         {
                             "PolicyName": "managed-compute-control",
-                            "PolicyDocument": {
-                                "Version": "2012-10-17",
-                                "Statement": [
-                                    {
-                                        "Sid": "Inventory",
-                                        "Effect": "Allow",
-                                        "Action": [
-                                            "autoscaling:DescribeAutoScalingGroups",
-                                            "ec2:DescribeAvailabilityZones",
-                                            "ec2:DescribeInstances",
-                                            "ec2:DescribeInternetGateways",
-                                            "ec2:DescribeLaunchTemplates",
-                                            "ec2:DescribeLaunchTemplateVersions",
-                                            "ec2:DescribeRegions",
-                                            "ec2:DescribeRouteTables",
-                                            "ec2:DescribeSecurityGroups",
-                                            "ec2:DescribeSubnets",
-                                            "ec2:DescribeVolumes",
-                                            "ec2:DescribeVpcs",
-                                            "sts:GetCallerIdentity",
-                                        ],
-                                        "Resource": "*",
-                                    },
-                                    {
-                                        "Sid": "ManageCurrentAuthorization",
-                                        "Effect": "Allow",
-                                        "Action": [
-                                            "cloudformation:DeleteStack",
-                                            "cloudformation:DescribeStackEvents",
-                                            "cloudformation:DescribeStacks",
-                                        ],
-                                        "Resource": {"Ref": "AWS::StackId"},
-                                    },
-                                    {
-                                        "Sid": "CreateTaggedLaunchTemplates",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:CreateLaunchTemplate",
-                                        "Resource": "*",
-                                        "Condition": request_tag,
-                                    },
-                                    {
-                                        "Sid": "TagOnlyDuringOwnedCreate",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:CreateTags",
-                                        "Resource": "*",
-                                        "Condition": {
-                                            "StringEquals": {
-                                                "aws:RequestTag/cloud-pool:managed-by": (
-                                                    "control-plane"
-                                                ),
-                                                "ec2:CreateAction": "CreateLaunchTemplate",
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "Sid": "CreateTaggedAutoScalingGroups",
-                                        "Effect": "Allow",
-                                        "Action": "autoscaling:CreateAutoScalingGroup",
-                                        "Resource": "*",
-                                        "Condition": request_tag,
-                                    },
-                                    {
-                                        "Sid": "ManageTaggedLaunchTemplates",
-                                        "Effect": "Allow",
-                                        "Action": [
-                                            "ec2:CreateLaunchTemplateVersion",
-                                            "ec2:DeleteLaunchTemplate",
-                                            "ec2:ModifyLaunchTemplate",
-                                        ],
-                                        "Resource": "*",
-                                        "Condition": ec2_managed_tag,
-                                    },
-                                    {
-                                        "Sid": "ManageTaggedAutoScalingGroups",
-                                        "Effect": "Allow",
-                                        "Action": [
-                                            "autoscaling:DeleteAutoScalingGroup",
-                                            "autoscaling:SetDesiredCapacity",
-                                            "autoscaling:TerminateInstanceInAutoScalingGroup",
-                                            "autoscaling:UpdateAutoScalingGroup",
-                                        ],
-                                        "Resource": "*",
-                                        "Condition": {
-                                            "StringEquals": {
-                                                "autoscaling:ResourceTag/"
-                                                "cloud-pool:managed-by": "control-plane"
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "Sid": "RunTaggedInstanceResources",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:RunInstances",
-                                        "Resource": [
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:instance/*"
-                                                )
-                                            },
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:volume/*"
-                                                )
-                                            },
-                                        ],
-                                        "Condition": request_tag,
-                                    },
-                                    {
-                                        "Sid": "UseManagedInstanceLaunchResources",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:RunInstances",
-                                        "Resource": [
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:launch-template/*"
-                                                )
-                                            },
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:security-group/*"
-                                                )
-                                            },
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:subnet/*"
-                                                )
-                                            },
-                                        ],
-                                        "Condition": ec2_managed_tag,
-                                    },
-                                    {
-                                        "Sid": "UseRegionalImagesForInstances",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:RunInstances",
-                                        "Resource": {
-                                            "Fn::Sub": (
-                                                "arn:${AWS::Partition}:ec2:${AWS::Region}:*:image/*"
-                                            )
-                                        },
-                                    },
-                                    {
-                                        "Sid": "CreateInstanceNetworkInterfaces",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:RunInstances",
-                                        "Resource": {
-                                            "Fn::Sub": (
-                                                "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                "${AWS::AccountId}:network-interface/*"
-                                            )
-                                        },
-                                    },
-                                    {
-                                        "Sid": "TagManagedInstancesOnLaunch",
-                                        "Effect": "Allow",
-                                        "Action": "ec2:CreateTags",
-                                        "Resource": [
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:instance/*"
-                                                )
-                                            },
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:ec2:${AWS::Region}:"
-                                                    "${AWS::AccountId}:volume/*"
-                                                )
-                                            },
-                                        ],
-                                        "Condition": {
-                                            "StringEquals": {
-                                                "aws:RequestTag/cloud-pool:managed-by": (
-                                                    "control-plane"
-                                                ),
-                                                "ec2:CreateAction": "RunInstances",
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "Sid": "CreateAutoScalingServiceRole",
-                                        "Effect": "Allow",
-                                        "Action": "iam:CreateServiceLinkedRole",
-                                        "Resource": {
-                                            "Fn::Sub": (
-                                                "arn:${AWS::Partition}:iam::*:role/aws-service-role/"
-                                                "autoscaling.amazonaws.com/"
-                                                "AWSServiceRoleForAutoScaling"
-                                            )
-                                        },
-                                        "Condition": {
-                                            "StringEquals": {
-                                                "iam:AWSServiceName": "autoscaling.amazonaws.com"
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "Sid": "CreateManagedNodeIdentity",
-                                        "Effect": "Allow",
-                                        "Action": [
-                                            "iam:CreateInstanceProfile",
-                                            "iam:CreateRole",
-                                        ],
-                                        "Resource": [
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:iam::"
-                                                    "${AWS::AccountId}:instance-profile/"
-                                                    "${NodeInstanceProfileName}"
-                                                )
-                                            },
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:iam::"
-                                                    "${AWS::AccountId}:role/${NodeRoleName}"
-                                                )
-                                            },
-                                        ],
-                                        "Condition": request_tag,
-                                    },
-                                    {
-                                        "Sid": "ManageOwnedNodeIdentity",
-                                        "Effect": "Allow",
-                                        "Action": [
-                                            "iam:AddRoleToInstanceProfile",
-                                            "iam:DeleteInstanceProfile",
-                                            "iam:DeleteRole",
-                                            "iam:DeleteRolePolicy",
-                                            "iam:GetInstanceProfile",
-                                            "iam:GetRole",
-                                            "iam:ListRolePolicies",
-                                            "iam:PutRolePolicy",
-                                            "iam:RemoveRoleFromInstanceProfile",
-                                            "iam:TagInstanceProfile",
-                                            "iam:TagRole",
-                                            "iam:UntagInstanceProfile",
-                                            "iam:UntagRole",
-                                        ],
-                                        "Resource": [
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:iam::"
-                                                    "${AWS::AccountId}:instance-profile/"
-                                                    "${NodeInstanceProfileName}"
-                                                )
-                                            },
-                                            {
-                                                "Fn::Sub": (
-                                                    "arn:${AWS::Partition}:iam::"
-                                                    "${AWS::AccountId}:role/${NodeRoleName}"
-                                                )
-                                            },
-                                        ],
-                                    },
-                                    {
-                                        "Sid": "PassOwnedNodeRole",
-                                        "Effect": "Allow",
-                                        "Action": "iam:PassRole",
-                                        "Resource": {
-                                            "Fn::Sub": (
-                                                "arn:${AWS::Partition}:iam::"
-                                                "${AWS::AccountId}:role/${NodeRoleName}"
-                                            )
-                                        },
-                                        "Condition": {
-                                            "StringEquals": {
-                                                "iam:PassedToService": "ec2.amazonaws.com",
-                                            }
-                                        },
-                                    },
-                                ],
-                            },
+                            "PolicyDocument": connection_role_policy(
+                                CloudFormationArns(),
+                                authorization_stack={"Ref": "AWS::StackId"},
+                            ),
                         }
                     ],
                 },

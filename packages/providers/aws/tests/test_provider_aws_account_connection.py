@@ -37,6 +37,7 @@ from provider_aws.account_connection import (
     AwsConnectionStsClient,
 )
 from pydantic import JsonValue, SecretStr, TypeAdapter
+from shared.aws_connections import AwsAccountNetwork
 
 _ACCOUNT_ID = "123456789012"
 _EXTERNAL_ID = "connection-external-id-0123456789abcdef"
@@ -428,6 +429,28 @@ class _Ec2:
         self.state.volume_inventory_reads += 1
         return {"Volumes": []}
 
+    def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]:
+        return {
+            "Subnets": [
+                {
+                    "SubnetId": subnet_id,
+                    "VpcId": self.state.subnets[subnet_id][0],
+                    "AvailabilityZone": self.state.subnets[subnet_id][1],
+                }
+                for subnet_id in SubnetIds
+                if subnet_id in self.state.subnets
+            ]
+        }
+
+    def describe_security_groups(self, *, GroupIds: list[str]) -> Mapping[str, object]:
+        return {
+            "SecurityGroups": [
+                {"GroupId": group_id, "VpcId": self.state.security_groups[group_id]}
+                for group_id in GroupIds
+                if group_id in self.state.security_groups
+            ]
+        }
+
 
 class _Iam:
     def __init__(self, state: _AwsState) -> None:
@@ -620,6 +643,8 @@ class _AwsState:
         self.delete_requests: list[tuple[str, str]] = []
         self.node_identity_counts_at_stack_delete: list[tuple[int, int]] = []
         self.volume_inventory_reads = 0
+        self.subnets: dict[str, tuple[str, str]] = {}
+        self.security_groups: dict[str, str] = {}
 
     def sessions(
         self,
@@ -732,9 +757,9 @@ def test_validation_accepts_ready_stack_and_ensures_node_identity(stack_status: 
 
     assert result.authorization.stack_id == expected.stack_id
     assert result.node_identity == pending.node_identity
-    assert result.vpc_id == _STACK_VPC_ID
-    assert result.subnet_ids == _STACK_SUBNET_IDS
-    assert result.security_group_id == _STACK_SECURITY_GROUP_ID
+    assert result.network.vpc_id == _STACK_VPC_ID
+    assert result.network.subnet_ids == _STACK_SUBNET_IDS
+    assert result.network.security_group_id == _STACK_SECURITY_GROUP_ID
     assert state.roles[pending.node_identity.role_name] == pending.node_identity.role_arn
     assert state.profiles[pending.node_identity.instance_profile_name][1] == [
         pending.node_identity.role_arn
@@ -996,4 +1021,71 @@ def test_cleanup_rejects_invalid_cloudformation_operation_token() -> None:
             external_id=SecretStr(_EXTERNAL_ID),
             operation_id="1-invalid",
             remove_node_identity=False,
+        )
+
+
+def test_existing_role_carries_a_supplied_network_through_validation() -> None:
+    network = AwsAccountNetwork(
+        vpc_id="vpc-0123456789abcdef0",
+        subnet_ids=("subnet-0123456789abcdef0", "subnet-0123456789abcdef1"),
+        security_group_id="sg-0123456789abcdef0",
+    )
+    authorization = _planner().plan_existing_role(
+        user_id=_WORKSPACE_ID,
+        connection_id=_CONNECTION_ID,
+        account_id=_ACCOUNT_ID,
+        role_arn=f"arn:aws:iam::{_ACCOUNT_ID}:role/customer-managed-compute",
+        external_id=SecretStr(_EXTERNAL_ID),
+        network=network,
+    )
+    state = _AwsState()
+    state.subnets = {
+        "subnet-0123456789abcdef0": (network.vpc_id, "us-east-1a"),
+        "subnet-0123456789abcdef1": (network.vpc_id, "us-east-1b"),
+    }
+    state.security_groups = {network.security_group_id: network.vpc_id}
+
+    validation = Boto3AwsAccountConnectionValidator(state.sessions).validate_existing_authorization(
+        AwsExistingAccountAuthorizationValidationInput(
+            authorization=authorization,
+            external_id=SecretStr(_EXTERNAL_ID),
+        )
+    )
+
+    assert validation.network == network
+
+
+def test_existing_role_network_in_one_availability_zone_is_refused() -> None:
+    """The failure this catches is the one that otherwise launches fine.
+
+    A cross-VPC subnet id fails at the first launch attempt anyway. Two subnets
+    in one zone provisions, serves, and only shows itself when that zone is what
+    went down, so it has to be refused where the values were entered.
+    """
+    network = AwsAccountNetwork(
+        vpc_id="vpc-0123456789abcdef0",
+        subnet_ids=("subnet-0123456789abcdef0", "subnet-0123456789abcdef1"),
+        security_group_id="sg-0123456789abcdef0",
+    )
+    authorization = _planner().plan_existing_role(
+        user_id=_WORKSPACE_ID,
+        connection_id=_CONNECTION_ID,
+        account_id=_ACCOUNT_ID,
+        role_arn=f"arn:aws:iam::{_ACCOUNT_ID}:role/customer-managed-compute",
+        external_id=SecretStr(_EXTERNAL_ID),
+        network=network,
+    )
+    state = _AwsState()
+    state.subnets = {
+        "subnet-0123456789abcdef0": (network.vpc_id, "us-east-1a"),
+        "subnet-0123456789abcdef1": (network.vpc_id, "us-east-1a"),
+    }
+    state.security_groups = {network.security_group_id: network.vpc_id}
+
+    with pytest.raises(AwsProviderControlError, match="one availability zone"):
+        Boto3AwsAccountConnectionValidator(state.sessions).validate_existing_authorization(
+            AwsExistingAccountAuthorizationValidationInput(
+                authorization=authorization,
+                external_id=SecretStr(_EXTERNAL_ID),
+            )
         )

@@ -21,38 +21,53 @@ The API tokens are also not managed here. Minting a token needs a token, and the
 resulting cycle is not worth automating; they stay dashboard-created and are
 documented in `deploy/RUNBOOK.md`.
 
-## The tunnel and the records already exist
+## Declared, not adopted
 
-This module is being introduced against infrastructure that a human created by
-hand. **The first action is an import, not an apply.** The tunnel id currently
-committed in `deploy/public-ingress/cloudflared.yml` and the two CNAMEs in the
-zone are the resources to adopt:
+An apply against a zone that has none of these creates all of them: the tunnel,
+its secret, both records, and optionally the fallback origin. There is no import
+path here and there should not be one. A resource Terraform adopted carries
+whatever a human left on it, and the difference between "declared" and "happens
+to match" is invisible until an apply strips something nobody declared.
 
-```sh
-terraform -chdir=deploy/cloudflare import \
-  cloudflare_zero_trust_tunnel_cloudflared.public_ingress '<account_id>/<tunnel_id>'
-terraform -chdir=deploy/cloudflare import cloudflare_dns_record.apex     '<zone_id>/<record_id>'
-terraform -chdir=deploy/cloudflare import cloudflare_dns_record.wildcard '<zone_id>/<record_id>'
-```
+`tunnel_secret` is the clearest case. It is an argument rather than something the
+API returns, so an adopted tunnel has a secret Terraform does not know and the
+first apply rotates it out from under the running connector. Created here, the
+secret is Terraform's from the start.
 
-Record ids come from `GET /zones/<zone_id>/dns_records`.
+### Replacing resources a human made
 
-One thing the import cannot recover: `tunnel_secret` is an argument rather than
-something the API returns, so an imported tunnel has a secret Terraform does not
-know, and the first apply rotates it.
+Delete them through the API, then apply. Do not import them.
 
-Observed on the real account: the tunnel is **updated in place**, not replaced.
-Its id survives, so `deploy/public-ingress/cloudflared.yml` needs no edit and the
-DNS records do not move. What does happen is that the running connector's
-credentials stop being valid the moment the secret rotates, and the edge serves
-1033 until a new credentials file is written and `public-ingress` is recreated.
-Have the replacement credentials ready to install before applying rather than
-after; the gap is however long that takes.
+Order matters, and one step is not obvious:
 
-The records themselves adopt cleanly, with one catch worth knowing: anything set
-on them that this module does not declare — a `comment`, most likely — shows up
-in the plan as a deletion. Declare it here instead of letting an apply quietly
-strip it.
+1. **Remove the Cloudflare for SaaS fallback origin designation first**, under
+   SSL/TLS → Custom Hostnames, if the apex is set as one. A record pinned that
+   way cannot be deleted at all, and the delete fails with an error about the
+   record rather than about the designation.
+
+2. **Delete the two CNAMEs by id.** Never clear the zone:
+
+   ```sh
+   curl -sX DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID"
+   ```
+
+   `lazycloud.dev` carries live Google Workspace mail — five `MX`, an SPF `TXT`,
+   and a site-verification `TXT` — which coexist with a proxied apex CNAME only
+   because of CNAME flattening. Read the zone through the API before deleting
+   anything; `dig` cannot tell a flattened apex CNAME from an unrelated proxied
+   A record.
+
+3. **Delete the tunnel**, then apply. The new tunnel has a new id, so the
+   records this module creates point at it correctly, but two things outside this
+   module name the old one: `deploy/public-ingress/cloudflared.yml` and the
+   credentials file it loads. Both need replacing before `public-ingress` comes
+   back up.
+
+The public host is down from the moment the records go until the new connector is
+running. Plan for that rather than discovering it: the edge serves 1033 for a
+hostname whose record no longer resolves to a live tunnel, and 1033 also looks
+exactly like a connector that is merely unhealthy.
 
 ## Backend and credentials
 

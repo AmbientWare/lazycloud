@@ -5,6 +5,7 @@ from typing import Protocol
 from urllib.parse import urlencode
 
 from pydantic import JsonValue
+from shared.aws_connections import AwsAccountNetwork
 from shared.http.aws_connections import (
     AwsComputeConfigurationUpdateRequest,
     AwsConnectionAuthorizationResponse,
@@ -77,8 +78,13 @@ class ComputeClient:
         *,
         account_id: str,
         role_arn: str | None = None,
+        network: AwsAccountNetwork | None = None,
     ) -> AwsConnectionAuthorizationResponse:
-        request = AwsConnectionCreateRequest(account_id=account_id, role_arn=role_arn)
+        request = AwsConnectionCreateRequest(
+            account_id=account_id,
+            role_arn=role_arn,
+            network=network,
+        )
         return AwsConnectionAuthorizationResponse.model_validate(
             self.channel.post(self._aws_path(""), request.model_dump(mode="json"))
         )

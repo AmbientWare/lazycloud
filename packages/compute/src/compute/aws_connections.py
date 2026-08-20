@@ -24,6 +24,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
+    AwsAccountNetwork,
     AwsAccountValidationResult,
     AwsAuthorizationCleanupStatus,
     AwsAuthorizationCleanupTombstone,
@@ -52,6 +53,7 @@ class AwsAccountAuthorizationPlanner(Protocol):
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
+        network: AwsAccountNetwork | None,
     ) -> AwsAccountAuthorizationPlan: ...
 
 
@@ -195,6 +197,7 @@ class AwsAccountConnectionService:
             active_authorization=None,
             node_role_arn=None,
             node_instance_profile_arn=None,
+            network=request.network,
         )
         self._validate_plan_account(plan, request.account_id)
         now = utc_now()
@@ -213,6 +216,7 @@ class AwsAccountConnectionService:
             pending_authorization=pending,
             node_role_arn=plan.node_role_arn,
             node_instance_profile_arn=plan.node_instance_profile_arn,
+            network=plan.network,
             customer_action_url=plan.authorization_url,
             customer_action_label=("Continue in AWS" if plan.authorization_url else ""),
             next_reconcile_at=now,
@@ -1100,6 +1104,7 @@ class AwsAccountConnectionService:
                         "pending_authorization": None,
                         "node_role_arn": result.node_role_arn,
                         "node_instance_profile_arn": result.node_instance_profile_arn,
+                        "network": result.network or connection.network,
                         "next_reconcile_at": None,
                         "reconcile_attempt_count": 0,
                         "customer_action_url": None,
@@ -1121,6 +1126,7 @@ class AwsAccountConnectionService:
                     ),
                     "node_role_arn": result.node_role_arn,
                     "node_instance_profile_arn": result.node_instance_profile_arn,
+                    "network": result.network or connection.network,
                     "provider_operation_id": self._operation_id(),
                     "provider_operation_started_at": result.validated_at,
                     "next_reconcile_at": result.validated_at,
@@ -1137,6 +1143,7 @@ class AwsAccountConnectionService:
                 "active_authorization": ready_target,
                 "node_role_arn": result.node_role_arn,
                 "node_instance_profile_arn": result.node_instance_profile_arn,
+                "network": result.network or connection.network,
                 "next_reconcile_at": None,
                 "reconcile_attempt_count": 0,
                 "customer_action_url": None,
@@ -1231,6 +1238,7 @@ class AwsAccountConnectionService:
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
+        network: AwsAccountNetwork | None = None,
     ) -> AwsAccountAuthorizationPlan:
         try:
             return self.authorization_planner.plan(
@@ -1243,6 +1251,7 @@ class AwsAccountConnectionService:
                 active_authorization=active_authorization,
                 node_role_arn=node_role_arn,
                 node_instance_profile_arn=node_instance_profile_arn,
+                network=network,
             )
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -376,6 +377,48 @@ def unit_create(
     print_payload(ctx, response.model_dump(mode="json"))
 
 
+def unit_ensure(
+    ctx: typer.Context,
+    name: str,
+    pool: Annotated[str, typer.Option("--pool")] = "",
+    provider: Annotated[str, typer.Option("--provider")] = "agent",
+    capacity_owner_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--capacity-owner-output",
+            dir_okay=False,
+            resolve_path=True,
+            help=(
+                "Write the unit's capacity owner id here. A worker is admitted only "
+                "into a pool some unit already feeds, and this id is assigned at "
+                "creation rather than derived from the pool name."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Return the unit with this name, creating it only if none exists.
+
+    Looked up by name rather than by pool: several units may feed one pool, so a
+    pool lookup can return somebody else's unit. The shared fleet and a joined
+    machine both file a unit against the platform pool, and registering the fleet
+    against the machine's unit fails no visible check.
+    """
+    client = admin_api_client()
+    record = next(
+        (item for item in client.list_units().pools if item.name == name),
+        None,
+    )
+    if record is None:
+        record = client.create_unit(
+            UnitCreateRequest(name=name, pool=MachinePool(pool), provider=provider)
+        )
+    if capacity_owner_output is not None:
+        # An identifier, not a credential: it grants nothing without the worker
+        # token that accompanies it, so it is written in the clear.
+        capacity_owner_output.write_text(record.capacity_owner_id)
+    print_payload(ctx, record.model_dump(mode="json"))
+
+
 def unit_list(ctx: typer.Context) -> None:
     records = admin_api_client().list_units().pools
     if json_output_enabled(ctx):
@@ -599,6 +642,7 @@ container_app.command("checkpoint")(container_checkpoint)
 
 
 unit_app.command("create")(unit_create)
+unit_app.command("ensure")(unit_ensure)
 unit_app.command("list")(unit_list)
 unit_app.command("delete")(unit_delete)
 unit_app.command("join")(pool_join)

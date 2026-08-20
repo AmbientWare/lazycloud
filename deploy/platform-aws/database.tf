@@ -1,0 +1,61 @@
+# The control plane's Postgres.
+#
+# Applying a branch creates the parent database if it does not exist, so this one
+# resource is the database. `major_version` is pinned rather than tracking latest:
+# the schema declares `btree_gist` and `pgcrypto` and uses a GiST exclusion
+# constraint over `tstzrange` to make overlapping billing rate windows
+# impossible, and a major version is not something to discover during an apply.
+resource "planetscale_postgres_branch" "control_plane" {
+  organization  = var.planetscale_organization
+  database      = var.deployment
+  name          = "main"
+  major_version = var.planetscale_major_version
+  cluster_size  = var.planetscale_cluster_size
+  region        = var.planetscale_region
+}
+
+# The role the control plane connects as. Its password exists only here and in
+# Secrets Manager.
+resource "planetscale_postgres_branch_role" "control_plane" {
+  organization = var.planetscale_organization
+  database     = planetscale_postgres_branch.control_plane.database
+  branch       = planetscale_postgres_branch.control_plane.name
+
+  # Terraform destroys the role before the branch it depends on, and PlanetScale
+  # refuses a role that is still referenced, so `terraform destroy` cannot remove
+  # the database on its own. Deleting the database takes both with it; the
+  # runbook says so rather than leaving the next person to discover the 422.
+
+  # A branch role inherits nothing by default, and a role that cannot CREATE in
+  # `public` fails on the very first DDL the schema bootstrap issues. The schema
+  # also declares `btree_gist` and `pgcrypto`, so this needs to create extensions
+  # and not only tables.
+  #
+  # `postgres`, not `pscale_admin`: the API takes the role to inherit, and the
+  # `pscale_*` names that `pg_roles` lists are rejected as invalid values.
+  inherited_roles = ["postgres"]
+}
+
+# No `planetscale_postgres_bouncer`, and this is not an omission.
+#
+# PlanetScale's managed PgBouncer runs in transaction pooling mode only, and
+# `ControlPlaneRecoveryFence.start_serving` takes `pg_advisory_lock_shared` and
+# holds it for the entire lifetime of a serving process. There is no transaction
+# to scope that to. Behind a transaction pooler the lock is released when the
+# backend is recycled, the fence stops fencing without erroring, and offline
+# recovery can mint an administrator credential while replicas are still serving.
+# `WorkspaceDeletionFence` has the same shape.
+#
+# So the control plane connects direct, on `access_host_url`. Adding a bouncer
+# here and pointing the URL at it would look like a performance change and behave
+# like a correctness one.
+resource "aws_secretsmanager_secret_version" "database_url" {
+  secret_id = aws_secretsmanager_secret.runtime["database-url"].id
+  secret_string = format(
+    "postgresql+psycopg://%s:%s@%s:5432/%s",
+    planetscale_postgres_branch_role.control_plane.username,
+    planetscale_postgres_branch_role.control_plane.password,
+    planetscale_postgres_branch_role.control_plane.access_host_url,
+    planetscale_postgres_branch_role.control_plane.database_name,
+  )
+}

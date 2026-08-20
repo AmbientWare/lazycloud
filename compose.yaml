@@ -12,7 +12,11 @@ x-process-env: &process-env
 # password is not topology, and is the one Postgres itself is initialized with,
 # so it reads the same variable rather than a copy that can disagree with it.
 x-database-env: &database-env
-  LAZYCLOUD_DATABASE_URL: "postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud"
+  # The default names the Compose service; a deployment supplies its own, because
+  # the postgres container is not among the services it starts. Deliberately not
+  # named LAZYCLOUD_DATABASE_URL: that one is the host-side value the CLI uses and
+  # points at localhost, which resolves to the wrong thing inside a container.
+  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 x-redis-env: &redis-env
   LAZYCLOUD_REDIS_URL: "redis://redis:6379/0"
 
@@ -59,11 +63,15 @@ x-api-env: &api-env
 
 x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET:-lazycloud-objects}"
-  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL:-http://object-store:9000}"
+  # Names the bucket each workspace gets. A deployment sharing an AWS account with
+  # another one must differ here, because the grant that reaches `workspace-*`
+  # cannot otherwise tell two deployments' customers apart.
+  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: "${LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX:-workspace}"
   # Empty is meaningful and distinct from omitted: a connected-cloud deployment
   # sets these to "" so the object store resolves the platform role through the
   # SDK credential chain and presigns against the storage endpoint itself.
   # Use "${VAR-default}" (not ":-") so an explicit empty value survives.
+  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL-http://object-store:9000}"
   LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL-http://object-store.localhost:${LAZYCLOUD_COMPOSE_OBJECT_STORE_PORT:-9002}}"
   LAZYCLOUD_OBJECT_STORE_REGION_NAME: "${LAZYCLOUD_OBJECT_STORE_REGION_NAME:-us-east-1}"
   LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: "${LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID-lazycloud-local}"
@@ -138,7 +146,11 @@ x-cache-origin-registry: &cache-origin-registry
 x-database-bootstrap-env: &database-bootstrap-env
   LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
   LAZYCLOUD_LOG_LEVEL: "${LAZYCLOUD_LOG_LEVEL:-INFO}"
-  LAZYCLOUD_DATABASE_URL: "postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud"
+  # The default names the Compose service; a deployment supplies its own, because
+  # the postgres container is not among the services it starts. Deliberately not
+  # named LAZYCLOUD_DATABASE_URL: that one is the host-side value the CLI uses and
+  # points at localhost, which resolves to the wrong thing inside a container.
+  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 
 x-lazycloud-build-args: &lazycloud-build-args
   TAILSCALE_IMAGE: "${LAZYCLOUD_TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8}"
@@ -751,18 +763,9 @@ services:
         owner_path=/var/lib/lazycloud/tokens/worker-capacity-owner
         mkdir -p "$$(dirname "$$owner_path")"
         umask 077
-        # Looked up by name rather than by pool: a joined machine also files a unit
-        # feeding this pool, and the shared fleet must not register against the unit
-        # that belongs to somebody's hardware.
-        owner="$$(lazycloud-admin --json unit list \
-          | python -c 'import json,sys; name=sys.argv[1]; print(next((u["capacity_owner_id"] for u in json.load(sys.stdin) if u.get("name") == name), ""))' \
-          "$$pool-shared")"
-        if [ -z "$$owner" ]; then
-          owner="$$(lazycloud-admin --json unit create "$$pool-shared" --pool "$$pool" --provider local \
-            | python -c 'import json,sys; print(json.load(sys.stdin)["capacity_owner_id"])')"
-        fi
-        printf '%s' "$$owner" > "$$owner_path"
-        echo "shared fleet capacity owner ready: $$owner"
+        lazycloud-admin unit ensure "$$pool-shared" \
+          --pool "$$pool" --provider local --capacity-owner-output "$$owner_path"
+        echo "shared fleet capacity owner ready: $$(cat "$$owner_path")"
     environment:
       GATEWAY_HTTP_URL: "http://control-plane:9000"
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
