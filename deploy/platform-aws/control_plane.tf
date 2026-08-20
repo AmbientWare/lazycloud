@@ -80,6 +80,7 @@ locals {
     export LAZYCLOUD_BUNDLE_URI="s3://${aws_s3_bucket.deploy.id}/current"
     export LAZYCLOUD_REGION="${var.region}"
     export LAZYCLOUD_REGISTRY="${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+    export LAZYCLOUD_TUNNEL_CREDENTIALS_SECRET="${aws_secretsmanager_secret.runtime["cloudflare-tunnel-credentials"].name}"
     aws s3 cp "$LAZYCLOUD_BUNDLE_URI/converge.sh" /opt/lazycloud/converge.sh
     chmod 0755 /opt/lazycloud/converge.sh
     exec /opt/lazycloud/converge.sh

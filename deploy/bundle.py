@@ -34,6 +34,7 @@ _COMPOSE = _REPOSITORY_ROOT / "compose.yaml"
 _OVERLAY = _REPOSITORY_ROOT / "deploy" / "compose.deploy.yaml"
 _COLLECTOR = _REPOSITORY_ROOT / "deploy" / "telemetry" / "collector.deploy.yaml"
 _CONVERGE = _REPOSITORY_ROOT / "deploy" / "host" / "converge.sh"
+_INGRESS = _REPOSITORY_ROOT / "deploy" / "public-ingress" / "cloudflared.yml"
 _STRING_MAP = TypeAdapter(dict[str, str])
 
 # The services a deployment runs. Everything absent is served by something else:
@@ -121,7 +122,7 @@ def publish(args: argparse.Namespace) -> None:
     )
 
     prefix = f"s3://{args.bucket}/current"
-    for source in (_COMPOSE, _OVERLAY, _COLLECTOR, _CONVERGE):
+    for source in (_COMPOSE, _OVERLAY, _COLLECTOR, _CONVERGE, _INGRESS):
         _upload(source, f"{prefix}/{source.name}", aws_cli=args.aws_cli)
     for name in ("images.env", "runtime.env", "services", "secret-map"):
         _upload(staged / name, f"{prefix}/{name}", aws_cli=args.aws_cli)

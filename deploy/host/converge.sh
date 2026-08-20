@@ -14,10 +14,11 @@ umask 077
 BUNDLE="${LAZYCLOUD_BUNDLE_URI:?LAZYCLOUD_BUNDLE_URI is required}"
 REGION="${LAZYCLOUD_REGION:?LAZYCLOUD_REGION is required}"
 REGISTRY="${LAZYCLOUD_REGISTRY:?LAZYCLOUD_REGISTRY is required}"
+LAZYCLOUD_TUNNEL_CREDENTIALS_SECRET="${LAZYCLOUD_TUNNEL_CREDENTIALS_SECRET:?required}"
 
 cd /opt/lazycloud
 
-for artifact in compose.yaml compose.deploy.yaml collector.deploy.yaml images.env runtime.env services secret-map; do
+for artifact in compose.yaml compose.deploy.yaml collector.deploy.yaml cloudflared.yml images.env runtime.env services secret-map; do
   aws s3 cp "$BUNDLE/$artifact" "$artifact"
 done
 
@@ -43,6 +44,19 @@ done <secret-map
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "secrets with no value: ${missing[*]}" >&2
+fi
+
+# cloudflared wants its credentials as a file, not an environment variable. An
+# absent secret leaves an empty file and the connector says so, which is better
+# than a bind mount whose missing source Docker silently turns into a directory.
+: >tunnel-credentials.json
+chmod 0600 tunnel-credentials.json
+if credentials="$(aws secretsmanager get-secret-value \
+    --secret-id "$LAZYCLOUD_TUNNEL_CREDENTIALS_SECRET" \
+    --query SecretString --output text 2>/dev/null)" && [ -n "$credentials" ]; then
+  printf '%s' "$credentials" >tunnel-credentials.json
+else
+  echo "no tunnel credentials yet; public ingress will not connect" >&2
 fi
 
 aws ecr get-login-password --region "$REGION" \

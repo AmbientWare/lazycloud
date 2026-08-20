@@ -109,6 +109,12 @@ services:
     depends_on: !override
       control-plane:
         condition: service_healthy
+    # Both paths come from the bundle rather than the repository, which is not on
+    # the host. A bind mount whose source does not exist is created as a
+    # directory, and cloudflared then reports its config file as one.
+    volumes: !override
+      - ./cloudflared.yml:/etc/cloudflared/cloudflared.yml:ro
+      - ./tunnel-credentials.json:/etc/cloudflared/credentials.json:ro
 
   # The image is upstream and unpinned by this overlay on purpose: it carries no
   # repository source, so it is not one of the artifacts a package-digest
