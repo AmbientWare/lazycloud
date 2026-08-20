@@ -249,6 +249,9 @@ connectivity fault.
 
 ## The hosted deployment
 
+Creating or destroying a deployment is `deploy/platform-aws/LIFECYCLE.md`. This
+section is about running one that exists.
+
 The control plane runs on one EC2 instance declared by `deploy/platform-aws`.
 Nothing changes what that host runs except the bundle in the deploy bucket, and
 nothing writes that bundle except the `Deploy` workflow.

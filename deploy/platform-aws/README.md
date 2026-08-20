@@ -48,6 +48,10 @@ it does.
 
 ## Bring-up
 
+`LIFECYCLE.md` covers standing a deployment up and taking one down in full,
+including what a teardown cannot remove on its own. This is the short form.
+
+
 ```sh
 DEPLOYMENT=lazycloud-prod
 terraform -chdir=deploy/platform-aws init \
