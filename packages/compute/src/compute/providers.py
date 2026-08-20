@@ -119,6 +119,18 @@ class ProviderUnitSnapshot(ContractModel):
     observed_machines: int = 0
     instances: list[ProviderUnitInstance] = Field(default_factory=list)
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
+    current_template_version: str = ""
+    """Version an instance launched now would boot with, empty when unknown.
+
+    The counterpart to each instance's `booted_template_version`: comparing the
+    two is what says a node is running an older release than the pool would give
+    it today, and without this the comparison can only be made inside the
+    provider adapter.
+
+    Empty means the provider cannot say, and must never be read as every instance
+    being stale — a provider that reports no version is a provider whose nodes
+    nothing should replace.
+    """
 
 
 class DirectMachineLaunchRequest(ContractModel):
