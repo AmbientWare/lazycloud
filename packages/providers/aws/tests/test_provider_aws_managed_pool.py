@@ -485,6 +485,10 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     ready = provider.describe_unit(observed_request)
     assert ready.phase is ProviderCapacityPhase.Ready
     assert {instance.status for instance in ready.instances} == {ProviderMachineStatus.Active}
+    # The counterpart to each instance's booted version. Reported empty, nothing
+    # downstream can tell a node is running an older release than the pool would
+    # launch now, and the comparison silently never fires.
+    assert ready.current_template_version != ""
 
     autoscaling.instances = [
         {

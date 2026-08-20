@@ -11,7 +11,7 @@ from scheduler.agent_pool import (
 )
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import SchedulerWorkerRecord
-from shared.compute_enrollment import ComputePreflightCheck
+from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
 from shared.compute_policy import MachinePool
 from shared.scheduling import WorkerUnavailableReason
 
@@ -126,6 +126,97 @@ def test_agent_worker_pool_disables_stale_machine_worker() -> None:
     assert unavailable_worker.status is SchedulerWorkerStatus.Unavailable
 
 
+def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker() -> None:
+    """A cordon has to survive the pass that would otherwise undo it.
+
+    `ensure_machine_worker` re-adds the worker of any schedulable machine whose
+    worker is unavailable, and preemption records its operation id and returns
+    early the second time it sees it. So a cordon the schedulability rule cannot
+    see is applied once by preemption and removed by the very next reconcile,
+    which puts work back on a machine that is being taken away.
+    """
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    machine = _agent_machine(
+        machine_id="machine-one",
+        cpu_millicores=4000,
+        memory_mb=8192,
+        last_heartbeat_at=now,
+        capacity_state=AgentCapacityState.Cordoned,
+    )
+    worker = SchedulerWorkerRecord(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        worker_id=agent_machine_worker_id("machine-one"),
+        pool=MachinePool("gpu"),
+        machine_id="machine-one",
+        status=SchedulerWorkerStatus.Unavailable,
+        total_cpu_millicores=4000,
+        total_memory_mib=8192,
+        free_cpu_millicores=4000,
+        free_memory_mib=8192,
+        created_at=now,
+        updated_at=now,
+    )
+    workers = _WorkerRepo([worker])
+    controller = AgentWorkerPoolController(
+        AgentPoolConfig(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            workspace_id="ws-1",
+            pool=MachinePool("gpu"),
+        ),
+        _MachineRepo([machine]),
+        workers,
+    )
+
+    outcome = controller.ensure_machine_worker(machine, now=now)
+
+    settled = workers.get_worker(worker.worker_id)
+    assert settled is not None
+    assert settled.status is SchedulerWorkerStatus.Unavailable
+    assert outcome.action is not AgentPoolWorkerAction.Ensured
+
+
+def test_agent_worker_pool_reports_a_cordon_as_a_cordon() -> None:
+    """A cordoned machine is connected, so the disconnected diagnosis misleads."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    machine = _agent_machine(
+        machine_id="machine-one",
+        cpu_millicores=4000,
+        memory_mb=8192,
+        last_heartbeat_at=now,
+        capacity_state=AgentCapacityState.Cordoned,
+    )
+    worker = SchedulerWorkerRecord(
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        worker_id=agent_machine_worker_id("machine-one"),
+        pool=MachinePool("gpu"),
+        machine_id="machine-one",
+        status=SchedulerWorkerStatus.Available,
+        total_cpu_millicores=4000,
+        total_memory_mib=8192,
+        free_cpu_millicores=4000,
+        free_memory_mib=8192,
+        created_at=now,
+        updated_at=now,
+    )
+    workers = _WorkerRepo([worker])
+    controller = AgentWorkerPoolController(
+        AgentPoolConfig(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            workspace_id="ws-1",
+            pool=MachinePool("gpu"),
+        ),
+        _MachineRepo([machine]),
+        workers,
+    )
+
+    outcome = controller.ensure_machine_worker(machine, now=now)
+
+    settled = workers.get_worker(worker.worker_id)
+    assert settled is not None
+    assert outcome.action is AgentPoolWorkerAction.Disabled
+    assert settled.unavailable_reason is WorkerUnavailableReason.MachineCordoned
+
+
 class _MachineRepo:
     def __init__(self, machines: list[ComputeAgentTokenState]) -> None:
         self.machines = machines
@@ -173,6 +264,8 @@ class _WorkerRepo:
         updated = worker.model_copy(
             update={
                 "status": SchedulerWorkerStatus.Unavailable,
+                "unavailable_reason": reason,
+                "unavailable_detail": detail,
                 "updated_at": now or worker.updated_at,
             }
         )
@@ -207,6 +300,7 @@ def _agent_machine(
     gpus: list[str] | None = None,
     gpu_count: int = 0,
     last_heartbeat_at: datetime,
+    capacity_state: AgentCapacityState = AgentCapacityState.Available,
 ) -> ComputeAgentTokenState:
     return ComputeAgentTokenState(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -222,6 +316,7 @@ def _agent_machine(
         preflight_passed=True,
         heartbeat_confirmed=True,
         schedulable=True,
+        capacity_state=capacity_state,
         last_join_at=last_heartbeat_at,
         last_heartbeat_at=last_heartbeat_at,
     )
