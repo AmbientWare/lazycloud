@@ -116,6 +116,7 @@ class WorkerUnavailableReason(StringEnum):
     Draining = "draining"
     MachineRetired = "machine_retired"
     AgentDisconnected = "agent_disconnected"
+    MachineCordoned = "machine_cordoned"
     OperatorCordon = "operator_cordon"
     ShuttingDown = "shutting_down"
 
