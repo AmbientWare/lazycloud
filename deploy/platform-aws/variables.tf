@@ -88,6 +88,18 @@ variable "state_bucket" {
   type        = string
 }
 
+variable "destroy_buckets_with_contents" {
+  description = <<-EOT
+    Let `terraform destroy` remove buckets and repositories that still hold data.
+
+    True while predeployment, so the whole deployment can be torn down and rebuilt
+    to prove it reproduces. Set it false once these hold anything a customer would
+    miss; unlike `prevent_destroy`, this is a variable and can be switched.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "control_role_name" {
   description = <<-EOT
     Name of the platform control principal.

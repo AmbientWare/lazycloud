@@ -12,10 +12,6 @@ resource "planetscale_postgres_branch" "control_plane" {
   major_version = var.planetscale_major_version
   cluster_size  = var.planetscale_cluster_size
   region        = var.planetscale_region
-
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 # The role the control plane connects as. Its password exists only here and in

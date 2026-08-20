@@ -21,14 +21,18 @@ resource "aws_iam_role" "control_principal" {
     }]
   })
 
-  # Deleting this role is irreversible for a customer who has already connected:
-  # AWS rewrites a role-ARN principal in their trust policy to this role's unique
-  # ID, and recreating the same name does not restore that trust. Every live
-  # connection would need a new authorization generation.
-  lifecycle {
-    prevent_destroy = true
-  }
 }
+
+# Deleting this role is irreversible for a customer who has already connected: AWS
+# rewrites a role-ARN principal in their trust policy to this role's unique ID,
+# and recreating the same name does not restore that trust. Every live connection
+# would need a new authorization generation.
+#
+# There is no `prevent_destroy` here, deliberately. It takes no variable, so it
+# cannot be "off while predeployment and on afterwards", and a guard that cannot
+# be switched is one people work around instead of thinking about. Add it in this
+# file the day the first customer connects; until then the deployment has to be
+# destroyable to be provably rebuildable.
 
 data "aws_iam_policy_document" "control_principal" {
   # Every EC2, Auto Scaling and IAM call in the connection and capacity lifecycle

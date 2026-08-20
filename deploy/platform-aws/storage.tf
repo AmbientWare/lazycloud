@@ -9,6 +9,11 @@ resource "aws_s3_bucket" "objects" {
   for_each = local.object_buckets
 
   bucket = "${var.deployment}-${each.key}"
+
+  # A deployment that cannot be destroyed cannot be proven to rebuild. Unlike
+  # `prevent_destroy` this takes a variable, so it is a switch the owner flips
+  # once these buckets hold something worth keeping.
+  force_destroy = var.destroy_buckets_with_contents
 }
 
 resource "aws_s3_bucket_public_access_block" "objects" {
@@ -46,7 +51,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "objects" {
 # Where the deploy bundle lands: the digest-pinned Compose override CI writes and
 # the instance reads at boot and on every redeploy.
 resource "aws_s3_bucket" "deploy" {
-  bucket = "${var.deployment}-deploy"
+  bucket        = "${var.deployment}-deploy"
+  force_destroy = var.destroy_buckets_with_contents
 }
 
 resource "aws_s3_bucket_public_access_block" "deploy" {
@@ -79,6 +85,7 @@ resource "aws_ecr_repository" "image" {
 
   name                 = "${var.deployment}/${each.key}"
   image_tag_mutability = "IMMUTABLE"
+  force_delete         = var.destroy_buckets_with_contents
 
   image_scanning_configuration {
     scan_on_push = true
