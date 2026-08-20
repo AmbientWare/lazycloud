@@ -59,6 +59,11 @@ else
   echo "no tunnel credentials yet; public ingress will not connect" >&2
 fi
 
+# cloudflared runs as uid 65532 and reads both files directly, so the 0600 this
+# script's umask gives them is unreadable to it. The containing directory stays
+# 0700 root, which is what keeps them off the host.
+chmod 0444 tunnel-credentials.json cloudflared.yml
+
 aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$REGISTRY"
 
