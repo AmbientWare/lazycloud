@@ -11,6 +11,7 @@ from compute.state import ComputeAgentTokenState, ComputeUnitState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityOwnerKind
+from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import (
     ComputeUnitRecord,
     MachinePool,
@@ -153,16 +154,28 @@ class AgentWorkerPoolController:
                     worker_id=worker.worker_id,
                     reason="agent machine worker already disabled",
                 )
+            cordoned = not machine_accepts_work(machine)
             disabled = self.workers.disable_worker(
                 worker.worker_id,
-                reason=WorkerUnavailableReason.AgentDisconnected,
+                reason=(
+                    WorkerUnavailableReason.MachineCordoned
+                    if cordoned
+                    else WorkerUnavailableReason.AgentDisconnected
+                ),
                 now=current_time,
             )
             return AgentPoolWorkerResult(
                 action=AgentPoolWorkerAction.Disabled,
                 machine_id=machine.machine_id,
                 worker_id=disabled.worker_id,
-                reason="agent machine is not schedulable",
+                reason=(
+                    # A cordoned machine is reachable and healthy, so reporting it
+                    # as disconnected sends the reader after a network fault that
+                    # is not there.
+                    f"agent machine is cordoned: {machine.capacity_reason}"
+                    if cordoned
+                    else "agent machine is not schedulable"
+                ),
             )
         if worker is not None and worker.status is not SchedulerWorkerStatus.Unavailable:
             return self.reconcile_worker_tenancy(machine, worker, now=current_time)
@@ -325,8 +338,26 @@ def agent_machine_schedulable(
         machine.workspace_id == config.workspace_id
         and _machine_owned_by(machine, config)
         and machine.executor == expected_executor
+        and machine_accepts_work(machine)
         and agent_machine_connected(agent_telemetry_state(machine), now=now)
     )
+
+
+def machine_accepts_work(machine: ComputeAgentTokenState) -> bool:
+    """Whether a machine may still be given work it has not already been given.
+
+    A cordoned machine is connected and healthy and must not be scheduled onto,
+    which is the whole distinction between `Cordoned` and `Available`. Reading it
+    here rather than only where the cordon is applied is what makes the cordon
+    hold: `ensure_machine_worker` re-adds the worker of any schedulable machine
+    whose worker is unavailable, so a cordon this function cannot see is undone by
+    the next reconcile pass. Preemption will not reapply it either — it records
+    its operation id and returns early on the second sight of the same one.
+
+    The same argument the compute package makes about tenancy: a stamp survives
+    because something reconciles it, not because it was written once.
+    """
+    return machine.capacity_state is AgentCapacityState.Available
 
 
 def _machine_owned_by(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> bool:

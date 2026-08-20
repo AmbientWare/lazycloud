@@ -11,6 +11,7 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
+    ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
@@ -39,6 +40,7 @@ from shared.capacity import (
     capacity_owner_for_provider,
 )
 from shared.compute_enrollment import (
+    AgentCapacityState,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
@@ -1918,6 +1920,93 @@ class ComputeService:
             update_capacity=False,
         )
         return updated, snapshot
+
+    def internal_unit_machine_by_instance(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> dict[str, str]:
+        """Which machine each of a unit's provider instances became.
+
+        A provider snapshot names instances; everything downstream of enrollment
+        names machines, and only the provider instance record holds both. An
+        instance that has not enrolled yet has no machine and is absent here
+        rather than present with an empty value.
+        """
+        unit = self.get_internal_unit(workspace_id, capacity_owner_id)
+        with self.context.database.session() as session:
+            records = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+        return {
+            record.instance_id: record.machine_id
+            for record in records
+            if record.instance_id and record.machine_id
+        }
+
+    def internal_unit_cordoned_machines(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> dict[str, datetime]:
+        """When each of a unit's machines stopped accepting work.
+
+        Read rather than inferred from the scheduler's worker records: a worker is
+        `Unavailable` for a disconnect or a failed registration just as readily as
+        for a cordon, and only the enrollment says which. It also carries the clock
+        a drain deadline has to be measured from — a worker's `updated_at` moves
+        with every heartbeat, so a deadline keyed on it never arrives.
+        """
+        with self.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session).list_for_unit(
+                workspace_id,
+                capacity_owner_id,
+            )
+        return {
+            enrollment.machine_id: enrollment.capacity_observed_at
+            for enrollment in enrollments
+            if enrollment.machine_id
+            and enrollment.capacity_state is not AgentCapacityState.Available
+            and enrollment.capacity_observed_at is not None
+        }
+
+    def cordon_internal_unit_machine(
+        self,
+        workspace_id: str,
+        machine_id: str,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Stop a machine being given new work, durably.
+
+        Narrow on purpose: capacity state, its reason, and when it was observed,
+        and nothing else. The enrollment is where a cordon survives — the
+        scheduler's worker record is rewritten by reconcile passes and by the node
+        itself, so a cordon written there is undone by whichever runs next.
+
+        Setting it is the whole of stopping the machine. Schedulability reads it,
+        so the worker is disabled on the next pass and stays disabled; the
+        capacity interruption source reads it too, and requeues the work that can
+        move. Returns whether anything changed, so a caller that runs every pass
+        does not rewrite an observed-at that other timing is measured from.
+        """
+        current_time = _utc(now)
+        with self.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(workspace_id, machine_id, for_update=True)
+            if enrollment is None:
+                raise KeyError(f"machine enrollment not found: {machine_id}")
+            if enrollment.capacity_state is not AgentCapacityState.Available:
+                return False
+            enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "capacity_state": AgentCapacityState.Cordoned,
+                        "capacity_reason": reason,
+                        "capacity_observed_at": current_time,
+                    }
+                )
+            )
+        return True
 
     def release_internal_unit_machine(
         self,

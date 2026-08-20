@@ -263,6 +263,11 @@ def _snapshot(
         max_machines=snapshot.max_nodes,
         observed_machines=len(instances),
         instances=instances,
+        current_template_version=(
+            ""
+            if snapshot.resource_ids.launch_template_latest_version is None
+            else str(snapshot.resource_ids.launch_template_latest_version)
+        ),
         provider_state=ComputeUnitProviderState(
             resource_id=snapshot.resource_ids.autoscaling_group_name or "",
             attributes=snapshot.resource_ids.model_dump(mode="json"),
