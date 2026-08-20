@@ -5,6 +5,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
+from compute.providers import (
+    ProviderCapacityPhase,
+    ProviderUnitInstance,
+    ProviderUnitSnapshot,
+)
 from compute.state import ComputeUnitState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from scheduler.capacity_reservations import (
@@ -29,6 +34,7 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
+from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 PROVIDER_OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -51,9 +57,95 @@ class _Compute:
     """
 
     released: list[tuple[str, str]] = field(default_factory=list)
+    cordoned: list[str] = field(default_factory=list)
+    scaled: list[int] = field(default_factory=list)
+    current_template_version: str = ""
+    instances: list[tuple[str, str]] = field(default_factory=list)
+    """Provider instance id and the template version it booted with."""
+    cordoned_since: dict[str, datetime] = field(default_factory=dict)
+    """Machine id to when it stopped accepting work, as the enrollment records it."""
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         return CapacityPoolSizingSnapshot(capacity_owner_id=capacity_owner_id)
+
+    def describe_internal_unit(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> tuple[ComputeUnitRecord, ProviderUnitSnapshot]:
+        _ = workspace_id, capacity_owner_id
+        return (
+            ComputeUnitRecord(
+                id=PROVIDER_OWNER_ID,
+                capacity_owner_id=PROVIDER_OWNER_ID,
+                workspace_id=WORKSPACE_ID,
+                name=UnitName(POOL),
+                pool=MachinePool(POOL),
+            ),
+            ProviderUnitSnapshot(
+                phase=ProviderCapacityPhase.Ready,
+                current_template_version=self.current_template_version,
+                instances=[
+                    ProviderUnitInstance(
+                        provider_instance_id=instance_id,
+                        booted_template_version=version,
+                    )
+                    for instance_id, version in self.instances
+                ],
+            ),
+        )
+
+    def internal_unit_cordoned_machines(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> dict[str, datetime]:
+        _ = workspace_id, capacity_owner_id
+        return dict(self.cordoned_since)
+
+    def internal_unit_machine_by_instance(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> dict[str, str]:
+        _ = workspace_id, capacity_owner_id
+        return {instance_id: f"machine-{instance_id}" for instance_id, _ in self.instances}
+
+    def scale_internal_unit(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        desired_machines: int,
+        *,
+        before_mutation: object = None,
+        now: datetime | None = None,
+    ) -> ComputeUnitRecord:
+        _ = workspace_id, capacity_owner_id, before_mutation, now
+        self.scaled.append(desired_machines)
+        return ComputeUnitRecord(
+            id=PROVIDER_OWNER_ID,
+            capacity_owner_id=PROVIDER_OWNER_ID,
+            workspace_id=WORKSPACE_ID,
+            name=UnitName(POOL),
+            pool=MachinePool(POOL),
+            desired_machines=desired_machines,
+            max_machines=max(desired_machines, 4),
+        )
+
+    def cordon_internal_unit_machine(
+        self,
+        workspace_id: str,
+        machine_id: str,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        _ = workspace_id, reason, now
+        if machine_id in self.cordoned:
+            return False
+        self.cordoned.append(machine_id)
+        self.cordoned_since[machine_id] = now or NOW
+        return True
 
     def release_internal_unit_machine(
         self,
@@ -122,6 +214,18 @@ def _add_worker(
             updated_at=updated_at,
         ),
         now=updated_at,
+    )
+
+
+def _add_container(redis: RedisClient, container_id: str, worker_id: str) -> None:
+    RedisSchedulerContainerRepository(redis).set_container_state(
+        SchedulerContainerState(
+            container_id=container_id,
+            stub_id="stub-1",
+            workspace_id=WORKSPACE_ID,
+            worker_id=worker_id,
+            status=SchedulerContainerStatus.Running,
+        )
     )
 
 
@@ -229,3 +333,254 @@ def test_drain_never_releases_a_machine_another_unit_owns(
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
     assert compute.released == [(POOL, "machine-provider")]
     assert workers.get_worker("worker-joined-host") is not None
+
+
+def test_replacement_surges_before_it_cordons_anything(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """The replacement is added first, and nothing is taken away in the same pass.
+
+    Cordoning first would drop a pool at its minimum to no capacity at all, and
+    the idle-drain phase below refuses to go under that floor for exactly that
+    reason.
+    """
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(current_template_version="2", instances=[("i-old", "1")])
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=1,
+        min_machines=1,
+    )
+    _add_worker(
+        workers,
+        "worker-old",
+        NOW,
+        machine_id="machine-i-old",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.SurgeReplacementMachine]
+    assert compute.scaled == [2]
+    assert compute.cordoned == []
+    assert compute.released == []
+
+
+def test_replacement_cordons_only_once_the_surge_has_registered(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-old", "1"), ("i-new", "2")],
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=2,
+        min_machines=1,
+    )
+    for worker_id, machine_id in (("worker-old", "machine-i-old"), ("worker-new", "machine-i-new")):
+        _add_worker(
+            workers,
+            worker_id,
+            NOW,
+            machine_id=machine_id,
+            capacity_owner_id=PROVIDER_OWNER_ID,
+        )
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.CordonSupersededMachine]
+    assert compute.cordoned == ["machine-i-old"]
+    assert compute.released == []
+
+
+def test_replacement_does_nothing_when_the_provider_reports_no_version(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """No version is "cannot tell", never "everything is stale".
+
+    Read the other way, a provider that reports nothing would have its whole pool
+    replaced on the first pass. The same pool with a version set is what makes
+    that a decision about the empty string rather than about the wiring.
+    """
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=1,
+        min_machines=1,
+    )
+    _add_worker(
+        workers,
+        "worker-old",
+        NOW,
+        machine_id="machine-i-old",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+
+    silent = _Compute(current_template_version="", instances=[("i-old", "1")])
+    _drain_service(redis, silent, compute_states, workers).reconcile(now=NOW)
+
+    speaking = _Compute(current_template_version="2", instances=[("i-old", "1")])
+    _drain_service(redis, speaking, compute_states, workers).reconcile(now=NOW)
+
+    assert silent.scaled == []
+    assert speaking.scaled == [2]
+
+
+def test_replacement_releases_a_cordoned_machine_once_it_is_empty(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-old", "1"), ("i-new", "2")],
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=2,
+        min_machines=1,
+    )
+    _add_worker(
+        workers,
+        "worker-new",
+        NOW,
+        machine_id="machine-i-new",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+    _add_worker(
+        workers,
+        "worker-old",
+        NOW,
+        machine_id="machine-i-old",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+    compute.cordoned_since["machine-i-old"] = NOW - timedelta(minutes=5)
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
+    assert compute.released == [(POOL, "machine-i-old")]
+
+
+def test_replacement_cordons_one_machine_while_another_is_in_flight(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A template change must not cordon a whole pool at once.
+
+    Every cordoned machine costs a surged replacement, so cordoning three at once
+    would ask for three extra nodes and take three machines' placement capacity
+    away before any of them arrived.
+    """
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-a", "1"), ("i-b", "1"), ("i-new", "2")],
+        cordoned_since={"machine-i-a": NOW},
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=3,
+        min_machines=1,
+    )
+    for machine_id in ("machine-i-a", "machine-i-b", "machine-i-new"):
+        _add_worker(
+            workers,
+            f"worker-{machine_id}",
+            NOW,
+            machine_id=machine_id,
+            capacity_owner_id=PROVIDER_OWNER_ID,
+        )
+
+    _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    # The one already cordoned is dealt with; the second stale machine is left alone.
+    assert compute.cordoned == []
+    assert compute.released == [(POOL, "machine-i-a")]
+
+
+def test_replacement_releases_a_cordoned_machine_once_its_deadline_passes(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A container that cannot be requeued must not pin a node on an old release.
+
+    The deadline runs from the cordon, not from the worker's heartbeat, which
+    keeps moving for as long as the machine is alive.
+    """
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-old", "1"), ("i-new", "2")],
+        cordoned_since={"machine-i-old": NOW - timedelta(hours=2)},
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=2,
+        min_machines=1,
+    )
+    for machine_id in ("machine-i-old", "machine-i-new"):
+        _add_worker(
+            workers,
+            f"worker-{machine_id}",
+            NOW,
+            machine_id=machine_id,
+            capacity_owner_id=PROVIDER_OWNER_ID,
+        )
+    _add_container(redis, "container-stuck", "worker-machine-i-old")
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
+    assert compute.released == [(POOL, "machine-i-old")]
+
+
+def test_replacement_holds_a_cordoned_machine_inside_its_deadline(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-old", "1"), ("i-new", "2")],
+        cordoned_since={"machine-i-old": NOW - timedelta(minutes=5)},
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=2,
+        min_machines=1,
+    )
+    for machine_id in ("machine-i-old", "machine-i-new"):
+        _add_worker(
+            workers,
+            f"worker-{machine_id}",
+            NOW,
+            machine_id=machine_id,
+            capacity_owner_id=PROVIDER_OWNER_ID,
+        )
+    _add_container(redis, "container-running", "worker-machine-i-old")
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert compute.released == []
+    assert [item.reason for item in result] == ["cordoned machine is still draining"]

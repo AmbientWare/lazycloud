@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+from compute.providers import ProviderUnitSnapshot
 from compute.service import ComputeService
 from compute.state import ComputeUnitState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
@@ -25,12 +26,23 @@ class WorkerPoolDrainAction(StrEnum):
     None_ = "none"
     ScaleWorkerPool = "scale-worker-pool"
     TerminateProviderMachine = "terminate-provider-machine"
+    SurgeReplacementMachine = "surge-replacement-machine"
+    CordonSupersededMachine = "cordon-superseded-machine"
 
 
 class WorkerPoolDrainConfig(ContractModel):
     enabled: bool = True
     min_workers: int = 0
     idle_seconds: float = 300
+    replace_drain_deadline_seconds: float = 3600
+    """How long a cordoned machine may keep work that cannot be requeued.
+
+    A cordon stops new work immediately and everything recoverable moves at once.
+    This bounds the rest: without it one long container pins a node on a
+    superseded release indefinitely, which is the drift replacement exists to
+    remove. Pools running long batch work raise it rather than the default
+    accommodating them.
+    """
 
 
 class WorkerPoolDrainResult(ContractModel):
@@ -187,6 +199,9 @@ class ManagedComputeWorkerPoolDrainController:
                 pool=self.pool,
                 reason="worker-pool drain disabled",
             )
+        replacement = self._reconcile_replacement(config, now=current_time)
+        if replacement is not None:
+            return replacement
         sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
         if sizing_state.pending_operation_id or sizing_state.desired_units > (
             self.state.active_machines
@@ -269,6 +284,214 @@ class ManagedComputeWorkerPoolDrainController:
             reason=reason,
         )
 
+    def _reconcile_replacement(
+        self,
+        config: WorkerPoolDrainConfig,
+        *,
+        now: datetime,
+    ) -> WorkerPoolDrainResult | None:
+        """Move the pool onto the version it would launch today, one machine at a time.
+
+        Surging before cordoning is what lets a pool at `min_machines` update
+        itself: the idle-drain phase below refuses to go under that floor, and
+        adding first means active is above it by the time anything is removed.
+
+        Returns None when there is nothing superseded, so the idle-drain phase
+        runs as it did before.
+        """
+        # Not guarded. `reconcile_controller` already turns an exception into a
+        # result carrying the error, and a provider that cannot be described is
+        # worth seeing rather than a pool that quietly stops replacing.
+        _, snapshot = self.compute.describe_internal_unit(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+        )
+
+        current_version = snapshot.current_template_version
+        if not current_version:
+            # The provider cannot say what it would launch. Nothing is provably
+            # stale, and treating that as "everything" would replace a whole pool
+            # on a provider that simply does not report versions.
+            return None
+
+        machines_by_instance = self.compute.internal_unit_machine_by_instance(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+        )
+        superseded = [
+            machine_id
+            for instance in snapshot.instances
+            if instance.booted_template_version
+            and instance.booted_template_version != current_version
+            and (machine_id := machines_by_instance.get(instance.provider_instance_id))
+        ]
+        if not superseded:
+            return None
+
+        workers_by_machine = _workers_by_machine(
+            [
+                worker
+                for worker in self.workers.list_workers_in_pool(self.unit_name)
+                if worker.capacity_owner_id == self.capacity_owner_id
+            ]
+        )
+        cordoned_since = self.compute.internal_unit_cordoned_machines(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+        )
+        cordoned = [machine_id for machine_id in superseded if machine_id in cordoned_since]
+        if cordoned:
+            return self._release_cordoned(
+                cordoned[0],
+                workers_by_machine,
+                config,
+                cordoned_at=cordoned_since[cordoned[0]],
+                now=now,
+            )
+
+        # One at a time. A template change otherwise cordons a whole pool at once,
+        # and every machine surges a replacement beside it.
+        sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
+        if sizing_state.pending_operation_id:
+            return WorkerPoolDrainResult(
+                capacity_owner_id=self.capacity_owner_id,
+                pool=self.pool,
+                reason="replacement is waiting on a capacity operation",
+            )
+        if self.state.active_machines != self.state.desired_machines:
+            # Cordoning while the count is moving would take capacity away before
+            # the replacement it was surged for has arrived. Under is the surge
+            # still booting; over is a release still settling.
+            return WorkerPoolDrainResult(
+                capacity_owner_id=self.capacity_owner_id,
+                pool=self.pool,
+                reason=(
+                    "replacement machine has not registered"
+                    if self.state.active_machines < self.state.desired_machines
+                    else "released replacement capacity is still settling"
+                ),
+            )
+
+        up_to_date = [
+            instance
+            for instance in snapshot.instances
+            if instance.booted_template_version == current_version
+        ]
+        if not up_to_date:
+            # Nothing in the pool can take this machine's work yet. Cordoning now
+            # would leave a pool at its minimum with nowhere to place anything
+            # until the replacement finishes booting.
+            return self._surge_for_replacement(superseded[0], current_version)
+        return self._cordon_superseded(superseded[0], snapshot, current_version, now=now)
+
+    def _surge_for_replacement(
+        self,
+        machine_id: str,
+        current_version: str,
+    ) -> WorkerPoolDrainResult:
+        """Add the replacement before taking anything away, or report it exists."""
+        if self.state.active_machines >= self.state.max_machines:
+            # No room to surge. Nothing is cordoned, so the pool keeps serving on
+            # the old version rather than shrinking to make room.
+            return WorkerPoolDrainResult(
+                capacity_owner_id=self.capacity_owner_id,
+                pool=self.pool,
+                reason="replacement cannot surge past the pool maximum",
+            )
+        target = self.state.active_machines + 1
+        self.compute.scale_internal_unit(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+            target,
+            before_mutation=lambda _unit: None,
+        )
+        return WorkerPoolDrainResult(
+            capacity_owner_id=self.capacity_owner_id,
+            pool=self.pool,
+            action=WorkerPoolDrainAction.SurgeReplacementMachine,
+            machine_id=machine_id,
+            desired_replicas=target,
+            observed_replicas=self.state.active_machines,
+            reason=f"surged a replacement for template {current_version}",
+        )
+
+    def _cordon_superseded(
+        self,
+        machine_id: str,
+        snapshot: ProviderUnitSnapshot,
+        current_version: str,
+        *,
+        now: datetime,
+    ) -> WorkerPoolDrainResult | None:
+        booted = next(
+            (
+                instance.booted_template_version
+                for instance in snapshot.instances
+                if instance.booted_template_version
+                and instance.booted_template_version != current_version
+            ),
+            "",
+        )
+        changed = self.compute.cordon_internal_unit_machine(
+            self.state.workspace_id,
+            machine_id,
+            reason=f"launch template {booted} superseded by {current_version}",
+            now=now,
+        )
+        if not changed:
+            return None
+        return WorkerPoolDrainResult(
+            capacity_owner_id=self.capacity_owner_id,
+            pool=self.pool,
+            action=WorkerPoolDrainAction.CordonSupersededMachine,
+            machine_id=machine_id,
+            desired_replicas=self.state.desired_machines,
+            observed_replicas=self.state.active_machines,
+            reason=f"cordoned template {booted}, superseded by {current_version}",
+        )
+
+    def _release_cordoned(
+        self,
+        machine_id: str,
+        workers_by_machine: dict[str, list[WorkerPoolDrainWorker]],
+        config: WorkerPoolDrainConfig,
+        *,
+        cordoned_at: datetime,
+        now: datetime,
+    ) -> WorkerPoolDrainResult | None:
+        """Take a cordoned machine away once it is empty, or once its time is up.
+
+        Emptying is the normal case and needs no deadline: the cordon moved every
+        recoverable request the moment it was applied. The deadline only bounds
+        what could not be moved, and one long container would otherwise pin a
+        machine on an old release for as long as it runs.
+        """
+        workers = workers_by_machine.get(machine_id, [])
+        if _pool_has_active_containers(workers, self.containers):
+            deadline = cordoned_at + timedelta(seconds=config.replace_drain_deadline_seconds)
+            if now < deadline:
+                return WorkerPoolDrainResult(
+                    capacity_owner_id=self.capacity_owner_id,
+                    pool=self.pool,
+                    machine_id=machine_id,
+                    reason="cordoned machine is still draining",
+                )
+        pooled = self.compute.release_internal_unit_machine(
+            self.state.workspace_id,
+            self.unit_name,
+            machine_id,
+        )
+        return WorkerPoolDrainResult(
+            capacity_owner_id=self.capacity_owner_id,
+            pool=self.pool,
+            action=WorkerPoolDrainAction.TerminateProviderMachine,
+            machine_id=machine_id,
+            desired_replicas=pooled.desired_machines,
+            observed_replicas=pooled.observed_machines,
+            drained_worker_ids=[worker.worker_id for worker in workers],
+            reason="released a machine on a superseded template",
+        )
+
 
 def managed_compute_drain_controllers(
     compute: ComputeService,
@@ -299,6 +522,11 @@ def _drain_config_from_state(state: ComputeUnitState) -> WorkerPoolDrainConfig:
         enabled=truthy_env_value(enabled),
         min_workers=max(state.min_machines, 0),
         idle_seconds=_float_label(labels, "scale_down_idle_seconds", 300),
+        replace_drain_deadline_seconds=_float_label(
+            labels,
+            "replace_drain_deadline_seconds",
+            3600,
+        ),
     )
 
 
