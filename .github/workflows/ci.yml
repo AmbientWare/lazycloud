@@ -61,6 +61,12 @@ jobs:
       - name: Ruff format
         run: uv run --group dev ruff format --check .
 
+      # The committed policy and the generator that owns it drift silently, and
+      # they drift into a role missing an action the control plane started
+      # calling. That surfaces as a launch denial naming an API call.
+      - name: Connection role policy is current
+        run: uv run --group workspace python deploy/render_connection_policy.py --check
+
   validate:
     name: Changed Python owners
     runs-on: ubuntu-latest

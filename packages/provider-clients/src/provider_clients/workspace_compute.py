@@ -103,7 +103,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
         if authorization is None:
             raise RuntimeError("ready AWS account connection has no active authorization")
         region = sorted(self.binaries_by_region)[0]
-        managed = authorization.managed_authorization
         target = AwsAccountConnectionTarget(
             account_id=connection.account_id,
             region=region,
@@ -111,9 +110,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
             external_id=SecretStr(connection.external_id),
             node_role_arn=connection.node_role_arn or "",
             node_instance_profile_arn=connection.node_instance_profile_arn or "",
-            vpc_id=managed.vpc_id if managed is not None else None,
-            subnet_ids=managed.subnet_ids if managed is not None else (),
-            security_group_id=managed.security_group_id if managed is not None else None,
+            network=connection.network,
         )
         provider_ref = _provider_ref(connection.id)
         return ResolvedComputeProvider(

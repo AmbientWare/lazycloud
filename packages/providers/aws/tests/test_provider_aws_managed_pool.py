@@ -28,6 +28,7 @@ from provider_aws import (
     AwsProviderControlErrorCode,
 )
 from pydantic import SecretStr, TypeAdapter
+from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -37,6 +38,11 @@ from shared.compute_policy import (
 _VPC_ID = "vpc-00000000000000001"
 _SUBNET_IDS = ("subnet-00000000000000001", "subnet-00000000000000002")
 _SECURITY_GROUP_ID = "sg-00000000000000001"
+_NETWORK = AwsAccountNetwork(
+    vpc_id=_VPC_ID,
+    subnet_ids=_SUBNET_IDS,
+    security_group_id=_SECURITY_GROUP_ID,
+)
 
 
 class _Filter(TypedDict):
@@ -293,9 +299,7 @@ def _spec() -> AwsManagedPoolSpec:
 
 def _connection_target(
     *,
-    vpc_id: str | None = _VPC_ID,
-    subnet_ids: tuple[str, ...] = _SUBNET_IDS,
-    security_group_id: str | None = _SECURITY_GROUP_ID,
+    network: AwsAccountNetwork | None = None,
 ) -> AwsAccountConnectionTarget:
     return AwsAccountConnectionTarget(
         account_id="123456789012",
@@ -304,9 +308,7 @@ def _connection_target(
         external_id=SecretStr("x" * 48),
         node_role_arn="arn:aws:iam::123456789012:role/lazycloud-node",
         node_instance_profile_arn=("arn:aws:iam::123456789012:instance-profile/lazycloud-node"),
-        vpc_id=vpc_id,
-        subnet_ids=subnet_ids,
-        security_group_id=security_group_id,
+        network=network if network is not None else _NETWORK,
     )
 
 
@@ -526,10 +528,17 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     assert launching_statuses[second_instance] is ProviderMachineStatus.Pending
 
 
-def test_pooled_provider_requires_the_stack_provisioned_network() -> None:
+def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
-        connection=_connection_target(vpc_id=None, subnet_ids=(), security_group_id=None),
+        connection=AwsAccountConnectionTarget(
+            account_id="123456789012",
+            region="us-east-1",
+            role_arn="arn:aws:iam::123456789012:role/lazycloud-control",
+            external_id=SecretStr("x" * 48),
+            node_role_arn="arn:aws:iam::123456789012:role/lazycloud-node",
+            node_instance_profile_arn=("arn:aws:iam::123456789012:instance-profile/lazycloud-node"),
+        ),
         binaries_by_region={
             "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
@@ -545,7 +554,7 @@ def test_pooled_provider_requires_the_stack_provisioned_network() -> None:
         ),
     )
 
-    with pytest.raises(ValueError, match="no stack-provisioned network"):
+    with pytest.raises(ValueError, match="no network for managed pools"):
         provider.set_unit_capacity(
             _pool_request(provider.provider_ref),
             desired_machines=1,

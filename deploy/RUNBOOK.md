@@ -247,6 +247,82 @@ Repeated `control stream encountered a failure while serving` with every
 network precheck passing means the tunnel no longer exists at Cloudflare, not a
 connectivity fault.
 
+## The hosted deployment
+
+Creating or destroying a deployment is `deploy/platform-aws/LIFECYCLE.md`. This
+section is about running one that exists.
+
+The control plane runs on one EC2 instance declared by `deploy/platform-aws`.
+Nothing changes what that host runs except the bundle in the deploy bucket, and
+nothing writes that bundle except the `Deploy` workflow.
+
+```sh
+# Publish a release and converge the host.
+gh workflow run deploy.yml -f deployment=lazycloud-prod
+
+# Or converge it onto the bundle already published.
+aws ssm send-command --document-name AWS-RunShellScript \
+  --instance-ids "$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)" \
+  --parameters 'commands=["/usr/local/bin/lazycloud-deploy"]'
+```
+
+There is no SSH key and no inbound rule. Operator shell is
+`aws ssm start-session --target <instance-id>`.
+
+### What a deployment runs, and what it does not
+
+`deploy/compose.deploy.yaml` is an overlay on the same `compose.yaml` the local
+stack uses. It pins images to digests, drops the published host ports, and
+replaces the `depends_on` edges that point at services a deployment does not
+start. `deploy/bundle.py` carries the service list.
+
+| Not started | Served instead by |
+| --- | --- |
+| `postgres` | PlanetScale, through `LAZYCLOUD_DATABASE_URL` |
+| `object-store`, `object-store-bucket` | S3, through the platform role |
+| `otel-collector` | whatever `LAZYCLOUD_TELEMETRY_ENDPOINT` names |
+| `container-worker` | the connected-AWS pool the scheduler launches |
+| `agent`, `agent-join-token` | a real joined machine |
+| `platform-unit`, `worker-token` | not needed; those feed the Compose fleet |
+
+Redis stays on the host. It is also the reason there is one host: two would need
+it moved to ElastiCache first, because it holds the leases the scheduler
+serialises capacity work on.
+
+### The database connection string
+
+Use the **direct endpoint on 5432**, never PgBouncer. PlanetScale's managed
+PgBouncer is transaction-pooling only, and `ControlPlaneRecoveryFence` holds
+`pg_advisory_lock_shared` for the lifetime of a serving process. Behind a
+transaction pooler that lock is released when the backend is recycled, the fence
+stops fencing **without erroring**, and offline recovery can mint an
+administrator credential while replicas are still serving.
+
+### Secrets
+
+The host renders them from Secrets Manager on every deploy, into a mode-0600
+file that only the compose invocation reads. They are never in the bundle: the
+bundle is a build artifact in a versioned bucket, and a credential in there
+outlives every rotation.
+
+To rotate one, write the new value and converge the host:
+
+```sh
+aws secretsmanager put-secret-value --secret-id lazycloud-prod/<name> --secret-string '<value>'
+```
+
+### Connecting the platform account to its own fleet
+
+Shared capacity is a connected-AWS pool in the platform's own account, using the
+same managed flow a customer uses — which is what the control stack anticipates
+when it says a customer account can be this account. The connection stack creates
+the fleet VPC, its two subnets, the security group and the node instance profile,
+and the control plane reads them back from the stack outputs.
+
+`deploy/platform-aws` therefore declares no fleet network. Adding one there would
+mean declaring the connection role beside it, and that role's policy is generated
+in `provider_aws/account_connection.py`.
+
 ## Secrets and rotation
 
 | Secret | Where it lives | Rotate by |
@@ -278,16 +354,21 @@ Confirm the target belongs to the task before each of these. None can be undone.
 
 ## Not yet covered
 
-- **A metrics backend, and alerting on it.** The processes aggregate metrics in
-  memory and push them over OTLP on an interval, to whatever
-  `LAZYCLOUD_TELEMETRY_ENDPOINT` names, with `LAZYCLOUD_TELEMETRY_ENABLED` off by
-  default. The local stack runs a collector that prints what arrives, which
-  answers whether a metric left its process and nothing else. A deployment
-  points the same variable at a real backend and replaces the debug exporter in
-  `deploy/telemetry/collector.yaml`; alert meanings come after the numbers are
-  somewhere queryable.
+- **Alerting.** A deployment now exports to a real backend:
+  `deploy/telemetry/collector.deploy.yaml` replaces the debug exporter with an
+  OTLP one, and the collector holds the backend credential because
+  `TelemetrySettings` has no headers field — a process can push OTLP but cannot
+  authenticate to a hosted backend. Set `telemetry-backend-endpoint`,
+  `-username` and `-password` in Secrets Manager.
+
+  What is still missing is what the numbers should mean. Alert thresholds come
+  after there is history to read them against.
 
   Only `control-plane` and `scheduler` export. They are the two processes that
   call `setup_telemetry`, and between them they record every platform metric —
   the container worker publishes its container metrics through the worker
   repository instead, on a path that does not use the meter.
+
+  A missing telemetry credential is deliberately not fatal. The collector cannot
+  export and says so; the control plane keeps serving, because an exporter that
+  cannot reach a receiver drops the batch rather than failing the process.

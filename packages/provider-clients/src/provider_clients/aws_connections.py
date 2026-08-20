@@ -56,6 +56,7 @@ from shared.aws_connections import (
     AwsAccountAuthorizationPlan,
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
+    AwsAccountNetwork,
     AwsAccountValidationResult,
     AwsAuthorizationCleanupStatus,
     AwsManagedAuthorizationReference,
@@ -124,6 +125,7 @@ class _AwsAccountAuthorizationPlanner:
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
+        network: AwsAccountNetwork | None = None,
     ) -> AwsAccountAuthorizationPlan:
         secret_external_id = SecretStr(external_id)
         if role_arn is not None:
@@ -133,6 +135,7 @@ class _AwsAccountAuthorizationPlanner:
                 account_id=account_id,
                 role_arn=role_arn,
                 external_id=secret_external_id,
+                network=network,
             )
             if generation != (active_authorization.generation + 1 if active_authorization else 1):
                 raise ValueError("existing-role authorization generation is not sequential")
@@ -141,6 +144,7 @@ class _AwsAccountAuthorizationPlanner:
                 authorization_mode=AwsAccountAuthorizationMode.ExistingRole,
                 node_role_arn=existing.node_identity.role_arn,
                 node_instance_profile_arn=existing.node_identity.instance_profile_arn,
+                network=existing.network,
             )
         plan = (
             self.planner.plan_initial(
@@ -248,14 +252,12 @@ class _AwsAccountConnectionValidator:
                     managed_authorization=managed_reference.model_copy(
                         update={
                             "stack_id": managed.authorization.stack_id,
-                            "vpc_id": managed.vpc_id,
-                            "subnet_ids": managed.subnet_ids,
-                            "security_group_id": managed.security_group_id,
                             "shared_ami_ids": shared_ami_ids,
                         }
                     ),
                     node_role_arn=managed.node_identity.role_arn,
                     node_instance_profile_arn=managed.node_identity.instance_profile_arn,
+                    network=managed.network,
                     validated_at=managed.authorization.validated_at,
                 )
             existing = self.validator.validate_existing_authorization(
@@ -267,6 +269,7 @@ class _AwsAccountConnectionValidator:
                         node_role_arn=connection.node_role_arn,
                         node_instance_profile_arn=connection.node_instance_profile_arn,
                         region=self.region,
+                        network=connection.network,
                     ),
                     external_id=SecretStr(connection.external_id),
                 )
@@ -290,6 +293,7 @@ class _AwsAccountConnectionValidator:
             role_arn=existing.authorization.role_arn,
             node_role_arn=existing.node_identity.role_arn,
             node_instance_profile_arn=existing.node_identity.instance_profile_arn,
+            network=existing.network,
             validated_at=utc_now(),
         )
 
@@ -498,6 +502,7 @@ def _existing_authorization(
     node_role_arn: str | None,
     node_instance_profile_arn: str | None,
     region: str,
+    network: AwsAccountNetwork | None = None,
 ) -> AwsExistingAccountAuthorization:
     return AwsExistingAccountAuthorization(
         account_id=account_id,
@@ -505,6 +510,7 @@ def _existing_authorization(
         role_arn=authorization.role_arn,
         external_id_sha256=hashlib.sha256(external_id.encode()).hexdigest(),
         node_identity=_managed_node_identity(node_role_arn, node_instance_profile_arn),
+        network=network,
     )
 
 

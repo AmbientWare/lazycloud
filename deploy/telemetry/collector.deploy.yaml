@@ -1,0 +1,42 @@
+# Deployment collector. Same receiver as the local one; the debug exporter is
+# replaced by an OTLP exporter pointed at a real backend.
+#
+# The collector holds the backend credential rather than the processes, because
+# `TelemetrySettings` has no headers field: a process can push OTLP but cannot
+# authenticate to a hosted backend. Keeping it here also means changing backends
+# touches this file rather than every service's environment.
+#
+# Both values come from the deployment's secrets, substituted at start. Nothing
+# in this file is a credential.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlphttp:
+    endpoint: ${env:LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT}
+    auth:
+      authenticator: basicauth
+
+extensions:
+  basicauth:
+    client_auth:
+      username: ${env:LAZYCLOUD_TELEMETRY_BACKEND_USERNAME}
+      password: ${env:LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD}
+
+service:
+  extensions: [basicauth]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]

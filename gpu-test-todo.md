@@ -86,7 +86,7 @@ CloudFormation cannot create a role whose name is taken.
 Recovering it: delete that orphan, then
 
 ```sh
-uv run python deploy/connected-aws/bootstrap.py --profile default \
+terraform -chdir=deploy/platform-aws apply \
   --acceptance-operator --trusted-principal-arn arn:aws:iam::<account>:user/lazycloud-test
 ```
 

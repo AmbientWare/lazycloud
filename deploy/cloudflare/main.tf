@@ -8,9 +8,8 @@
 # it does not name is invisible to it.
 
 locals {
-  # Carried explicitly so adopting these records does not erase the annotation a
-  # human left on them. A record this module owns and a record it does not look
-  # identical in the dashboard otherwise.
+  # Written on every record this module owns, so the dashboard distinguishes them
+  # from the ones it does not.
   record_comment = "LazyCloud public ingress -> cloudflared tunnel"
 }
 

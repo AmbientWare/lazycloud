@@ -47,6 +47,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
+    AwsAccountNetwork,
     AwsAuthorizationCleanupStatus,
     AwsManagedAuthorizationReference,
 )
@@ -316,9 +317,11 @@ def _managed_validation() -> AwsAccountAuthorizationValidation:
         ),
         caller_arn=_ROLE_ARN,
         node_identity=node_identity,
-        vpc_id="vpc-0123456789abcdef0",
-        subnet_ids=("subnet-a", "subnet-b"),
-        security_group_id="sg-0123456789abcdef0",
+        network=AwsAccountNetwork(
+            vpc_id="vpc-0123456789abcdef0",
+            subnet_ids=("subnet-a", "subnet-b"),
+            security_group_id="sg-0123456789abcdef0",
+        ),
     )
 
 

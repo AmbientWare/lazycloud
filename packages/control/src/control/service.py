@@ -93,6 +93,7 @@ class WorkspaceStorageAuthorizationError(PermissionError):
 
 class WorkspaceBucketSettings(Protocol):
     bucket: str
+    workspace_bucket_prefix: str
     endpoint_url: str | None
     region_name: str
     access_key_id: str
@@ -468,7 +469,7 @@ class ControlPlaneService:
         self,
         workspace: str,
         *,
-        bucket_prefix: str = "workspace",
+        bucket_prefix: str = "",
         backend: str = "s3",
         config: dict[str, JsonValue] | None = None,
         token_id_for_cache_invalidation: str | None = None,
@@ -476,7 +477,11 @@ class ControlPlaneService:
         workspace_record = self.get_workspace(workspace)
         self._validate_storage_attach_allowed(workspace_record)
         client = self._default_workspace_storage_client()
-        bucket = f"{bucket_prefix}-{workspace_record.id}".replace("_", "-")
+        # Deployment-scoped rather than a bare "workspace-": two deployments in
+        # one AWS account share the bucket namespace, and the grant that reaches
+        # `workspace-*` cannot tell theirs from ours.
+        prefix = bucket_prefix or _workspace_bucket_settings(client).workspace_bucket_prefix
+        bucket = f"{prefix}-{workspace_record.id}".replace("_", "-")
         storage = self._default_workspace_storage(
             client=client,
             bucket=bucket,
