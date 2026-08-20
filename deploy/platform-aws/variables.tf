@@ -100,6 +100,12 @@ variable "destroy_buckets_with_contents" {
   default     = true
 }
 
+variable "cloudflare_state_key" {
+  description = "State key of the deploy/cloudflare module, read for the tunnel credentials."
+  type        = string
+  default     = "cloudflare/production.tfstate"
+}
+
 variable "control_role_name" {
   description = <<-EOT
     Name of the platform control principal.

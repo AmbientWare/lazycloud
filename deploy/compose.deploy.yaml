@@ -40,6 +40,18 @@ services:
   control-plane:
     image: "${LAZYCLOUD_IMAGE_API:?set by images.env}"
     build: !reset null
+    # Two. The base file caps this at one solely because it publishes fixed host
+    # ports, which Compose cannot give a second container — and the ports are
+    # removed below. Nothing else about the process is singular: the tailnet
+    # state directory is container-local, each device is ephemeral, and the
+    # Tailscale Service takes as many advertisers as start.
+    #
+    # On one host this does not survive the host, but it does survive the thing
+    # that actually happens: one container dying on an unhandled exception while
+    # the other keeps serving. It also makes a deploy a rolling replace rather
+    # than a gap.
+    deploy:
+      replicas: 2
     # Credentials come from the instance profile through the SDK's own chain.
     # The Compose environment names a role-chain profile in a mounted config
     # directory, which is how a developer's stack reaches AWS; on an instance
