@@ -768,8 +768,8 @@ class App:
     def sandbox(
         self,
         *,
-        cpu: int | float | str = 1.0,
-        memory: int | str = 128,
+        cpu: CpuRequest | str = 1.0,
+        memory: MemoryRequest = 128,
         disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int = 0,
@@ -1469,8 +1469,8 @@ def _pod_options(
 
 def _sandbox_options(
     *,
-    cpu: int | float | str,
-    memory: int | str,
+    cpu: CpuRequest | str,
+    memory: MemoryRequest,
     disk: str | None,
     gpu: str | None,
     gpu_count: int,

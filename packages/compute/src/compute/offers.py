@@ -29,6 +29,19 @@ def capacity_with_overhead(value: int) -> int:
     return math.ceil(value * NODE_OVERHEAD_FACTOR)
 
 
+def schedulable_capacity(total: int) -> int:
+    """What a node can give containers, after what the platform takes.
+
+    The inverse of `capacity_with_overhead`, and the reason both exist: selection
+    buys a node at least this much larger than the request, and the node then has
+    to advertise less than it physically holds or placement fills back in the
+    headroom selection just paid for.
+    """
+    if total <= 0:
+        return total
+    return int(total / NODE_OVERHEAD_FACTOR)
+
+
 class ReservationStatus(StrEnum):
     Pending = "pending"
     Active = "active"
@@ -215,4 +228,5 @@ __all__ = [
     "capacity_with_overhead",
     "choose_offer",
     "filter_offers",
+    "schedulable_capacity",
 ]

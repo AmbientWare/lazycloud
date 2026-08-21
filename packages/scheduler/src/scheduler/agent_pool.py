@@ -6,6 +6,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
+from compute.offers import schedulable_capacity
 from compute.projection import PoolConfig, normalize_unit_config
 from compute.state import ComputeAgentTokenState, ComputeUnitState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
@@ -298,7 +299,10 @@ def agent_machine_worker_record(
     now: datetime | None = None,
 ) -> SchedulerWorkerRecord:
     current_time = now or utc_now()
-    cpu_millicores = machine.cpu_millicores or machine.cpu_count * 1000
+    # What the scheduler may place onto, not what the machine physically holds:
+    # the agent and the container runtime are already running on it.
+    cpu_millicores = schedulable_capacity(machine.cpu_millicores or machine.cpu_count * 1000)
+    memory_mib = schedulable_capacity(machine.memory_mb)
     gpu_types = _machine_gpu_types(machine, config)
     return SchedulerWorkerRecord(
         worker_id=agent_machine_worker_id(machine.machine_id),
@@ -317,10 +321,10 @@ def agent_machine_worker_record(
         private_worker=True,
         requires_pool_selector=True,
         free_cpu_millicores=cpu_millicores,
-        free_memory_mib=machine.memory_mb,
+        free_memory_mib=memory_mib,
         free_gpu_count=machine.gpu_count,
         total_cpu_millicores=cpu_millicores,
-        total_memory_mib=machine.memory_mb,
+        total_memory_mib=memory_mib,
         total_gpu_count=machine.gpu_count,
         created_at=current_time,
         updated_at=current_time,

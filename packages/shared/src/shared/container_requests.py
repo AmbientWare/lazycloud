@@ -31,6 +31,12 @@ DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 # a gibibyte, where a Python interpreter and one large import already do not fit.
 CONTAINER_MEMORY_BURST_FACTOR = 4.0
 CONTAINER_MEMORY_BURST_FLOOR_MIB = 1024
+# And bounded above, because a proportional ceiling on a large request outgrows
+# the machine. Selection only guarantees a node slightly larger than the request,
+# so a limit several times it is one the container can never reach: the host runs
+# out first and its OOM killer picks a victim, which is the outcome a
+# per-container ceiling exists to avoid.
+CONTAINER_MEMORY_BURST_CAP_MIB = 8192
 
 # Modal's soft CPU limit, deliberately: a request plus sixteen physical cores.
 # Processor time is compressible, so a container over its share is throttled and
@@ -48,10 +54,11 @@ def container_memory_limit_mib(request_mib: int) -> int:
     """
     if request_mib <= 0:
         return 0
-    return max(
+    proportional = max(
         int(request_mib * CONTAINER_MEMORY_BURST_FACTOR),
         request_mib + CONTAINER_MEMORY_BURST_FLOOR_MIB,
     )
+    return min(proportional, request_mib + CONTAINER_MEMORY_BURST_CAP_MIB)
 
 
 class WorkerStartupKind(StringEnum):
@@ -256,6 +263,7 @@ __all__ = [
     "CONTAINER_CPU_BURST_CEILING_MILLICORES",
     "CONTAINER_HEALTH_PATH",
     "CONTAINER_INNER_PORT",
+    "CONTAINER_MEMORY_BURST_CAP_MIB",
     "CONTAINER_MEMORY_BURST_FACTOR",
     "CONTAINER_MEMORY_BURST_FLOOR_MIB",
     "DEFAULT_ARTIFACTS_PATH",

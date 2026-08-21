@@ -119,7 +119,7 @@ class ComputeCapacityPlacementService:
 
 
 def _pool_supports(pool: ComputeUnitRecord, requirements: ComputeResourceRequirements) -> bool:
-    # The same overhead offer selection applies, so a pool judged able to host a
+    # The same overhead that offer selection applies, so a pool judged able to host a
     # shape is one that would have been chosen for it. Judging an existing pool
     # by the raw request while sizing a new one with headroom would place work on
     # nodes that were never big enough for it.

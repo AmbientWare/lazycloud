@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated
 
+from foundation.resources import parse_memory_mib
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.autoscaling import QueueDepthAutoscaler
@@ -70,9 +71,29 @@ class Resources(ContractModel):
 
     @field_validator("cpu")
     @classmethod
-    def cpu_must_be_positive(cls, value: float | None) -> float | None:
-        if value is not None and value <= 0:
-            msg = "cpu must be greater than zero"
+    def cpu_must_be_positive(cls, value: CpuRequest | None) -> CpuRequest | None:
+        # Both halves of a pair, because a ceiling of zero throttles a container
+        # to nothing and is as wrong as a reservation of zero.
+        request, limit = request_and_limit(value)
+        for part in (request, limit):
+            if part is not None and float(part) <= 0:
+                msg = "cpu must be greater than zero"
+                raise ValueError(msg)
+        if limit is not None and request is not None and float(limit) < float(request):
+            msg = "a cpu limit cannot sit below its request"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("memory")
+    @classmethod
+    def memory_limit_cannot_sit_below_its_request(
+        cls, value: MemoryRequest | None
+    ) -> MemoryRequest | None:
+        request, limit = request_and_limit(value)
+        if request is None or limit is None:
+            return value
+        if (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0):
+            msg = "a memory limit cannot sit below its request"
             raise ValueError(msg)
         return value
 

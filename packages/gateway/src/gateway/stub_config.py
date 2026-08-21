@@ -9,8 +9,10 @@ from shared.compute_policy import MachinePool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DeploymentSpec,
+    MemoryRequest,
     Resources,
     VolumeMount,
+    request_and_limit,
     resolve_cpu,
     resolve_disk,
     resolve_keep_warm_seconds,
@@ -215,7 +217,10 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             # Carried whole, pair included: this is what a deployment reports back
             # about itself, and a ceiling its author set is part of that.
             cpu=runtime_config.cpu,
-            memory=runtime_config.memory if runtime_config.memory not in {None, "", 0} else None,
+            # Read through the pair helper rather than by set membership: a pair
+            # is a list once it has been through JSON, and an unhashable value in
+            # a set test raises rather than answering false.
+            memory=runtime_config.memory if _memory_stated(runtime_config.memory) else None,
             # A stored config without a ceiling rehydrates to the platform one
             # rather than to None: the spec never carries an absent limit.
             disk=(
@@ -280,6 +285,12 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
         lifecycle_hooks=config.lifecycle_hooks,
         client_contract=config.client_contract,
     )
+
+
+def _memory_stated(value: MemoryRequest | None) -> bool:
+    """Whether a stored memory value names anything at all."""
+    request, _ = request_and_limit(value)
+    return request is not None and request != "" and request != 0
 
 
 def _autoscaler_config(request: GetOrCreateStubRequest) -> StubAutoscalerConfig:

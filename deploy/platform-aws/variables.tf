@@ -175,67 +175,18 @@ variable "instance_hourly_micros" {
   description = <<-EOT
     Hourly price per instance type, in millionths of a dollar.
 
-    The one managed-capacity value a release cannot publish, so authoring it is
-    what declares that this deployment intends to run managed AWS capacity at
-    all. An empty map advertises no instance types, which is a control plane
-    with no managed capacity rather than an error.
+    Empty by default, and that default is load-bearing. This is the one managed
+    capacity value a release cannot publish, so authoring it is what declares
+    that a deployment intends to run managed AWS capacity at all; supplying it
+    here for everyone would make the declaration meaningless and would demand a
+    release from deployments that have none. `terraform.tfvars.example` carries
+    a current us-east-1 map to paste in.
 
     It is also the ranking `choose_offer` uses, so a wrong figure does not fail.
-    It silently changes which instance every workload lands on. Take these from
-    the AWS price list, and leave out any type whose on-demand rate is not
-    published rather than recording a zero: zero wins every comparison.
-
-    us-east-1 on-demand Linux, read from the Pricing API on 2026-08-21.
+    It silently changes which instance every workload lands on. Leave out any
+    type whose on-demand rate is not published rather than recording a zero:
+    zero wins every comparison.
   EOT
   type        = map(number)
-  default = {
-    "c7i.large"     = 89250
-    "c7i.xlarge"    = 178500
-    "c7i.2xlarge"   = 357000
-    "c7i.4xlarge"   = 714000
-    "c7i.8xlarge"   = 1428000
-    "c7i.12xlarge"  = 2142000
-    "c7i.16xlarge"  = 2856000
-    "m7i.large"     = 100800
-    "m7i.xlarge"    = 201600
-    "m7i.2xlarge"   = 403200
-    "m7i.4xlarge"   = 806400
-    "m7i.8xlarge"   = 1612800
-    "m7i.12xlarge"  = 2419200
-    "m7i.16xlarge"  = 3225600
-    "g4dn.xlarge"   = 526000
-    "g4dn.2xlarge"  = 752000
-    "g4dn.4xlarge"  = 1204000
-    "g4dn.8xlarge"  = 2176000
-    "g4dn.12xlarge" = 3912000
-    "g4dn.16xlarge" = 4352000
-    "g4dn.metal"    = 7824000
-    "g5.xlarge"     = 1006000
-    "g5.2xlarge"    = 1212000
-    "g5.4xlarge"    = 1624000
-    "g5.8xlarge"    = 2448000
-    "g5.12xlarge"   = 5672000
-    "g5.16xlarge"   = 4096000
-    "g5.24xlarge"   = 8144000
-    "g5.48xlarge"   = 16288000
-    "g6.xlarge"     = 804800
-    "g6.2xlarge"    = 977600
-    "g6.4xlarge"    = 1323200
-    "g6.8xlarge"    = 2014400
-    "g6.12xlarge"   = 4601600
-    "g6.16xlarge"   = 3396800
-    "g6.24xlarge"   = 6675200
-    "g6.48xlarge"   = 13350400
-    "g6e.xlarge"    = 1861000
-    "g6e.2xlarge"   = 2242080
-    "g6e.4xlarge"   = 3004240
-    "g6e.8xlarge"   = 4528560
-    "g6e.12xlarge"  = 10492640
-    "g6e.16xlarge"  = 7577190
-    "g6e.24xlarge"  = 15065590
-    "g6e.48xlarge"  = 30131180
-    "p4d.24xlarge"  = 21957642
-    "p4de.24xlarge" = 27447050
-    "p5.48xlarge"   = 55040000
-  }
+  default     = {}
 }
