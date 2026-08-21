@@ -83,17 +83,25 @@ CONTAINER_MEMORY_BURST_CAP_MIB = 8192
 CONTAINER_CPU_BURST_CEILING_MILLICORES = 16_000
 
 
-DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT = 20.0
-"""Full-stall percentage over ten seconds at which a machine stops coping.
+DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT = 1.0
+"""Full-stall percentage over ten seconds at which a worker stops coping.
 
-`full` rather than `some`: `some` counts any window where a task waited on
-memory, which a busy machine does constantly. `full` counts windows where
-nothing on the machine could run, which is the machine having stopped rather
-than slowed.
+Measured rather than chosen, because the figure this replaced was chosen and
+never fired. A slot pinned at its memory limit with more than its own size
+swapped out -- a genuinely thrashing worker -- reads between 0.8 and 1.4 here,
+and an idle one reads 0.0 to 0.2. Twenty, the first guess, describes a machine
+already dead.
 
-Low enough to act while the kernel is still only reclaiming. Above this the next
-thing to make the decision is the global OOM killer, which scores by resident
-size and has never read anyone's reservation.
+`full` rather than `some`: `some` counts any window where one task waited, which
+a busy worker does constantly. `full` counts windows where nothing could run.
+The two tracked each other closely when measured, but only because there were
+two containers; `some` climbs with the container count whether or not anything
+is wrong.
+
+The margin over idle is about five times, which is thinner than it looks: a
+container inside its reservation is never a candidate, and the cooldown means a
+transient spike costs at most one eviction. Worth re-measuring on a node running
+zram, where reclaim is faster and the stall for the same thrash will be lower.
 """
 
 

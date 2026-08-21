@@ -87,7 +87,11 @@ a signal about this worker rather than the machine, so both halves are load
 bearing.
 
 None of that is visible without a real runsc and a real cgroup filesystem, and
-all of it is visible immediately with one. When these values change, run the
+all of it is visible immediately with one. The same is true of the eviction
+threshold: a worker pinned at its memory limit with more than its own size
+swapped out reads under 1.5% full stall, so the first threshold — twenty per
+cent, chosen rather than measured — described a machine already dead and would
+never have fired. When these values change, run the
 production path against the worker image rather than trusting the unit suite:
 build the spec with `build_base_oci_config` and `plan_oci_linux_resources`, run
 it under `runsc` in a privileged container with `--cgroupns=host`, and read the

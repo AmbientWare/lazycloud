@@ -50,7 +50,8 @@ def test_a_container_inside_its_request_is_never_chosen() -> None:
 
 
 def test_nothing_is_evicted_before_the_machine_is_actually_struggling() -> None:
+    """Idle measures around 0.2; a thrashing worker measures around 1.0."""
     over = [_reading("leaker", current_gib=3, reserved_gib=1)]
 
-    assert select_memory_eviction_candidate(over, pressure_percent=1.0) is None
-    assert select_memory_eviction_candidate(over, pressure_percent=50.0) is not None
+    assert select_memory_eviction_candidate(over, pressure_percent=0.2) is None
+    assert select_memory_eviction_candidate(over, pressure_percent=1.1) is not None
