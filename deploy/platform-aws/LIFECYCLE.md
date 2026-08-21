@@ -95,15 +95,26 @@ gh secret set TF_STATE_BUCKET --body '<state-bucket>'
 The deploy role's trust names `repo:<owner>/<repo>:environment:production`, so the
 workflow must keep `environment: production` or it cannot assume the role.
 
-### 5. Deploy
+### 5. Ship
 
 ```sh
-gh workflow run deploy.yml -f deployment=lazycloud-prod
+gh workflow run ship.yml -f deployment=lazycloud-prod
 ```
 
-That builds every image in one bake, publishes the bundle, converges the host,
-and registers the platform's own capacity. Roughly six minutes, most of it the
-image build.
+`Ship` publishes a release, then deploys onto it. Both halves matter on a new
+deployment: `Deploy` on its own names whichever release the deployment already
+records, and a deployment standing up for the first time records none. A control
+plane with no release serves fine and offers no managed capacity, so the symptom
+is pools that never launch rather than anything that fails.
+
+The release half builds the agent executable, the container worker, and the node
+AMI, then publishes the manifest. The deploy half builds every control-plane
+image in one bake, publishes the bundle, converges the host, and registers the
+platform's own capacity. Roughly six minutes for the deploy, and longer for the
+release when the AMI bake runs.
+
+Afterwards, `gh workflow run deploy.yml -f deployment=lazycloud-prod` ships code
+alone, carrying the same release forward.
 
 ## Taking one down
 
