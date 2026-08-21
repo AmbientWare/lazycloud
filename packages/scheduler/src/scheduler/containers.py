@@ -106,8 +106,8 @@ class SchedulerContainerStateRepository(Protocol):
         *,
         workspace_id: str,
         container_id: str,
-        gpu_limit: int,
-        cpu_limit_millicores: int,
+        workspace_gpu_quota: int,
+        workspace_cpu_quota_millicores: int,
         request_gpu_count: int,
         request_cpu_millicores: int,
         now: datetime | None = None,
@@ -709,17 +709,21 @@ class SchedulerContainerRequestService:
             request.gpu_request,
             request.gpu_count,
         )
-        gpu_limit = request.gpu_limit if request.gpu_limit > 0 else max(gpu_count, 1_000_000)
+        workspace_gpu_quota = (
+            request.workspace_gpu_quota
+            if request.workspace_gpu_quota > 0
+            else max(gpu_count, 1_000_000)
+        )
         cpu_limit = (
-            request.cpu_limit_millicores
-            if request.cpu_limit_millicores > 0
+            request.workspace_cpu_quota_millicores
+            if request.workspace_cpu_quota_millicores > 0
             else max(request.cpu_millicores, 2_147_483_647)
         )
         decision = self.containers.reserve_concurrency(
             workspace_id=request.workspace_id,
             container_id=request.container_id,
-            gpu_limit=gpu_limit,
-            cpu_limit_millicores=cpu_limit,
+            workspace_gpu_quota=workspace_gpu_quota,
+            workspace_cpu_quota_millicores=cpu_limit,
             request_gpu_count=gpu_count,
             request_cpu_millicores=request.cpu_millicores,
             now=now,
@@ -1212,4 +1216,4 @@ def _schedulable_workers(
 
 
 def _request_uses_quota(request: SchedulerWorkerRequest) -> bool:
-    return request.gpu_limit > 0 or request.cpu_limit_millicores > 0
+    return request.workspace_gpu_quota > 0 or request.workspace_cpu_quota_millicores > 0

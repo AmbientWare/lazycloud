@@ -21,10 +21,10 @@ class AutoscalerGuardrailPlan(ContractModel):
     limited: bool = False
     reason: str = ""
     enforced: bool = False
-    cpu_limit_millicores: int = 0
+    workspace_cpu_quota_millicores: int = 0
     cpu_used_millicores: int = 0
     cpu_per_container_millicores: int = 0
-    gpu_limit: int = 0
+    workspace_gpu_quota: int = 0
     gpu_used: int = 0
     gpu_per_container: int = 0
     limiting_resources: list[str] = Field(default_factory=list)
@@ -54,13 +54,13 @@ def plan_autoscaler_start_guardrails(
         return base
 
     runtime_config = stub.config.runtime
-    cpu_limit = runtime_config.cpu_limit_millicores
-    gpu_limit = runtime_config.gpu_limit
+    cpu_limit = runtime_config.workspace_cpu_quota_millicores
+    workspace_gpu_quota = runtime_config.workspace_gpu_quota
     cpu_per_container = runtime_config.cpu_millicores or (
         int(float(runtime_config.cpu) * 1000) if runtime_config.cpu is not None else 0
     )
     gpu_per_container = _gpu_per_container(runtime_config)
-    if cpu_limit <= 0 and gpu_limit <= 0:
+    if cpu_limit <= 0 and workspace_gpu_quota <= 0:
         return base
 
     counter = RedisSchedulerContainerRepository(redis).ensure_workspace_concurrency_counter(
@@ -69,16 +69,18 @@ def plan_autoscaler_start_guardrails(
     resource_caps: list[tuple[str, int]] = []
     if cpu_limit > 0 and cpu_per_container > 0:
         resource_caps.append(("cpu", (cpu_limit - counter.cpu_millicores) // cpu_per_container))
-    if gpu_limit > 0 and gpu_per_container > 0:
-        resource_caps.append(("gpu", (gpu_limit - counter.gpu_count) // gpu_per_container))
+    if workspace_gpu_quota > 0 and gpu_per_container > 0:
+        resource_caps.append(
+            ("gpu", (workspace_gpu_quota - counter.gpu_count) // gpu_per_container)
+        )
     if not resource_caps:
         return base.model_copy(
             update={
                 "enforced": True,
-                "cpu_limit_millicores": cpu_limit,
+                "workspace_cpu_quota_millicores": cpu_limit,
                 "cpu_used_millicores": counter.cpu_millicores,
                 "cpu_per_container_millicores": cpu_per_container,
-                "gpu_limit": gpu_limit,
+                "workspace_gpu_quota": workspace_gpu_quota,
                 "gpu_used": counter.gpu_count,
                 "gpu_per_container": gpu_per_container,
             }
@@ -100,10 +102,10 @@ def plan_autoscaler_start_guardrails(
             "limited": limited,
             "reason": _guardrail_reason(limiting_resources) if limited else "",
             "enforced": True,
-            "cpu_limit_millicores": cpu_limit,
+            "workspace_cpu_quota_millicores": cpu_limit,
             "cpu_used_millicores": counter.cpu_millicores,
             "cpu_per_container_millicores": cpu_per_container,
-            "gpu_limit": gpu_limit,
+            "workspace_gpu_quota": workspace_gpu_quota,
             "gpu_used": counter.gpu_count,
             "gpu_per_container": gpu_per_container,
             "limiting_resources": limiting_resources,

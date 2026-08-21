@@ -331,8 +331,8 @@ class PodControlService:
                     block_network=config.runtime.block_network,
                     allow_list=config.runtime.allow_list,
                     preemptible=config.runtime.preemptible,
-                    gpu_limit=config.runtime.gpu_limit,
-                    cpu_limit_millicores=config.runtime.cpu_limit_millicores,
+                    workspace_gpu_quota=config.runtime.workspace_gpu_quota,
+                    workspace_cpu_quota_millicores=config.runtime.workspace_cpu_quota_millicores,
                     secret_names=config.secrets,
                     gateway_token_required=True,
                     workspace_storage_required=(

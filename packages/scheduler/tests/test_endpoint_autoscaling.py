@@ -143,7 +143,7 @@ def _assert_endpoint_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
         isolated_services,
         max_containers=3,
         tasks_per_container=1,
-        runtime_config={"cpu_millicores": 500, "cpu_limit_millicores": 1000},
+        runtime_config={"cpu_millicores": 500, "workspace_cpu_quota_millicores": 1000},
     )
     for _ in range(3):
         _attach_dispatch(isolated_services, stub)

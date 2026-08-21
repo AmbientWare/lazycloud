@@ -475,7 +475,7 @@ def _assert_pod_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
         isolated_services,
         keep_warm_seconds=0,
         autoscaler={"max_containers": 3},
-        resource_config={"cpu_millicores": 500, "cpu_limit_millicores": 1000},
+        resource_config={"cpu_millicores": 500, "workspace_cpu_quota_millicores": 1000},
     )
     redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
 

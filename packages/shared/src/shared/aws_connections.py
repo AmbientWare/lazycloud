@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import Field, field_validator, model_validator
 
 from shared.capacity import MachinePool
+from shared.container_requests import CONTAINER_MEMORY_BURST_FLOOR_MIB
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -100,7 +101,15 @@ class AwsAccountComputeConfiguration(ContractModel):
     max_cpu_instances: int = Field(default=10, ge=0, le=100)
     max_gpu_instances: int = Field(default=2, ge=0, le=100)
     min_free_cpu_millicores: int = Field(default=1_000, ge=0)
-    min_free_memory_mib: int = Field(default=1_024, ge=0)
+    min_free_memory_mib: int = Field(default=CONTAINER_MEMORY_BURST_FLOOR_MIB, ge=0)
+    """Free memory below which the pool adds a machine.
+
+    Stated as the smallest expansion any container is granted, so a node stops
+    being counted as spare before it can no longer absorb one more default
+    container growing into its allowance. A figure chosen independently of that
+    allowance is a scaling policy that does not know what the burst policy
+    permits, and the two drift apart silently.
+    """
     allowed_regions: tuple[str, ...] = ("us-east-1",)
     allowed_instance_types: tuple[str, ...] = ()
     idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
