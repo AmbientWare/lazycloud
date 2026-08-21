@@ -44,3 +44,20 @@ keeps no idle window unless its author names one.
 That only works while an omitted value stays distinguishable from a chosen one,
 which is why the SDK sends nothing rather than the default it would have picked.
 A client that fills in defaults leaves the resolver with nothing to resolve.
+
+A container's memory reservation and its ceiling are deliberately different
+numbers, and the gap between them is the product. Placement reserves 1.25x the
+request so a node is never oversubscribed on what was promised; the ceiling lets
+a container grow several times past it into memory nobody reserved. beta9 keeps
+the two equal, which is safe by construction and means no burst at all. We do
+not, which is why eviction has to exist: the gap is only survivable because
+something chooses who leaves when it closes.
+
+Four cgroup values express it. `memory.low` is the request and is what reclaim
+protects. `memory.high` is the ceiling and throttles rather than kills.
+`memory.max` is the wall behind it, clamped to what the machine holds because a
+ceiling larger than the node is one the container never reaches — the host runs
+out first and its OOM killer picks by size. Swap is the fourth and the other
+three are decorative without it: a cgroup of anonymous pages with nowhere to
+reclaim to does not slow at `memory.high`, it stalls, measured at 21 seconds for
+an 8MiB allocation with zero pages scanned.

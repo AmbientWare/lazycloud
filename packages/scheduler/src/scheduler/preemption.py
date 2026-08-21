@@ -41,13 +41,6 @@ class WorkerPreemptionResult(ContractModel):
     stopped_container_ids: list[str] = Field(default_factory=list)
 
 
-class ContainerEvictionResult(ContractModel):
-    container_id: str
-    stopped: bool = False
-    requeued: bool = False
-    reason: str = ""
-
-
 class CapacityInterruption(ContractModel):
     enrollment_id: str
     credential_generation: int = Field(ge=1)
@@ -160,44 +153,6 @@ class SchedulerWorkerPreemptionService:
             changed=queued.changed,
             requeued_request_ids=queued.requeued_request_ids,
             stopped_container_ids=stopped,
-        )
-
-    def evict_container(
-        self,
-        container_id: str,
-        *,
-        worker_id: str,
-        reason: StopContainerReason = StopContainerReason.MemoryEvicted,
-    ) -> ContainerEvictionResult:
-        """Stop one container to relieve the machine it is running on.
-
-        One container rather than a whole worker, which is what separates this
-        from a machine being reclaimed: the machine is fine and stays serving,
-        and only the container that grew furthest past its reservation goes.
-
-        Recoverable work is requeued and lands elsewhere. Everything else stops
-        carrying a reason that says the machine ran out rather than that anybody
-        intervened, because the container did nothing wrong except grow into
-        headroom that stopped being spare.
-        """
-        if self.containers.is_container_cancelled(container_id):
-            return ContainerEvictionResult(
-                container_id=container_id,
-                reason="container was already cancelled",
-            )
-        # Asked before the stop. Afterwards the request is gone and every
-        # container looks unrecoverable, which would silently discard work that
-        # had somewhere else to run.
-        requeued = self.workers.has_recoverable_container_request(
-            container_id,
-            worker_id=worker_id,
-        )
-        self.stopper.stop(container_id, reason=reason)
-        return ContainerEvictionResult(
-            container_id=container_id,
-            stopped=True,
-            requeued=requeued,
-            reason=reason.describe(),
         )
 
 

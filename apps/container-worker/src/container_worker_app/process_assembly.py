@@ -399,8 +399,9 @@ def _memory_pressure_watcher(
         read_memory_current=read_container_memory_current,
         # Forced, because a machine already out of memory is one where a graceful
         # stop may never complete.
-        stop_container=lambda container_id, _reason: stopper.stop_container(
+        stop_container=lambda container_id, reason: stopper.stop_container(
             container_id,
             force=True,
+            reason=reason,
         ),
     )

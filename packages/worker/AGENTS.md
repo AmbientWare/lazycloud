@@ -53,3 +53,25 @@ What a container reserved is not restated as a usage metric. The reservation
 prices from the placement the control plane recorded, so a worker's own copy of
 it is a label — and a second copy that decided nothing would still have to be
 kept in step with the one that does.
+
+A container that outgrows its reservation is stopped here, not by the kernel.
+The worker holds the two readings the decision needs — its own memory pressure
+and what each container currently uses — and the kernel is seconds away once a
+machine is in full stall, so the decision is made where the readings are rather
+than reported to something that would have to ask again. The scheduler learns
+about it the same way it learns about any other stop. Nothing is requeued, and
+nothing needs to be: a request stops being recoverable once a worker has taken
+it, so a container that is running has no queued work waiting behind it. What
+recovers is whatever recovers any container that died — the autoscaler for an
+endpoint or a pod, the retry schedule for a function task.
+
+The rule is the reservation, and it is the whole of what a reservation buys: the
+container furthest above what it asked for goes, and one inside its request is
+never chosen however large it is. That inverts `oom_badness`, which scores
+resident size and reaches the biggest honest tenant first — the reason this
+cannot be delegated to the kernel and then explained to the customer afterwards.
+
+A worker without a cgroup of its own does not watch. The Compose stack runs an
+`agent` and a `container-worker` on one host, so the pressure there describes
+both, and stopping this worker's containers because a neighbour grew is worse
+than leaving the kernel to it.

@@ -553,7 +553,13 @@ class EventSink(WorkerEventSink):
 class Stopper:
     stopped: list[tuple[str, bool]] = field(default_factory=list)
 
-    def stop_container(self, container_id: str, *, force: bool) -> None:
+    def stop_container(
+        self,
+        container_id: str,
+        *,
+        force: bool,
+        reason: StopContainerReason = StopContainerReason.Unknown,
+    ) -> None:
         self.stopped.append((container_id, force))
 
 
