@@ -164,6 +164,17 @@ Resources:
                   - ec2:DescribeImages
                   - ec2:DescribeInstances
                 Resource: "*"
+              # How the bake reports. The instance carries no key pair and no
+              # instance profile, so its console is the only channel it has, and
+              # without this the baker reads an empty string from every call and
+              # cannot tell a finished bake from a failed one.
+              - Sid: ReadBakeConsole
+                Effect: Allow
+                Action: ec2:GetConsoleOutput
+                Resource: !Sub "arn:aws:ec2:*:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/cloud-pool:managed-by: control-plane
               - Sid: LaunchBakeInstanceInfrastructure
                 Effect: Allow
                 Action: ec2:RunInstances

@@ -108,12 +108,12 @@ _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 _BAKE_FAILED_SENTINEL = "LAZYCLOUD_BAKE_FAILED"
 _BAKE_OK_SENTINEL = "LAZYCLOUD_BAKE_OK"
 _CLI_TIMEOUT_SECONDS = 300
-# Console output trails the instance by minutes, and the first publication of it
-# has been measured at six. These attempts are only spent once an instance has
-# already stopped without its success line having appeared yet, so the cost of a
-# generous window is paid on a path that is usually about to succeed, while a
-# short one throws away a finished bake for being slow to say so.
-_CONSOLE_SETTLE_ATTEMPTS = 24
+# Console output trails the instance badly: a bake that stopped at 20:12 first
+# published at 20:17. These attempts are only spent once an instance has stopped
+# without its success line having appeared, so a generous window costs time on a
+# path that is usually about to succeed, while a short one throws away a finished
+# bake for being slow to say so. Twelve minutes against a measured five.
+_CONSOLE_SETTLE_ATTEMPTS = 48
 _CONSOLE_TAIL_LINES = 40
 _MANAGED_TAG_KEY = "cloud-pool:managed-by"
 _MANAGED_TAG_VALUE = "control-plane"
@@ -587,8 +587,14 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
 def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> str:
     """What the instance has said so far, or nothing while EC2 catches up.
 
-    Console output lags the instance by a minute or two and is empty until the
-    first flush, so absence here is never evidence of silence.
+    Console output lags the instance by minutes and is empty until the first
+    flush, so absence here is never evidence of silence.
+
+    A call that fails is not the same absence, and saying so is the whole point:
+    this returned an empty string on a denied `ec2:GetConsoleOutput` for a full
+    bake, which reads exactly like an instance that has not spoken yet. The
+    sentinels were invisible to the baker while working perfectly by hand, and
+    the bake it discarded had succeeded.
     """
     result = _run_aws(
         request.aws_cli,
@@ -607,7 +613,10 @@ def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> st
         check=False,
     )
     if result.returncode != 0:
-        return ""
+        raise SystemExit(
+            f"{region}: cannot read the console of {instance_id}, which is the only "
+            f"channel a bake instance has: {result.stderr.strip()[:400]}"
+        )
     # `--output text` renders a null as the four characters "None", which would
     # otherwise be searched for sentinels as though it were console output.
     return "" if result.stdout.strip() == "None" else result.stdout
