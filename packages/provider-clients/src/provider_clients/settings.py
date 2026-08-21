@@ -16,10 +16,10 @@ _AWS_PRINCIPAL_PATTERN = re.compile(
     r"(root|role/[A-Za-z0-9+=,.@_/-]+|user/[A-Za-z0-9+=,.@_/-]+)"
 )
 _AWS_REGION_PATTERN = re.compile(r"(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+")
-_MANIFEST_URL_ENV = f"{ENV_PREFIX}_RELEASE_MANIFEST_URL"
+RELEASE_MANIFEST_URL_ENV = f"{ENV_PREFIX}_RELEASE_MANIFEST_URL"
 _GPU_AMI_IDS_ENV = f"{ENV_PREFIX}_AWS_CAPACITY_GPU_AMI_IDS"
 _INSTANCE_PRICES_ENV = f"{ENV_PREFIX}_AWS_CAPACITY_INSTANCE_HOURLY_MICROS"
-_CONTROL_PRINCIPAL_ENV = f"{ENV_PREFIX}_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN"
+AWS_CONNECTION_CONTROL_PRINCIPAL_ENV = f"{ENV_PREFIX}_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN"
 
 
 def normalize_ami_catalog(value: Mapping[str, str]) -> dict[str, str]:
@@ -59,7 +59,6 @@ class AwsAccountConnectionEnvironmentSettings(BaseSettings):
     here, so its URL is resolved from the release manifest.
     """
 
-    enabled: bool = False
     control_principal_arn: str = ""
     external_id_bytes: int = 48
     draft_ttl_seconds: int = 24 * 60 * 60
@@ -75,7 +74,6 @@ class AwsAccountConnectionEnvironmentSettings(BaseSettings):
 class AwsAccountConnectionSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    enabled: bool = False
     template_url: str = ""
     control_principal_arn: str = ""
     external_id_bytes: int = Field(default=48, ge=32, le=128)
@@ -90,39 +88,43 @@ class AwsAccountConnectionSettings(BaseModel):
 
     @property
     def configured(self) -> bool:
-        return self.enabled and bool(self.template_url and self.control_principal_arn)
+        """Whether this deployment has a connected AWS at all.
+
+        Read from the two values that do the work rather than from a flag beside
+        them. A separate switch can disagree with them, and did: it defaulted
+        false, no deployment path ever set it, and every deployment that had both
+        values still answered 503 to every connection request.
+        """
+        return bool(self.template_url and self.control_principal_arn)
 
     @model_validator(mode="after")
-    def validate_enabled_configuration(self) -> AwsAccountConnectionSettings:
-        """Connected AWS is opted into explicitly, and opting in requires its configuration.
+    def validate_configuration(self) -> AwsAccountConnectionSettings:
+        """The two values are one decision, so having one of them is an error.
 
-        ``enabled`` is a deployment declaration, not a runtime switch: a deployment that
-        leaves it false has no connected AWS at all, and one that sets it true must have
-        both values or fail here rather than degrade. Publishing a customer authorization
-        template with no control principal would trust nothing, so the two are one unit,
-        even though they now arrive from different places.
+        Publishing a customer authorization template with no control principal
+        trusts nothing, and naming a control principal no template points at
+        leaves customers nothing to authorize. Neither is a deployment without
+        connected AWS — that is both of them absent — so a deployment holding one
+        is stopped here rather than left to degrade into a capability that is
+        present, reachable, and wrong.
         """
 
         if self.control_principal_arn and (
             _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None
         ):
             raise ValueError("AWS account connection control principal ARN is invalid")
-        if not self.enabled:
+        if not self.template_url and not self.control_principal_arn:
             return self
-        missing: list[str] = []
         if not self.template_url:
-            missing.append(
-                f"connection template URL (published by the release at {_MANIFEST_URL_ENV})"
+            raise ValueError(
+                "connected AWS names a control principal but no connection template URL "
+                f"(published by the release at {RELEASE_MANIFEST_URL_ENV})"
             )
         if not self.control_principal_arn:
-            missing.append(
-                f"control principal ARN ({_CONTROL_PRINCIPAL_ENV}, the "
-                "control_principal_arn output of deploy/platform-aws)"
-            )
-        if missing:
             raise ValueError(
-                "connected AWS is enabled but its configuration is incomplete: missing "
-                + ", ".join(missing)
+                "connected AWS has a connection template but no control principal ARN "
+                f"({AWS_CONNECTION_CONTROL_PRINCIPAL_ENV}, the control_principal_arn output of "
+                "deploy/platform-aws)"
             )
         return self
 
@@ -238,7 +240,7 @@ class AwsCapacitySettings(BaseModel):
         problems: list[str] = []
         if missing_from_release:
             problems.append(
-                f"the release at {_MANIFEST_URL_ENV} published no "
+                f"the release at {RELEASE_MANIFEST_URL_ENV} published no "
                 + ", ".join(missing_from_release)
             )
         if missing_from_deployment:
@@ -280,6 +282,8 @@ class AwsCapacityReconciliationSettings(BaseSettings):
 
 
 __all__ = [
+    "AWS_CONNECTION_CONTROL_PRINCIPAL_ENV",
+    "RELEASE_MANIFEST_URL_ENV",
     "AwsAccountConnectionEnvironmentSettings",
     "AwsAccountConnectionSettings",
     "AwsCapacityEnvironmentSettings",

@@ -234,7 +234,7 @@ def _account_token(services: ApiServices, name: str) -> str:
     return raw_token
 
 
-def test_connection_status_is_available_when_aws_mutations_are_disabled(
+def test_connection_status_is_readable_without_a_connected_aws(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> None:
@@ -258,7 +258,11 @@ def test_connection_status_is_available_when_aws_mutations_are_disabled(
     assert status_response.json() == {"connection": None}
     assert connect_response.status_code == 503
     assert connect_response.json() == {
-        "detail": "AWS account connections are not enabled",
+        "detail": (
+            "this deployment has no connected AWS: it needs "
+            "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN and a release naming a "
+            "connection template through LAZYCLOUD_RELEASE_MANIFEST_URL"
+        ),
         "code": "upstream_unavailable",
     }
 

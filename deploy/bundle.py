@@ -64,6 +64,30 @@ IMAGE_VARIABLES = {
     "cli": "LAZYCLOUD_IMAGE_CLI",
 }
 
+# Runtime values whose absence produces a control plane that starts, reports
+# healthy, and is wrong. Each of these has done exactly that: the deployment
+# converged, the workflow reported success, and the defect surfaced steps later
+# as a symptom naming something else. Checked here because this is the last point
+# that holds the whole set at once -- the host receives them already assembled,
+# and the API cannot tell a value it was never given from one a deployment
+# legitimately does not have.
+#
+# Deliberately not everything. A value with a meaningful empty -- the object
+# store endpoint, which is blank to select S3 itself -- cannot be told from an
+# omission by this check and does not belong in it.
+REQUIRED_RUNTIME_VARIABLES = {
+    "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN": (
+        "the principal a customer's account authorizes; without it every "
+        "connection request is refused and no managed capacity is ever registered"
+    ),
+    "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL": (
+        "the origin this deployment is reached on; it defaults to localhost, so "
+        "absence is silent and reaches customers in authorization templates and "
+        "OAuth redirects"
+    ),
+    "LAZYCLOUD_OBJECT_STORE_BUCKET": ("the bucket every artifact, package and log is written to"),
+}
+
 
 class BundleError(RuntimeError):
     """The bundle could not be assembled or published."""
@@ -87,6 +111,15 @@ def _images_env(registry: str, deployment: str, digests: dict[str, str]) -> str:
 
 
 def _runtime_env(values: dict[str, str]) -> str:
+    missing = sorted(
+        variable for variable in REQUIRED_RUNTIME_VARIABLES if not values.get(variable, "").strip()
+    )
+    if missing:
+        raise BundleError(
+            "the deployment is missing runtime values a control plane cannot work "
+            "without:\n"
+            + "\n".join(f"  {name}: {REQUIRED_RUNTIME_VARIABLES[name]}" for name in missing)
+        )
     return "".join(f"{key}={value}\n" for key, value in sorted(values.items()))
 
 

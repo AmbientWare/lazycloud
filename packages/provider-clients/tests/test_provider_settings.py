@@ -25,14 +25,20 @@ def test_aws_connection_settings_reject_invalid_control_authority() -> None:
         )
 
 
-def test_aws_connection_settings_reject_enabled_without_control_authority() -> None:
-    # Enabling with a template URL but no control principal would publish a customer
-    # authorization template that trusts nothing.
-    with pytest.raises(ValidationError, match="configuration is incomplete"):
+def test_aws_connection_settings_reject_half_a_connection() -> None:
+    # Either half alone is a deployment that answers connection requests and gets
+    # them wrong: a template trusting no principal, or a principal customers have
+    # nothing to authorize against. Absent together is the deployment that simply
+    # has no connected AWS, and is allowed.
+    with pytest.raises(ValidationError, match="no control principal ARN"):
         AwsAccountConnectionSettings(
-            enabled=True,
             template_url="https://assets.example.com/template.json",
         )
+    with pytest.raises(ValidationError, match="no connection template URL"):
+        AwsAccountConnectionSettings(
+            control_principal_arn="arn:aws:iam::123456789012:role/control-plane",
+        )
+    assert not AwsAccountConnectionSettings().configured
 
 
 def test_aws_capacity_settings_reject_partial_and_mutable_artifacts() -> None:
