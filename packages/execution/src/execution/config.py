@@ -13,7 +13,12 @@ from pydantic import (
     model_validator,
 )
 from shared.container_requests import OciRuntimeName
-from shared.deployment_records import DEFAULT_DISK
+from shared.deployment_records import (
+    DEFAULT_DISK,
+    CpuRequest,
+    MemoryRequest,
+    request_and_limit,
+)
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
 from shared.mounts import MountAuthMode, validate_mount_auth
@@ -146,10 +151,21 @@ class ContainerResourceConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=True)
 
-    cpu: int | float | None = Field(default=None, ge=0)
+    cpu: CpuRequest | None = Field(default=None)
+    """Cores to reserve, or a `(reserve, throttle at)` pair.
+
+    The pair is kept as written rather than split into two fields, the same way
+    a bare value is kept and resolved by `requested_cpu_millicores`. What the
+    author stated and what the platform computed from it stay distinguishable.
+    """
+
     cpu_millicores: int = Field(default=0, ge=0)
-    memory: str | int | None = None
+    cpu_limit_millicores: int = Field(default=0, ge=0)
+    memory: MemoryRequest | None = None
+    """Memory to reserve, or a `(reserve, kill at)` pair."""
+
     memory_mib: int = Field(default=0, ge=0)
+    memory_limit_mib: int = Field(default=0, ge=0)
     disk: str | int = DEFAULT_DISK
     gpu: str | None = None
     gpu_type: str | None = None
@@ -172,26 +188,52 @@ class ContainerResourceConfig(BaseModel):
             return DEFAULT_DISK
         return value
 
-    @field_validator("memory")
+    @field_validator("cpu", "memory")
     @classmethod
-    def memory_must_be_valid(cls, value: str | int | None) -> str | int | None:
-        parsed = parse_memory_mib(value)
-        if parsed is not None and parsed < 0:
-            msg = "memory must be non-negative"
-            raise ValueError(msg)
+    def a_pair_states_a_limit_above_its_request(
+        cls, value: CpuRequest | MemoryRequest | None
+    ) -> CpuRequest | MemoryRequest | None:
+        request, limit = request_and_limit(value)
+        for part in (request, limit):
+            if part is not None and (parse_memory_mib(part) or 0) < 0:
+                raise ValueError("resource values must be non-negative")
+        if limit is None:
+            return value
+        # A ceiling under the reservation is a container guaranteed more than it
+        # is allowed to use, which the kernel resolves by killing it.
+        if (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0):
+            raise ValueError("a resource limit cannot sit below its request")
         return value
 
     @property
     def requested_cpu_millicores(self) -> int:
         if self.cpu_millicores:
             return self.cpu_millicores
-        return int(float(self.cpu) * 1000) if self.cpu is not None else 0
+        request, _ = request_and_limit(self.cpu)
+        return int(float(request) * 1000) if request is not None else 0
+
+    @property
+    def limit_cpu_millicores(self) -> int:
+        """Where this container is throttled, or zero to take the default."""
+        if self.cpu_limit_millicores:
+            return self.cpu_limit_millicores
+        _, limit = request_and_limit(self.cpu)
+        return int(float(limit) * 1000) if limit is not None else 0
 
     @property
     def requested_memory_mib(self) -> int:
         if self.memory_mib:
             return self.memory_mib
-        return parse_memory_mib(self.memory) or 0
+        request, _ = request_and_limit(self.memory)
+        return parse_memory_mib(request) or 0
+
+    @property
+    def limit_memory_mib(self) -> int:
+        """Where this container is killed, or zero to take the default."""
+        if self.memory_limit_mib:
+            return self.memory_limit_mib
+        _, limit = request_and_limit(self.memory)
+        return parse_memory_mib(limit) or 0
 
     @property
     def requested_disk_mib(self) -> int:

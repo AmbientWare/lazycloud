@@ -212,10 +212,10 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             ignore_python=image_config.ignore_python,
         ),
         resources=Resources(
-            cpu=float(runtime_config.cpu) if runtime_config.cpu is not None else None,
-            memory=(
-                str(runtime_config.memory) if runtime_config.memory not in {None, "", 0} else None
-            ),
+            # Carried whole, pair included: this is what a deployment reports back
+            # about itself, and a ceiling its author set is part of that.
+            cpu=runtime_config.cpu,
+            memory=runtime_config.memory if runtime_config.memory not in {None, "", 0} else None,
             # A stored config without a ceiling rehydrates to the platform one
             # rather than to None: the spec never carries an absent limit.
             disk=(

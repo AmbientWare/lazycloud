@@ -77,7 +77,9 @@ class FunctionContainerStartRequest(ContractModel):
     python_executable: ManagedPythonExecutable = FUNCTION_DEFAULT_PYTHON_EXECUTABLE
     runner_module: str = FUNCTION_RUNNER_MODULE
     cpu_millicores: int = Field(default=0, ge=0)
+    cpu_limit_millicores: int = Field(default=0, ge=0)
     memory_mib: int = Field(default=0, ge=0)
+    memory_limit_mib: int = Field(default=0, ge=0)
     disk_mib: int = Field(default=0, ge=0)
     requires_gpu: bool = False
     gpu_count: int = Field(default=0, ge=0)
@@ -94,7 +96,9 @@ class FunctionContainerStartPlan(ContractModel):
     entrypoint: list[str]
     env: list[str]
     cpu_millicores: int
+    cpu_limit_millicores: int = 0
     memory_mib: int
+    memory_limit_mib: int = 0
     disk_mib: int = 0
     gpu_count: int
     gpu_request: list[str]
@@ -277,7 +281,9 @@ def plan_function_container_start(
             ),
         ],
         cpu_millicores=request.cpu_millicores or DEFAULT_FUNCTION_CONTAINER_CPU_MILLICORES,
+        cpu_limit_millicores=request.cpu_limit_millicores,
         memory_mib=request.memory_mib or DEFAULT_FUNCTION_CONTAINER_MEMORY_MIB,
+        memory_limit_mib=request.memory_limit_mib,
         disk_mib=request.disk_mib,
         gpu_count=normalize_gpu_count(request.requires_gpu, request.gpu_count),
         gpu_request=request.gpu_request,

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import type { Deployment } from "@/lib/api/schemas";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, resourceAllocation } from "@/lib/format";
 
 /**
  * What the current version was provisioned with: the container it gets, and
@@ -28,8 +28,8 @@ export function WorkloadConfiguration({
   return (
     <div className="grid min-w-0 gap-x-8 gap-y-6 p-4 lg:grid-cols-2">
       <ConfigurationGroup title="Runtime">
-        <Fact label="CPU" value={resources.cpu == null ? "Default" : `${resources.cpu} cores`} />
-        <Fact label="Memory" value={resources.memory ?? "Default"} />
+        <Fact label="CPU" value={resourceAllocation(resources.cpu, "cores")} />
+        <Fact label="Memory" value={resourceAllocation(resources.memory)} />
         {resources.gpu ? (
           <Fact
             label="GPU"

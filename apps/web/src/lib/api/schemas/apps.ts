@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { cpuRequestSchema, memoryRequestSchema } from "./resources";
 
 import { stubSchema } from "./stubs";
 
@@ -34,8 +35,8 @@ export const deploymentSchema = z.object({
     .object({
       resources: z
         .object({
-          cpu: z.number().nullish(),
-          memory: z.string().nullish(),
+          cpu: cpuRequestSchema.nullish(),
+          memory: memoryRequestSchema.nullish(),
           disk: z.string().nullish(),
           gpu: z.string().nullish(),
           gpu_count: z.number().default(0),

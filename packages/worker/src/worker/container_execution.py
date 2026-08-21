@@ -313,6 +313,7 @@ class ContainerExecutionContext(ContractModel):
     allow_list: list[str] = Field(default_factory=list)
     memory_enforced: bool = True
     memory_limit_bytes: int | None = None
+    cpu_limit_millicores: int = 0
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = False
 

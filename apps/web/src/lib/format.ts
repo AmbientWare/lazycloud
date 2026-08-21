@@ -1,4 +1,10 @@
 import { formatDistanceToNowStrict, parseISO } from "date-fns";
+import {
+  resourceLimit,
+  resourceRequest,
+  type CpuRequest,
+  type MemoryRequest,
+} from "@/lib/api/schemas/resources";
 
 import type { RowValue } from "@/lib/api/resources";
 
@@ -175,4 +181,22 @@ export function stopReasonLabel(
 ): string | null {
   if (status === "running" || status === "pending") return null;
   return (terminationReason && STOP_REASONS[terminationReason]) || null;
+}
+
+/**
+ * A resource a workload stated, with its ceiling when the author named one.
+ *
+ * The pair form is what a container may grow into, so hiding the second figure
+ * would show a workload as smaller than it is allowed to become.
+ */
+export function resourceAllocation(
+  value: CpuRequest | MemoryRequest | null | undefined,
+  unit = "",
+): string {
+  const request = resourceRequest(value);
+  if (request == null) return "Default";
+  const suffix = unit ? ` ${unit}` : "";
+  const limit = resourceLimit(value);
+  if (limit == null) return `${request}${suffix}`;
+  return `${request}${suffix} (limit ${limit}${suffix})`;
 }

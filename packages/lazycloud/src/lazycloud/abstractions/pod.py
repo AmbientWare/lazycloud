@@ -6,7 +6,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
-from shared.deployment_records import DEFAULT_DISK, DeploymentSpec, Resources, VolumeMount
+from shared.deployment_records import (
+    DEFAULT_DISK,
+    CpuRequest,
+    DeploymentSpec,
+    MemoryRequest,
+    Resources,
+    VolumeMount,
+)
 from shared.deployments import DeploymentKind
 from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentResponse
@@ -69,8 +76,8 @@ class PodOptions(TypedDict, total=False):
     command: list[str]
     ports: dict[str, int]
     env: dict[str, str]
-    cpu: float | None
-    memory: str | None
+    cpu: CpuRequest | None
+    memory: MemoryRequest | None
     disk: str | None
     gpu: str | None
     gpu_count: int
@@ -178,8 +185,8 @@ class Pod(ControlClientConfigMixin):
     command: list[str] = field(default_factory=list)
     ports: dict[str, int] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
-    cpu: float | None = 1.0
-    memory: str | None = "128Mi"
+    cpu: CpuRequest | None = 1.0
+    memory: MemoryRequest | None = "128Mi"
     disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
@@ -308,8 +315,8 @@ class Pod(ControlClientConfigMixin):
         command: list[str] | None = None,
         ports: dict[str, int] | None = None,
         env: dict[str, str] | None = None,
-        cpu: float | None = None,
-        memory: str | None = None,
+        cpu: CpuRequest | None = None,
+        memory: MemoryRequest | None = None,
         disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int | None = None,

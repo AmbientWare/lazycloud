@@ -25,7 +25,9 @@ from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
+    CpuRequest,
     DeploymentSpec,
+    MemoryRequest,
     Resources,
     VolumeMount,
     resolve_http_wait_timeout_seconds,
@@ -118,8 +120,8 @@ class EndpointOptions(TypedDict, total=False):
     route: str
     domain: str | None
     methods: list[str] | None
-    cpu: float | None
-    memory: str | None
+    cpu: CpuRequest | None
+    memory: MemoryRequest | None
     disk: str | None
     gpu: str | None
     gpu_count: int
@@ -154,8 +156,8 @@ class ASGIOptions(TypedDict, total=False):
     image: Image | None
     route: str
     domain: str | None
-    cpu: float | None
-    memory: str | None
+    cpu: CpuRequest | None
+    memory: MemoryRequest | None
     disk: str | None
     gpu: str | None
     gpu_count: int
@@ -201,8 +203,8 @@ class Endpoint(Generic[P, R]):
     route: str = "/"
     domain: str | None = None
     methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
-    cpu: float | None = DEFAULT_HTTP_CPU
-    memory: str | None = DEFAULT_HTTP_MEMORY
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
@@ -430,8 +432,8 @@ def _endpoint(
     route: str = "/",
     domain: str | None = None,
     methods: list[str] | None = None,
-    cpu: float | None = DEFAULT_HTTP_CPU,
-    memory: str | None = DEFAULT_HTTP_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
@@ -472,8 +474,8 @@ def _endpoint(
     route: str = "/",
     domain: str | None = None,
     methods: list[str] | None = None,
-    cpu: float | None = DEFAULT_HTTP_CPU,
-    memory: str | None = DEFAULT_HTTP_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
@@ -513,8 +515,8 @@ def _endpoint(
     route: str = "/",
     domain: str | None = None,
     methods: list[str] | None = None,
-    cpu: float | None = DEFAULT_HTTP_CPU,
-    memory: str | None = DEFAULT_HTTP_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
@@ -596,8 +598,8 @@ class ASGI:
     image: Image = field(default_factory=Image)
     route: str = "/"
     domain: str | None = None
-    cpu: float | None = DEFAULT_HTTP_CPU
-    memory: str | None = DEFAULT_HTTP_MEMORY
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
@@ -794,8 +796,8 @@ def _asgi(
     image: Image | None = None,
     route: str = "/",
     domain: str | None = None,
-    cpu: float | None = DEFAULT_HTTP_CPU,
-    memory: str | None = DEFAULT_HTTP_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
@@ -857,8 +859,8 @@ def _realtime(
     image: Image | None = None,
     route: str = "/",
     domain: str | None = None,
-    cpu: float | None = DEFAULT_HTTP_CPU,
-    memory: str | None = DEFAULT_HTTP_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
+    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,

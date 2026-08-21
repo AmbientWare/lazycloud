@@ -34,7 +34,7 @@ from shared.compute_policy import (
     WorkspaceComputePolicy,
 )
 from shared.contracts import ContractModel
-from shared.deployment_records import Deployment, DeploymentSpec
+from shared.deployment_records import Deployment, DeploymentSpec, request_and_limit
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.timestamps import utc_now
@@ -461,9 +461,13 @@ class WorkspaceComputePolicyService:
     @staticmethod
     def _requirements_for_spec(spec: DeploymentSpec) -> ComputeResourceRequirements:
         resources = spec.resources
+        # The reservation is what capacity is sized against. A ceiling its author
+        # named bounds the container, not the machine chosen for it.
+        cpu_request, _ = request_and_limit(resources.cpu)
+        memory_request, _ = request_and_limit(resources.memory)
         return ComputeResourceRequirements(
-            cpu_millicores=int((resources.cpu or 0) * 1000),
-            memory_mb=_memory_mb(resources.memory),
+            cpu_millicores=int(float(cpu_request or 0) * 1000),
+            memory_mb=_memory_mb(memory_request),
             gpu=resources.gpu,
             gpu_count=resources.gpu_count,
         )
@@ -488,7 +492,7 @@ class WorkspaceComputePolicyService:
         )
 
 
-def _memory_mb(value: str | None) -> int:
+def _memory_mb(value: str | int | float | None) -> int:
     return parse_memory_mib(value) or 0
 
 

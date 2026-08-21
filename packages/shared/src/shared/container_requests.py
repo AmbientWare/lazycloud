@@ -224,6 +224,17 @@ class WorkerContainerRequestPayload(ContractModel):
     allow_list: list[str] = Field(default_factory=list)
     memory_enforced: bool = True
     memory_limit_bytes: int | None = None
+    """Where this container is killed, or None to take the platform default.
+
+    Read as the effective ceiling by everything downstream: the cgroup the
+    container runs under and the watcher that reports an OOM both take this
+    number, so a container cannot be reported killed at a figure it was
+    allowed to exceed.
+    """
+
+    cpu_limit_millicores: int = 0
+    """Where this container is throttled, or zero to take the platform default."""
+
     # Per-container disk ceiling for the container's writable layer. A cap, not
     # a reservation: the scheduler does not fit against it. Never optional: a
     # container without a ceiling is the unbounded case this exists to prevent.

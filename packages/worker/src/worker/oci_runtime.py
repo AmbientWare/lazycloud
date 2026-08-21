@@ -499,6 +499,10 @@ class OciRuntimeSpecBuilder:
                 cpu_millicores=context.request.cpu_millicores,
                 memory_mib=context.request.memory_mib,
                 memory_enforced=context.memory_enforced,
+                cpu_limit_millicores=context.cpu_limit_millicores,
+                # Already resolved against the platform default where the author
+                # named none, so the cgroup and the OOM watcher agree.
+                memory_limit_mib=(context.memory_limit_bytes or 0) // (1024 * 1024),
             )
         )
         linux = spec.get("linux")
