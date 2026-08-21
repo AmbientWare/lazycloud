@@ -86,8 +86,8 @@ class StubRuntimeConfig(ContractModel):
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)
     preemptible: bool = False
-    gpu_limit: int = Field(default=0, ge=0)
-    cpu_limit_millicores: int = Field(default=0, ge=0)
+    workspace_gpu_quota: int = Field(default=0, ge=0)
+    workspace_cpu_quota_millicores: int = Field(default=0, ge=0)
     ports: dict[str, int] = Field(default_factory=dict)
 
 

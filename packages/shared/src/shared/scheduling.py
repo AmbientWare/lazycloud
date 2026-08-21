@@ -80,8 +80,8 @@ class SchedulerWorkerRequest(ContractModel):
     runtime_class: str = ""
     docker_enabled: bool = False
     preemptible: bool = False
-    gpu_limit: int = 0
-    cpu_limit_millicores: int = 0
+    workspace_gpu_quota: int = 0
+    workspace_cpu_quota_millicores: int = 0
     retry_count: int = 0
     timestamp: datetime = Field(default_factory=utc_now)
     payload: dict[str, JsonValue] = Field(default_factory=dict)
@@ -90,8 +90,8 @@ class SchedulerWorkerRequest(ContractModel):
         "cpu_millicores",
         "memory_mib",
         "gpu_count",
-        "gpu_limit",
-        "cpu_limit_millicores",
+        "workspace_gpu_quota",
+        "workspace_cpu_quota_millicores",
         "retry_count",
     )
     @classmethod

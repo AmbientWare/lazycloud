@@ -160,8 +160,8 @@ class ContainerResourceConfig(BaseModel):
     runtime_class: str | None = None
     docker_enabled: bool = False
     preemptible: bool = False
-    gpu_limit: int = Field(default=0, ge=0)
-    cpu_limit_millicores: int = Field(default=0, ge=0)
+    workspace_gpu_quota: int = Field(default=0, ge=0)
+    workspace_cpu_quota_millicores: int = Field(default=0, ge=0)
 
     @field_validator("disk", mode="before")
     @classmethod

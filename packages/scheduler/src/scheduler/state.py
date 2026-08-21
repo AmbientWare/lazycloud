@@ -323,12 +323,12 @@ end
 
 local used_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
 local used_cpu = tonumber(redis.call("HGET", KEYS[1], "cpu_millicores") or "0")
-local gpu_limit = tonumber(ARGV[1])
+local workspace_gpu_quota = tonumber(ARGV[1])
 local cpu_limit = tonumber(ARGV[2])
 local request_gpu = tonumber(ARGV[3])
 local request_cpu = tonumber(ARGV[4])
 
-if used_gpu + request_gpu > gpu_limit then
+if used_gpu + request_gpu > workspace_gpu_quota then
     return {ARGV[13], "0"}
 end
 
@@ -2364,8 +2364,8 @@ class RedisSchedulerContainerRepository:
         *,
         workspace_id: str,
         container_id: str,
-        gpu_limit: int,
-        cpu_limit_millicores: int,
+        workspace_gpu_quota: int,
+        workspace_cpu_quota_millicores: int,
         request_gpu_count: int,
         request_cpu_millicores: int,
         now: datetime | None = None,
@@ -2375,8 +2375,8 @@ class RedisSchedulerContainerRepository:
         decision = self._reserve_concurrency_once(
             workspace_id=workspace_id,
             container_id=container_id,
-            gpu_limit=gpu_limit,
-            cpu_limit_millicores=cpu_limit_millicores,
+            workspace_gpu_quota=workspace_gpu_quota,
+            workspace_cpu_quota_millicores=workspace_cpu_quota_millicores,
             request_gpu_count=request_gpu_count,
             request_cpu_millicores=request_cpu_millicores,
             now=current_time,
@@ -2390,8 +2390,8 @@ class RedisSchedulerContainerRepository:
             decision = self._reserve_concurrency_once(
                 workspace_id=workspace_id,
                 container_id=container_id,
-                gpu_limit=gpu_limit,
-                cpu_limit_millicores=cpu_limit_millicores,
+                workspace_gpu_quota=workspace_gpu_quota,
+                workspace_cpu_quota_millicores=workspace_cpu_quota_millicores,
                 request_gpu_count=request_gpu_count,
                 request_cpu_millicores=request_cpu_millicores,
                 now=current_time,
@@ -2406,8 +2406,8 @@ class RedisSchedulerContainerRepository:
             decision = self._reserve_concurrency_once(
                 workspace_id=workspace_id,
                 container_id=container_id,
-                gpu_limit=gpu_limit,
-                cpu_limit_millicores=cpu_limit_millicores,
+                workspace_gpu_quota=workspace_gpu_quota,
+                workspace_cpu_quota_millicores=workspace_cpu_quota_millicores,
                 request_gpu_count=request_gpu_count,
                 request_cpu_millicores=request_cpu_millicores,
                 now=current_time,
@@ -2632,8 +2632,8 @@ class RedisSchedulerContainerRepository:
         *,
         workspace_id: str,
         container_id: str,
-        gpu_limit: int,
-        cpu_limit_millicores: int,
+        workspace_gpu_quota: int,
+        workspace_cpu_quota_millicores: int,
         request_gpu_count: int,
         request_cpu_millicores: int,
         now: datetime,
@@ -2655,8 +2655,8 @@ class RedisSchedulerContainerRepository:
             self.keys.workspace_concurrency_counter(workspace_id),
             self.keys.workspace_concurrency_reservation(workspace_id, container_id),
             self.keys.workspace_concurrency_reservation_index(workspace_id),
-            gpu_limit,
-            cpu_limit_millicores,
+            workspace_gpu_quota,
+            workspace_cpu_quota_millicores,
             request_gpu_count,
             request_cpu_millicores,
             reservation_values["workspace_id"],
@@ -3162,8 +3162,8 @@ def reserve_concurrency(
     existing_reservation: ConcurrencyReservation | None,
     workspace_id: str,
     container_id: str,
-    gpu_limit: int,
-    cpu_limit_millicores: int,
+    workspace_gpu_quota: int,
+    workspace_cpu_quota_millicores: int,
     request_gpu_count: int,
     request_cpu_millicores: int,
     now: datetime | None = None,
@@ -3181,13 +3181,13 @@ def reserve_concurrency(
             counter=counter,
             reason="concurrency counter is not initialized",
         )
-    if counter.gpu_count + request_gpu_count > gpu_limit:
+    if counter.gpu_count + request_gpu_count > workspace_gpu_quota:
         return ConcurrencyReservationDecision(
             status=ConcurrencyReservationStatus.GpuExceeded,
             counter=counter,
             reason="gpu quota exceeded",
         )
-    if counter.cpu_millicores + request_cpu_millicores > cpu_limit_millicores:
+    if counter.cpu_millicores + request_cpu_millicores > workspace_cpu_quota_millicores:
         return ConcurrencyReservationDecision(
             status=ConcurrencyReservationStatus.CpuExceeded,
             counter=counter,

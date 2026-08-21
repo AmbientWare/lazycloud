@@ -57,8 +57,8 @@ class ContainerSchedulingOptions(ContractModel):
     block_network: bool = False
     allow_list: list[str] | None = None
     preemptible: bool = False
-    gpu_limit: int = 0
-    cpu_limit_millicores: int = 0
+    workspace_gpu_quota: int = 0
+    workspace_cpu_quota_millicores: int = 0
     mounts: list[RequestMount] | None = None
     secret_names: list[str] | None = None
     gateway_token_required: bool = False

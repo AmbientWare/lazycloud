@@ -8,8 +8,12 @@ from collections.abc import Sequence
 from enum import StrEnum
 from urllib.parse import urlparse
 
-from pydantic import Field, JsonValue, field_validator
-from shared.container_requests import CONTAINER_INNER_PORT
+from pydantic import Field, JsonValue, field_validator, model_validator
+from shared.container_requests import (
+    CONTAINER_CPU_BURST_CEILING_MILLICORES,
+    CONTAINER_INNER_PORT,
+    container_memory_limit_mib,
+)
 from shared.contracts import ContractModel
 from shared.env import (
     CONTAINER_HOSTNAME_ENV,
@@ -31,17 +35,6 @@ CGROUP_V2_OOM_GROUP_PARAMETER = "memory.oom.group"
 DEFAULT_CGROUP_V2_PARAMETERS: dict[str, str] = {CGROUP_V2_OOM_GROUP_PARAMETER: "1"}
 DEFAULT_CPU_SHARE_UNIT = 1024
 DEFAULT_CPU_PERIOD_US = 100_000
-DEFAULT_MEMORY_OVERHEAD_FACTOR = 1.25
-# A request is a floor, not a ceiling: shares guarantee it under contention
-# while quota is set well above it so idle worker capacity is usable. The
-# ceiling exists only to stop one container monopolising a machine.
-DEFAULT_CPU_BURST_CEILING_MILLICORES = 16_000
-# Memory gets the same floor-plus-ceiling treatment. Unlike Modal this keeps a
-# hard ceiling rather than leaving memory unbounded: an unbounded container
-# that leaks is reaped by the worker-wide OOM killer, which picks an arbitrary
-# victim, whereas a per-container ceiling kills the container responsible and
-# keeps the OOM watcher's attribution correct.
-DEFAULT_MEMORY_BURST_CEILING_MIB = 8_192
 DEFAULT_CUDA_VERSION = "12.4"
 DEFAULT_CONTAINER_PATHS = (
     "/usr/local/sbin",
@@ -244,9 +237,15 @@ class ContainerResourceRequest(ContractModel):
     cgroup_v2_oom_group: bool = True
     cpu_share_unit: int = DEFAULT_CPU_SHARE_UNIT
     cpu_period_us: int = DEFAULT_CPU_PERIOD_US
-    cpu_burst_ceiling_millicores: int = DEFAULT_CPU_BURST_CEILING_MILLICORES
-    memory_overhead_factor: float = DEFAULT_MEMORY_OVERHEAD_FACTOR
-    memory_burst_ceiling_mib: int = DEFAULT_MEMORY_BURST_CEILING_MIB
+    cpu_limit_millicores: int = 0
+    """Throttle point this container's author chose, or zero to take the default.
+
+    Zero is absence rather than a limit of nothing: a container throttled at zero
+    would never run, so there is no value it could be confused with.
+    """
+
+    memory_limit_mib: int = 0
+    """Kill point this container's author chose, or zero to take the default."""
 
     @field_validator("cpu_millicores", "memory_mib", "cpu_share_unit", "cpu_period_us")
     @classmethod
@@ -256,13 +255,16 @@ class ContainerResourceRequest(ContractModel):
             raise ValueError(msg)
         return value
 
-    @field_validator("memory_overhead_factor")
-    @classmethod
-    def overhead_must_be_at_least_one(cls, value: float) -> float:
-        if value < 1:
-            msg = "memory overhead factor must be at least 1"
-            raise ValueError(msg)
-        return value
+    @model_validator(mode="after")
+    def a_limit_cannot_sit_below_its_request(self) -> ContainerResourceRequest:
+        # The request is the reservation. A ceiling under it would be a container
+        # guaranteed more than it is allowed to use, and the kernel would kill it
+        # for reaching what the scheduler promised.
+        if 0 < self.cpu_limit_millicores < self.cpu_millicores:
+            raise ValueError("cpu limit cannot be below the cpu request")
+        if 0 < self.memory_limit_mib < self.memory_mib:
+            raise ValueError("memory limit cannot be below the memory request")
+        return self
 
 
 class PortBinding(ContractModel):
@@ -590,7 +592,10 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
     # still gets at least what it asked for. quota is the burst ceiling, not the
     # request: capping it at the request would pin a default function to an
     # eighth of a core even on a completely idle worker.
-    ceiling_millicores = request.cpu_millicores + request.cpu_burst_ceiling_millicores
+    ceiling_millicores = (
+        request.cpu_limit_millicores
+        or request.cpu_millicores + CONTAINER_CPU_BURST_CEILING_MILLICORES
+    )
     cpu = OciLinuxCpu(
         shares=request.cpu_millicores * request.cpu_share_unit // 1000,
         quota=ceiling_millicores * request.cpu_period_us // 1000,
@@ -604,13 +609,16 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
     memory: OciLinuxMemory | None = None
     if request.memory_enforced:
         # reservation is the request, so the container is protected under memory
-        # pressure. The limit is a burst ceiling rather than the request plus a
-        # fixed overhead, so a small request can still use idle worker memory
-        # instead of being pinned a few percent above what it asked for.
+        # pressure. The limit is only how far above it the container may go before
+        # the kernel stops it, and a ceiling its author named wins over the
+        # default. Keeping a default at all is where this parts from Modal, which
+        # leaves memory unbounded unless asked: an unbounded container that leaks
+        # is reaped by the worker-wide OOM killer, which picks an arbitrary
+        # victim, whereas a per-container ceiling kills the one responsible and
+        # keeps the OOM watcher's attribution correct.
         reservation = request.memory_mib * 1024 * 1024
-        overhead_limit = int(reservation * request.memory_overhead_factor)
-        burst_limit = reservation + request.memory_burst_ceiling_mib * 1024 * 1024
-        limit = max(overhead_limit, burst_limit)
+        limit_mib = request.memory_limit_mib or container_memory_limit_mib(request.memory_mib)
+        limit = limit_mib * 1024 * 1024
         memory = OciLinuxMemory(
             reservation_bytes=reservation,
             limit_bytes=limit,

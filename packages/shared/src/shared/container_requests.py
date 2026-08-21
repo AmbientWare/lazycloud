@@ -22,6 +22,37 @@ CONTAINER_HEALTH_PATH = "/health"
 # Matches DEFAULT_DISK in shared.deployment_records, in bytes.
 DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 
+# How far past its request a container may expand when its author named no limit.
+#
+# Proportional rather than a flat addend. A fixed number of gibibytes above the
+# request is enormous for the small workloads that ask for a few hundred mebibytes
+# and irrelevant to the large ones, which is the opposite of how much is known
+# about either. The floor keeps a default 128 MiB request from being held to half
+# a gibibyte, where a Python interpreter and one large import already do not fit.
+CONTAINER_MEMORY_BURST_FACTOR = 4.0
+CONTAINER_MEMORY_BURST_FLOOR_MIB = 1024
+
+# Modal's soft CPU limit, deliberately: a request plus sixteen physical cores.
+# Processor time is compressible, so a container over its share is throttled and
+# everything on the node degrades together. Memory is not, which is why the two
+# ceilings are not written the same way.
+CONTAINER_CPU_BURST_CEILING_MILLICORES = 16_000
+
+
+def container_memory_limit_mib(request_mib: int) -> int:
+    """The ceiling a container is killed at when its author named none.
+
+    The request itself stays the reservation, so a container is protected under
+    node memory pressure up to what it asked for. This is only how far above that
+    it may go before the kernel stops it.
+    """
+    if request_mib <= 0:
+        return 0
+    return max(
+        int(request_mib * CONTAINER_MEMORY_BURST_FACTOR),
+        request_mib + CONTAINER_MEMORY_BURST_FLOOR_MIB,
+    )
+
 
 class WorkerStartupKind(StringEnum):
     Function = "function"
@@ -211,8 +242,11 @@ class WorkerContainerRequestPayload(ContractModel):
 
 
 __all__ = [
+    "CONTAINER_CPU_BURST_CEILING_MILLICORES",
     "CONTAINER_HEALTH_PATH",
     "CONTAINER_INNER_PORT",
+    "CONTAINER_MEMORY_BURST_FACTOR",
+    "CONTAINER_MEMORY_BURST_FLOOR_MIB",
     "DEFAULT_ARTIFACTS_PATH",
     "DEFAULT_ARTIFACTS_PREFIX",
     "DEFAULT_CONTAINER_DISK_LIMIT_BYTES",
@@ -232,4 +266,5 @@ __all__ = [
     "StopContainerReason",
     "WorkerContainerRequestPayload",
     "WorkerStartupKind",
+    "container_memory_limit_mib",
 ]

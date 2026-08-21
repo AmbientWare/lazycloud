@@ -240,8 +240,8 @@ class ContainerService:
         block_network: bool = False,
         allow_list: Iterable[str] | None = None,
         preemptible: bool = False,
-        gpu_limit: int = 0,
-        cpu_limit_millicores: int = 0,
+        workspace_gpu_quota: int = 0,
+        workspace_cpu_quota_millicores: int = 0,
     ) -> ContainerRecord:
         _ = timeout_seconds
         argv = _shell_split(command)
@@ -306,8 +306,8 @@ class ContainerService:
                 block_network=block_network,
                 allow_list=list(allow_list) if allow_list is not None else None,
                 preemptible=preemptible,
-                gpu_limit=gpu_limit,
-                cpu_limit_millicores=cpu_limit_millicores,
+                workspace_gpu_quota=workspace_gpu_quota,
+                workspace_cpu_quota_millicores=workspace_cpu_quota_millicores,
             ),
         )
         if not submitted.accepted:
@@ -428,8 +428,8 @@ class ContainerService:
             runtime_class=runtime_constraint,
             docker_enabled=options.docker_enabled,
             preemptible=options.preemptible,
-            gpu_limit=options.gpu_limit,
-            cpu_limit_millicores=options.cpu_limit_millicores,
+            workspace_gpu_quota=options.workspace_gpu_quota,
+            workspace_cpu_quota_millicores=options.workspace_cpu_quota_millicores,
             payload=payload.model_dump(mode="json"),
         )
         return self.scheduler.submit(request, ready_at=options.ready_at)

@@ -230,8 +230,8 @@ def test_real_redis_concurrency_reserve_and_release_are_bounded_and_idempotent(
         decision = repositories[index].reserve_concurrency(
             workspace_id="workspace-1",
             container_id=container_id,
-            gpu_limit=5,
-            cpu_limit_millicores=500,
+            workspace_gpu_quota=5,
+            workspace_cpu_quota_millicores=500,
             request_gpu_count=1,
             request_cpu_millicores=100,
             now=now,
