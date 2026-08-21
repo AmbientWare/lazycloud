@@ -365,11 +365,16 @@ def build_base_oci_config(
         "devices": devices,
         "namespaces": namespaces,
     }
-    if container_id:
+    cgroup_path = container_cgroup_path(container_id) if container_id else ""
+    if cgroup_path:
         # runsc creates a cgroup named after the container when this is absent.
         # Naming it means the worker knows where to write the settings runsc
         # drops, instead of depending on how the runtime happens to derive one.
-        linux["cgroupsPath"] = container_cgroup_path(container_id)
+        #
+        # Only when there is a real path to name. An empty string here is not
+        # "no preference" -- it points the runtime at the cgroup root, where a
+        # container is bounded by nothing.
+        linux["cgroupsPath"] = cgroup_path
     annotations: JsonObject = {}
     config: JsonObject = {
         "ociVersion": "1.1.0",
@@ -391,6 +396,11 @@ def plan_runtime_command(
 
 
 CGROUP_ROOT = "/sys/fs/cgroup"
+# The leaf the worker's own processes are moved into so its cgroup can become a
+# parent. cgroup v2 refuses to enable a controller on a cgroup holding
+# processes, so a worker sitting directly in its own cgroup can never give its
+# containers limits there.
+WORKER_SUPERVISOR_CGROUP = "supervisor"
 
 
 def container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
@@ -666,6 +676,47 @@ def _read_cgroup_cpu_quota_millicores() -> int | None:
         return None
 
 
+def prepare_worker_cgroup(*, root: str = CGROUP_ROOT) -> bool:
+    """Make the worker's cgroup able to hold its containers, and say if it can.
+
+    Two steps, and neither is optional. The worker's own processes move into a
+    leaf, because cgroup v2 refuses to enable a controller on a cgroup that
+    holds any; then the memory and cpu controllers are delegated to the now-empty
+    parent so its children can carry limits at all.
+
+    What that buys is the whole basis of the design: container cgroups nest
+    inside the worker's, so they are bounded by the slot the agent gave it, and
+    its `memory.current` and `memory.pressure` aggregate them -- which is what
+    makes the pressure reading a fact about this worker rather than the machine.
+
+    Returns whether it worked, because everything downstream depends on it and a
+    worker that could not do this must not pretend to enforce anything.
+    """
+    parent = worker_cgroup_path(root=root)
+    if not parent:
+        return False
+    supervisor = Path(parent, WORKER_SUPERVISOR_CGROUP)
+    try:
+        supervisor.mkdir(parents=True, exist_ok=True)
+        for pid in Path(parent, "cgroup.procs").read_text(encoding="utf-8").split():
+            try:
+                (supervisor / "cgroup.procs").write_text(pid, encoding="utf-8")
+            except OSError:
+                # A process that will not move leaves the parent non-empty, which
+                # the delegation below then fails on and reports.
+                continue
+        Path(parent, "cgroup.subtree_control").write_text("+memory +cpu", encoding="utf-8")
+    except OSError as error:
+        LOGGER.warning(
+            "cannot prepare %s to hold container cgroups (%s); containers will not be "
+            "bounded by this worker and memory eviction is off",
+            parent,
+            type(error).__name__,
+        )
+        return False
+    return True
+
+
 def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/cgroup") -> str:
     """This process's own cgroup, or empty at the root.
 
@@ -681,6 +732,12 @@ def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/
     if not relative:
         return ""
     candidate = Path(root, relative)
+    if candidate.name == WORKER_SUPERVISOR_CGROUP:
+        # `prepare_worker_cgroup` has run and this process now lives in the leaf.
+        # The cgroup that owns this worker's slot is its parent -- returning the
+        # leaf would nest containers under a cgroup holding processes, which is
+        # the arrangement the leaf exists to escape.
+        candidate = candidate.parent
     return str(candidate) if (candidate / "memory.pressure").exists() else ""
 
 

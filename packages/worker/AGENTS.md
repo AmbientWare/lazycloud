@@ -78,6 +78,23 @@ bounded. Unbounded, the pressure reading describes the whole machine rather than
 this worker's share, and evicting on it stops this worker's containers because
 something else on the host grew.
 
+A container's cgroup nests inside the worker's, and the worker moves its own
+processes into a leaf first. cgroup v2 refuses to enable a controller on a cgroup
+that holds processes, so a worker sitting directly in its own cgroup can never
+give its containers a limit there — the child is created and has no `memory.max`
+at all. Nesting is what makes the slot a bound and the worker's `memory.pressure`
+a signal about this worker rather than the machine, so both halves are load
+bearing.
+
+None of that is visible without a real runsc and a real cgroup filesystem, and
+all of it is visible immediately with one. When these values change, run the
+production path against the worker image rather than trusting the unit suite:
+build the spec with `build_base_oci_config` and `plan_oci_linux_resources`, run
+it under `runsc` in a privileged container with `--cgroupns=host`, and read the
+cgroup back. Four review rounds and a green suite each missed a different way
+this was inert; one such run found the controller-delegation problem in a single
+attempt.
+
 For the same reason every figure a ceiling is clamped against comes from that
 cgroup rather than from `/proc/meminfo` or `os.cpu_count()`, neither of which
 Docker namespaces. Several workers share a host, each started with its own

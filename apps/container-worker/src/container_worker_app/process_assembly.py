@@ -73,6 +73,7 @@ from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
 from worker.runtime_config import (
+    prepare_worker_cgroup,
     read_memory_pressure_percent,
     read_process_memory_bytes,
     read_worker_cpu_millicores,
@@ -404,16 +405,20 @@ def _memory_pressure_watcher(
     evicting on it would stop this worker's containers because something else on
     the host grew.
     """
+    # Done before anything reads the path, because it moves this process into a
+    # leaf and therefore changes what the path is.
+    prepared = prepare_worker_cgroup()
     cgroup_path = worker_cgroup_path()
     # The cgroup's own bound, not the reader that falls back to the machine: the
     # fallback answers with the host, which enables the watcher on exactly the
     # unbounded workers this is meant to skip.
     memory_mib = worker_memory_limit_mib()
-    if not cgroup_path or not memory_mib or memory_mib <= 0:
+    if not prepared or not cgroup_path or not memory_mib or memory_mib <= 0:
         # Said out loud. A worker that silently does not watch looks exactly like
         # one that does, right up until the kernel picks a victim by size.
         LOGGER.warning(
-            "memory eviction is off: cgroup=%r memory=%s MiB",
+            "memory eviction is off: prepared=%s cgroup=%r memory=%s MiB",
+            prepared,
             cgroup_path,
             memory_mib,
         )
