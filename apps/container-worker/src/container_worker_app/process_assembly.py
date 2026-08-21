@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
@@ -70,6 +71,7 @@ from worker.monitoring import ContainerRuntimeMonitor
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
+from worker.runtime_config import read_machine_memory_mib
 from worker.scheduler_requests import (
     WorkerSchedulerRequestContainerRepository,
     WorkerSchedulerRequestProcessor,
@@ -355,6 +357,11 @@ def assemble_worker_process_services(
             image_builds=image_builds,
             usage_recorder=usage_supervisor,
             worker_gpu_type=registration.gpu_type,
+            # Read from the machine rather than configured: a figure someone set
+            # is one that can be wrong on a host nobody re-configured after
+            # resizing it, and this bounds what every container may hold.
+            node_cpu_millicores=(os.cpu_count() or 0) * 1000,
+            node_memory_mib=read_machine_memory_mib(),
         ),
         retention=retention,
     )

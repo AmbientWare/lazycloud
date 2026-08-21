@@ -5,6 +5,7 @@ import shutil
 from collections.abc import Callable
 from copy import deepcopy
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import Field, JsonValue, TypeAdapter, field_validator
 from shared.app_identity import CLI_NAME
@@ -499,6 +500,45 @@ def cgroup_oom_decision(previous: OomCounterSnapshot, current: OomCounterSnapsho
         triggered=triggered,
         reason="oom counter increased" if triggered else "oom counters unchanged",
     )
+
+
+MEMINFO_PATH = "/proc/meminfo"
+
+
+def read_machine_memory_mib(*, path: str = MEMINFO_PATH) -> int:
+    """What this machine holds, or zero when it cannot be read.
+
+    Zero rather than a guess. It bounds a container's hard ceiling, so an
+    unreadable machine costs a ceiling that may be too generous, where an
+    invented one costs containers that will not start on a machine that could
+    have run them.
+    """
+    try:
+        return parse_meminfo_total_mib(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+
+
+def read_memory_pressure_percent(cgroup_path: str) -> float:
+    """Full memory stall over the last ten seconds, or zero when unreadable.
+
+    Zero reads as "coping", which is the safe direction: a pressure file this
+    worker cannot read must not evict anybody.
+    """
+    try:
+        return parse_memory_pressure_percent(
+            Path(cgroup_path, "memory.pressure").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return 0.0
+
+
+def read_container_memory_current(cgroup_path: str) -> int:
+    """Bytes this container currently holds, or zero when unreadable."""
+    try:
+        return int(Path(cgroup_path, "memory.current").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
 
 
 def parse_meminfo_total_mib(text: str) -> int:
