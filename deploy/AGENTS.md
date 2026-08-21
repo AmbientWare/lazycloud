@@ -29,5 +29,18 @@ substitutes, and gives every service an explicit owner and health check.
   twice is two allocators issuing one address with no lock between them. Machine
   fingerprint, state directory, pool, and bridge are the four values that must
   differ, and none of them fails visibly when it does not.
+- A release and a deploy are separate workflows, chained by `ship.yml`. They are
+  not merged because a release is public and immutable: a customer's own AWS
+  account resolves the agent binary, the worker image, and the node AMI out of
+  its manifest, so rebuilding one per code deploy churns artifacts other
+  people's infrastructure already points at. Sequencing them is the part that
+  cannot be left to chance — both once triggered on `v*` independently, so a
+  tagged deploy raced the release it was meant to run.
+- Which release a deployment runs lives beside its bundle, not in Terraform. It
+  is a fact about the deployment rather than its infrastructure, it changes on a
+  different schedule from anything Terraform declares, and keeping it in the
+  bucket Terraform does own means it is destroyed with the stack instead of
+  outliving it. A deploy that names no release carries forward the one already
+  recorded; blanking it would silently take away every managed pool.
 - Operator documentation is part of the change: when deployment behavior
   changes, the runbook that describes it changes with it.

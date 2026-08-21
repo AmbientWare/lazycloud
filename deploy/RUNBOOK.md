@@ -257,14 +257,29 @@ Nothing changes what that host runs except the bundle in the deploy bucket, and
 nothing writes that bundle except the `Deploy` workflow.
 
 ```sh
-# Publish a release and converge the host.
+# Everything: publish a release, then put the host on it. A `v*` tag does the
+# same thing without the dispatch.
+gh workflow run ship.yml -f deployment=lazycloud-prod
+
+# Code only, onto the release the deployment already runs.
 gh workflow run deploy.yml -f deployment=lazycloud-prod
 
-# Or converge it onto the bundle already published.
+# Neither: converge the host onto the bundle already published.
 aws ssm send-command --document-name AWS-RunShellScript \
   --instance-ids "$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)" \
   --parameters 'commands=["/usr/local/bin/lazycloud-deploy"]'
 ```
+
+`Deploy` on its own publishes no release. It reads the one the deployment already
+names from `s3://<deploy bucket>/current/release-manifest-url` and carries it
+forward, so shipping a code change does not take the fleet's managed capacity
+away. That file is written only by a run that published a release, and the deploy
+warns rather than proceeding quietly when there is none to read.
+
+Expect a ship to replace every managed node. A new release moves each pool's
+launch template, and the scheduler drains the superseded machines onto it one at
+a time, surging a replacement before it cordons anything. Nothing is lost, but
+the fleet is briefly one node larger per pool.
 
 There is no SSH key and no inbound rule. Operator shell is
 `aws ssm start-session --target <instance-id>`.

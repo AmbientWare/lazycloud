@@ -1,0 +1,57 @@
+name: Ship
+
+# One entry point for a full deploy: publish a release, then put the control
+# plane on it.
+#
+# The two halves stay separate workflows because they answer to different
+# audiences. A release is immutable and public — a customer's own AWS account
+# resolves the agent binary, the worker image and the node AMI out of its
+# manifest — so rebuilding it on every code deploy would churn artifacts other
+# people's infrastructure depends on. A deploy is ours alone and runs many times
+# against one release.
+#
+# Sequencing them here is what a tag used to get wrong. Both workflows once
+# triggered on `v*` independently, so the deploy raced the release it was meant
+# to run and published a bundle naming whichever release came before it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: Deployment prefix the ECR repositories and secrets carry
+        type: string
+        default: lazycloud-prod
+      bake_ami:
+        description: Bake the node AMI. Off reuses the previous release's image.
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ship-${{ inputs.deployment || 'lazycloud-prod' }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish the release
+    uses: ./.github/workflows/release.yml
+    secrets: inherit
+    with:
+      # A tag names no inputs, and a tagged ship is exactly the case that wants a
+      # freshly baked image.
+      bake_ami: ${{ github.event_name != 'workflow_dispatch' || inputs.bake_ami }}
+
+  deploy:
+    name: Deploy onto it
+    needs: release
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      deployment: ${{ inputs.deployment || 'lazycloud-prod' }}
+      release_manifest_url: ${{ needs.release.outputs.manifest_url }}

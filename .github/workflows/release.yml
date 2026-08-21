@@ -1,15 +1,32 @@
 name: Release Artifacts
 
+# A release is the unit a deployment points at, and the unit a customer's own AWS
+# account pulls from. It is published on its own rather than as a deploy step so
+# that shipping code to our control plane does not rebuild artifacts other
+# people's infrastructure already resolves.
+#
+# `ship.yml` runs this and then the deploy, which is how a tag becomes both.
+
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       bake_ami:
         description: Bake the per-region connected AWS node AMI
         type: boolean
         default: true
+  workflow_call:
+    inputs:
+      bake_ami:
+        description: Bake the per-region connected AWS node AMI
+        type: boolean
+        default: true
+    outputs:
+      version:
+        description: The immutable version the release was published under.
+        value: ${{ jobs.connected-aws-assets.outputs.version }}
+      manifest_url:
+        description: Public URL of the published manifest, for a deployment to name.
+        value: ${{ jobs.connected-aws-assets.outputs.manifest_url }}
 
 permissions:
   contents: read
@@ -48,6 +65,9 @@ jobs:
     name: Publish connected AWS assets
     runs-on: ubuntu-latest
     environment: release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      manifest_url: ${{ steps.published.outputs.manifest_url }}
     env:
       AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
@@ -122,7 +142,7 @@ jobs:
 
       - name: Bake connected AWS node image
         id: bake
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.bake_ami }}
+        if: ${{ inputs.bake_ami }}
         shell: bash
         run: |
           cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
@@ -154,6 +174,17 @@ jobs:
           uv run --group workspace python deploy/aws-release-assets/release.py publish
           --manifest
           "dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+
+      - name: Name the published release
+        id: published
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+          url="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["manifest_public_url"])' "${manifest}")"
+          test -n "${url}"
+          echo "manifest_url=${url}" >> "${GITHUB_OUTPUT}"
+          echo "Published ${{ steps.version.outputs.version }} at ${url}"
 
       - name: Verify published assets without AWS or registry credentials
         run: >-
