@@ -49,6 +49,35 @@ def test_a_ceiling_below_the_request_is_refused() -> None:
         )
 
 
+def test_the_reservation_the_throttle_and_the_wall_stay_in_order() -> None:
+    """`low <= high <= max`, in every shape the clamp can produce.
+
+    A throttle above the wall is unreachable, so the container is killed having
+    never been slowed. A wall below the reservation kills it inside what it was
+    promised. Both were reachable while only half of this was asserted.
+    """
+    for request_mib, node_mib in (
+        (4096, 8192),
+        (1024, 2048),
+        (512, 1024),
+        (128, 4096),
+        (14894, 15974),
+        (1024, 0),
+    ):
+        resources = plan_oci_linux_resources(
+            ContainerResourceRequest(
+                cpu_millicores=1_000,
+                memory_mib=request_mib,
+                node_memory_mib=node_mib,
+            )
+        )
+        assert resources.memory is not None
+        low = resources.memory.reservation_bytes
+        high = int(resources.deferred["memory.high"])
+        wall = resources.memory.limit_bytes
+        assert low <= high <= wall, f"request={request_mib} node={node_mib}"
+
+
 def test_a_ceiling_never_exceeds_the_machine_it_runs_on() -> None:
     """A container has to be able to reach its own ceiling for it to stop it.
 

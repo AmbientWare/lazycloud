@@ -752,6 +752,10 @@ _ZRAM_SETUP_FRAGMENT = """
 # allocation slows by about 3x and the cgroup holds at its limit. `memory.low`
 # protection has the same dependency, for the same reason.
 #
+# A quarter of RAM, not half: zram's backing store is RAM, so a device holding
+# incompressible pages costs its full size in real memory. A quarter is enough
+# for reclaim to have somewhere to go without the machine losing half itself.
+#
 # In RAM rather than on the root volume because the CPU catalog is EBS-only.
 # Written as a unit rather than installed, because a bake that discovers its
 # package is missing has already burned the instance.
@@ -761,7 +765,7 @@ set -Eeuo pipefail
 modprobe zram num_devices=1
 # Algorithm before size: zram rejects the write once a disksize is set.
 echo zstd > /sys/block/zram0/comp_algorithm
-awk '/MemTotal/ {print int($2 * 1024 / 2)}' /proc/meminfo > /sys/block/zram0/disksize
+awk '/MemTotal/ {print int($2 * 1024 / 4)}' /proc/meminfo > /sys/block/zram0/disksize
 mkswap /dev/zram0
 # Above any disk swap, so reclaim compresses before it ever reaches a volume.
 swapon --priority 100 /dev/zram0
@@ -779,7 +783,7 @@ Before=swap.target docker.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/lazycloud-zram
-ExecStop=/usr/bin/swapoff /dev/zram0
+ExecStop=-/usr/sbin/swapoff /dev/zram0
 
 [Install]
 WantedBy=swap.target

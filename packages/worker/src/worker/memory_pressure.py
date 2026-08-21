@@ -13,6 +13,7 @@ is what the pressure reading is for.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -25,6 +26,12 @@ from shared.container_requests import (
 from shared.contracts import ContractModel
 
 MIB = 1024 * 1024
+
+# Long enough for an eviction to show up in the reading it was triggered by.
+# `full avg10` is a ten-second average, so a machine that has just lost its
+# largest over-committed container still reads as under pressure for most of
+# that window.
+MEMORY_PRESSURE_COOLDOWN_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +70,24 @@ class WorkerMemoryPressureWatcher:
     read_pressure_percent: Callable[[str], float]
     read_memory_current: Callable[[int], int]
     stop_container: Callable[[str, StopContainerReason], None]
+    monotonic: Callable[[], float] = time.monotonic
     threshold_percent: float = DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT
-    evicted_container_ids: list[str] = field(default_factory=list, init=False)
+    cooldown_seconds: float = MEMORY_PRESSURE_COOLDOWN_SECONDS
+    _evicted_at: float | None = field(default=None, init=False)
 
     def run_once(self) -> MemoryEvictionResult:
         pressure = self.read_pressure_percent(self.worker_cgroup_path)
         if pressure < self.threshold_percent:
             return MemoryEvictionResult(pressure_percent=pressure, reason="machine is coping")
+        now = self.monotonic()
+        if self._evicted_at is not None and now - self._evicted_at < self.cooldown_seconds:
+            # The reading is an average over the last ten seconds, so it keeps
+            # describing a shortage the previous eviction already settled. Acting
+            # on it again empties a machine one departure would have fixed.
+            return MemoryEvictionResult(
+                pressure_percent=pressure,
+                reason="waiting to see whether the last eviction settled it",
+            )
 
         readings = [
             ContainerMemoryReading(
@@ -78,7 +96,11 @@ class WorkerMemoryPressureWatcher:
                 reserved_bytes=resident.reserved_mib * MIB,
             )
             for resident in self.residents()
-            if resident.pid > 0
+            # A container that reserved nothing is not thereby a container that
+            # reserved zero: its whole footprint would count as excess and it
+            # would be chosen every pass, told it was furthest above a request it
+            # never made. The runtime treats the same value as "apply no limits".
+            if resident.pid > 0 and resident.reserved_mib > 0
         ]
         candidate = select_memory_eviction_candidate(
             readings,
@@ -96,7 +118,7 @@ class WorkerMemoryPressureWatcher:
             )
 
         self.stop_container(candidate.container_id, StopContainerReason.MemoryEvicted)
-        self.evicted_container_ids.append(candidate.container_id)
+        self._evicted_at = now
         return MemoryEvictionResult(
             pressure_percent=pressure,
             evicted_container_id=candidate.container_id,

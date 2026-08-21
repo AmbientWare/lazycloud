@@ -53,6 +53,15 @@ the two equal, which is safe by construction and means no burst at all. We do
 not, which is why eviction has to exist: the gap is only survivable because
 something chooses who leaves when it closes.
 
+Under gVisor the sentry and the gofer are charged to the container's cgroup
+alongside guest memory, so every value below is really "guest plus sandbox" and a
+small container is protected for less than it asked for. No constant covers it
+yet, deliberately: the footprint depends on file access and thread count, and two
+figures here that were chosen rather than measured both turned out wrong in a
+direction nobody noticed. Measure it on a live sandbox — RSS against guest usage,
+at rest and under load — before applying one, and apply it to all three values
+rather than the hard limit alone.
+
 Four cgroup values express it. `memory.low` is the request and is what reclaim
 protects. `memory.high` is the ceiling and throttles rather than kills.
 `memory.max` is the wall behind it, clamped to what the machine holds because a

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import posixpath
 import shutil
@@ -552,37 +553,107 @@ def cgroup_oom_decision(previous: OomCounterSnapshot, current: OomCounterSnapsho
     )
 
 
+LOGGER = logging.getLogger(__name__)
+
 MEMINFO_PATH = "/proc/meminfo"
+MIB = 1024 * 1024
 
 
-def read_machine_memory_mib(*, path: str = MEMINFO_PATH) -> int:
-    """What this machine holds, or zero when it cannot be read.
+def read_worker_memory_mib(*, path: str = MEMINFO_PATH) -> int:
+    """What this worker may use, or zero when it cannot be read.
 
-    Zero rather than a guess. It bounds a container's hard ceiling, so an
-    unreadable machine costs a ceiling that may be too generous, where an
-    invented one costs containers that will not start on a machine that could
-    have run them.
+    Its own cgroup first, and the machine only when that cgroup is unlimited.
+    Several workers share a host -- the agent starts each one with `--memory` for
+    its slot -- and neither `/proc/meminfo` nor `os.cpu_count()` is namespaced by
+    Docker, so reading the machine tells a worker holding a 16 GiB slot on a
+    64 GiB host that it has 64 GiB. Every ceiling computed from that is one the
+    worker cannot honour, and the container reaching it takes the whole worker
+    down with it.
+
+    Zero when neither can be read, which the ceilings treat as "do not clamp":
+    a ceiling that may be too generous beats one invented from a number nobody
+    measured.
     """
+    limit = _read_cgroup_limit("memory.max")
+    if limit is not None:
+        return limit // MIB
     try:
-        return parse_meminfo_total_mib(Path(path).read_text(encoding="utf-8"))
+        total = parse_meminfo_total_mib(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        LOGGER.warning("worker cannot read its memory from %s; ceilings will not be clamped", path)
         return 0
+    # Minus compressed swap, whose backing store is this same memory. A device
+    # holding incompressible pages costs its full size in real RAM, so counting
+    # it as available is how a ceiling ends up above what the machine can honour.
+    return max(total - _zram_reserved_mib(), 0)
+
+
+def _zram_reserved_mib(*, root: str = "/sys/block") -> int:
+    """What active zram devices could take, at their configured size."""
+    reserved = 0
+    for device in Path(root).glob("zram*"):
+        try:
+            reserved += int((device / "disksize").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+    return reserved // MIB
+
+
+def read_worker_cpu_millicores() -> int:
+    """What this worker may use, from its own cgroup quota or the machine."""
+    quota = _read_cgroup_cpu_quota_millicores()
+    if quota is not None:
+        return quota
+    return (os.cpu_count() or 0) * 1000
+
+
+def _read_cgroup_limit(name: str) -> int | None:
+    """A byte limit from this process's own cgroup, or None when unlimited."""
+    path = worker_cgroup_path()
+    if not path:
+        return None
+    try:
+        raw = Path(path, name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if raw == "max":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _read_cgroup_cpu_quota_millicores() -> int | None:
+    """The quota from `cpu.max`, in millicores, or None when unlimited."""
+    path = worker_cgroup_path()
+    if not path:
+        return None
+    try:
+        fields = Path(path, "cpu.max").read_text(encoding="utf-8").split()
+    except OSError:
+        return None
+    if len(fields) != 2 or fields[0] == "max":
+        return None
+    try:
+        return int(fields[0]) * 1000 // int(fields[1])
+    except (ValueError, ZeroDivisionError):
+        return None
 
 
 def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/cgroup") -> str:
-    """This process's own cgroup, or empty when it does not have a distinct one.
+    """This process's own cgroup, or empty at the root.
 
-    Empty at the root, and that is the case worth naming: a worker sharing a host
-    with another one reads the machine's pressure rather than its own, and acting
-    on it would stop this worker's containers because a neighbour grew. The
-    Compose stack runs exactly that way, with an `agent` and a `container-worker`
-    on one host.
+    Both deployments give a worker a cgroup of its own, so this is almost never
+    empty; what distinguishes a worker that owns its memory from one that does
+    not is whether that cgroup carries a limit, which `read_worker_memory_mib`
+    answers.
     """
     try:
         relative = parse_proc_cgroup_path(Path(proc_self).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
-    if not relative or relative == "/":
+    if not relative:
         return ""
     candidate = Path(root, relative)
     return str(candidate) if (candidate / "memory.pressure").exists() else ""
@@ -591,14 +662,20 @@ def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/
 def read_memory_pressure_percent(cgroup_path: str) -> float:
     """Full memory stall over the last ten seconds, or zero when unreadable.
 
-    Zero reads as "coping", which is the safe direction: a pressure file this
-    worker cannot read must not evict anybody.
+    Zero reads as "coping", so an unreadable file leaves the machine unguarded
+    while every other signal says the loop is healthy -- the first symptom would
+    be the kernel killing by size, which is the outcome this watcher exists to
+    prevent. It is therefore reported every time rather than swallowed.
     """
+    path = Path(cgroup_path, "memory.pressure")
     try:
-        return parse_memory_pressure_percent(
-            Path(cgroup_path, "memory.pressure").read_text(encoding="utf-8")
+        return parse_memory_pressure_percent(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        LOGGER.warning(
+            "cannot read memory pressure from %s (%s); no container will be evicted",
+            path,
+            type(error).__name__,
         )
-    except (OSError, ValueError):
         return 0.0
 
 

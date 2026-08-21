@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
@@ -73,9 +73,10 @@ from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
 from worker.runtime_config import (
-    read_machine_memory_mib,
     read_memory_pressure_percent,
     read_process_memory_bytes,
+    read_worker_cpu_millicores,
+    read_worker_memory_mib,
     worker_cgroup_path,
 )
 from worker.scheduler_requests import (
@@ -188,6 +189,9 @@ class WorkerProcessServices:
     processor: WorkerSchedulerRequestProcessor
     memory_watcher: WorkerMemoryPressureWatcher | None = None
     retention: WorkerRetentionService | None = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def assemble_worker_process_services(
@@ -346,11 +350,11 @@ def assemble_worker_process_services(
         image_builds=image_builds,
         usage_recorder=usage_supervisor,
         worker_gpu_type=registration.gpu_type,
-        # Read from the machine rather than configured: a figure someone set
-        # is one that can be wrong on a host nobody re-configured after
-        # resizing it, and this bounds what every container may hold.
-        node_cpu_millicores=(os.cpu_count() or 0) * 1000,
-        node_memory_mib=read_machine_memory_mib(),
+        # The worker's own slot, not the machine: several workers share a host,
+        # each started with its own `--memory`, and reading the host would hand
+        # every container a ceiling the worker cannot honour.
+        node_cpu_millicores=read_worker_cpu_millicores(),
+        node_memory_mib=read_worker_memory_mib(),
     )
 
     # Set after both exist rather than passed in: execution has to tell the
@@ -387,15 +391,28 @@ def _memory_pressure_watcher(
     *,
     stopper: WorkerRuntimeContainerStopper,
 ) -> WorkerMemoryPressureWatcher | None:
-    """Watch this machine, if it is one whose memory this process accounts for.
+    """Watch this worker's slot, if the slot is this worker's to account for.
 
-    A worker sharing a host with another one has no cgroup of its own to read,
-    and a pressure figure covering both would evict this worker's containers for
-    a neighbour's growth. Better to leave the kernel in charge than to act on a
-    reading that is not about us.
+    The condition is a memory limit on the worker's own cgroup, not the presence
+    of a cgroup. Both deployments give a worker its own cgroup -- the agent
+    passes `--cgroupns host` and Compose sets `cgroup: host` -- so a worker
+    always has one, and an earlier version of this guard therefore never fired.
+
+    What actually disqualifies a worker is an unlimited cgroup: the pressure
+    there describes the whole machine rather than this worker's share of it, and
+    evicting on it would stop this worker's containers because something else on
+    the host grew.
     """
     cgroup_path = worker_cgroup_path()
-    if not cgroup_path:
+    memory_mib = read_worker_memory_mib()
+    if not cgroup_path or memory_mib <= 0:
+        # Said out loud. A worker that silently does not watch looks exactly like
+        # one that does, right up until the kernel picks a victim by size.
+        LOGGER.warning(
+            "memory eviction is off: cgroup=%r memory=%s MiB",
+            cgroup_path,
+            memory_mib,
+        )
         return None
     return WorkerMemoryPressureWatcher(
         worker_cgroup_path=cgroup_path,

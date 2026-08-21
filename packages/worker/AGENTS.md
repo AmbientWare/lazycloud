@@ -71,7 +71,15 @@ never chosen however large it is. That inverts `oom_badness`, which scores
 resident size and reaches the biggest honest tenant first — the reason this
 cannot be delegated to the kernel and then explained to the customer afterwards.
 
-A worker without a cgroup of its own does not watch. The Compose stack runs an
-`agent` and a `container-worker` on one host, so the pressure there describes
-both, and stopping this worker's containers because a neighbour grew is worse
-than leaving the kernel to it.
+A worker whose cgroup carries no memory limit does not watch. Both deployments
+give a worker a cgroup — the agent passes `--cgroupns host`, Compose sets
+`cgroup: host` — so having one proves nothing; what matters is whether it is
+bounded. Unbounded, the pressure reading describes the whole machine rather than
+this worker's share, and evicting on it stops this worker's containers because
+something else on the host grew.
+
+For the same reason every figure a ceiling is clamped against comes from that
+cgroup rather than from `/proc/meminfo` or `os.cpu_count()`, neither of which
+Docker namespaces. Several workers share a host, each started with its own
+`--memory`, and a worker reading the machine would hand every container a
+ceiling it cannot honour.
