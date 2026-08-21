@@ -618,15 +618,19 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
     announced_ok = False
     while True:
         console = _read_console(request, region=region, instance_id=instance_id)
-        if _BAKE_FAILED_SENTINEL in console:
+        # Success is terminal and is read first. Everything after the script says
+        # it finished is shutdown, so a failure line appearing later describes the
+        # machine going away rather than the bake, and letting it win would
+        # discard an image whose work was already complete.
+        if not announced_ok and _BAKE_OK_SENTINEL in console:
+            announced_ok = True
+            _log(f"{region}: bake script finished on {instance_id}, waiting for it to stop")
+        if not announced_ok and _BAKE_FAILED_SENTINEL in console:
             tail = "\n".join(console.strip().splitlines()[-_CONSOLE_TAIL_LINES:])
             raise SystemExit(
                 f"{region}: the bake script failed on {instance_id}. Its last "
                 f"{_CONSOLE_TAIL_LINES} console lines:\n{tail}"
             )
-        if not announced_ok and _BAKE_OK_SENTINEL in console:
-            announced_ok = True
-            _log(f"{region}: bake script finished on {instance_id}, waiting for it to stop")
         result = _run_aws(
             request.aws_cli,
             [
@@ -802,8 +806,15 @@ say() { echo "$*" > /dev/console; }
 # end. ERR's job is only to record where it happened.
 bake_line="unknown"
 bake_cmd="unknown"
+bake_done="no"
 bake_announce() {
   rc=$?
+  # Nothing after the success line can unsay it. `shutdown` returning non-zero
+  # would otherwise append a failure the baker reads first, throwing away a bake
+  # that had already finished everything it was asked to do.
+  if [ "${bake_done}" = "yes" ]; then
+    return 0
+  fi
   if [ "${rc}" -ne 0 ]; then
     say "LAZYCLOUD_BAKE_FAILED rc=${rc} line=${bake_line} cmd=${bake_cmd}"
   fi
@@ -845,6 +856,7 @@ MARKER
 # not evidence of a finished bake -- a spot reclaim, an operator, or a panic all
 # stop an instance too, and every one of them would otherwise be captured and
 # published as a node image.
+bake_done="yes"
 say "LAZYCLOUD_BAKE_OK release=${RELEASE_VERSION} variant=__VARIANT__"
 sync
 shutdown -h now
