@@ -138,6 +138,23 @@ def select_memory_eviction_candidate(
     return max(over, key=lambda reading: (reading.bytes_above_reservation, reading.container_id))
 
 
+# Not applied, and deliberately not guessed at.
+#
+# Under gVisor the sentry and the gofer are charged to the container's cgroup
+# alongside the guest's own memory, so every value below is really "guest plus
+# sandbox" and a small container is protected for less than it asked for. beta9
+# answers this with a flat 2 GiB added to the hard limit, which is a number
+# chosen rather than measured, and the last two constants here that were chosen
+# rather than measured both turned out to be wrong in a direction nobody noticed.
+#
+# The footprint depends on the workload's file access and thread count, so it
+# takes a real sandbox to answer. Measure it on the first live run: sandbox RSS
+# against guest usage for a container at rest and one under load, then size this
+# and apply it to all three values, since all three are read against a cgroup
+# that contains the sandbox.
+CONTAINER_SANDBOX_OVERHEAD_MIB = 0
+
+
 def container_memory_limit_mib(request_mib: int) -> int:
     """The ceiling a container is killed at when its author named none.
 
@@ -373,6 +390,7 @@ __all__ = [
     "CONTAINER_MEMORY_BURST_CAP_MIB",
     "CONTAINER_MEMORY_BURST_FACTOR",
     "CONTAINER_MEMORY_BURST_FLOOR_MIB",
+    "CONTAINER_SANDBOX_OVERHEAD_MIB",
     "DEFAULT_ARTIFACTS_PATH",
     "DEFAULT_ARTIFACTS_PREFIX",
     "DEFAULT_CONTAINER_DISK_LIMIT_BYTES",
