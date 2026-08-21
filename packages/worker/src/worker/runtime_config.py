@@ -286,6 +286,7 @@ def build_base_oci_config(
     container_cli_source: str | None = None,
     container_cli_path: str = DEFAULT_CONTAINER_CLI_PATH,
     tmpfs_size_mib: int = DEFAULT_CONTAINER_TMPFS_SIZE_MIB,
+    container_id: str = "",
 ) -> JsonObject:
     selected = normalize_oci_runtime(runtime)
     capabilities = _base_capabilities()
@@ -363,6 +364,11 @@ def build_base_oci_config(
         "devices": devices,
         "namespaces": namespaces,
     }
+    if container_id:
+        # runsc creates a cgroup named after the container when this is absent.
+        # Naming it means the worker knows where to write the settings runsc
+        # drops, instead of depending on how the runtime happens to derive one.
+        linux["cgroupsPath"] = container_cgroup_path(container_id)
     annotations: JsonObject = {}
     config: JsonObject = {
         "ociVersion": "1.1.0",
@@ -381,6 +387,49 @@ def plan_runtime_command(
     request: RuntimeCommandRequest,
 ) -> RuntimeCommandPlan:
     return _plan_runsc_command(config, request)
+
+
+CGROUP_ROOT = "/sys/fs/cgroup"
+CONTAINER_CGROUP_PARENT = "lazycloud"
+
+
+def container_cgroup_path(container_id: str) -> str:
+    """Where this container's cgroup lives, chosen rather than inferred.
+
+    runsc creates a cgroup named after the container id when the spec names no
+    path, which works but makes the location an implementation detail of the
+    runtime. Naming it here means the worker can find it afterwards to write the
+    settings runsc does not apply itself.
+    """
+    return posixpath.join("/", CONTAINER_CGROUP_PARENT, container_id)
+
+
+def apply_unsupported_cgroup_parameters(
+    container_id: str,
+    parameters: dict[str, str],
+    *,
+    root: str = CGROUP_ROOT,
+) -> dict[str, str]:
+    """Write the cgroup v2 settings the runtime silently drops, after it starts.
+
+    runsc ignores `linux.resources.unified` outright: a spec asking for
+    `memory.high` and `memory.oom.group` produces a cgroup holding `max` and `0`.
+    That is measured, not assumed. Everything under `resources.memory` it does
+    apply, so only these two need writing, and only once the cgroup exists --
+    which is after the container has started.
+
+    Returns what was written, so a caller can report the ones that failed rather
+    than leaving a container running under settings nobody installed.
+    """
+    written: dict[str, str] = {}
+    directory = Path(root, CONTAINER_CGROUP_PARENT, container_id)
+    for name, value in parameters.items():
+        try:
+            (directory / name).write_text(value, encoding="utf-8")
+        except OSError:
+            continue
+        written[name] = value
+    return written
 
 
 def prepare_oci_spec_for_runtime(
@@ -518,9 +567,6 @@ def read_machine_memory_mib(*, path: str = MEMINFO_PATH) -> int:
         return parse_meminfo_total_mib(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return 0
-
-
-CGROUP_ROOT = "/sys/fs/cgroup"
 
 
 def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/cgroup") -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,10 +39,13 @@ from worker.events import (
     populate_container_event,
 )
 from worker.execution import (
+    MIB,
     ContainerNetworkIdentity,
+    ContainerResourceRequest,
     OciMount,
     PortBinding,
     WorkerOomWatcherPlan,
+    plan_oci_linux_resources,
     select_worker_oom_watcher,
 )
 from worker.finalization import (
@@ -64,8 +68,13 @@ from worker.monitoring import (
     ContainerRuntimeMonitoringResult,
 )
 from worker.oci_spec import OciRuntimeContainerSpec
-from worker.runtime_config import OciRuntimeName
+from worker.runtime_config import (
+    OciRuntimeName,
+    apply_unsupported_cgroup_parameters,
+)
 from worker.supervision import WorkerOomHandlingResult, WorkerSupervisionService
+
+LOGGER = logging.getLogger(__name__)
 
 CONTAINER_EXIT_EVENT_ID = "container.exited"
 CONTAINER_EXIT_MESSAGE = "container process exited"
@@ -363,6 +372,34 @@ class ContainerExecutionResult(ContractModel):
         return None
 
 
+def container_resource_request(context: ContainerExecutionContext) -> ContainerResourceRequest:
+    """One reading of a container's resource ask, for everything that needs it.
+
+    The spec, the OOM watcher and the deferred cgroup write all have to agree on
+    the same numbers; deriving them separately is how the watcher ended up
+    guarding a ceiling the cgroup did not enforce.
+    """
+    return ContainerResourceRequest(
+        cpu_millicores=context.request.cpu_millicores,
+        memory_mib=context.request.memory_mib,
+        memory_enforced=context.memory_enforced,
+        cpu_limit_millicores=context.cpu_limit_millicores,
+        memory_limit_mib=(context.memory_limit_bytes or 0) // MIB,
+        node_cpu_millicores=context.node_cpu_millicores,
+        node_memory_mib=context.node_memory_mib,
+    )
+
+
+def enforced_memory_limit_bytes(context: ContainerExecutionContext) -> int | None:
+    """The wall the cgroup holds, which is what anything watching must watch."""
+    if context.request.cpu_millicores <= 0 or context.request.memory_mib <= 0:
+        return context.memory_limit_bytes
+    resources = plan_oci_linux_resources(container_resource_request(context))
+    if resources.memory is None:
+        return context.memory_limit_bytes
+    return resources.memory.limit_bytes
+
+
 @dataclass(slots=True)
 class WorkerContainerExecutionService:
     address_publisher: WorkerAddressPublisher
@@ -395,6 +432,32 @@ class WorkerContainerExecutionService:
     reported again until it exits, so anything watching live containers has to be
     handed it here or it never learns of the container at all.
     """
+
+    def _apply_deferred_cgroup_parameters(self, context: ContainerExecutionContext) -> None:
+        """Install the cgroup settings the runtime dropped.
+
+        runsc ignores `linux.resources.unified`, so a container starts with
+        `memory.high` at `max` and `memory.oom.group` at `0` however the spec was
+        written. Everything under `resources.memory` it does apply, so this is
+        the whole of what has to be written by hand.
+
+        A failure is reported rather than raised: the container is already
+        running under the limits runsc did install, and killing it for a missing
+        throttle would be a worse outcome than running without one.
+        """
+        if context.request.cpu_millicores <= 0 or context.request.memory_mib <= 0:
+            return
+        deferred = plan_oci_linux_resources(container_resource_request(context)).deferred
+        if not deferred:
+            return
+        written = apply_unsupported_cgroup_parameters(context.request.container_id, deferred)
+        missing = sorted(set(deferred) - set(written))
+        if missing:
+            LOGGER.warning(
+                "container %s is running without cgroup settings: %s",
+                context.request.container_id,
+                ", ".join(missing),
+            )
 
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
         result = ContainerExecutionResult()
@@ -562,6 +625,9 @@ class WorkerContainerExecutionService:
             started_pid = pid
             if self.container_started is not None:
                 self.container_started(context.request.container_id, pid)
+            # Written here because the cgroup does not exist until the runtime
+            # has made one, and runsc will not install these from the spec.
+            self._apply_deferred_cgroup_parameters(context)
             if not self._phase(
                 result,
                 ContainerExecutionPhase.PrepareSandboxDocker,
@@ -587,7 +653,11 @@ class WorkerContainerExecutionService:
                 context.runtime,
                 pid=pid,
                 memory_enforced=context.memory_enforced,
-                memory_limit_bytes=context.memory_limit_bytes,
+                # The ceiling the cgroup actually enforces, not the one asked
+                # for. Watching the larger figure means the kernel reaches its
+                # wall first and the attribution this watcher exists to produce
+                # is never made.
+                memory_limit_bytes=enforced_memory_limit_bytes(context),
                 cgroup_path=context.cgroup_path,
             )
             if not self._phase(

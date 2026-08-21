@@ -82,6 +82,6 @@ def test_a_container_can_reclaim_rather_than_die_at_its_ceiling() -> None:
     )
 
     assert resources.memory is not None
-    high = int(resources.unified["memory.high"])
+    high = int(resources.deferred["memory.high"])
     assert resources.memory.reservation_bytes < high <= resources.memory.limit_bytes
     assert resources.memory.swap_bytes > resources.memory.limit_bytes

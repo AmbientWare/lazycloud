@@ -33,7 +33,7 @@ from shared.routing import BackendRouteTransport
 from worker.runtime_config import OciRuntimeName, OomWatcherKind, RuntimeCapabilities
 
 CGROUP_V2_OOM_GROUP_PARAMETER = "memory.oom.group"
-DEFAULT_CGROUP_V2_PARAMETERS: dict[str, str] = {CGROUP_V2_OOM_GROUP_PARAMETER: "1"}
+CGROUP_V2_MEMORY_HIGH_PARAMETER = "memory.high"
 MIB = 1024 * 1024
 DEFAULT_CPU_SHARE_UNIT = 1024
 DEFAULT_CPU_PERIOD_US = 100_000
@@ -211,7 +211,13 @@ class OciLinuxMemory(ContractModel):
 class OciLinuxResources(ContractModel):
     cpu: OciLinuxCpu
     memory: OciLinuxMemory | None = None
-    unified: dict[str, str] = Field(default_factory=dict)
+    deferred: dict[str, str] = Field(default_factory=dict)
+    """cgroup v2 settings the runtime will not install, for the worker to write.
+
+    Kept off the OCI spec deliberately. runsc ignores `linux.resources.unified`,
+    so putting them there produces a spec that asks for settings and a cgroup
+    that does not have them -- which reads as working and is not.
+    """
 
     def as_oci_dict(self) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
@@ -227,8 +233,7 @@ class OciLinuxResources(ContractModel):
                 "limit": self.memory.limit_bytes,
                 "swap": self.memory.swap_bytes,
             }
-        if self.unified:
-            payload["unified"] = dict(self.unified)
+
         return payload
 
 
@@ -617,8 +622,11 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         quota=ceiling_millicores * request.cpu_period_us // 1000,
         period=request.cpu_period_us,
     )
-    unified = (
-        dict(DEFAULT_CGROUP_V2_PARAMETERS)
+    # Not put in the OCI spec's `unified` block, which runsc ignores outright: a
+    # spec asking for these produces a cgroup holding `max` and `0`. Returned for
+    # the caller to write into the cgroup once the container has started.
+    deferred = (
+        {CGROUP_V2_OOM_GROUP_PARAMETER: "1"}
         if request.memory_enforced and request.cgroup_v2_oom_group
         else {}
     )
@@ -643,9 +651,27 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         # it stalls -- 21 seconds for an 8MiB allocation, with the kernel
         # scanning zero pages.
         reservation = request.memory_mib * MIB
-        high_mib = request.memory_limit_mib or container_memory_limit_mib(request.memory_mib)
-        hard_mib = _hard_memory_ceiling_mib(high_mib, node_memory_mib=request.node_memory_mib)
+        requested_high = request.memory_limit_mib or container_memory_limit_mib(request.memory_mib)
+        hard_mib = _hard_memory_ceiling_mib(
+            requested_high,
+            request_mib=request.memory_mib,
+            node_memory_mib=request.node_memory_mib,
+        )
+        # The throttle takes the same bound the wall does. Above it the throttle
+        # is unreachable, so the container is killed at the wall having never
+        # been slowed down -- the opposite of what these two values are for.
+        high_mib = min(requested_high, hard_mib)
+        if high_mib >= hard_mib > request.memory_mib:
+            # And it has to sit below the wall, not on it. Reclaim beginning at
+            # the point the kernel would kill leaves no room to reclaim in, so
+            # the throttle buys nothing at exactly the moment it is needed.
+            high_mib = hard_mib - max((hard_mib - request.memory_mib) // 10, 1)
         limit = hard_mib * MIB
+        if not request.memory_mib <= high_mib <= hard_mib:
+            raise ValueError(
+                "memory ordering must hold: "
+                f"low={request.memory_mib} high={high_mib} max={hard_mib} MiB"
+            )
         memory = OciLinuxMemory(
             reservation_bytes=reservation,
             limit_bytes=limit,
@@ -654,8 +680,8 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
             # what it was before: no swap at all.
             swap_bytes=limit + reservation,
         )
-        unified["memory.high"] = str(high_mib * MIB)
-    return OciLinuxResources(cpu=cpu, memory=memory, unified=unified)
+        deferred[CGROUP_V2_MEMORY_HIGH_PARAMETER] = str(high_mib * MIB)
+    return OciLinuxResources(cpu=cpu, memory=memory, deferred=deferred)
 
 
 def _cpu_burst_ceiling_millicores(request_millicores: int, *, node_cpu_millicores: int) -> int:
@@ -669,22 +695,30 @@ def _cpu_burst_ceiling_millicores(request_millicores: int, *, node_cpu_millicore
     ceiling = request_millicores + CONTAINER_CPU_BURST_CEILING_MILLICORES
     if node_cpu_millicores <= 0:
         return ceiling
-    return min(ceiling, schedulable_capacity(node_cpu_millicores))
+    # Floored at the request for the same reason memory is: shares still promise
+    # the request under contention, so a quota below it would throttle a
+    # container beneath what it reserved on an otherwise idle machine.
+    return max(min(ceiling, schedulable_capacity(node_cpu_millicores)), request_millicores)
 
 
-def _hard_memory_ceiling_mib(high_mib: int, *, node_memory_mib: int) -> int:
+def _hard_memory_ceiling_mib(high_mib: int, *, request_mib: int, node_memory_mib: int) -> int:
     """The wall behind the throttle, never larger than the machine holds.
 
     A container has to be able to reach its own ceiling for that ceiling to be
     the thing that stops it. Above the node's own size it never can, and the
     kernel's global OOM killer resolves the shortage instead -- by `oom_badness`,
     which scores resident size and knows nothing about what anyone reserved.
+
+    Floored at the request, because the clamp can otherwise land under it: the
+    machine is sized from advertised capacity while this reads `MemTotal`, which
+    is always smaller once the kernel has taken its share. A wall below the
+    reservation kills a container inside what it was promised.
     """
     if node_memory_mib <= 0:
         # The worker could not read its machine. Better a ceiling that may be too
         # generous than one invented from a number nobody measured.
-        return high_mib
-    return min(high_mib, schedulable_capacity(node_memory_mib))
+        return max(high_mib, request_mib)
+    return max(min(high_mib, schedulable_capacity(node_memory_mib)), request_mib)
 
 
 def container_id_hash_suffix(container_id: str, length: int) -> str:

@@ -141,7 +141,8 @@ class RuntimeStartedWaitPlan(ContractModel):
 class AppliedContainerResources(ContractModel):
     cpu: OciLinuxCpu | None = None
     memory: OciLinuxMemory | None = None
-    unified: dict[str, str] = Field(default_factory=dict)
+    deferred: dict[str, str] = Field(default_factory=dict)
+    """Settings the runtime will not install, for the worker to write itself."""
 
     @property
     def has_cpu(self) -> bool:
@@ -394,7 +395,7 @@ def plan_container_resource_application(
         resources=AppliedContainerResources(
             cpu=applied_cpu,
             memory=applied_memory,
-            unified=dict(resources.unified) if memory_enforced else {},
+            deferred=dict(resources.deferred) if memory_enforced else {},
         ),
         deferred_cpu=deferred_cpu,
         cpu_enforced=cpu_enforced,

@@ -33,12 +33,12 @@ from worker.container_execution import (
     ContainerNetworkSetupResult,
     ContainerRuntimeRunResult,
     ContainerRuntimeStartError,
+    container_resource_request,
 )
 from worker.container_rootfs import ContainerRootfsSetupResult
 from worker.execution import (
     CONTAINER_INNER_PORT,
     ContainerEnvironmentRequest,
-    ContainerResourceRequest,
     GatewayServiceSettings,
     OciDevice,
     OciMount,
@@ -494,19 +494,7 @@ class OciRuntimeSpecBuilder:
     ) -> None:
         if context.request.cpu_millicores <= 0 or context.request.memory_mib <= 0:
             return
-        resources = plan_oci_linux_resources(
-            ContainerResourceRequest(
-                cpu_millicores=context.request.cpu_millicores,
-                memory_mib=context.request.memory_mib,
-                memory_enforced=context.memory_enforced,
-                cpu_limit_millicores=context.cpu_limit_millicores,
-                # Already resolved against the platform default where the author
-                # named none, so the cgroup and the OOM watcher agree.
-                memory_limit_mib=(context.memory_limit_bytes or 0) // (1024 * 1024),
-                node_cpu_millicores=context.node_cpu_millicores,
-                node_memory_mib=context.node_memory_mib,
-            )
-        )
+        resources = plan_oci_linux_resources(container_resource_request(context))
         linux = spec.get("linux")
         if not isinstance(linux, dict):
             linux = {}
