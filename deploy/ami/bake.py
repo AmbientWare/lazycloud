@@ -92,6 +92,12 @@ _NVPROXY_SUPPORTED_DRIVERS = (
 # A GPU bake must run on a GPU or it cannot check its own work; this is the
 # cheapest instance that has one.
 _GPU_BAKE_INSTANCE_TYPE = "g4dn.xlarge"
+# Not burstable. The bake's cost is a driver install and a container-worker pull,
+# both of which are exactly what exhausts a `t3` credit balance, and a bake whose
+# duration depends on how much credit the account happened to have is one whose
+# timeout means nothing. A few cents an hour buys a run that takes the same time
+# every time.
+_CPU_BAKE_INSTANCE_TYPE = "c7i.large"
 # The driver and CUDA userspace do not fit in the CPU image's 16 GiB.
 _GPU_ROOT_VOLUME_GIB = 40
 _CPU_ROOT_VOLUME_GIB = 16
@@ -99,7 +105,11 @@ _CPU_ROOT_VOLUME_GIB = 16
 _MAX_ENCODED_USER_DATA_BYTES = 25600
 _AL2023_SSM_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
+_BAKE_FAILED_SENTINEL = "LAZYCLOUD_BAKE_FAILED"
+_BAKE_OK_SENTINEL = "LAZYCLOUD_BAKE_OK"
 _CLI_TIMEOUT_SECONDS = 300
+_CONSOLE_SETTLE_ATTEMPTS = 4
+_CONSOLE_TAIL_LINES = 40
 _MANAGED_TAG_KEY = "cloud-pool:managed-by"
 _MANAGED_TAG_VALUE = "control-plane"
 _POLL_INTERVAL_SECONDS = 15
@@ -569,9 +579,47 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
     return instance_id
 
 
+def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> str:
+    """What the instance has said so far, or nothing while EC2 catches up.
+
+    Console output lags the instance by a minute or two and is empty until the
+    first flush, so absence here is never evidence of silence.
+    """
+    result = _run_aws(
+        request.aws_cli,
+        [
+            "ec2",
+            "get-console-output",
+            "--instance-id",
+            instance_id,
+            "--region",
+            region,
+            "--output",
+            "text",
+            "--query",
+            "Output",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout
+
+
 def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_id: str) -> None:
     deadline = time.monotonic() + request.instance_timeout_seconds
+    announced_ok = False
     while True:
+        console = _read_console(request, region=region, instance_id=instance_id)
+        if _BAKE_FAILED_SENTINEL in console:
+            tail = "\n".join(console.strip().splitlines()[-_CONSOLE_TAIL_LINES:])
+            raise SystemExit(
+                f"{region}: the bake script failed on {instance_id}. Its last "
+                f"{_CONSOLE_TAIL_LINES} console lines:\n{tail}"
+            )
+        if not announced_ok and _BAKE_OK_SENTINEL in console:
+            announced_ok = True
+            _log(f"{region}: bake script finished on {instance_id}, waiting for it to stop")
         result = _run_aws(
             request.aws_cli,
             [
@@ -608,7 +656,23 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
             raise SystemExit(f"{region}: bake instance {instance_id} was not observable")
         state = states[0]
         if state == "stopped":
-            return
+            if announced_ok:
+                return
+            # The console trails the instance, so a stop seen before the success
+            # line is usually only that lag. Give it a bounded chance to arrive
+            # rather than imaging on the strength of the state alone.
+            for _ in range(_CONSOLE_SETTLE_ATTEMPTS):
+                time.sleep(_POLL_INTERVAL_SECONDS)
+                console = _read_console(request, region=region, instance_id=instance_id)
+                if _BAKE_OK_SENTINEL in console:
+                    return
+                if _BAKE_FAILED_SENTINEL in console:
+                    break
+            tail = "\n".join(console.strip().splitlines()[-_CONSOLE_TAIL_LINES:])
+            raise SystemExit(
+                f"{region}: bake instance {instance_id} stopped without finishing its "
+                f"script. Its last {_CONSOLE_TAIL_LINES} console lines:\n{tail}"
+            )
         if state in {"shutting-down", "terminated"}:
             raise SystemExit(f"{region}: bake instance {instance_id} terminated before imaging")
         if time.monotonic() >= deadline:
@@ -706,7 +770,21 @@ def _terminate_instance(request: _BakeRequest, *, region: str, instance_id: str)
 
 _BAKE_USER_DATA_TEMPLATE = """#!/bin/bash
 set -Eeuo pipefail
-exec >/var/log/lazycloud-bake.log 2>&1
+
+# To the console as well as the log. A bake instance is launched with no key
+# pair and no instance profile, so it has neither SSH nor SSM for its whole
+# life: a log on its disk is written where nothing can ever read it, and the
+# baker is left inferring a cause from an instance that simply stopped moving.
+exec > >(tee -a /var/log/lazycloud-bake.log > /dev/console) 2>&1
+
+# Two sentinels the baker polls for, because the states EC2 reports cannot tell
+# these apart. A script that fails never reaches `shutdown`, so the instance
+# stays `running` exactly as it does while a driver installs, and the only thing
+# that eventually distinguishes them is a timeout that explains nothing.
+bake_failed() {
+  echo "LAZYCLOUD_BAKE_FAILED rc=$? line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"
+}
+trap bake_failed ERR
 
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 RELEASE_VERSION=__RELEASE_VERSION__
@@ -738,6 +816,12 @@ cat > /etc/lazycloud-node-image.json <<MARKER
 {"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","tailscale_version":"${TAILSCALE_VERSION}","worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER
 
+# Last, and the baker will not image an instance that never said it. A stop is
+# not evidence of a finished bake -- a spot reclaim, an operator, or a panic all
+# stop an instance too, and every one of them would otherwise be captured and
+# published as a node image.
+echo "LAZYCLOUD_BAKE_OK release=${RELEASE_VERSION} variant=__VARIANT__"
+sync
 shutdown -h now
 """
 
@@ -768,10 +852,15 @@ _ZRAM_SETUP_FRAGMENT = """
 # zram only on hosts under 800MB, which no node in the catalog is, so without
 # this the generator declines and the rest of the file never takes effect.
 # `none` removes the cap; a value in /etc wins over the one in /usr.
+#
+# No `compression-algorithm`. Asking for zstd on this kernel gets "algorithm
+# zstd not recognised" and the default silently anyway, so naming it bought a
+# warning and the illusion of a choice. Which algorithms exist is a property of
+# the kernel zram was built into, so the bake prints the list rather than a
+# preference written from somewhere that cannot see it.
 cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
 [zram0]
 zram-size = ram / 4
-compression-algorithm = zstd
 # Above any disk swap, so reclaim compresses before it ever reaches a volume.
 swap-priority = 100
 host-memory-limit = none
@@ -790,6 +879,7 @@ SYSCTL_EOF
 systemctl daemon-reload
 systemctl start systemd-zram-setup@zram0.service
 grep -q '^/dev/zram0 ' /proc/swaps
+cat /sys/block/zram0/comp_algorithm
 """
 
 
@@ -833,7 +923,7 @@ esac
 
 def _default_bake_instance_type(variant: _BakeVariant) -> str:
     """A GPU bake must run where it can see a GPU, or it cannot verify itself."""
-    return _GPU_BAKE_INSTANCE_TYPE if variant is _BakeVariant.Gpu else "t3.small"
+    return _GPU_BAKE_INSTANCE_TYPE if variant is _BakeVariant.Gpu else _CPU_BAKE_INSTANCE_TYPE
 
 
 def _bake_user_data_blob(request: _BakeRequest) -> bytes:
@@ -845,7 +935,9 @@ def _bake_user_data_blob(request: _BakeRequest) -> bytes:
     of truth for that installer rather than splitting it across a second fetch
     the bake would then have to publish and verify.
     """
-    blob = gzip.compress(_bake_user_data(request).encode("utf-8"), mtime=0)
+    script = _bake_user_data(request)
+    _reject_unparsable_script(script)
+    blob = gzip.compress(script.encode("utf-8"), mtime=0)
     encoded = len(b64encode(blob))
     if encoded > _MAX_ENCODED_USER_DATA_BYTES:
         msg = (
@@ -855,6 +947,28 @@ def _bake_user_data_blob(request: _BakeRequest) -> bytes:
         )
         raise SystemExit(msg)
     return blob
+
+
+def _reject_unparsable_script(script: str) -> None:
+    """Parse the script here rather than discovering it will not parse on EC2.
+
+    The script is assembled from fragments and substitutions, so a quoting
+    mistake in any of them produces a file that only fails once an instance has
+    booted it — and the failure arrives as an instance that stopped moving,
+    minutes and one launch later. `bash -n` costs milliseconds and reads the
+    exact bytes EC2 would.
+    """
+    result = subprocess.run(
+        ["bash", "-n", "-"],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=_CLI_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = f"the generated bake script is not valid bash: {result.stderr.strip()[:500]}"
+        raise SystemExit(msg)
 
 
 def _bake_user_data(request: _BakeRequest) -> str:
