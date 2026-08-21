@@ -1,11 +1,32 @@
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 
 from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
+
+NODE_OVERHEAD_FACTOR = 1.10
+"""How much larger than the request a node has to be before it can host it.
+
+The agent, the container runtime and the host's own daemons take their share
+before a container gets anything, so a request that exactly equals a node's
+advertised size leaves nothing for the processes that start the container.
+
+Applied to the request rather than deducted from the offer because it is a fact
+about every node this platform launches, not about any one workload. Both places
+that decide whether capacity fits a shape read it, so a pool judged able to host
+a request is sized the way a new pool would have been.
+"""
+
+
+def capacity_with_overhead(value: int) -> int:
+    """A resource floor raised by what the node spends on itself."""
+    if value <= 0:
+        return value
+    return math.ceil(value * NODE_OVERHEAD_FACTOR)
 
 
 class ReservationStatus(StrEnum):
@@ -119,6 +140,8 @@ class OfferRequest(ContractModel):
 
 
 def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
+    required_cpu = capacity_with_overhead(request.min_cpu_millicores)
+    required_memory = capacity_with_overhead(request.min_memory_mb)
     selected: list[ComputeOffer] = []
     for offer in offers:
         if request.offer_id and offer.id != request.offer_id:
@@ -127,9 +150,9 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             continue
         if request.regions and offer.region not in request.regions:
             continue
-        if offer.cpu_millicores < request.min_cpu_millicores:
+        if offer.cpu_millicores < required_cpu:
             continue
-        if offer.memory_mb < request.min_memory_mb:
+        if offer.memory_mb < required_memory:
             continue
         if offer.storage_mb < request.min_storage_mb:
             continue
@@ -185,9 +208,11 @@ def offer_cost_per_node(offer: ComputeOffer) -> float:
 
 
 __all__ = [
+    "NODE_OVERHEAD_FACTOR",
     "ComputeOffer",
     "OfferRequest",
     "ReservationStatus",
+    "capacity_with_overhead",
     "choose_offer",
     "filter_offers",
 ]

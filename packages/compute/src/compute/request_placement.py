@@ -11,6 +11,7 @@ from shared.errors import InvalidInputError
 from shared.gpu import GPU_ANY, normalize_gpu_type
 
 from compute.context import ComputeContext
+from compute.offers import capacity_with_overhead
 from compute.policy import WorkspaceComputePolicyService
 
 
@@ -118,9 +119,13 @@ class ComputeCapacityPlacementService:
 
 
 def _pool_supports(pool: ComputeUnitRecord, requirements: ComputeResourceRequirements) -> bool:
-    if pool.worker_cpu_millicores < requirements.cpu_millicores:
+    # The same overhead offer selection applies, so a pool judged able to host a
+    # shape is one that would have been chosen for it. Judging an existing pool
+    # by the raw request while sizing a new one with headroom would place work on
+    # nodes that were never big enough for it.
+    if pool.worker_cpu_millicores < capacity_with_overhead(requirements.cpu_millicores):
         return False
-    if pool.worker_memory_mib < requirements.memory_mb:
+    if pool.worker_memory_mib < capacity_with_overhead(requirements.memory_mb):
         return False
     if requirements.runtime not in pool.worker_runtimes:
         return False
