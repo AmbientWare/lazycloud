@@ -757,39 +757,25 @@ _ZRAM_SETUP_FRAGMENT = """
 # for reclaim to have somewhere to go without the machine losing half itself.
 #
 # In RAM rather than on the root volume because the CPU catalog is EBS-only.
-# Written as a unit rather than installed, because a bake that discovers its
-# package is missing has already burned the instance.
-cat > /usr/local/bin/lazycloud-zram <<'ZRAM_EOF'
-#!/bin/bash
-set -Eeuo pipefail
-modprobe zram num_devices=1
-# Algorithm before size: zram rejects the write once a disksize is set.
-echo zstd > /sys/block/zram0/comp_algorithm
-awk '/MemTotal/ {print int($2 * 1024 / 4)}' /proc/meminfo > /sys/block/zram0/disksize
-mkswap /dev/zram0
+#
+# Configured through the zram-generator AL2023 already ships rather than through
+# a unit of our own. The generator owns zram0: it runs on every daemon-reload,
+# loads the module, and drives `systemd-zram-setup@zram0`. A second unit doing
+# its own modprobe races it for the same device and loses, and the bake dies
+# with the device added and no swap on it.
+#
+# `host-memory-limit` is the setting that decides it. The shipped default sets up
+# zram only on hosts under 800MB, which no node in the catalog is, so without
+# this the generator declines and the rest of the file never takes effect.
+# `none` removes the cap; a value in /etc wins over the one in /usr.
+cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
+[zram0]
+zram-size = ram / 4
+compression-algorithm = zstd
 # Above any disk swap, so reclaim compresses before it ever reaches a volume.
-swapon --priority 100 /dev/zram0
+swap-priority = 100
+host-memory-limit = none
 ZRAM_EOF
-chmod 0755 /usr/local/bin/lazycloud-zram
-
-cat > /etc/systemd/system/lazycloud-zram.service <<'ZRAM_UNIT_EOF'
-[Unit]
-Description=Compressed swap backing container memory reclaim
-DefaultDependencies=no
-After=local-fs.target
-Before=swap.target docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/bin/lazycloud-zram
-ExecStop=-/usr/sbin/swapoff /dev/zram0
-
-[Install]
-WantedBy=swap.target
-ZRAM_UNIT_EOF
-
-systemctl enable lazycloud-zram.service
 
 # Reclaim has to prefer compressing a cold anonymous page over evicting a hot
 # file page. The kernel's default assumes swap is a slow disk; this one is RAM.
@@ -801,7 +787,8 @@ SYSCTL_EOF
 # Prove it here rather than on a node with a tenant on it. A bake that cannot
 # raise swap produces an image where every memory ceiling silently stalls
 # instead of throttling.
-systemctl start lazycloud-zram.service
+systemctl daemon-reload
+systemctl start systemd-zram-setup@zram0.service
 grep -q '^/dev/zram0 ' /proc/swaps
 """
 
