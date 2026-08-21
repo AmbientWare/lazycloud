@@ -108,7 +108,12 @@ _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 _BAKE_FAILED_SENTINEL = "LAZYCLOUD_BAKE_FAILED"
 _BAKE_OK_SENTINEL = "LAZYCLOUD_BAKE_OK"
 _CLI_TIMEOUT_SECONDS = 300
-_CONSOLE_SETTLE_ATTEMPTS = 4
+# Console output trails the instance by minutes, and the first publication of it
+# has been measured at six. These attempts are only spent once an instance has
+# already stopped without its success line having appeared yet, so the cost of a
+# generous window is paid on a path that is usually about to succeed, while a
+# short one throws away a finished bake for being slow to say so.
+_CONSOLE_SETTLE_ATTEMPTS = 24
 _CONSOLE_TAIL_LINES = 40
 _MANAGED_TAG_KEY = "cloud-pool:managed-by"
 _MANAGED_TAG_VALUE = "control-plane"
@@ -603,7 +608,9 @@ def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> st
     )
     if result.returncode != 0:
         return ""
-    return result.stdout
+    # `--output text` renders a null as the four characters "None", which would
+    # otherwise be searched for sentinels as though it were console output.
+    return "" if result.stdout.strip() == "None" else result.stdout
 
 
 def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_id: str) -> None:
@@ -781,10 +788,28 @@ exec > >(tee -a /var/log/lazycloud-bake.log > /dev/console) 2>&1
 # these apart. A script that fails never reaches `shutdown`, so the instance
 # stays `running` exactly as it does while a driver installs, and the only thing
 # that eventually distinguishes them is a timeout that explains nothing.
-bake_failed() {
-  echo "LAZYCLOUD_BAKE_FAILED rc=$? line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"
+#
+# Straight to the console, not through the tee above. That redirect is an
+# asynchronous subshell and the success line is followed immediately by
+# `shutdown`: a line still in the pipe when the machine halts never arrives, and
+# the baker would refuse to image a bake that had in fact succeeded.
+say() { echo "$*" > /dev/console; }
+
+# Announced from EXIT rather than from ERR, so that every way out is covered by
+# one mechanism. ERR does not run for an explicit `exit`, and this script has
+# several that report a specific diagnosis and quit -- each of which would
+# otherwise leave silently, which is the exact failure the sentinels exist to
+# end. ERR's job is only to record where it happened.
+bake_line="unknown"
+bake_cmd="unknown"
+bake_announce() {
+  rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    say "LAZYCLOUD_BAKE_FAILED rc=${rc} line=${bake_line} cmd=${bake_cmd}"
+  fi
 }
-trap bake_failed ERR
+trap 'bake_line=${LINENO}; bake_cmd=${BASH_COMMAND}' ERR
+trap bake_announce EXIT
 
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 RELEASE_VERSION=__RELEASE_VERSION__
@@ -820,7 +845,7 @@ MARKER
 # not evidence of a finished bake -- a spot reclaim, an operator, or a panic all
 # stop an instance too, and every one of them would otherwise be captured and
 # published as a node image.
-echo "LAZYCLOUD_BAKE_OK release=${RELEASE_VERSION} variant=__VARIANT__"
+say "LAZYCLOUD_BAKE_OK release=${RELEASE_VERSION} variant=__VARIANT__"
 sync
 shutdown -h now
 """
@@ -878,8 +903,27 @@ SYSCTL_EOF
 # instead of throttling.
 systemctl daemon-reload
 systemctl start systemd-zram-setup@zram0.service
-grep -q '^/dev/zram0 ' /proc/swaps
-cat /sys/block/zram0/comp_algorithm
+
+# Poll, rather than read once or name the unit that finishes the job. The setup
+# service returns when mkswap is done and the swapon lands about thirty
+# milliseconds later under a separate generated unit, so a single read races it
+# and loses. Starting that other unit by name would mean hardcoding a name the
+# generator chooses; polling the thing actually being asserted cannot be wrong
+# about it, and says what it saw either way.
+for attempt in $(seq 1 30); do
+  if grep -q '^/dev/zram0 ' /proc/swaps; then
+    echo "zram swap up after ${attempt} attempt(s): $(grep '^/dev/zram0 ' /proc/swaps)"
+    echo "zram algorithm: $(cat /sys/block/zram0/comp_algorithm)"
+    break
+  fi
+  if [ "${attempt}" -eq 30 ]; then
+    echo "zram never raised swap; /proc/swaps holds:"
+    cat /proc/swaps
+    systemctl --no-pager status systemd-zram-setup@zram0.service || true
+    exit 1
+  fi
+  sleep 1
+done
 """
 
 
