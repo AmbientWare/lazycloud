@@ -125,6 +125,13 @@ services:
   cli:
     image: "${LAZYCLOUD_IMAGE_CLI:?set by images.env}"
     build: !reset null
+    # `--env-file` on the compose command line feeds `${...}` interpolation, not
+    # the container. Every other consumer of the administrator credential takes
+    # it as a mounted secret and reads the file, so nothing noticed that the one
+    # service which needs it as a variable never received it: `fleet ensure`
+    # reported "missing bearer token" no matter what the secret held.
+    environment:
+      LAZYCLOUD_TOKEN: "${LAZYCLOUD_TOKEN:?set by secrets.env}"
 
   public-ingress:
     depends_on: !override
