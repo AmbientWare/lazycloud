@@ -6,12 +6,12 @@ from typing import Protocol
 from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import ComputeUnitRepository
 from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord, MachinePool
+from shared.container_requests import capacity_with_overhead
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.gpu import GPU_ANY, normalize_gpu_type
 
 from compute.context import ComputeContext
-from compute.offers import capacity_with_overhead
 from compute.policy import WorkspaceComputePolicyService
 
 

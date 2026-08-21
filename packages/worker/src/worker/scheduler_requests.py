@@ -174,6 +174,14 @@ class WorkerSchedulerRequestProcessor:
     machine that silently reports the wrong card bills the wrong rate.
     """
 
+    node_cpu_millicores: int = 0
+    node_memory_mib: int = 0
+    """What this worker's machine holds, or zero when it could not be read.
+
+    Only bounds a container's hard memory ceiling, so an unreadable machine costs
+    a ceiling that may be too generous rather than a container that will not run.
+    """
+
     lifecycle: WorkerSchedulerRequestLifecycle | None = None
     image_builds: WorkerSchedulerRequestImageBuildExecutor | None = None
     usage_recorder: WorkerUsageWindowRecorder | None = None
@@ -239,7 +247,10 @@ class WorkerSchedulerRequestProcessor:
 
         try:
             context = container_execution_context_from_scheduler_request(
-                request, worker_gpu_type=self.worker_gpu_type
+                request,
+                worker_gpu_type=self.worker_gpu_type,
+                node_cpu_millicores=self.node_cpu_millicores,
+                node_memory_mib=self.node_memory_mib,
             )
             if runs_in_background(context.startup_kind):
                 return self._start_background(request, context)
@@ -772,6 +783,8 @@ def container_execution_context_from_scheduler_request(
     request: SchedulerWorkerRequest,
     *,
     worker_gpu_type: str,
+    node_cpu_millicores: int = 0,
+    node_memory_mib: int = 0,
 ) -> ContainerExecutionContext:
     """Build the execution context for one scheduled container.
 
@@ -835,6 +848,8 @@ def container_execution_context_from_scheduler_request(
         memory_enforced=payload.memory_enforced,
         memory_limit_bytes=memory_limit_bytes,
         cpu_limit_millicores=payload.cpu_limit_millicores,
+        node_cpu_millicores=node_cpu_millicores,
+        node_memory_mib=node_memory_mib,
         cgroup_path=payload.cgroup_path,
         run_delayed_cleanup=payload.run_delayed_cleanup,
     )

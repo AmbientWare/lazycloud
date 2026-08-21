@@ -314,6 +314,10 @@ class ContainerExecutionContext(ContractModel):
     memory_enforced: bool = True
     memory_limit_bytes: int | None = None
     cpu_limit_millicores: int = 0
+    node_cpu_millicores: int = 0
+    node_memory_mib: int = 0
+    """What the machine has, or zero when it could not be read."""
+
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = False
 

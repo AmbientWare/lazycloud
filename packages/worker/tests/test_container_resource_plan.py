@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
-from worker.execution import ContainerResourceRequest, plan_oci_linux_resources
-
-MIB = 1024 * 1024
+from worker.execution import MIB, ContainerResourceRequest, plan_oci_linux_resources
 
 
 def test_the_request_is_reserved_and_the_ceiling_sits_above_it() -> None:
@@ -49,3 +47,41 @@ def test_a_ceiling_below_the_request_is_refused() -> None:
             memory_mib=1_024,
             memory_limit_mib=512,
         )
+
+
+def test_a_ceiling_never_exceeds_the_machine_it_runs_on() -> None:
+    """A container has to be able to reach its own ceiling for it to stop it.
+
+    Above the node's size it never can, so the machine runs out first and the
+    kernel's global OOM killer resolves the shortage instead — by resident size,
+    which is the one thing that has never read anyone's reservation.
+    """
+    on_a_small_node = plan_oci_linux_resources(
+        ContainerResourceRequest(
+            cpu_millicores=1_000,
+            memory_mib=4_096,
+            node_cpu_millicores=2_000,
+            node_memory_mib=8_192,
+        )
+    )
+
+    assert on_a_small_node.memory is not None
+    assert on_a_small_node.memory.limit_bytes <= 8_192 * MIB
+    assert on_a_small_node.cpu.quota <= 2_000 * on_a_small_node.cpu.period // 1000
+
+
+def test_a_container_can_reclaim_rather_than_die_at_its_ceiling() -> None:
+    """`memory.high` throttles, `memory.max` kills, and swap is what separates them.
+
+    Without somewhere to reclaim to, a cgroup of anonymous pages does not slow
+    down at the throttle, it stalls. Granting swap equal to the limit, as this
+    did before, is granting none: OCI states memory-plus-swap.
+    """
+    resources = plan_oci_linux_resources(
+        ContainerResourceRequest(cpu_millicores=1_000, memory_mib=1_024)
+    )
+
+    assert resources.memory is not None
+    high = int(resources.unified["memory.high"])
+    assert resources.memory.reservation_bytes < high <= resources.memory.limit_bytes
+    assert resources.memory.swap_bytes > resources.memory.limit_bytes

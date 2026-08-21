@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
-from compute.offers import schedulable_capacity
 from compute.state import ComputeAgentTokenState
 from scheduler.agent_pool import (
     AgentPoolConfig,
@@ -14,6 +13,7 @@ from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import SchedulerWorkerRecord
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
 from shared.compute_policy import MachinePool
+from shared.container_requests import schedulable_capacity
 from shared.scheduling import WorkerUnavailableReason
 
 

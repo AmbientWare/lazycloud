@@ -725,6 +725,7 @@ sh /tmp/lazycloud-agent-install.sh --install-only --agent-url __AGENT_BINARY_URL
 rm -f /tmp/lazycloud-agent-install.sh
 
 __GPU_SETUP__
+__ZRAM_SETUP__
 systemctl enable --now amazon-ssm-agent
 # A pool node produces no console output and reports nothing once its agent
 # cannot reach the control plane. Without SSM every failure in that window is
@@ -738,6 +739,66 @@ cat > /etc/lazycloud-node-image.json <<MARKER
 MARKER
 
 shutdown -h now
+"""
+
+
+_ZRAM_SETUP_FRAGMENT = """
+# Compressed swap, and the reason the container memory ceilings mean anything.
+#
+# A cgroup holding anonymous pages with no swap has nothing reclaimable, so
+# `memory.high` stops throttling and starts stalling: measured at 2ms per 8MiB
+# allocation below the threshold and 21s per 8MiB above it, with the kernel
+# scanning zero pages because there was nowhere to put them. With swap the same
+# allocation slows by about 3x and the cgroup holds at its limit. `memory.low`
+# protection has the same dependency, for the same reason.
+#
+# In RAM rather than on the root volume because the CPU catalog is EBS-only.
+# Written as a unit rather than installed, because a bake that discovers its
+# package is missing has already burned the instance.
+cat > /usr/local/bin/lazycloud-zram <<'ZRAM_EOF'
+#!/bin/bash
+set -Eeuo pipefail
+modprobe zram num_devices=1
+# Algorithm before size: zram rejects the write once a disksize is set.
+echo zstd > /sys/block/zram0/comp_algorithm
+awk '/MemTotal/ {print int($2 * 1024 / 2)}' /proc/meminfo > /sys/block/zram0/disksize
+mkswap /dev/zram0
+# Above any disk swap, so reclaim compresses before it ever reaches a volume.
+swapon --priority 100 /dev/zram0
+ZRAM_EOF
+chmod 0755 /usr/local/bin/lazycloud-zram
+
+cat > /etc/systemd/system/lazycloud-zram.service <<'ZRAM_UNIT_EOF'
+[Unit]
+Description=Compressed swap backing container memory reclaim
+DefaultDependencies=no
+After=local-fs.target
+Before=swap.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/lazycloud-zram
+ExecStop=/usr/bin/swapoff /dev/zram0
+
+[Install]
+WantedBy=swap.target
+ZRAM_UNIT_EOF
+
+systemctl enable lazycloud-zram.service
+
+# Reclaim has to prefer compressing a cold anonymous page over evicting a hot
+# file page. The kernel's default assumes swap is a slow disk; this one is RAM.
+cat > /etc/sysctl.d/60-lazycloud-zram.conf <<'SYSCTL_EOF'
+vm.swappiness = 180
+vm.page-cluster = 0
+SYSCTL_EOF
+
+# Prove it here rather than on a node with a tenant on it. A bake that cannot
+# raise swap produces an image where every memory ceiling silently stalls
+# instead of throttling.
+systemctl start lazycloud-zram.service
+grep -q '^/dev/zram0 ' /proc/swaps
 """
 
 
@@ -824,6 +885,8 @@ def _bake_user_data(request: _BakeRequest) -> str:
         else ""
     )
     script = script.replace("__GPU_SETUP__", gpu_setup)
+    # Every variant: a GPU node's containers reclaim the same way a CPU node's do.
+    script = script.replace("__ZRAM_SETUP__", _ZRAM_SETUP_FRAGMENT)
     for placeholder, value in values.items():
         script = script.replace(placeholder, shlex.quote(value))
     installer = build_agent_install_script(

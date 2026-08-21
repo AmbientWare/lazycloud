@@ -501,6 +501,44 @@ def cgroup_oom_decision(previous: OomCounterSnapshot, current: OomCounterSnapsho
     )
 
 
+def parse_meminfo_total_mib(text: str) -> int:
+    """What the machine holds, from `/proc/meminfo`.
+
+    Read rather than configured because it is a fact about the host the worker is
+    already running on, and a configured figure is one that can be wrong on a
+    machine nobody re-configured after resizing it.
+    """
+    for line in text.splitlines():
+        name, _, rest = line.partition(":")
+        if name.strip() != "MemTotal":
+            continue
+        fields = rest.split()
+        if not fields:
+            break
+        return int(fields[0]) // 1024
+    msg = "MemTotal not found in meminfo"
+    raise ValueError(msg)
+
+
+def parse_memory_pressure_percent(text: str) -> float:
+    """How much of the last ten seconds every task spent stalled on memory.
+
+    The `full` line, not `some`: `some` counts a window where any task waited,
+    which a healthy machine does constantly. `full` counts windows where nothing
+    could run at all, which is the machine having stopped rather than slowed.
+    """
+    for line in text.splitlines():
+        fields = line.split()
+        if not fields or fields[0] != "full":
+            continue
+        for field in fields[1:]:
+            key, _, value = field.partition("=")
+            if key == "avg10":
+                return float(value)
+    msg = "no full avg10 in pressure file"
+    raise ValueError(msg)
+
+
 def parse_proc_cgroup_path(text: str) -> str:
     for line in text.splitlines():
         parts = line.strip().split(":", 2)
