@@ -388,6 +388,13 @@ class WorkerContainerExecutionService:
     checkpoint_restorer: ContainerCheckpointRestorer | None = None
     automatic_checkpoints: ContainerAutomaticCheckpointCoordinator | None = None
     container_logs: ContainerLogCaptureService | None = None
+    container_started: Callable[[str, int], None] | None = None
+    """Told the sandbox process id the moment a container has one.
+
+    A long-running container's pid is not known when it is registered and is not
+    reported again until it exits, so anything watching live containers has to be
+    handed it here or it never learns of the container at all.
+    """
 
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
         result = ContainerExecutionResult()
@@ -553,6 +560,8 @@ class WorkerContainerExecutionService:
         def on_started(pid: int) -> None:
             nonlocal started_pid
             started_pid = pid
+            if self.container_started is not None:
+                self.container_started(context.request.container_id, pid)
             if not self._phase(
                 result,
                 ContainerExecutionPhase.PrepareSandboxDocker,

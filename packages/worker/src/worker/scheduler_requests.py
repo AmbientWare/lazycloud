@@ -142,8 +142,8 @@ class _BackgroundExecution:
     request: SchedulerWorkerRequest
     thread: threading.Thread | None = None
     result: WorkerSchedulerRequestResult | None = None
-    cgroup_path: str = ""
-    """Where this container's memory is accounted, once the runtime has placed it."""
+    pid: int = 0
+    """The sandbox process, once the runtime has started one."""
 
 
 @dataclass(slots=True)
@@ -453,7 +453,7 @@ class WorkerSchedulerRequestProcessor:
         # polls again immediately, and the acknowledgement has to be in flight
         # before it does or every background start costs a redelivery.
         self._take_container(context)
-        active = _BackgroundExecution(request=request, cgroup_path=context.cgroup_path or "")
+        active = _BackgroundExecution(request=request)
         thread = threading.Thread(
             target=self._run_background,
             args=(active, context),
@@ -472,6 +472,18 @@ class WorkerSchedulerRequestProcessor:
             background=True,
         )
 
+    def record_container_started(self, container_id: str, pid: int) -> None:
+        """Note the sandbox a running container got.
+
+        Called from the execution thread the moment the runtime reports one. A
+        long-running container has no pid when it is registered and reports none
+        again until it exits, so without this it is invisible to anything reading
+        live containers.
+        """
+        active = self._background.get(container_id)
+        if active is not None:
+            active.pid = pid
+
     def resident_containers(self) -> list[ResidentContainer]:
         """The containers this worker is holding, and what each was promised.
 
@@ -482,7 +494,7 @@ class WorkerSchedulerRequestProcessor:
         return [
             ResidentContainer(
                 container_id=container_id,
-                cgroup_path=active.cgroup_path,
+                pid=active.pid,
                 reserved_mib=active.request.memory_mib,
             )
             for container_id, active in self._background.items()

@@ -32,7 +32,7 @@ class ResidentContainer:
     """A container this worker is running, and what it was promised."""
 
     container_id: str
-    cgroup_path: str
+    pid: int
     reserved_mib: int
 
 
@@ -61,7 +61,7 @@ class WorkerMemoryPressureWatcher:
     worker_cgroup_path: str
     residents: Callable[[], Sequence[ResidentContainer]]
     read_pressure_percent: Callable[[str], float]
-    read_memory_current: Callable[[str], int]
+    read_memory_current: Callable[[int], int]
     stop_container: Callable[[str, StopContainerReason], None]
     threshold_percent: float = DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT
     evicted_container_ids: list[str] = field(default_factory=list, init=False)
@@ -74,11 +74,11 @@ class WorkerMemoryPressureWatcher:
         readings = [
             ContainerMemoryReading(
                 container_id=resident.container_id,
-                current_bytes=self.read_memory_current(resident.cgroup_path),
+                current_bytes=self.read_memory_current(resident.pid),
                 reserved_bytes=resident.reserved_mib * MIB,
             )
             for resident in self.residents()
-            if resident.cgroup_path
+            if resident.pid > 0
         ]
         candidate = select_memory_eviction_candidate(
             readings,

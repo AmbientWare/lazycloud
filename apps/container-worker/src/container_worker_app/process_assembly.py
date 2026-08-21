@@ -73,9 +73,9 @@ from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
 from worker.runtime_config import (
-    read_container_memory_current,
     read_machine_memory_mib,
     read_memory_pressure_percent,
+    read_process_memory_bytes,
     worker_cgroup_path,
 )
 from worker.scheduler_requests import (
@@ -353,6 +353,11 @@ def assemble_worker_process_services(
         node_memory_mib=read_machine_memory_mib(),
     )
 
+    # Set after both exist rather than passed in: execution has to tell the
+    # processor a pid, and the processor is built from execution. Without it a
+    # long-running container is never seen by anything watching live containers.
+    execution.container_started = processor.record_container_started
+
     return WorkerProcessServices(
         identity=identity,
         workers=worker_repository,
@@ -396,7 +401,7 @@ def _memory_pressure_watcher(
         worker_cgroup_path=cgroup_path,
         residents=processor.resident_containers,
         read_pressure_percent=read_memory_pressure_percent,
-        read_memory_current=read_container_memory_current,
+        read_memory_current=read_process_memory_bytes,
         # Forced, because a machine already out of memory is one where a graceful
         # stop may never complete.
         stop_container=lambda container_id, reason: stopper.stop_container(
