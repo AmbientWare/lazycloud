@@ -104,11 +104,12 @@ class AwsAccountComputeConfiguration(ContractModel):
     min_free_memory_mib: int = Field(default=CONTAINER_MEMORY_BURST_FLOOR_MIB, ge=0)
     """Free memory below which the pool adds a machine.
 
-    Stated as the smallest expansion any container is granted, so a node stops
-    being counted as spare before it can no longer absorb one more default
-    container growing into its allowance. A figure chosen independently of that
-    allowance is a scaling policy that does not know what the burst policy
-    permits, and the two drift apart silently.
+    Accounted memory, not physical: the pool subtracts what its containers
+    reserved, so a container expanding into its burst allowance consumes real
+    memory without moving this figure. It therefore bounds how tightly the pool
+    packs reservations and says nothing about how much room a burst will find.
+    Stated as the smallest burst allowance so the two are at least the same
+    order, but the guarantee a node can absorb a burst is the ceiling's, not this.
     """
     allowed_regions: tuple[str, ...] = ("us-east-1",)
     allowed_instance_types: tuple[str, ...] = ()

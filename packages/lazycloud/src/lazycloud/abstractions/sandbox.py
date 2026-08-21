@@ -19,6 +19,7 @@ from shared.deployment_records import (
     MemoryRequest,
     Resources,
     VolumeMount,
+    request_and_limit,
 )
 from shared.deployments import DeploymentKind
 from shared.http import pods
@@ -214,8 +215,8 @@ class SandboxPodClient(Protocol):
 
 
 class SandboxOptions(TypedDict, total=False):
-    cpu: int | float | str
-    memory: int | str
+    cpu: CpuRequest | str
+    memory: MemoryRequest
     disk: str | None
     gpu: str | None
     gpu_count: int
@@ -1562,8 +1563,8 @@ class Sandbox(ControlClientConfigMixin):
         self,
         *,
         _app_slug: str,
-        cpu: int | float | str = 1.0,
-        memory: int | str = 128,
+        cpu: CpuRequest | str = 1.0,
+        memory: MemoryRequest = 128,
         disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int = 0,
@@ -1884,7 +1885,18 @@ def _command_to_text(command: str | Iterable[str]) -> tuple[str, list[str]]:
     return shlex.join(args), args
 
 
-def _cpu_value(value: int | float | str) -> float:
+def _cpu_value(value: CpuRequest | str) -> CpuRequest:
+    """Cores as a number, keeping a `(reserve, throttle at)` pair as a pair."""
+    request, limit = request_and_limit(value)
+    if limit is None:
+        return _cores(request)
+    return (_cores(request), _cores(limit))
+
+
+def _cores(value: str | int | float | None) -> float:
+    if value is None:
+        msg = "sandbox cpu value is required"
+        raise TypeError(msg)
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
@@ -1906,8 +1918,12 @@ def _nonnegative_timeout(name: str, value: float) -> float:
     return timeout
 
 
-def _memory_value(value: int | str) -> str:
-    return str(value)
+def _memory_value(value: MemoryRequest) -> MemoryRequest:
+    """Memory as written, keeping a `(reserve, kill at)` pair as a pair."""
+    request, limit = request_and_limit(value)
+    if limit is None:
+        return str(request)
+    return (str(request), str(limit))
 
 
 def _sandbox_ports(ports: Iterable[int]) -> list[int]:

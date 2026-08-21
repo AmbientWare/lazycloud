@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Literal
 
+from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from shared.callbacks import normalize_callback_url
 from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
-from shared.deployment_records import CpuRequest, MemoryRequest
+from shared.deployment_records import CpuRequest, MemoryRequest, request_and_limit
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
@@ -64,6 +65,33 @@ class StubRuntimeConfig(ContractModel):
     checkpoint_readiness_interval_seconds: float = Field(default=1.0, gt=0)
     health_check_path: str = ""
     health_check_port: int = Field(default=0, ge=0, le=65535)
+
+    @field_validator("cpu")
+    @classmethod
+    def cpu_states_a_limit_above_its_request(cls, value: CpuRequest | None) -> CpuRequest | None:
+        # Replaces the `ge=0` the scalar field carried, and adds the ordering a
+        # pair makes possible to get wrong. Every writer of a stub config goes
+        # through this model, so refusing here is refusing at stub creation
+        # rather than at container start on a worker an hour later.
+        request, limit = request_and_limit(value)
+        for part in (request, limit):
+            if part is not None and float(part) < 0:
+                raise ValueError("cpu must be non-negative")
+        if request is not None and limit is not None and float(limit) < float(request):
+            raise ValueError("a cpu limit cannot sit below its request")
+        return value
+
+    @field_validator("memory")
+    @classmethod
+    def memory_states_a_limit_above_its_request(
+        cls, value: MemoryRequest | None
+    ) -> MemoryRequest | None:
+        request, limit = request_and_limit(value)
+        if request is None or limit is None:
+            return value
+        if (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0):
+            raise ValueError("a memory limit cannot sit below its request")
+        return value
 
     @field_validator("health_check_path")
     @classmethod

@@ -188,21 +188,39 @@ class ContainerResourceConfig(BaseModel):
             return DEFAULT_DISK
         return value
 
-    @field_validator("cpu", "memory")
+    @field_validator("cpu")
     @classmethod
-    def a_pair_states_a_limit_above_its_request(
-        cls, value: CpuRequest | MemoryRequest | None
-    ) -> CpuRequest | MemoryRequest | None:
+    def a_cpu_limit_cannot_sit_below_its_request(
+        cls, value: CpuRequest | None
+    ) -> CpuRequest | None:
+        # Compared as cores, not through the memory parser: that parser returns
+        # whole mebibytes, so every CPU figure below one core collapsed to zero
+        # and an inverted fractional pair compared equal.
+        request, limit = request_and_limit(value)
+        for part in (request, limit):
+            if part is not None and float(part) < 0:
+                raise ValueError("cpu must be non-negative")
+        if request is not None and limit is not None and float(limit) < float(request):
+            # A ceiling under the reservation is a container guaranteed more than
+            # it may use, which the kernel resolves by killing it.
+            raise ValueError("a cpu limit cannot sit below its request")
+        return value
+
+    @field_validator("memory")
+    @classmethod
+    def a_memory_limit_cannot_sit_below_its_request(
+        cls, value: MemoryRequest | None
+    ) -> MemoryRequest | None:
         request, limit = request_and_limit(value)
         for part in (request, limit):
             if part is not None and (parse_memory_mib(part) or 0) < 0:
-                raise ValueError("resource values must be non-negative")
-        if limit is None:
-            return value
-        # A ceiling under the reservation is a container guaranteed more than it
-        # is allowed to use, which the kernel resolves by killing it.
-        if (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0):
-            raise ValueError("a resource limit cannot sit below its request")
+                raise ValueError("memory must be non-negative")
+        if (
+            request is not None
+            and limit is not None
+            and (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0)
+        ):
+            raise ValueError("a memory limit cannot sit below its request")
         return value
 
     @property

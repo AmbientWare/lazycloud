@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
+from compute.offers import schedulable_capacity
 from compute.state import ComputeAgentTokenState
 from scheduler.agent_pool import (
     AgentPoolConfig,
@@ -47,8 +48,12 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
     assert worker.status is SchedulerWorkerStatus.Pending
     assert worker.pool == "gpu"
     assert worker.machine_id == "machine-one"
-    assert worker.total_cpu_millicores == 4000
-    assert worker.total_memory_mib == 8192
+    # Less than the machine physically holds. The agent and the container
+    # runtime are already on it, and offer selection bought it on that basis.
+    assert worker.total_cpu_millicores == schedulable_capacity(4000)
+    assert worker.total_memory_mib == schedulable_capacity(8192)
+    # Cards are discrete and are not shared with the platform, so they are not
+    # reduced.
     assert worker.total_gpu_count == 1
     assert worker.gpu_type == "A4000"
 

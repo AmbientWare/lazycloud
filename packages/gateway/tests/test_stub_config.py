@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
+import pytest
 from api.server.services import ApiServices
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
-from gateway.stub_config import stub_config
+from database.repositories.apps import StubRecord
+from gateway.stub_config import deployment_spec_from_stub, stub_config
+from pydantic import ValidationError
+from shared.deployment_records import request_and_limit
 from shared.deployments import DeploymentKind
 from shared.http.gateway import DeployStubRequest, GetOrCreateStubRequest
+from shared.workload_config import StubConfig
 from tests.redis_fakes import FakeRedis
 
 
@@ -60,3 +66,50 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
     assert deployment_stub.config.runtime.checkpoint_readiness_port == 8080
     assert deployment_stub.config.runtime.checkpoint_readiness_timeout_seconds == 60
     assert deployment_stub.config.runtime.checkpoint_readiness_interval_seconds == 0.25
+
+
+def test_a_resource_ceiling_survives_being_stored_and_read_back() -> None:
+    """`cpu=(1, 4)` has to reach the deploy that reads the stub back.
+
+    The pair crosses JSON to reach the stub row, so it returns as a list rather
+    than the tuple its author wrote. Everything between here and the container
+    has to accept both, and the value has to still name a ceiling at the end.
+    """
+    request = GetOrCreateStubRequest(
+        name="paired-resources",
+        stub_type=DeploymentKind.Function.value,
+        cpu=(1.0, 4.0),
+        memory=("1Gi", "2Gi"),
+    )
+
+    stored = json.loads(stub_config(request).model_dump_json())
+    runtime = StubConfig.model_validate(stored).runtime
+
+    assert request_and_limit(runtime.cpu) == (1.0, 4.0)
+    assert request_and_limit(runtime.memory) == ("1Gi", "2Gi")
+
+    spec = deployment_spec_from_stub(
+        StubRecord(
+            id="stub-1",
+            workspace_id="workspace-1",
+            name="paired-resources",
+            config=StubConfig.model_validate(stored),
+        ),
+        name="paired-resources",
+    )
+    assert request_and_limit(spec.resources.cpu) == (1.0, 4.0)
+    assert request_and_limit(spec.resources.memory) == ("1Gi", "2Gi")
+
+
+def test_a_ceiling_below_its_request_is_refused_at_the_public_boundary() -> None:
+    """Refused where it is written, not at container start on a worker."""
+    for cpu, memory in (((0.5, 0.25), None), (None, ("2Gi", "1Gi"))):
+        with pytest.raises(ValidationError):
+            stub_config(
+                GetOrCreateStubRequest(
+                    name="inverted",
+                    stub_type=DeploymentKind.Function.value,
+                    cpu=cpu,
+                    memory=memory,
+                )
+            )
