@@ -164,6 +164,12 @@ x-container-worker-settings: &container-worker-settings
   restart: unless-stopped
   privileged: true
   cgroup: host
+  # The slot a deployed worker gets from the agent, so a local one is bounded the
+  # same way. Without it the worker's cgroup is unlimited, its memory pressure
+  # describes the whole development machine rather than its own share, and the
+  # eviction watcher correctly refuses to run -- which means the path is never
+  # exercised anywhere a person would notice it breaking.
+  mem_limit: "${LAZYCLOUD_WORKER_MEMORY_LIMIT:-4g}"
   cap_add:
     - NET_ADMIN
     - SYS_ADMIN
