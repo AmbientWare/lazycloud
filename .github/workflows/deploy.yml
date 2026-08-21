@@ -18,9 +18,19 @@ on:
         description: Deployment prefix the ECR repositories and secrets carry
         type: string
         default: lazycloud-prod
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      deployment:
+        description: Deployment prefix the ECR repositories and secrets carry
+        type: string
+        default: lazycloud-prod
+      release_manifest_url:
+        description: |
+          Release this deployment should run. Empty keeps whichever release it
+          already runs, so a code-only deploy does not silently take the fleet's
+          managed capacity away.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -40,6 +50,7 @@ jobs:
     env:
       DEPLOYMENT: ${{ inputs.deployment || 'lazycloud-prod' }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -118,8 +129,34 @@ jobs:
             -backend-config="region=$AWS_REGION"
           terraform -chdir=deploy/platform-aws output -json runtime_configuration >runtime.json
           terraform -chdir=deploy/platform-aws output -json secret_environment >secret-map.json
+          bucket="$(terraform -chdir=deploy/platform-aws output -raw deploy_bucket)"
+
+          # Which release this deployment runs is a fact about the deployment,
+          # not about its infrastructure, so it is not a Terraform output. It
+          # lives beside the bundle, in the bucket Terraform does own, and is
+          # therefore destroyed with the stack rather than outliving it.
+          pointer="s3://${bucket}/current/release-manifest-url"
+          if [ -z "${RELEASE_MANIFEST_URL}" ]; then
+            RELEASE_MANIFEST_URL="$(aws s3 cp "${pointer}" - 2>/dev/null || true)"
+          else
+            printf '%s' "${RELEASE_MANIFEST_URL}" | aws s3 cp - "${pointer}"
+          fi
+          if [ -z "${RELEASE_MANIFEST_URL}" ]; then
+            echo "::warning::No release named; this control plane will run without managed capacity."
+          else
+            echo "Release: ${RELEASE_MANIFEST_URL}"
+          fi
+          # Added only when there is one. Writing the variable empty is not the
+          # same as leaving it out: the host environment would then carry a blank
+          # URL, and a release that cannot be fetched is a different failure from
+          # a deployment that names no release.
+          if [ -n "${RELEASE_MANIFEST_URL}" ]; then
+            jq --arg url "${RELEASE_MANIFEST_URL}" \
+              '. + {LAZYCLOUD_RELEASE_MANIFEST_URL: $url}' runtime.json >runtime.merged.json
+            mv runtime.merged.json runtime.json
+          fi
           uv run --group workspace python deploy/bundle.py \
-            --bucket "$(terraform -chdir=deploy/platform-aws output -raw deploy_bucket)" \
+            --bucket "${bucket}" \
             --registry "${{ steps.ecr.outputs.registry }}" \
             --deployment "$DEPLOYMENT" \
             --digests digests.json \
