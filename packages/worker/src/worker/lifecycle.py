@@ -24,7 +24,6 @@ from worker.execution import (
     CONTAINER_INNER_PORT,
     OciLinuxCpu,
     OciLinuxMemory,
-    OciLinuxResources,
     OciMount,
     OciMountType,
     PortBinding,
@@ -151,14 +150,6 @@ class AppliedContainerResources(ContractModel):
     @property
     def has_memory(self) -> bool:
         return self.memory is not None
-
-
-class ContainerResourceApplicationPlan(ContractModel):
-    resources: AppliedContainerResources
-    deferred_cpu: OciLinuxCpu | None = None
-    cpu_enforced: bool = False
-    memory_enforced: bool = False
-    sandbox_cpu_deferred: bool = False
 
 
 class DeferredCpuApplyPlan(ContractModel):
@@ -371,36 +362,6 @@ def plan_runtime_started_wait(
     return RuntimeStartedWaitPlan(
         action=RuntimeStartedWaitAction.Await,
         reason=RuntimeStartedWaitReason.Waiting,
-    )
-
-
-def plan_container_resource_application(
-    resources: OciLinuxResources,
-    *,
-    cpu_enforced: bool,
-    memory_enforced: bool,
-    sandbox: bool = False,
-    runtime_can_update_resources: bool = False,
-) -> ContainerResourceApplicationPlan:
-    applied_cpu = resources.cpu if cpu_enforced else None
-    deferred_cpu: OciLinuxCpu | None = None
-    sandbox_cpu_deferred = False
-    if applied_cpu is not None and sandbox and runtime_can_update_resources:
-        deferred_cpu = applied_cpu
-        applied_cpu = None
-        sandbox_cpu_deferred = True
-
-    applied_memory = resources.memory if memory_enforced else None
-    return ContainerResourceApplicationPlan(
-        resources=AppliedContainerResources(
-            cpu=applied_cpu,
-            memory=applied_memory,
-            deferred=dict(resources.deferred) if memory_enforced else {},
-        ),
-        deferred_cpu=deferred_cpu,
-        cpu_enforced=cpu_enforced,
-        memory_enforced=memory_enforced,
-        sandbox_cpu_deferred=sandbox_cpu_deferred,
     )
 
 

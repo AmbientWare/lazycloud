@@ -335,6 +335,16 @@ def run_container_worker(
                                     f"(memory stall {eviction.pressure_percent:.1f}%)",
                                     file=sys.stderr,
                                 )
+                            elif eviction.pressure_percent >= (memory_watcher.threshold_percent):
+                                # A machine in stall that this worker will not act
+                                # on is the case an operator most needs to see: the
+                                # kernel is about to choose instead, by size.
+                                print(
+                                    f"memory stall {eviction.pressure_percent:.1f}% "
+                                    f"with no eviction: {eviction.reason} "
+                                    f"({eviction.considered} containers considered)",
+                                    file=sys.stderr,
+                                )
                         result = worker_services.processor.run_once()
                         if result.processed:
                             last_request_at = now

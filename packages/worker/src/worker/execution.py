@@ -30,7 +30,12 @@ from shared.env import (
 )
 from shared.routing import BackendRouteTransport
 
-from worker.runtime_config import OciRuntimeName, OomWatcherKind, RuntimeCapabilities
+from worker.runtime_config import (
+    DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
+    OciRuntimeName,
+    OomWatcherKind,
+    RuntimeCapabilities,
+)
 
 CGROUP_V2_OOM_GROUP_PARAMETER = "memory.oom.group"
 CGROUP_V2_MEMORY_HIGH_PARAMETER = "memory.high"
@@ -661,11 +666,17 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         # is unreachable, so the container is killed at the wall having never
         # been slowed down -- the opposite of what these two values are for.
         high_mib = min(requested_high, hard_mib)
-        if high_mib >= hard_mib > request.memory_mib:
-            # And it has to sit below the wall, not on it. Reclaim beginning at
-            # the point the kernel would kill leaves no room to reclaim in, so
-            # the throttle buys nothing at exactly the moment it is needed.
-            high_mib = hard_mib - max((hard_mib - request.memory_mib) // 10, 1)
+        # And it has to sit below both walls, not on them. Reclaim beginning where
+        # the kernel would kill leaves no room to reclaim in; and the sandbox
+        # OOM watcher trips at a percentage of the same ceiling, so a throttle
+        # above that point is one the watcher reaches first -- the container
+        # killed having never been slowed, which is what these two values exist
+        # to avoid.
+        watcher_trips_at = int(hard_mib * DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT / 100)
+        high_mib = min(high_mib, watcher_trips_at - 1)
+        if hard_mib > request.memory_mib:
+            high_mib = min(high_mib, hard_mib - max((hard_mib - request.memory_mib) // 10, 1))
+        high_mib = max(high_mib, request.memory_mib)
         limit = hard_mib * MIB
         if not request.memory_mib <= high_mib <= hard_mib:
             raise ValueError(

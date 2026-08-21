@@ -313,6 +313,10 @@ class OciRuntimeSpecBuilder:
             env=env,
             cwd=context.cwd or self.cwd,
             hostname=context.request.container_id,
+            # Places the container's cgroup inside this worker's, which is what
+            # keeps it inside the worker's memory bound and visible to the
+            # pressure reading the eviction watcher gates on.
+            container_id=context.request.container_id,
             readonly_rootfs=self.readonly_rootfs,
             container_cli_source=self._container_cli_source(),
             container_cli_path=self.container_cli_path,

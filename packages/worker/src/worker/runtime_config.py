@@ -391,18 +391,27 @@ def plan_runtime_command(
 
 
 CGROUP_ROOT = "/sys/fs/cgroup"
-CONTAINER_CGROUP_PARENT = "lazycloud"
 
 
-def container_cgroup_path(container_id: str) -> str:
-    """Where this container's cgroup lives, chosen rather than inferred.
+def container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
+    """Where this container's cgroup goes: inside the worker's own.
 
-    runsc creates a cgroup named after the container id when the spec names no
-    path, which works but makes the location an implementation detail of the
-    runtime. Naming it here means the worker can find it afterwards to write the
-    settings runsc does not apply itself.
+    Nested rather than beside it, and that is the whole point. A cgroup at the
+    root is outside the worker's `--memory` bound, so its containers escape the
+    slot the agent gave them; and their growth never reaches the
+    `memory.pressure` the eviction watcher reads, so the trigger never fires.
+    Both things this subsystem rests on are properties of being underneath.
+
+    Naming it at all is what lets the worker find the cgroup afterwards to write
+    the settings runsc will not apply itself. Empty when the worker's own cgroup
+    cannot be found, which leaves the runtime to choose: worse, but not wrong in
+    a way that silently escapes a bound.
     """
-    return posixpath.join("/", CONTAINER_CGROUP_PARENT, container_id)
+    worker = worker_cgroup_path(root=root)
+    if not worker or not container_id:
+        return ""
+    relative = posixpath.relpath(worker, root)
+    return posixpath.join("/", relative, container_id)
 
 
 def apply_unsupported_cgroup_parameters(
@@ -423,7 +432,10 @@ def apply_unsupported_cgroup_parameters(
     than leaving a container running under settings nobody installed.
     """
     written: dict[str, str] = {}
-    directory = Path(root, CONTAINER_CGROUP_PARENT, container_id)
+    relative = container_cgroup_path(container_id, root=root)
+    if not relative:
+        return written
+    directory = Path(root, relative.lstrip("/"))
     for name, value in parameters.items():
         try:
             (directory / name).write_text(value, encoding="utf-8")
@@ -605,6 +617,19 @@ def read_worker_cpu_millicores() -> int:
     if quota is not None:
         return quota
     return (os.cpu_count() or 0) * 1000
+
+
+def worker_memory_limit_mib() -> int | None:
+    """The worker's own cgroup memory bound, or None when it has none.
+
+    Distinct from `read_worker_memory_mib`, which falls back to the machine so a
+    ceiling always has something to clamp against. Anything asking "does this
+    worker own its memory" has to ask this one: the fallback answers with the
+    host, and gating on it enables the watcher on exactly the unbounded workers
+    it is meant to skip.
+    """
+    limit = _read_cgroup_limit("memory.max")
+    return None if limit is None else limit // MIB
 
 
 def _read_cgroup_limit(name: str) -> int | None:

@@ -86,6 +86,15 @@ class ContainerExitCode(IntEnum):
     User = 560
     Admin = 561
     Preempted = 562
+    MemoryEvicted = 563
+    """Its own code, and the reason this feature has one.
+
+    A force-killed container exits 137, which is also `OomKill` -- the code
+    that tells a customer their container exceeded its own memory limit. An
+    evicted container did not: it was inside its ceiling and the platform
+    stopped it because the machine ran short. Reporting both the same way is
+    exactly the misattribution the stop reason exists to prevent.
+    """
 
 
 class WorkerPoolMode(StrEnum):
@@ -437,6 +446,10 @@ def normalize_container_exit_code(
         return int(ContainerExitCode.Preempted)
     if reason is StopContainerReason.Admin:
         return int(ContainerExitCode.Admin)
+    if reason is StopContainerReason.MemoryEvicted:
+        # Before the `oom_killed` branch: an eviction is a SIGKILL and the
+        # runtime reports it as an OOM, which is the confusion being avoided.
+        return int(ContainerExitCode.MemoryEvicted)
     if oom_killed:
         return int(ContainerExitCode.OomKill)
     if exit_code < 0:

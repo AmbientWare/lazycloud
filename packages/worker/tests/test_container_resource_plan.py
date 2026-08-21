@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 from worker.execution import MIB, ContainerResourceRequest, plan_oci_linux_resources
+from worker.runtime_config import (
+    CGROUP_ROOT,
+    build_base_oci_config,
+    container_cgroup_path,
+    worker_cgroup_path,
+)
 
 
 def test_the_request_is_reserved_and_the_ceiling_sits_above_it() -> None:
@@ -114,3 +122,34 @@ def test_a_container_can_reclaim_rather_than_die_at_its_ceiling() -> None:
     high = int(resources.deferred["memory.high"])
     assert resources.memory.reservation_bytes < high <= resources.memory.limit_bytes
     assert resources.memory.swap_bytes > resources.memory.limit_bytes
+
+
+def test_the_spec_names_a_cgroup_inside_the_worker_own() -> None:
+    """The wiring, not the arithmetic — which is what kept breaking.
+
+    Every value in this module is correct only if the spec that carries them
+    names a cgroup, and that cgroup sits under the worker's. Named nowhere, runsc
+    picks a path of its own and the settings written afterwards land on a
+    directory that does not exist. Placed beside the worker rather than inside
+    it, containers escape the worker's memory bound and their growth never
+    reaches the pressure reading eviction depends on.
+    """
+    worker = worker_cgroup_path()
+    assert worker, "this test needs a worker cgroup to nest under"
+
+    spec = build_base_oci_config(container_id="container-abc")
+    linux = spec["linux"]
+    assert isinstance(linux, dict)
+    path = linux["cgroupsPath"]
+
+    assert path == container_cgroup_path("container-abc")
+    assert str(path).endswith("/container-abc")
+    # Underneath the worker's own cgroup, not a sibling of it.
+    assert str(Path(CGROUP_ROOT, str(path).lstrip("/")).parent) == worker
+
+
+def test_a_spec_built_without_a_container_names_no_cgroup() -> None:
+    """Better to leave the runtime to choose than to place one at the root."""
+    linux = build_base_oci_config()["linux"]
+    assert isinstance(linux, dict)
+    assert "cgroupsPath" not in linux

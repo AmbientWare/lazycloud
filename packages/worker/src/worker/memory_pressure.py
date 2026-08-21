@@ -13,6 +13,7 @@ is what the pressure reading is for.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ from shared.container_requests import (
     select_memory_eviction_candidate,
 )
 from shared.contracts import ContractModel
+
+LOGGER = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
 
@@ -117,7 +120,26 @@ class WorkerMemoryPressureWatcher:
                 reason="nothing is above its reservation",
             )
 
-        self.stop_container(candidate.container_id, StopContainerReason.MemoryEvicted)
+        try:
+            self.stop_container(candidate.container_id, StopContainerReason.MemoryEvicted)
+        except Exception as error:
+            # Reported, not raised. This runs inside the worker's main loop, and
+            # letting it escape skips the rest of the pass -- the loop stops
+            # taking scheduler work while the machine is still short of memory.
+            LOGGER.warning(
+                "could not evict %s: %s: %s",
+                candidate.container_id,
+                type(error).__name__,
+                error,
+            )
+            return MemoryEvictionResult(
+                pressure_percent=pressure,
+                considered=len(readings),
+                reason=f"eviction of {candidate.container_id} failed",
+            )
+        # Only once something was actually stopped. A cooldown started by a
+        # no-op leaves the machine in stall for its whole length with the
+        # watcher declining to act.
         self._evicted_at = now
         return MemoryEvictionResult(
             pressure_percent=pressure,

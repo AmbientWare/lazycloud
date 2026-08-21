@@ -78,6 +78,7 @@ from worker.runtime_config import (
     read_worker_cpu_millicores,
     read_worker_memory_mib,
     worker_cgroup_path,
+    worker_memory_limit_mib,
 )
 from worker.scheduler_requests import (
     WorkerSchedulerRequestContainerRepository,
@@ -404,8 +405,11 @@ def _memory_pressure_watcher(
     the host grew.
     """
     cgroup_path = worker_cgroup_path()
-    memory_mib = read_worker_memory_mib()
-    if not cgroup_path or memory_mib <= 0:
+    # The cgroup's own bound, not the reader that falls back to the machine: the
+    # fallback answers with the host, which enables the watcher on exactly the
+    # unbounded workers this is meant to skip.
+    memory_mib = worker_memory_limit_mib()
+    if not cgroup_path or not memory_mib or memory_mib <= 0:
         # Said out loud. A worker that silently does not watch looks exactly like
         # one that does, right up until the kernel picks a victim by size.
         LOGGER.warning(
