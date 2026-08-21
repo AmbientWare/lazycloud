@@ -94,7 +94,7 @@ class AwsAccountComputeConfiguration(ContractModel):
 
     revision: int = Field(default=1, ge=1)
     default_region: str = Field(default="us-east-1", pattern=AWS_REGION_PATTERN)
-    default_instance_type: str = Field(default="i4i.xlarge", min_length=1, max_length=64)
+    default_instance_type: str = Field(default="m7i.large", min_length=1, max_length=64)
     initial_cpu_workers: int = Field(default=1, ge=0, le=100)
     min_cpu_workers: int = Field(default=1, ge=0, le=100)
     max_cpu_instances: int = Field(default=10, ge=0, le=100)

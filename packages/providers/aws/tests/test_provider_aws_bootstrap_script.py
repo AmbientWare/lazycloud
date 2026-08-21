@@ -32,7 +32,7 @@ def _spec() -> AwsManagedPoolSpec:
         workspace_id="12345678-1234-4123-8123-123456789abc",
         unit_name=UnitName("bootstrap"),
         region="us-east-1",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         ami_id="ami-0123456789abcdef0",
         desired_nodes=0,
         max_nodes=1,

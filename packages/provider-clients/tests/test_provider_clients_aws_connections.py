@@ -88,7 +88,7 @@ def _enabled_settings() -> _AwsOwnerSettings:
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
-            instance_hourly_micros={"i4i.xlarge": 340_000},
+            instance_hourly_micros={"m7i.xlarge": 340_000},
             cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
             gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
         ),
@@ -151,7 +151,7 @@ def test_aws_compute_catalog_only_includes_launchable_priced_region_types() -> N
             },
             "instance_hourly_micros": {
                 "g6.xlarge": 804_000,
-                "i4i.xlarge": 340_000,
+                "m7i.xlarge": 340_000,
             },
         }
     )
@@ -162,9 +162,9 @@ def test_aws_compute_catalog_only_includes_launchable_priced_region_types() -> N
     )
 
     assert [region.region for region in catalog] == ["us-east-1", "us-west-2"]
-    assert [instance.instance_type for instance in catalog[0].instances] == ["i4i.xlarge"]
+    assert [instance.instance_type for instance in catalog[0].instances] == ["m7i.xlarge"]
     assert [instance.instance_type for instance in catalog[1].instances] == [
-        "i4i.xlarge",
+        "m7i.xlarge",
         "g6.xlarge",
     ]
 

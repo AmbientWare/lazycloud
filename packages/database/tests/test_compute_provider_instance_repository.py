@@ -32,8 +32,8 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
         instance = ComputeProviderInstanceRecord(
             id=str(uuid4()),
             provider="aws",
-            offer_id="i4i.xlarge:us-east-1",
-            instance_type="i4i.xlarge",
+            offer_id="m7i.xlarge:us-east-1",
+            instance_type="m7i.xlarge",
             instance_id="i-0123456789abcdef0",
             status="running",
             source="pooled",
@@ -76,8 +76,8 @@ def test_unbinding_releases_only_the_machine_it_names(
         instance = ComputeProviderInstanceRecord(
             id=str(uuid4()),
             provider="aws",
-            offer_id="i4i.xlarge:us-east-1",
-            instance_type="i4i.xlarge",
+            offer_id="m7i.xlarge:us-east-1",
+            instance_type="m7i.xlarge",
             instance_id="i-0abcdef0123456789",
             status="running",
             source="pooled",

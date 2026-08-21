@@ -56,6 +56,10 @@ output "runtime_configuration" {
     LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID          = ""
     LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY      = ""
     LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE       = "false"
+    # JSON, because the settings field is a map and the host environment carries
+    # strings. Empty advertises no instance types, which is a control plane with
+    # no managed capacity rather than a failure.
+    LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS = jsonencode(var.instance_hourly_micros)
   }
 }
 

@@ -195,7 +195,7 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsCon
     compute: {
       revision: 1,
       default_region: "us-east-1",
-      default_instance_type: "i4i.xlarge",
+      default_instance_type: "m7i.xlarge",
       initial_cpu_workers: 1,
       min_cpu_workers: 1,
       max_cpu_instances: 10,

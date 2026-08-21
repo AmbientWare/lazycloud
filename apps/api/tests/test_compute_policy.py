@@ -143,7 +143,8 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
         },
         instance_hourly_micros={
             "g6.xlarge": 804_000,
-            "i4i.xlarge": 340_000,
+            "m7i.large": 100_800,
+            "m7i.xlarge": 201_600,
         },
     )
     return _AwsCatalogConfiguration(
@@ -289,8 +290,8 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 capacity_mode=ComputeCapacityMode.Pooled,
                 visibility=ComputeUnitVisibility.Internal,
                 region="us-east-1",
-                offer_id="us-east-1:i4i.xlarge",
-                capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+                offer_id="us-east-1:m7i.xlarge",
+                capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
                 max_machines=3,
             )
         )
@@ -345,11 +346,11 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 ComputeProviderInstanceRecord(
                     id=str(uuid4()),
                     provider="aws",
-                    offer_id="us-east-1:i4i.xlarge",
+                    offer_id="us-east-1:m7i.xlarge",
                     status=status,
                     source="pooled",
                     pool_id=pool_id,
-                    instance_type="i4i.xlarge",
+                    instance_type="m7i.xlarge",
                     instance_id=f"i-{uuid4().hex[:17]}",
                     machine_id=ready_machine_id if status == "active" else None,
                     hourly_cost_micros=hourly_cost_micros,
@@ -617,8 +618,8 @@ class _RecordingPooledCapacity:
             capacity_mode=ComputeCapacityMode.Pooled,
             visibility=ComputeUnitVisibility.Internal,
             region=region,
-            offer_id="us-east-1:i4i.xlarge",
-            capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+            offer_id="us-east-1:m7i.xlarge",
+            capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
             desired_machines=desired_machines,
             max_machines=workspace_machine_limit,
         )

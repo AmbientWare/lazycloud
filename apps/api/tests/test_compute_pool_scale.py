@@ -45,7 +45,7 @@ from tests.service_fixtures import (
 )
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
-_OFFER_ID = "us-east-1:i4i.xlarge"
+_OFFER_ID = "us-east-1:m7i.large"
 _PROVIDER_REF = f"aws:{_CONNECTION_ID}"
 
 
@@ -79,14 +79,14 @@ class _PooledProvider:
                 id=_OFFER_ID,
                 provider=_PROVIDER_REF,
                 cloud="aws",
-                instance_type="i4i.xlarge",
+                instance_type="m7i.large",
                 region="us-east-1",
-                cpu_millicores=4_000,
-                memory_mb=32 * 1_024,
+                cpu_millicores=2_000,
+                memory_mb=8 * 1_024,
                 storage_mb=200 * 1_024,
                 available=10,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+                capability_key="aws:us-east-1:m7i.large:amd64:runsc",
                 supports_scale_to_zero=True,
             ),
         )

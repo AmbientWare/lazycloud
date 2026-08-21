@@ -394,7 +394,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     baseline = compute.reconcile_aws_default_capacity(
         workspace="default",
         region="us-east-1",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
         max_machines=10,
@@ -425,7 +425,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     baseline = compute.reconcile_aws_default_capacity(
         workspace="default",
         region="us-east-1",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
         max_machines=10,
@@ -1433,7 +1433,7 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     baseline = compute.reconcile_aws_default_capacity(
         workspace="default",
         region="us-east-1",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
         max_machines=10,
@@ -1481,7 +1481,7 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
         return compute.reconcile_aws_default_capacity(
             workspace="default",
             region="us-east-1",
-            instance_type="i4i.xlarge",
+            instance_type="m7i.xlarge",
             initial_machines=floor,
             min_machines=floor,
             max_machines=ceiling,
@@ -1525,7 +1525,7 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
     pool = compute.reconcile_aws_default_capacity(
         workspace="default",
         region="us-east-1",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
         max_machines=10,
@@ -1609,10 +1609,10 @@ def _mark_open_record_booting(
 
 def _offer() -> ComputeOffer:
     return ComputeOffer(
-        id="us-east-1:i4i.xlarge",
+        id="us-east-1:m7i.xlarge",
         provider="aws:11111111-1111-4111-8111-111111111111",
         cloud="aws",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         region="us-east-1",
         cpu_millicores=4_000,
         memory_mb=32 * 1024,
@@ -1620,7 +1620,7 @@ def _offer() -> ComputeOffer:
         hourly_cost_micros=340_000,
         available=10,
         capacity_mode=ComputeCapacityMode.Pooled,
-        capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+        capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
         supports_scale_to_zero=True,
     )
 
