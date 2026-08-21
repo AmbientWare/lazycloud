@@ -519,6 +519,28 @@ def read_machine_memory_mib(*, path: str = MEMINFO_PATH) -> int:
         return 0
 
 
+CGROUP_ROOT = "/sys/fs/cgroup"
+
+
+def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/cgroup") -> str:
+    """This process's own cgroup, or empty when it does not have a distinct one.
+
+    Empty at the root, and that is the case worth naming: a worker sharing a host
+    with another one reads the machine's pressure rather than its own, and acting
+    on it would stop this worker's containers because a neighbour grew. The
+    Compose stack runs exactly that way, with an `agent` and a `container-worker`
+    on one host.
+    """
+    try:
+        relative = parse_proc_cgroup_path(Path(proc_self).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not relative or relative == "/":
+        return ""
+    candidate = Path(root, relative)
+    return str(candidate) if (candidate / "memory.pressure").exists() else ""
+
+
 def read_memory_pressure_percent(cgroup_path: str) -> float:
     """Full memory stall over the last ten seconds, or zero when unreadable.
 

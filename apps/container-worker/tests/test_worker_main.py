@@ -234,3 +234,4 @@ class _Services:
     event_source: None = None
     worker_events: None = None
     retention: None = None
+    memory_watcher: None = None

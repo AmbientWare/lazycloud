@@ -43,6 +43,10 @@ from .container_service_http import (
 )
 
 WORKER_EVENT_POLL_INTERVAL_SECONDS = 0.1
+# Fast, because the thing this races is the kernel's OOM killer. A machine under
+# full memory stall is seconds from having the decision made for it, by a rule
+# that scores resident size and has never read anyone's reservation.
+WORKER_MEMORY_PRESSURE_INTERVAL_SECONDS = 2.0
 WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS = 0.2
 WORKER_EVENT_PUBSUB_TIMEOUT_SECONDS = 0.05
 WORKER_EVENT_BATCH_SIZE = 1
@@ -312,9 +316,25 @@ def run_container_worker(
                     ),
                 )
                 last_request_at = time.monotonic()
+                last_pressure_check_at = 0.0
+                memory_watcher = worker_services.memory_watcher
                 while not shutdown_event.is_set():
                     try:
                         now = time.monotonic()
+                        if (
+                            memory_watcher is not None
+                            and now - last_pressure_check_at
+                            >= WORKER_MEMORY_PRESSURE_INTERVAL_SECONDS
+                        ):
+                            last_pressure_check_at = now
+                            eviction = memory_watcher.run_once()
+                            if eviction.evicted:
+                                print(
+                                    "evicted container "
+                                    f"{eviction.evicted_container_id}: {eviction.reason} "
+                                    f"(memory stall {eviction.pressure_percent:.1f}%)",
+                                    file=sys.stderr,
+                                )
                         result = worker_services.processor.run_once()
                         if result.processed:
                             last_request_at = now

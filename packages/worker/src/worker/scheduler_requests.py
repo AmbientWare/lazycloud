@@ -39,6 +39,7 @@ from worker.image_build_execution import (
     is_image_build_scheduler_request,
 )
 from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
+from worker.memory_pressure import ResidentContainer
 from worker.monitoring import WorkerUsageWindowRecorder
 from worker.status import (
     WorkerDeliveredRequestPlan,
@@ -141,6 +142,8 @@ class _BackgroundExecution:
     request: SchedulerWorkerRequest
     thread: threading.Thread | None = None
     result: WorkerSchedulerRequestResult | None = None
+    cgroup_path: str = ""
+    """Where this container's memory is accounted, once the runtime has placed it."""
 
 
 @dataclass(slots=True)
@@ -450,7 +453,7 @@ class WorkerSchedulerRequestProcessor:
         # polls again immediately, and the acknowledgement has to be in flight
         # before it does or every background start costs a redelivery.
         self._take_container(context)
-        active = _BackgroundExecution(request=request)
+        active = _BackgroundExecution(request=request, cgroup_path=context.cgroup_path or "")
         thread = threading.Thread(
             target=self._run_background,
             args=(active, context),
@@ -468,6 +471,22 @@ class WorkerSchedulerRequestProcessor:
             request=request,
             background=True,
         )
+
+    def resident_containers(self) -> list[ResidentContainer]:
+        """The containers this worker is holding, and what each was promised.
+
+        Background executions only. A foreground container runs inside the call
+        that started it, so the loop asking this question is not running while
+        one exists.
+        """
+        return [
+            ResidentContainer(
+                container_id=container_id,
+                cgroup_path=active.cgroup_path,
+                reserved_mib=active.request.memory_mib,
+            )
+            for container_id, active in self._background.items()
+        ]
 
     def _run_background(
         self,

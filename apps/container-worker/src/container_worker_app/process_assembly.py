@@ -67,11 +67,17 @@ from worker.image_build_execution import (
     WorkerImageBuildExecutionService,
 )
 from worker.image_build_runtime_credentials import ImageBuildCredentialLoader
+from worker.memory_pressure import WorkerMemoryPressureWatcher
 from worker.monitoring import ContainerRuntimeMonitor
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
-from worker.runtime_config import read_machine_memory_mib
+from worker.runtime_config import (
+    read_container_memory_current,
+    read_machine_memory_mib,
+    read_memory_pressure_percent,
+    worker_cgroup_path,
+)
 from worker.scheduler_requests import (
     WorkerSchedulerRequestContainerRepository,
     WorkerSchedulerRequestProcessor,
@@ -180,6 +186,7 @@ class WorkerProcessServices:
     worker_events: WorkerStreamEventHandler
     event_source: WorkerProcessEventSource | None
     processor: WorkerSchedulerRequestProcessor
+    memory_watcher: WorkerMemoryPressureWatcher | None = None
     retention: WorkerRetentionService | None = None
 
 
@@ -330,6 +337,22 @@ def assemble_worker_process_services(
         and image_build_dependencies.image_archive_publisher is not None
         else None
     )
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id=identity.worker_id,
+        workers=worker_repository,
+        containers=container_repository,
+        execution=execution,
+        lifecycle=lifecycle,
+        image_builds=image_builds,
+        usage_recorder=usage_supervisor,
+        worker_gpu_type=registration.gpu_type,
+        # Read from the machine rather than configured: a figure someone set
+        # is one that can be wrong on a host nobody re-configured after
+        # resizing it, and this bounds what every container may hold.
+        node_cpu_millicores=(os.cpu_count() or 0) * 1000,
+        node_memory_mib=read_machine_memory_mib(),
+    )
+
     return WorkerProcessServices(
         identity=identity,
         workers=worker_repository,
@@ -348,20 +371,36 @@ def assemble_worker_process_services(
             worker_id=identity.worker_id,
         ),
         event_source=event_source,
-        processor=WorkerSchedulerRequestProcessor(
-            worker_id=identity.worker_id,
-            workers=worker_repository,
-            containers=container_repository,
-            execution=execution,
-            lifecycle=lifecycle,
-            image_builds=image_builds,
-            usage_recorder=usage_supervisor,
-            worker_gpu_type=registration.gpu_type,
-            # Read from the machine rather than configured: a figure someone set
-            # is one that can be wrong on a host nobody re-configured after
-            # resizing it, and this bounds what every container may hold.
-            node_cpu_millicores=(os.cpu_count() or 0) * 1000,
-            node_memory_mib=read_machine_memory_mib(),
-        ),
+        processor=processor,
+        memory_watcher=_memory_pressure_watcher(processor, stopper=runtime_stopper),
         retention=retention,
+    )
+
+
+def _memory_pressure_watcher(
+    processor: WorkerSchedulerRequestProcessor,
+    *,
+    stopper: WorkerRuntimeContainerStopper,
+) -> WorkerMemoryPressureWatcher | None:
+    """Watch this machine, if it is one whose memory this process accounts for.
+
+    A worker sharing a host with another one has no cgroup of its own to read,
+    and a pressure figure covering both would evict this worker's containers for
+    a neighbour's growth. Better to leave the kernel in charge than to act on a
+    reading that is not about us.
+    """
+    cgroup_path = worker_cgroup_path()
+    if not cgroup_path:
+        return None
+    return WorkerMemoryPressureWatcher(
+        worker_cgroup_path=cgroup_path,
+        residents=processor.resident_containers,
+        read_pressure_percent=read_memory_pressure_percent,
+        read_memory_current=read_container_memory_current,
+        # Forced, because a machine already out of memory is one where a graceful
+        # stop may never complete.
+        stop_container=lambda container_id, _reason: stopper.stop_container(
+            container_id,
+            force=True,
+        ),
     )
