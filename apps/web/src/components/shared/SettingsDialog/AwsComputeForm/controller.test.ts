@@ -235,7 +235,7 @@ function compute(
   return {
     revision,
     default_region: "us-east-1",
-    default_instance_type: "i4i.xlarge",
+    default_instance_type: "m7i.xlarge",
     initial_cpu_workers: 1,
     min_cpu_workers: 1,
     max_cpu_instances: overrides.maxCpuInstances ?? 10,

@@ -41,8 +41,13 @@ def normalize_instance_prices(value: Mapping[str, int]) -> dict[str, int]:
         instance_type = raw_instance_type.strip().lower()
         if not instance_type:
             raise ValueError("AWS capacity instance price keys cannot be empty")
-        if hourly_micros < 0:
-            raise ValueError("AWS capacity instance prices cannot be negative")
+        if hourly_micros <= 0:
+            # Zero is the dangerous one. Offers are ranked by cost per node, so a
+            # free instance hour wins every comparison it is entered in, and the
+            # AWS price list answers zero for types with no published on-demand
+            # rate rather than declining to answer. An instance whose price is
+            # not known is left out of this map and is simply not offered.
+            raise ValueError(f"AWS capacity instance price for {instance_type!r} must be positive")
         normalized[instance_type] = hourly_micros
     return normalized
 

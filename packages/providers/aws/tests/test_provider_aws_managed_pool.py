@@ -274,7 +274,7 @@ def _spec() -> AwsManagedPoolSpec:
         workspace_id="12345678-1234-4123-8123-123456789abc",
         unit_name=UnitName("acceptance"),
         region="us-east-1",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         ami_id="ami-0123456789abcdef0",
         desired_nodes=1,
         max_nodes=2,
@@ -395,10 +395,10 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
         provider_connection_id="12345678-1234-4123-8123-123456789abc",
         generation=1,
         offer=ComputeOffer(
-            id="us-east-1:i4i.xlarge",
+            id="us-east-1:m7i.xlarge",
             provider=provider_ref,
             cloud="aws",
-            instance_type="i4i.xlarge",
+            instance_type="m7i.xlarge",
             region="us-east-1",
             cpu_millicores=4_000,
             memory_mb=32_768,
@@ -406,7 +406,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
             hourly_cost_micros=340_000,
             available=100,
             capacity_mode=ComputeCapacityMode.Pooled,
-            capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+            capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
             supports_scale_to_zero=True,
         ),
         desired_machines=0,
@@ -440,8 +440,8 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"i4i.xlarge": 340_000},
-        allowed_instance_types=frozenset({"i4i.xlarge"}),
+        instance_hourly_micros={"m7i.xlarge": 340_000},
+        allowed_instance_types=frozenset({"m7i.xlarge"}),
         client_provider=_ClientProvider(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling)),
     )
     request = _pool_request(provider.provider_ref)
@@ -551,7 +551,7 @@ def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"i4i.xlarge": 340_000},
+        instance_hourly_micros={"m7i.xlarge": 340_000},
         allowed_instance_types=frozenset(),
         client_provider=_ClientProvider(
             AwsManagedPoolClients(ec2=_Ec2(), autoscaling=_AutoScaling())
@@ -579,7 +579,7 @@ def test_pooled_provider_does_not_offer_unpriced_instance_types() -> None:
                 gpu_ami_id="ami-1234567890abcdef0",
             )
         },
-        instance_hourly_micros={"i4i.xlarge": 340_000},
+        instance_hourly_micros={"m7i.xlarge": 340_000},
         allowed_instance_types=frozenset(),
         client_provider=_ClientProvider(
             AwsManagedPoolClients(ec2=_Ec2(), autoscaling=_AutoScaling())
@@ -588,7 +588,7 @@ def test_pooled_provider_does_not_offer_unpriced_instance_types() -> None:
 
     offers = list(provider.list_offers())
 
-    assert [offer.instance_type for offer in offers] == ["i4i.xlarge"]
+    assert [offer.instance_type for offer in offers] == ["m7i.xlarge"]
     assert offers[0].hourly_cost_micros == 340_000
 
 

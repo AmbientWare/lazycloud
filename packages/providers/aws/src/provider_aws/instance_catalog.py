@@ -26,7 +26,6 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
     memory_mb: int = Field(gt=0)
     gpu: GpuType | None = None
     gpu_count: int = Field(default=0, ge=0)
-    local_nvme: bool = True
 
     @model_validator(mode="after")
     def validate_accelerator(self) -> AwsInstanceCatalogEntry:
@@ -45,28 +44,88 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
 
 AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     AwsInstanceCatalogEntry(
-        instance_type="i4i.large",
+        instance_type="c7i.large",
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=2_000,
+        memory_mb=4 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="c7i.xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=4_000,
+        memory_mb=8 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="c7i.2xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=8_000,
         memory_mb=16 * 1024,
     ),
     AwsInstanceCatalogEntry(
-        instance_type="i4i.xlarge",
+        instance_type="c7i.4xlarge",
         kind=AwsInstanceCategory.Cpu,
-        cpu_millicores=4_000,
+        cpu_millicores=16_000,
         memory_mb=32 * 1024,
     ),
     AwsInstanceCatalogEntry(
-        instance_type="i4i.2xlarge",
+        instance_type="c7i.8xlarge",
         kind=AwsInstanceCategory.Cpu,
-        cpu_millicores=8_000,
+        cpu_millicores=32_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
-        instance_type="i4i.4xlarge",
+        instance_type="c7i.12xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=48_000,
+        memory_mb=96 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="c7i.16xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=64_000,
+        memory_mb=128 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.large",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=2_000,
+        memory_mb=8 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=4_000,
+        memory_mb=16 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.2xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=8_000,
+        memory_mb=32 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.4xlarge",
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
+        memory_mb=64 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.8xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=32_000,
         memory_mb=128 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.12xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=48_000,
+        memory_mb=192 * 1024,
+    ),
+    AwsInstanceCatalogEntry(
+        instance_type="m7i.16xlarge",
+        kind=AwsInstanceCategory.Cpu,
+        cpu_millicores=64_000,
+        memory_mb=256 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.xlarge",

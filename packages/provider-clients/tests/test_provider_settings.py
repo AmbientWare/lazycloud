@@ -62,7 +62,7 @@ def test_aws_capacity_settings_reject_partial_and_mutable_artifacts() -> None:
         ),
         cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
         gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
-        instance_hourly_micros={"i4i.xlarge": 340_000},
+        instance_hourly_micros={"m7i.xlarge": 340_000},
     )
     artifact = AgentBinarySettings(
         binary_dir=Path("/opt/lazycloud/agent"),
@@ -88,7 +88,7 @@ def test_a_deployment_that_wants_no_gpus_can_still_use_aws() -> None:
             "lazycloud-agent-linux-amd64"
         ),
         cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
-        instance_hourly_micros={"i4i.xlarge": 340_000},
+        instance_hourly_micros={"m7i.xlarge": 340_000},
     )
 
     assert capacity.configured

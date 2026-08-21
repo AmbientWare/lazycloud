@@ -92,7 +92,7 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
         _release_manifest(),
         agent_binaries=AgentBinaryEnvironmentSettings(binary_dir=Path("/var/lib/lazycloud/agent")),
         aws_capacity=AwsCapacityEnvironmentSettings(
-            instance_hourly_micros={"i4i.xlarge": 340_000},
+            instance_hourly_micros={"m7i.xlarge": 340_000},
         ),
         aws_connections=AwsAccountConnectionEnvironmentSettings(
             enabled=True,

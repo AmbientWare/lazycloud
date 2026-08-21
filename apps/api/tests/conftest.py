@@ -60,7 +60,7 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
             ),
             cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
             gpu_ami_ids={"us-east-1": "ami-00000000000000000"},
-            instance_hourly_micros={"test.instance": 0},
+            instance_hourly_micros={"test.instance": 1},
         ),
         map_service=maps,
         simple_queue_service=simple_queues,

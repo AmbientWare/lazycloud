@@ -75,7 +75,7 @@ _ROLE_NAME = "compute-node"
 _NODE_ROLE_ARN = f"arn:aws:iam::{_ACCOUNT_ID}:role/{_ROLE_NAME}"
 _NODE_PROFILE_ARN = f"arn:aws:iam::{_ACCOUNT_ID}:instance-profile/{_ROLE_NAME}"
 _ASG_NAME = "workspace-compute-pool"
-_OFFER_ID = f"{_REGION}:i4i.xlarge"
+_OFFER_ID = f"{_REGION}:m7i.xlarge"
 
 
 @dataclass(slots=True)
@@ -446,7 +446,7 @@ def _seed_connection_and_pool(
                 "status": "active",
                 "source": "workspace_policy",
                 "pool_id": pool.id,
-                "instance_type": "i4i.xlarge",
+                "instance_type": "m7i.xlarge",
                 "instance_id": _INSTANCE_ID,
             },
             status="active",
@@ -473,7 +473,7 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputeUnitRecord:
         visibility=ComputeUnitVisibility.Internal,
         region=_REGION,
         offer_id=_OFFER_ID,
-        capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+        capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
         desired_machines=1,
         min_machines=0,
         max_machines=10,
@@ -540,7 +540,7 @@ def _offer() -> ComputeOffer:
         id=_OFFER_ID,
         provider=f"aws:{_CONNECTION_ID}",
         cloud="aws",
-        instance_type="i4i.xlarge",
+        instance_type="m7i.xlarge",
         region=_REGION,
         cpu_millicores=4_000,
         memory_mb=32 * 1024,
@@ -548,7 +548,7 @@ def _offer() -> ComputeOffer:
         hourly_cost_micros=340_000,
         available=10,
         capacity_mode=ComputeCapacityMode.Pooled,
-        capability_key="aws:us-east-1:i4i.xlarge:amd64:runsc",
+        capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
         supports_scale_to_zero=True,
     )
 
