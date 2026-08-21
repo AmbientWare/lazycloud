@@ -3,15 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from shared.compute_policy import MachinePool
+from shared.deployment_records import CpuRequest, MemoryRequest
 
-WorkflowValue = str | float | int | bool | dict[str, str] | dict[str, int] | list[str] | None
+WorkflowValue = (
+    str
+    | float
+    | int
+    | bool
+    | dict[str, str]
+    | dict[str, int]
+    | list[str]
+    | CpuRequest
+    | MemoryRequest
+    | None
+)
 
 
 @dataclass(slots=True)
 class DeploymentOverrides:
     resource: str | None = None
-    cpu: float | None = None
-    memory: str | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
     gpu: str | None = None
     gpu_count: int | None = None
     image: str | None = None
@@ -55,8 +67,8 @@ class DeploymentOverrides:
 def build_deployment_overrides(
     *,
     resource: str | None = None,
-    cpu: float | None = None,
-    memory: str | None = None,
+    cpu: CpuRequest | None = None,
+    memory: MemoryRequest | None = None,
     gpu: str | None = None,
     gpu_count: int | None = None,
     image: str | None = None,

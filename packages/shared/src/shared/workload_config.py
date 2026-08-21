@@ -8,6 +8,7 @@ from shared.callbacks import normalize_callback_url
 from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
+from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
@@ -39,9 +40,9 @@ class StubImageConfig(ContractModel):
 
 
 class StubRuntimeConfig(ContractModel):
-    cpu: int | float | None = Field(default=None, ge=0)
+    cpu: CpuRequest | None = Field(default=None)
     cpu_millicores: int = Field(default=0, ge=0)
-    memory: str | int | None = None
+    memory: MemoryRequest | None = None
     disk: str | int | None = None
     memory_mib: int = Field(default=0, ge=0)
     gpu: str | None = None

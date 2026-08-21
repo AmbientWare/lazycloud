@@ -12,6 +12,7 @@ from shared.container_requests import (
     StopContainerReason,
     WorkerContainerRequestPayload,
     WorkerStartupKind,
+    container_memory_limit_mib,
 )
 from shared.contracts import ContractModel
 from shared.gpu import concrete_gpu_type
@@ -780,9 +781,13 @@ def container_execution_context_from_scheduler_request(
     price.
     """
     payload = WorkerContainerRequestPayload.model_validate(request.payload)
+    # Resolved once, here, because two things downstream read it and they must
+    # read the same number: the cgroup the container runs under, and the watcher
+    # that reports an OOM. Watching the request while the cgroup allowed a
+    # multiple of it would report a container killed for using what it was given.
     memory_limit_bytes = payload.memory_limit_bytes
     if memory_limit_bytes is None and request.memory_mib > 0:
-        memory_limit_bytes = request.memory_mib * MIB
+        memory_limit_bytes = container_memory_limit_mib(request.memory_mib) * MIB
     # One allocation count, so the model and the count it is charged by can never
     # disagree about whether this container held a GPU at all.
     gpu_count = gpu_count_for_capacity(request.gpu_type, request.gpu_request, request.gpu_count)
@@ -829,6 +834,7 @@ def container_execution_context_from_scheduler_request(
         allow_list=list(payload.allow_list),
         memory_enforced=payload.memory_enforced,
         memory_limit_bytes=memory_limit_bytes,
+        cpu_limit_millicores=payload.cpu_limit_millicores,
         cgroup_path=payload.cgroup_path,
         run_delayed_cleanup=payload.run_delayed_cleanup,
     )

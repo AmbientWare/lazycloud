@@ -5,14 +5,15 @@ from datetime import datetime
 from pydantic import Field
 
 from shared.compute_policy import MachinePool
+from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
 
 
 class DeploymentResourcesResponse(HttpModel):
-    cpu: float | None = None
-    memory: str | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
     disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0

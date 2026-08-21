@@ -12,7 +12,14 @@ from typing import Any, Protocol, TypedDict
 import yaml
 from pydantic import JsonValue
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
-from shared.deployment_records import DEFAULT_DISK, DeploymentSpec, Resources, VolumeMount
+from shared.deployment_records import (
+    DEFAULT_DISK,
+    CpuRequest,
+    DeploymentSpec,
+    MemoryRequest,
+    Resources,
+    VolumeMount,
+)
 from shared.deployments import DeploymentKind
 from shared.http import pods
 from shared.http.errors import HttpApiError
@@ -1523,8 +1530,8 @@ class Sandbox(ControlClientConfigMixin):
     env: dict[str, str] | None = None
     command: list[str] = field(default_factory=lambda: ["tail", "-f", "/dev/null"])
     ports: list[int] = field(default_factory=list)
-    cpu: float | None = None
-    memory: str | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
     disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0

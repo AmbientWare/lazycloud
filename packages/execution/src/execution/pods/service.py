@@ -214,7 +214,9 @@ class PodControlService:
                     else config.effective_entrypoint
                 ),
                 cpu_millicores=config.runtime.requested_cpu_millicores,
+                cpu_limit_millicores=config.runtime.limit_cpu_millicores,
                 memory_mib=config.runtime.requested_memory_mib,
+                memory_limit_mib=config.runtime.limit_memory_mib,
                 disk_mib=config.runtime.requested_disk_mib,
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
@@ -319,7 +321,9 @@ class PodControlService:
                         config.runtime.checkpoint_readiness_interval_seconds
                     ),
                     cpu_millicores=plan.cpu_millicores,
+                    cpu_limit_millicores=plan.cpu_limit_millicores,
                     memory_mib=plan.memory_mib,
+                    memory_limit_mib=plan.memory_limit_mib,
                     disk_mib=plan.disk_mib,
                     gpu_type=config.runtime.requested_gpu_type,
                     gpu_request=plan.gpu_request,

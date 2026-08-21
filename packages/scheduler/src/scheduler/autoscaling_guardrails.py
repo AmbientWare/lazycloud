@@ -4,6 +4,7 @@ from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
+from shared.deployment_records import request_and_limit
 from shared.scheduling import gpu_count_for_capacity
 from shared.workload_config import StubRuntimeConfig
 
@@ -56,8 +57,11 @@ def plan_autoscaler_start_guardrails(
     runtime_config = stub.config.runtime
     cpu_limit = runtime_config.workspace_cpu_quota_millicores
     workspace_gpu_quota = runtime_config.workspace_gpu_quota
+    # The reservation, not a ceiling: a quota counts what containers hold against
+    # the workspace, and what one may burst to is not held.
+    cpu_request, _ = request_and_limit(runtime_config.cpu)
     cpu_per_container = runtime_config.cpu_millicores or (
-        int(float(runtime_config.cpu) * 1000) if runtime_config.cpu is not None else 0
+        int(float(cpu_request) * 1000) if cpu_request is not None else 0
     )
     gpu_per_container = _gpu_per_container(runtime_config)
     if cpu_limit <= 0 and workspace_gpu_quota <= 0:

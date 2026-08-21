@@ -9,6 +9,7 @@ from shared.app_slug import validate_app_slug
 from shared.bytes_transport import EncodedBytesBody
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import MachinePool
+from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
@@ -170,8 +171,8 @@ class GetOrCreateStubRequest(HttpModel):
     image_secrets: list[str] = Field(default_factory=list)
     image_gpu: str = ""
     image_ignore_python: bool = False
-    cpu: float | None = None
-    memory: str | int | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
     disk: str | int | None = None
     gpu: str = ""
     handler: str = ""

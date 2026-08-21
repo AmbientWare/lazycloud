@@ -410,9 +410,14 @@ class ContainerService:
             workspace_storage_required=options.workspace_storage_required,
             workspace_storage_available=options.workspace_storage_available,
             workspace_storage_base_mount_path=options.workspace_storage_base_mount_path,
-            # Disk is a per-container ceiling rather than scheduled capacity, so it
-            # travels in the worker payload and not on the scheduler request.
+            # A ceiling is a per-container limit rather than scheduled capacity, so
+            # it travels in the worker payload and not on the scheduler request.
+            # Placement reserves the request; only the runtime enforces these.
             disk_limit_bytes=options.disk_mib * 1024 * 1024,
+            cpu_limit_millicores=options.cpu_limit_millicores,
+            memory_limit_bytes=(
+                options.memory_limit_mib * 1024 * 1024 if options.memory_limit_mib else None
+            ),
         )
         request = SchedulerWorkerRequest(
             workspace_id=record.workspace_id,

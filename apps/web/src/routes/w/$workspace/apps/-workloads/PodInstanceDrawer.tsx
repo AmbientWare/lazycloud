@@ -14,7 +14,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
 import { StopCause } from "@/components/shared/StopCause";
-import { exactTime, relativeTime } from "@/lib/format";
+import { exactTime, relativeTime, resourceAllocation } from "@/lib/format";
 import {
   containerMetricsTimeseriesQueryOptions,
   containerQueryOptions,
@@ -159,12 +159,8 @@ function PodInstanceDrawerBody({
               }
             />
             <Fact label="Uptime" value={podInstanceUptime(record)} mono />
-            <Fact
-              label="CPU allocation"
-              value={resources.cpu == null ? "Default" : `${resources.cpu} vCPU`}
-              mono
-            />
-            <Fact label="Memory allocation" value={resources.memory ?? "Default"} mono />
+            <Fact label="CPU allocation" value={resourceAllocation(resources.cpu, "vCPU")} mono />
+            <Fact label="Memory allocation" value={resourceAllocation(resources.memory)} mono />
             {resources.gpu ? (
               <Fact
                 label="GPU allocation"

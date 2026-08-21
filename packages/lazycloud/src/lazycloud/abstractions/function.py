@@ -24,7 +24,9 @@ from shared.deployment_records import (
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
+    CpuRequest,
     DeploymentSpec,
+    MemoryRequest,
     Resources,
     VolumeMount,
 )
@@ -112,8 +114,8 @@ class SerializedFunctionInvocation:
 class FunctionOptions(TypedDict, total=False):
     image: Image | None
     name: str | None
-    cpu: float | None
-    memory: str | None
+    cpu: CpuRequest | None
+    memory: MemoryRequest | None
     disk: str | None
     gpu: str | None
     gpu_count: int
@@ -157,8 +159,8 @@ class Function(Generic[P, R]):
     _app_slug: str
     image: Image = field(default_factory=Image)
     name: str | None = None
-    cpu: float | None = DEFAULT_FUNCTION_CPU
-    memory: str | None = DEFAULT_FUNCTION_MEMORY
+    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU
+    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY
     disk: str | None = None
     gpu: str | None = None
     gpu_count: int = 0
@@ -236,8 +238,8 @@ class Function(Generic[P, R]):
         self,
         *,
         image: Image | None = None,
-        cpu: float | None = None,
-        memory: str | None = None,
+        cpu: CpuRequest | None = None,
+        memory: MemoryRequest | None = None,
         disk: str | None = None,
         gpu: str | None = None,
         gpu_count: int | None = None,
@@ -730,8 +732,8 @@ def _function(
     _app_slug: str,
     image: Image | None = None,
     name: str | None = None,
-    cpu: float | None = DEFAULT_FUNCTION_CPU,
-    memory: str | None = DEFAULT_FUNCTION_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
@@ -777,8 +779,8 @@ def _function(
     _app_slug: str,
     image: Image | None = None,
     name: str | None = None,
-    cpu: float | None = DEFAULT_FUNCTION_CPU,
-    memory: str | None = DEFAULT_FUNCTION_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
@@ -823,8 +825,8 @@ def _function(
     _app_slug: str,
     image: Image | None = None,
     name: str | None = None,
-    cpu: float | None = DEFAULT_FUNCTION_CPU,
-    memory: str | None = DEFAULT_FUNCTION_MEMORY,
+    cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
+    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,

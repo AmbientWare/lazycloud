@@ -20,6 +20,15 @@ from shared.timestamps import utc_now
 # A per-container ceiling rather than an allocation, so one value serves every
 # workload kind; workloads that genuinely need more raise it explicitly.
 DEFAULT_DISK = "100Gi"
+# The list arm is not an alternative spelling anyone writes. JSON has no tuples,
+# so the pair a decorator states in Python reaches a strict model as a list once
+# it has crossed the wire, and both have to validate as the same thing.
+CpuRequest = int | float | tuple[int | float, int | float] | list[int | float]
+"""Cores to reserve, or a `(reserve, throttle at)` pair."""
+
+MemoryRequest = str | int | tuple[str | int, str | int] | list[str | int]
+"""Memory to reserve, or a `(reserve, kill at)` pair."""
+
 DEFAULT_FUNCTION_CPU = 0.125
 DEFAULT_FUNCTION_AUTHORIZED = True
 DEFAULT_FUNCTION_MAX_PENDING_TASKS = 100
@@ -39,8 +48,8 @@ DEFAULT_POD_KEEP_WARM_SECONDS = 600
 
 
 class Resources(ContractModel):
-    cpu: float | None = None
-    memory: str | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
     disk: str = DEFAULT_DISK
     gpu: str | None = None
     gpu_count: int = 0
@@ -155,7 +164,27 @@ def resolve_keep_warm_seconds(
     return default_keep_warm_seconds(kind)
 
 
-def resolve_cpu(kind: DeploymentKind | str, value: int | float | None) -> float | None:
+def request_and_limit(
+    value: CpuRequest | MemoryRequest | None,
+) -> tuple[str | int | float | None, str | int | float | None]:
+    """A resource field read as `(request, limit)`, whichever form was written.
+
+    Every reader that only wants the reservation goes through here rather than
+    testing the shape itself, so a pair cannot reach arithmetic that assumes a
+    scalar and silently multiply a tuple.
+    """
+    if isinstance(value, (tuple, list)):
+        if len(value) != 2:
+            raise ValueError("a resource pair states exactly a request and a limit")
+        return value[0], value[1]
+    return value, None
+
+
+def resolve_cpu(kind: DeploymentKind | str, value: CpuRequest | None) -> CpuRequest | None:
+    # A pair passes through whole. The default only answers an absent value, and
+    # a limit its author stated is not something to resolve away.
+    if isinstance(value, (tuple, list)):
+        return value
     if value is not None:
         return float(value)
     deployment_kind = _deployment_kind(kind)
@@ -168,7 +197,7 @@ def resolve_cpu(kind: DeploymentKind | str, value: int | float | None) -> float 
     return None
 
 
-def resolve_memory(kind: DeploymentKind | str, value: str | int | None) -> str | int | None:
+def resolve_memory(kind: DeploymentKind | str, value: MemoryRequest | None) -> MemoryRequest | None:
     if value is not None:
         return value
     deployment_kind = _deployment_kind(kind)
@@ -377,12 +406,15 @@ __all__ = [
     "DEFAULT_POD_CPU",
     "DEFAULT_POD_KEEP_WARM_SECONDS",
     "DEFAULT_POD_MEMORY",
+    "CpuRequest",
     "Deployment",
     "DeploymentSpec",
+    "MemoryRequest",
     "Resources",
     "VolumeMount",
     "declared_min_containers",
     "default_keep_warm_seconds",
+    "request_and_limit",
     "resolve_authorized",
     "resolve_cpu",
     "resolve_disk",

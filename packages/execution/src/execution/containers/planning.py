@@ -42,7 +42,9 @@ class ContainerSchedulingOptions(ContractModel):
     checkpoint_readiness_timeout_seconds: int = 600
     checkpoint_readiness_interval_seconds: float = 1.0
     cpu_millicores: int = 0
+    cpu_limit_millicores: int = 0
     memory_mib: int = 0
+    memory_limit_mib: int = 0
     # Required and positive: a start path that forgets the ceiling must fail
     # here rather than silently fall back to the platform default, and zero
     # would mean unlimited, which no container gets.
