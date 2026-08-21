@@ -795,8 +795,6 @@ def _column_values(
         "attempts",
         "exit_code",
         "pid",
-        "workspace_gpu_quota",
-        "cpu_millicore_limit",
         "size",
         "hits",
         "clip_version",
