@@ -117,6 +117,15 @@ services:
       cache-token:
         condition: service_completed_successfully
 
+  # Not a service this deployment runs, but one the deploy invokes once per
+  # release: `fleet ensure` reaches the control plane through it. Without the
+  # image pinned here the host keeps the base file's `cli:local`, tries to pull a
+  # repository that does not exist, and falls back to the build context -- which
+  # is the repository, and the repository is not on the host.
+  cli:
+    image: "${LAZYCLOUD_IMAGE_CLI:?set by images.env}"
+    build: !reset null
+
   public-ingress:
     depends_on: !override
       control-plane:

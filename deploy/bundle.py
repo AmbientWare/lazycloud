@@ -61,6 +61,7 @@ IMAGE_VARIABLES = {
     "cache-server": "LAZYCLOUD_IMAGE_CACHE_SERVER",
     "worker-bootstrap": "LAZYCLOUD_IMAGE_WORKER_BOOTSTRAP",
     "database-bootstrap": "LAZYCLOUD_IMAGE_DATABASE_BOOTSTRAP",
+    "cli": "LAZYCLOUD_IMAGE_CLI",
 }
 
 
