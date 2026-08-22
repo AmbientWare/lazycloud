@@ -101,11 +101,6 @@ def _daemon_events(stopped: Event) -> Iterable[SandboxProcessEvent]:
     yield SandboxProcessEvent(event_type=SandboxProcessEventType.Exited, pid=77, exit_code=0)
 
 
-def _reset_daemon_stream() -> Iterable[SandboxProcessEvent]:
-    raise ConnectionResetError("supervisor stopped")
-    yield
-
-
 def _failed_daemon_stream() -> Iterable[SandboxProcessEvent]:
     yield SandboxProcessEvent(
         event_type=SandboxProcessEventType.Chunk,

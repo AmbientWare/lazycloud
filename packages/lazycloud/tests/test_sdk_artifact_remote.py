@@ -17,7 +17,6 @@ from shared.http.artifacts import (
     ArtifactStatRequest,
     ArtifactStatResponse,
 )
-from shared.http.errors import HttpApiError
 
 
 @dataclass(frozen=True)
@@ -131,25 +130,3 @@ def test_artifact_save_remote_packages_directories_and_empty_files(tmp_path: Pat
         assert archive.namelist() == ["a.txt"]
     assert empty_saved.filename == "empty.txt"
     assert empty_client.save_requests[0].chunks == (b"",)
-
-
-class _DenyingSaveClient(FakeOutputClient):
-    def artifact_save_stream(
-        self,
-        task_id: str,
-        filename: str,
-        chunks: Iterable[bytes],
-        *,
-        content_type: str = "application/octet-stream",
-    ) -> ArtifactSaveResponse:
-        raise HttpApiError("denied", status_code=403)
-
-
-class _MissingStatClient(FakeOutputClient):
-    def artifact_stat(self, request: ArtifactStatRequest) -> ArtifactStatResponse:
-        raise HttpApiError("missing", status_code=404)
-
-
-class _FailingPublicUrlClient(FakeOutputClient):
-    def artifact_public_url(self, request: ArtifactPublicUrlRequest) -> ArtifactPublicUrlResponse:
-        raise HttpApiError("failed", status_code=500)

@@ -168,6 +168,8 @@ const STOP_REASONS: Record<string, string | undefined> = {
   PREEMPTED: "Its machine was reclaimed",
   ADMIN: "The platform stopped it",
   UNFUNDED: "The account has no payment method on file",
+  MEMORY_EVICTED:
+    "The machine ran out of memory and this container was using the most above its request",
 };
 
 /**

@@ -93,8 +93,6 @@ class RedisTransport(Protocol):
 
     def incr(self, name: str) -> RedisCommandResponse: ...
 
-    def decr(self, name: str) -> RedisCommandResponse: ...
-
     def strlen(self, name: str) -> RedisCommandResponse: ...
 
     def hset(
@@ -157,8 +155,6 @@ class RedisTransport(Protocol):
         min: float | str,
         max: float | str,
     ) -> RedisCommandResponse: ...
-
-    def zscore(self, name: str, value: RedisWireScalar) -> RedisCommandResponse: ...
 
     def zcard(self, name: str) -> RedisCommandResponse: ...
 
@@ -478,9 +474,6 @@ class RedisClient:
     def increment(self, key: str) -> int:
         return _redis_int(self._transport.incr(key), "INCR")
 
-    def decrement(self, key: str) -> int:
-        return _redis_int(self._transport.decr(key), "DECR")
-
     def string_length(self, key: str) -> int:
         return _redis_int(
             self._transport.strlen(key),
@@ -656,22 +649,6 @@ class RedisClient:
             ),
             "ZRANGEBYSCORE",
         )
-
-    def sorted_set_score(self, key: str, member: RedisWireScalar) -> float | None:
-        raw = _optional_scalar(
-            self._transport.zscore(key, member),
-            "ZSCORE",
-        )
-        if raw is None:
-            return None
-        if isinstance(raw, bool):
-            raise TypeError("Redis ZSCORE response must be numeric")
-        if isinstance(raw, (int, float)):
-            return float(raw)
-        try:
-            return float(raw)
-        except ValueError as exc:
-            raise TypeError("Redis ZSCORE response must be numeric") from exc
 
     def sorted_set_cardinality(self, key: str) -> int:
         return _redis_int(

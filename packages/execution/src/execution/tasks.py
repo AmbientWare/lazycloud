@@ -40,10 +40,6 @@ class TaskFinishOutcome:
     retry_decision: RetryDecision
     state_changed: bool
 
-    @property
-    def retry_scheduling_owned(self) -> bool:
-        return self.state_changed and self.retry_decision.should_retry
-
 
 @dataclass(slots=True)
 class TaskService:

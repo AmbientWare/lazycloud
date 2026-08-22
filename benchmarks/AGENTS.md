@@ -4,7 +4,7 @@ Measurements of current production entrypoints, run from outside the services
 they measure.
 
 A benchmark never changes the contract it measures and never relaxes a
-correctness check to go faster—a number produced by a path that no longer does
+correctness check to go faster. A number produced by a path that no longer does
 the work is worse than no number at all.
 
 Make inputs, concurrency, timeouts, and output format explicit rather than

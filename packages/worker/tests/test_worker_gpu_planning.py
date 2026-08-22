@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from subprocess import CompletedProcess
-
 from worker.gpu import (
     DynamicGpuAllocationManager,
     GpuAllocationManager,
@@ -55,14 +53,3 @@ class _Provider:
 
     def available_devices(self) -> list[int]:
         return list(self.devices)
-
-
-def _failed_command(
-    command: list[str],
-    *,
-    capture_output: bool,
-    text: bool,
-    check: bool,
-) -> CompletedProcess[str]:
-    _ = capture_output, text, check
-    return CompletedProcess(args=command, returncode=1, stdout="")

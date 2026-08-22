@@ -1,4 +1,4 @@
-# Cache Server App
+# Cache server app
 
 Settings, cache and storage service composition, and server startup for the
 standalone cache service.

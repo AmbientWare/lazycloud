@@ -107,10 +107,6 @@ class SignalMonitorSnapshot(ContractModel):
     response: SignalMonitorResponse = Field(default_factory=SignalMonitorResponse)
 
 
-def signal_prefix() -> str:
-    return SIGNAL_KEY_PREFIX
-
-
 def signal_name(workspace_name: str, name: str) -> str:
     return f"{SIGNAL_KEY_PREFIX}:{workspace_name}:{name}"
 

@@ -4,7 +4,6 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import ceil
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.compute import (
@@ -25,7 +24,7 @@ from database.repositories.orchestration import (
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
-from pydantic import Field, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
@@ -79,12 +78,6 @@ from compute.offers import (
     ReservationStatus,
     choose_offer,
 )
-from compute.projection import (
-    ComputeUnitPlan,
-    ComputeUnitSource,
-    PoolConfig,
-    ProviderReservation,
-)
 from compute.provider_machines import (
     _LAUNCH_STATE_INTENT,
     ProviderMachineReconciler,
@@ -95,7 +88,6 @@ from compute.provider_machines import (
     _require_internal_pooled_unit,
     _reservation_open,
     _utc,
-    _whole_hours,
 )
 from compute.providers import (
     CapacityOwnerMutationLease,
@@ -104,7 +96,6 @@ from compute.providers import (
     DirectMachineProvider,
     DirectMachineProviderRegistry,
     PooledCapacityProvider,
-    ProviderMachineStatus,
     ProviderUnitRequest,
     ProviderUnitSnapshot,
     ResolvedComputeProvider,
@@ -131,32 +122,9 @@ re-driven under its original id or the retry buys a second machine.
 """
 
 
-class _CapacityRequestMetadata(ContractModel):
-    selector: str = ""
-    providers: list[str] = Field(default_factory=list)
-    regions: list[str] = Field(default_factory=list)
-    gpu: list[str] = Field(default_factory=list)
-
-
 class ManagedComputeLaunchError(DomainError):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message, code=code)
-
-
-_LAUNCH_CODES_UPSTREAM = frozenset({"provider_unavailable"})
-
-
-def _launch_failure_as_domain_error(exc: ManagedComputeLaunchError) -> DomainError:
-    """Map a launch refusal to the status its code deserves.
-
-    Only an unreachable provider is a 503. A quota, an empty offer set or an
-    exhausted balance are states the caller owns and can act on, and reporting
-    them as an upstream outage tells them to wait for something that will not
-    change on its own.
-    """
-    if exc.code in _LAUNCH_CODES_UPSTREAM:
-        return UpstreamUnavailableError(exc.message, code=exc.code)
-    return ConflictError(exc.message, code=exc.code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,11 +181,6 @@ class ComputeService:
     capacity_owner_mutations: CapacityOwnerMutationLease | None = None
     reclaim: ComputeReclaimPolicy = field(default_factory=ComputeReclaimPolicy)
     source_cache_lifecycle: SourceCacheStorageLifecycleService = field(init=False)
-    _stale_first_seen: dict[tuple[str, str, str], datetime] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
 
     def __post_init__(self) -> None:
         self.source_cache_lifecycle = SourceCacheStorageLifecycleService(self.context)
@@ -227,9 +190,7 @@ class ComputeService:
         """Bound to this service's *current* configuration.
 
         `reclaim` and `scheduler_hooks` are reassigned after construction, so a
-        reconciler captured once would answer from stale settings. The stale
-        machine ledger is passed by reference because it must survive across
-        calls; everything else is read fresh.
+        reconciler captured once would answer from stale settings.
         """
         return ProviderMachineReconciler(
             context=self.context,
@@ -238,7 +199,6 @@ class ComputeService:
             workspace_changes=self.workspace_changes,
             scheduler_hooks=self.scheduler_hooks,
             source_cache_lifecycle=self.source_cache_lifecycle,
-            stale_first_seen=self._stale_first_seen,
         )
 
     def record_provider_bootstrap_status(
@@ -2465,19 +2425,6 @@ class ComputeService:
             resource_id=resource_id,
         )
 
-    def _provider_clients_for(
-        self,
-        providers: list[str],
-        clients: Mapping[str, DirectMachineProvider],
-    ) -> dict[str, DirectMachineProvider]:
-        if providers:
-            missing = [provider for provider in providers if provider not in clients]
-            if missing:
-                msg = f"compute provider unavailable: {', '.join(sorted(missing))}"
-                raise ManagedComputeLaunchError(msg, code="provider_unavailable")
-            return {provider: clients[provider] for provider in providers}
-        return dict(sorted(clients.items()))
-
     def _provider_client_snapshot(
         self,
         workspace: str,
@@ -2493,30 +2440,6 @@ class ComputeService:
         if self.provider_registry is None:
             return {}
         return self.provider_registry.snapshot_for_workspace_deletion(workspace_id)
-
-    def _resolved_workspace_providers(
-        self,
-        workspace_id: str,
-        providers: list[str],
-        *,
-        clients: Mapping[str, DirectMachineProvider],
-    ) -> dict[str, ResolvedComputeProvider]:
-        if self.provider_resolver is None:
-            return {}
-        if providers:
-            resolved: dict[str, ResolvedComputeProvider] = {}
-            for provider_ref in providers:
-                if provider_ref in clients:
-                    continue
-                resolved[provider_ref] = self.provider_resolver.resolve(
-                    workspace_id,
-                    provider_ref,
-                )
-            return resolved
-        return {
-            provider.ref: provider
-            for provider in self.provider_resolver.list_providers(workspace_id)
-        }
 
     def _internal_unit_provider(
         self,
@@ -2686,33 +2609,6 @@ class ComputeService:
                 )
 
 
-def _pool_labels_from_config(config: PoolConfig) -> dict[str, str]:
-    labels = {
-        "selector": config.selector,
-        "mode": str(config.mode),
-        "transport": str(config.transport),
-        "fallback": str(config.fallback),
-        "priority": str(config.priority),
-    }
-    return {key: value for key, value in labels.items() if value}
-
-
-def _offer_matches_capacity_policy(offer: ComputeOffer, pool: ComputeUnitRecord) -> bool:
-    return (
-        offer.capacity_mode
-        is (
-            ComputeCapacityMode.Pooled
-            if pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider
-            else ComputeCapacityMode.Direct
-        )
-        and offer.cpu_millicores == pool.worker_cpu_millicores
-        and offer.memory_mb == pool.worker_memory_mib
-        and (offer.gpu or "") == pool.worker_gpu_type
-        and offer.gpu_count == pool.worker_gpu_count
-        and offer.runtime in pool.worker_runtimes
-    )
-
-
 def _shape_matches_pool(shape: CapacityAcquisitionShape, pool: ComputeUnitRecord) -> bool:
     return (
         shape.cpu_millicores == pool.worker_cpu_millicores
@@ -2862,115 +2758,8 @@ def _operation_result(
     )
 
 
-def _offer_matches_pool(offer: ComputeOffer, plan: ComputeUnitPlan) -> bool:
-    if plan.offer_id and offer.id != plan.offer_id:
-        return False
-    if plan.providers and offer.provider not in plan.providers:
-        return False
-    if plan.regions and offer.region not in plan.regions:
-        return False
-    if plan.gpu and offer.gpu not in plan.gpu:
-        return False
-    if plan.gpu and offer.gpu_count <= 0:
-        return False
-    if not plan.gpu and plan.nodes > 0 and offer.gpu_count > 0:
-        return False
-    if plan.min_reliability > 0 and offer.reliability > 0:
-        return offer.reliability >= plan.min_reliability
-    return offer.available > 0
-
-
-def _offer_cost(offer: ComputeOffer) -> float:
-    capacity = offer.node_count or 1
-    return offer.hourly_cost_micros / max(capacity, 1)
-
-
-def _resource_status_from_provider(status: str) -> ResourceStatus:
-    if status == ProviderMachineStatus.Active:
-        return ResourceStatus.Running
-    if status == ProviderMachineStatus.Unhealthy:
-        return ResourceStatus.Failed
-    if status == ProviderMachineStatus.Terminated:
-        return ResourceStatus.Deleted
-    return ResourceStatus.Created
-
-
-def _provider_reservation_from_record(
-    pool: MachinePool,
-    record: ComputeProviderInstanceRecord,
-) -> ProviderReservation:
-    metadata = _provider_instance_metadata(record)
-    return ProviderReservation(
-        id=record.id,
-        pool=pool,
-        selector=str(metadata.get("selector") or pool),
-        provider=record.provider,
-        cloud=str(metadata.get("cloud") or record.provider),
-        region=str(metadata.get("region") or ""),
-        offer_id=record.offer_id,
-        instance_type=record.instance_type or "",
-        instance_id=record.instance_id or "",
-        status=record.status,
-        gpu=record.gpu,
-        gpu_count=record.gpu_count,
-        hourly_cost_micros=record.hourly_cost_micros,
-        committed_micros=record.committed_micros,
-        source=record.source,
-        created_at=_provider_commitment_start(record),
-        expires_at=record.expires_at,
-        billing_renewal_at=record.billing_renewal_at,
-        billing_cursor_at=_metadata_time(metadata, "billing_cursor_at"),
-        status_message=str(metadata.get("status_message") or ""),
-        terminating_reason=str(metadata.get("terminating_reason") or ""),
-        last_error=str(metadata.get("last_error") or ""),
-        registration_token_hash=str(metadata.get("registration_token_hash") or ""),
-        machine_id=record.machine_id or "",
-        node_count=_metadata_int(metadata, "node_count", default=1),
-        cpu_millicores=record.cpu_millicores,
-        memory_mb=record.memory_mb,
-        storage_mb=_metadata_int(metadata, "storage_mb"),
-        architecture=str(metadata.get("architecture") or ""),
-        runtime=str(metadata.get("runtime") or ""),
-    )
-
-
 def _json_object(model: ContractModel) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
-
-
-def _metadata_int(metadata: Mapping[str, JsonValue], key: str, *, default: int = 0) -> int:
-    value = metadata.get(key)
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int | float | str):
-        return int(value or default)
-    return default
-
-
-def _provider_record_at_deadline(
-    record: ComputeProviderInstanceRecord,
-    deadline: datetime,
-) -> ComputeProviderInstanceRecord:
-    committed_micros = record.committed_micros
-    if record.source == ComputeUnitSource.Managed.value:
-        lifetime_seconds = ceil(
-            (_utc(deadline) - _provider_commitment_start(record)).total_seconds()
-        )
-        projected = record.hourly_cost_micros * _whole_hours(lifetime_seconds)
-        committed_micros = max(committed_micros, projected)
-    return record.model_copy(
-        update={
-            "expires_at": _utc(deadline),
-            "committed_micros": committed_micros,
-        }
-    )
-
-
-def _provider_commitment_start(record: ComputeProviderInstanceRecord) -> datetime:
-    return _metadata_time(
-        _provider_instance_metadata(record),
-        "commitment_started_at",
-    ) or _utc(record.created_at)
 
 
 def _policy_owned_scale(pool: ComputeUnitRecord) -> None:
@@ -3037,9 +2826,3 @@ def _owns_provider_pool_capacity(pool: ComputeUnitRecord) -> bool:
 
 def _pool_gpu_capacity(pool: ComputeUnitRecord) -> bool:
     return pool.worker_gpu_count > 0
-
-
-def _unix_seconds(value: datetime | None) -> int:
-    if value is None:
-        return 0
-    return int(_utc(value).timestamp())

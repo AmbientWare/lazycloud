@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from shared.deployment_records import Deployment
+from shared.deployments import DeploymentKind
 from shared.http.deployments import (
     DeploymentActionCapabilitiesResponse,
     DeploymentResourcesResponse,
@@ -43,3 +44,29 @@ def deployment_response(
 
 
 __all__ = ["deployment_response"]
+
+
+def actionable_deployment_response(
+    deployment: Deployment,
+    *,
+    can_write: bool,
+    app_active: bool,
+    scaling: DeploymentScalingResponse | None,
+) -> DeploymentResponse:
+    available = deployment.deleted_at is None
+    return deployment_response(
+        deployment,
+        scaling=scaling,
+        actions=DeploymentActionCapabilitiesResponse(
+            can_start=can_write and available and app_active and not deployment.active,
+            can_stop=can_write and available and deployment.active,
+            can_scale=(
+                can_write
+                and available
+                and app_active
+                and deployment.active
+                and deployment.kind is DeploymentKind.Pod
+            ),
+            can_delete=can_write and available,
+        ),
+    )

@@ -458,19 +458,6 @@ class ObjectRepository:
             return None
         return record
 
-    def list_by_location(self, bucket: str, key: str) -> list[OwnedObjectRecord]:
-        statement = select(ObjectTable).where(
-            ObjectTable.bucket == bucket,
-            ObjectTable.key == key,
-        )
-        return [
-            OwnedObjectRecord(
-                workspace_id=str(row.workspace_id),
-                record=ObjectRecord.model_validate(row.payload),
-            )
-            for row in self.session.scalars(statement)
-        ]
-
     def find_by_sha256(
         self,
         sha256: str,
@@ -529,16 +516,6 @@ class ObjectRepository:
         return bool(
             self.session.scalar(select(exists().where(ObjectTable.workspace_id == workspace_id)))
         )
-
-    def list_owned(self) -> list[OwnedObjectRecord]:
-        """System retention listing over every workspace's objects."""
-        return [
-            OwnedObjectRecord(
-                workspace_id=str(row.workspace_id),
-                record=ObjectRecord.model_validate(row.payload),
-            )
-            for row in self.session.scalars(select(ObjectTable))
-        ]
 
     def delete(self, object_id: str, *, workspace_id: str) -> bool:
         return self.records.delete(object_id, workspace_id=workspace_id)

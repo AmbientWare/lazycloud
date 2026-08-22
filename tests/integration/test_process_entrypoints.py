@@ -368,6 +368,7 @@ class _ContainerWorkerServices:
         self.lifecycle = _ContainerWorkerLifecycle()
         self.event_source = event_source
         self.worker_events = worker_events
+        self.memory_watcher = None
         self.retention = None
 
 

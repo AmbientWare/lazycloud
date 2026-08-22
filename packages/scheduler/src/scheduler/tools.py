@@ -12,80 +12,12 @@ from shared.scheduling import worker_serves_owner
 from shared.timestamps import utc_now
 
 
-class BacklogStatus(StrEnum):
-    Queued = "queued"
-    Reserved = "reserved"
-    Dispatched = "dispatched"
-
-
-class PoolHealthStatus(StrEnum):
-    Healthy = "healthy"
-    Degraded = "degraded"
-    Unavailable = "unavailable"
-
-
 class SchedulingDecision(StrEnum):
     Dispatch = "dispatch"
     WaitForWorker = "wait-for-worker"
     ProvisionWorker = "provision-worker"
     RetryLater = "retry-later"
     Failed = "failed"
-
-
-class BacklogEntry(ContractModel):
-    id: str
-    queue: str
-    payload: JsonValue = None
-    priority: int = 100
-    status: BacklogStatus = BacklogStatus.Queued
-    created_at: datetime = Field(default_factory=utc_now)
-
-
-class SchedulerBacklogRequest(BacklogEntry):
-    ready_at: datetime = Field(default_factory=utc_now)
-    retry_count: int = 0
-
-
-class BatchPlan(ContractModel):
-    entries: list[BacklogEntry]
-    max_batch_size: int
-
-    @property
-    def selected(self) -> list[BacklogEntry]:
-        return sorted(self.entries, key=lambda item: (item.priority, item.created_at))[
-            : self.max_batch_size
-        ]
-
-
-class Reservation(ContractModel):
-    id: str
-    pool: MachinePool
-    task_id: str
-    worker_id: str | None = None
-    expires_at: datetime
-    created_at: datetime = Field(default_factory=utc_now)
-
-    @property
-    def expired(self) -> bool:
-        return self.expires_at <= utc_now()
-
-
-class PoolHealth(ContractModel):
-    pool: MachinePool
-    status: PoolHealthStatus
-    ready_workers: int = 0
-    desired_workers: int = 0
-    reason: str = ""
-
-
-class SchedulerCredential(ContractModel):
-    name: str
-    token_prefix: str
-    expires_at: datetime | None = None
-
-    @property
-    def expired(self) -> bool:
-        return self.expires_at is not None and self.expires_at <= utc_now()
 
 
 class WorkerPoolCapacity(ContractModel):
@@ -95,18 +27,6 @@ class WorkerPoolCapacity(ContractModel):
     pending_memory_mib: int = 0
     free_gpu: int = 0
     pending_gpu: int = 0
-
-    @property
-    def available_cpu(self) -> float:
-        return self.free_cpu + self.pending_cpu
-
-    @property
-    def available_memory_mib(self) -> int:
-        return self.free_memory_mib + self.pending_memory_mib
-
-    @property
-    def available_gpu(self) -> int:
-        return self.free_gpu + self.pending_gpu
 
 
 class SchedulingRequest(ContractModel):
@@ -266,12 +186,6 @@ class SchedulingBatchPlan(ContractModel):
     reservations: list[WorkerCapacityReservation] = Field(default_factory=list)
     outcomes: list[SchedulingOutcome] = Field(default_factory=list)
 
-    def dispatches_by_worker(self) -> dict[str, list[PlannedDispatch]]:
-        grouped: dict[str, list[PlannedDispatch]] = {}
-        for dispatch in self.dispatches:
-            grouped.setdefault(dispatch.worker_id, []).append(dispatch)
-        return grouped
-
 
 _DOCKER_ENABLED_RUNTIME_CLASSES = frozenset({"runsc", "gvisor", "sandboxed-oci"})
 
@@ -305,85 +219,6 @@ def _requires_specific_gpu_type(request: SchedulingRequest) -> bool:
     if request.gpu_type:
         requested.add(request.gpu_type.lower())
     return bool(requested - {"any"})
-
-
-class RequestBacklog:
-    def __init__(self, entries: Iterable[SchedulerBacklogRequest] | None = None) -> None:
-        self._entries = list(entries or [])
-
-    def push(
-        self,
-        entry: BacklogEntry | SchedulerBacklogRequest,
-        *,
-        now: datetime | None = None,
-    ) -> SchedulerBacklogRequest:
-        return self.push_after(entry, delay=timedelta(), now=now)
-
-    def push_after(
-        self,
-        entry: BacklogEntry | SchedulerBacklogRequest,
-        *,
-        delay: timedelta = timedelta(),
-        now: datetime | None = None,
-    ) -> SchedulerBacklogRequest:
-        current = now or utc_now()
-        record = SchedulerBacklogRequest.model_validate(entry)
-        if delay:
-            record.ready_at = current + delay
-        elif not isinstance(entry, SchedulerBacklogRequest):
-            record.ready_at = current
-        self._entries.append(record)
-        return record
-
-    def pop_ready(
-        self,
-        *,
-        count: int = 1,
-        now: datetime | None = None,
-    ) -> list[SchedulerBacklogRequest]:
-        current = now or utc_now()
-        ready = [entry for entry in self._entries if entry.ready_at <= current]
-        ready.sort(key=lambda item: (item.ready_at, item.priority, item.created_at, item.id))
-        selected = ready[:count]
-        selected_ids = {entry.id for entry in selected}
-        self._entries = [entry for entry in self._entries if entry.id not in selected_ids]
-        return selected
-
-    def peek_ready(self, *, now: datetime | None = None) -> list[SchedulerBacklogRequest]:
-        current = now or utc_now()
-        return sorted(
-            [entry for entry in self._entries if entry.ready_at <= current],
-            key=lambda item: (item.ready_at, item.priority, item.created_at, item.id),
-        )
-
-    def entries(self) -> list[SchedulerBacklogRequest]:
-        return list(self._entries)
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-
-def plan_batch(entries: list[BacklogEntry], *, max_batch_size: int) -> BatchPlan:
-    return BatchPlan(entries=entries, max_batch_size=max_batch_size)
-
-
-def evaluate_pool_health(pool: str, *, ready_workers: int, desired_workers: int) -> PoolHealth:
-    if ready_workers <= 0 and desired_workers > 0:
-        status = PoolHealthStatus.Unavailable
-        reason = "no ready workers"
-    elif ready_workers < desired_workers:
-        status = PoolHealthStatus.Degraded
-        reason = "ready workers below desired count"
-    else:
-        status = PoolHealthStatus.Healthy
-        reason = "ready workers meet desired count"
-    return PoolHealth(
-        pool=MachinePool(pool),
-        status=status,
-        ready_workers=ready_workers,
-        desired_workers=desired_workers,
-        reason=reason,
-    )
 
 
 def select_worker_for_request(

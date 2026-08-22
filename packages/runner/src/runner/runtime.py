@@ -8,8 +8,33 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Protocol, TextIO
 
+from pydantic import JsonValue
+from shared.http.gateway_tasks import AppendTaskLogRequest, AppendTaskLogResponse
+
 DEFAULT_GATEWAY_ENDPOINT = "http://127.0.0.1:9000"
 DEFAULT_RUNNER_TIMEOUT_SECONDS = 30.0
+
+
+class TaskLogControlChannel(Protocol):
+    def post(self, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue: ...
+
+
+def post_task_log(
+    control: TaskLogControlChannel,
+    task_id: str,
+    stream: str,
+    message: str,
+) -> None:
+    if not message:
+        return
+    AppendTaskLogResponse.model_validate(
+        control.post(
+            "/gateway/tasks/log",
+            AppendTaskLogRequest(task_id=task_id, stream=stream, message=message).model_dump(
+                mode="json"
+            ),
+        )
+    )
 
 
 class RunnerTaskLogStream(io.TextIOBase):

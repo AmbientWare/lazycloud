@@ -1,45 +1,11 @@
 from __future__ import annotations
 
-import math
 from enum import StrEnum
 
 from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode
-from shared.container_requests import OciRuntimeName
+from shared.container_requests import OciRuntimeName, capacity_with_overhead
 from shared.contracts import ContractModel
-
-NODE_OVERHEAD_FACTOR = 1.10
-"""How much larger than the request a node has to be before it can host it.
-
-The agent, the container runtime and the host's own daemons take their share
-before a container gets anything, so a request that exactly equals a node's
-advertised size leaves nothing for the processes that start the container.
-
-Applied to the request rather than deducted from the offer because it is a fact
-about every node this platform launches, not about any one workload. Both places
-that decide whether capacity fits a shape read it, so a pool judged able to host
-a request is sized the way a new pool would have been.
-"""
-
-
-def capacity_with_overhead(value: int) -> int:
-    """A resource floor raised by what the node spends on itself."""
-    if value <= 0:
-        return value
-    return math.ceil(value * NODE_OVERHEAD_FACTOR)
-
-
-def schedulable_capacity(total: int) -> int:
-    """What a node can give containers, after what the platform takes.
-
-    The inverse of `capacity_with_overhead`, and the reason both exist: selection
-    buys a node at least this much larger than the request, and the node then has
-    to advertise less than it physically holds or placement fills back in the
-    headroom selection just paid for.
-    """
-    if total <= 0:
-        return total
-    return int(total / NODE_OVERHEAD_FACTOR)
 
 
 class ReservationStatus(StrEnum):
@@ -221,12 +187,9 @@ def offer_cost_per_node(offer: ComputeOffer) -> float:
 
 
 __all__ = [
-    "NODE_OVERHEAD_FACTOR",
     "ComputeOffer",
     "OfferRequest",
     "ReservationStatus",
-    "capacity_with_overhead",
     "choose_offer",
     "filter_offers",
-    "schedulable_capacity",
 ]

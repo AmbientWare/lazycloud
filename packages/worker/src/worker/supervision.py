@@ -7,6 +7,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from pydantic import Field, JsonValue, TypeAdapter
+from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -47,7 +48,13 @@ class WorkerEventSink(Protocol):
 
 
 class WorkerContainerStopper(Protocol):
-    def stop_container(self, container_id: str, *, force: bool) -> None: ...
+    def stop_container(
+        self,
+        container_id: str,
+        *,
+        force: bool,
+        reason: StopContainerReason = StopContainerReason.Unknown,
+    ) -> None: ...
 
 
 class WorkerUsageRecorder(Protocol):

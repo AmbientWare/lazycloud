@@ -8,7 +8,7 @@ import { LiveTaskTimeline } from "./LiveTaskTimeline";
 
 export type StoryVisual = "application" | "jobs" | "background" | "sandbox";
 
-export function ProductFrame({
+function ProductFrame({
   title,
   detail,
   status = "live",

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
-from typing import Protocol
+from datetime import datetime
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
@@ -39,14 +38,9 @@ from shared.deployments import DeploymentKind
 from shared.env import STUB_ID_ENV, STUB_TYPE_ENV
 from shared.events import Event
 from shared.http.endpoints import EndpointForwardRequest
-from shared.timestamps import utc_now
 from shared.worker_events import ENDPOINT_SCALE_DECISION_ACTION
 from tests.metric_helpers import metric_value
 from tests.redis_fakes import FakeRedis
-
-
-class _RealRedisActors(Protocol):
-    def client(self) -> RedisClient: ...
 
 
 def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
@@ -127,97 +121,6 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
     assert state.lock_acquired is True
     assert state.last_sample["active_requests"] == 3
     assert len(state.last_actions) == 3
-
-
-def _assert_endpoint_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
-    isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    scheduler = _Scheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=scheduler),
-    )
-    redis = real_redis_actors.client()
-    stub = _create_endpoint_stub(
-        isolated_services,
-        max_containers=3,
-        tasks_per_container=1,
-        runtime_config={"cpu_millicores": 500, "workspace_cpu_quota_millicores": 1000},
-    )
-    for _ in range(3):
-        _attach_dispatch(isolated_services, stub)
-
-    result = _endpoint_autoscaler(isolated_services, redis).reconcile()[0]
-
-    assert result.signal_value == 3
-    assert result.current_containers == 0
-    assert result.desired_containers == 2
-    assert result.reason == "workspace cpu quota reached"
-    assert [action.action for action in result.actions] == ["start", "start"]
-    assert result.guardrails["limited"] is True
-    assert result.guardrails["available_start_count"] == 2
-    with isolated_services.context.database.session() as session:
-        state = AutoscalerStateRepository(session).get(
-            workspace_id=stub.workspace_id,
-            target_kind=AutoscalerTargetKind.Endpoint,
-            target_id=stub.id,
-        )
-    assert state is not None
-    assert state.reason == "workspace cpu quota reached"
-    guardrails = _json_object(state.last_sample["guardrails"], "last_sample.guardrails")
-    assert guardrails["limited"] is True
-
-
-def _assert_endpoint_autoscaler_halts_scale_up_after_failed_container_threshold(
-    isolated_services: ApiServices,
-) -> None:
-    scheduler = _Scheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=scheduler),
-    )
-    redis = RedisClient(FakeRedis(), key_prefix="test")
-    stub = _create_endpoint_stub(
-        isolated_services,
-        max_containers=3,
-        tasks_per_container=1,
-        failed_container_threshold=2,
-        failure_window_seconds=300,
-    )
-    current_time = utc_now()
-    newest_failed_id = "00000000-0000-4000-8000-000000000301"
-    older_failed_id = "00000000-0000-4000-8000-000000000302"
-    _record_failed_container(
-        isolated_services,
-        stub,
-        newest_failed_id,
-        finished_at=current_time - timedelta(seconds=5),
-    )
-    _record_failed_container(
-        isolated_services,
-        stub,
-        older_failed_id,
-        finished_at=current_time - timedelta(seconds=10),
-    )
-    _record_failed_container(
-        isolated_services,
-        stub,
-        "00000000-0000-4000-8000-000000000303",
-        finished_at=current_time - timedelta(seconds=600),
-    )
-    _attach_dispatch(isolated_services, stub)
-    _attach_dispatch(isolated_services, stub)
-
-    result = _endpoint_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
-
-    assert result.signal_value == 2
-    assert result.current_containers == 0
-    assert result.desired_containers == 0
-    assert result.reason == "failed container threshold reached"
-    assert result.failed_containers == [newest_failed_id, older_failed_id]
-    assert result.actions == []
-    assert scheduler.requests == []
 
 
 def test_endpoint_autoscaler_persists_scale_decisions_only_on_transition(
@@ -331,11 +234,6 @@ def _attach_dispatch(
         repository.transition(task, status)
 
 
-def _json_object(value: JsonValue, name: str) -> dict[str, JsonValue]:
-    assert isinstance(value, dict), f"{name} must be a JSON object"
-    return value
-
-
 def _endpoint_containers(services: ApiServices, stub: StubRecord) -> list[ContainerRecord]:
     return [container for container in services.containers.list() if container.stub_id == stub.id]
 
@@ -396,31 +294,6 @@ def _record_container(
         status=ContainerStatus.Running,
         created_at=created_at,
         started_at=created_at,
-    )
-    with runtime.context.database.session() as session:
-        return ContainerRepository(session).upsert(container)
-
-
-def _record_failed_container(
-    runtime: ApiServices,
-    stub: StubRecord,
-    container_id: str,
-    *,
-    finished_at: datetime,
-) -> ContainerRecord:
-    container = ContainerRecord(
-        id=container_id,
-        name=f"endpoint-{container_id}",
-        image="img-endpoint",
-        command=["python3.12", "-m", "runner.serve"],
-        workspace_id=stub.workspace_id,
-        stub_id=stub.id,
-        app_id=stub.app_id,
-        status=ContainerStatus.Failed,
-        exit_code=1,
-        created_at=finished_at - timedelta(seconds=1),
-        started_at=finished_at - timedelta(milliseconds=500),
-        finished_at=finished_at,
     )
     with runtime.context.database.session() as session:
         return ContainerRepository(session).upsert(container)

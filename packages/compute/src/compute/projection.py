@@ -13,12 +13,6 @@ from shared.compute_policy import (
 from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
-from compute.telemetry import (
-    AgentTelemetryState,
-    agent_machine_connected,
-)
-
-DEFAULT_PRIVATE_TRANSPORT = "tsnet_restricted"
 DEFAULT_PRIVATE_FALLBACK = "internal"
 DEFAULT_PRIVATE_PRIORITY = 1000
 
@@ -127,30 +121,6 @@ class ProviderReservation(ContractModel):
     runtime: str = ""
 
 
-class ProviderInstanceProjection(ContractModel):
-    id: str
-    pool: MachinePool = MachinePool("")
-    provider: str = ""
-    cloud: str = ""
-    region: str = ""
-    offer_id: str = ""
-    status: str = ""
-    gpu_count: int = 0
-    hourly_cost_micros: int = 0
-    source: str = ""
-    created_at: str = ""
-    expires_at: str = ""
-    billing_renewal_at: str = ""
-    status_message: str = ""
-    terminating_reason: str = ""
-    machine_id: str = ""
-    node_count: int = 0
-    instance_type: str = ""
-    cpu_millicores: int = 0
-    memory_mb: int = 0
-    storage_mb: int = 0
-
-
 class PrivateUnitState(CapacityOwnerIdentity):
     workspace_id: str = ""
     name: UnitName
@@ -167,21 +137,6 @@ class PrivateUnitState(CapacityOwnerIdentity):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     expires_at: datetime | None = None
-    reserved_nodes: int = 0
-
-
-class PrivateUnitProjection(ContractModel):
-    name: str
-    selector: str
-    config: NormalizedUnitConfig | None = None
-    reservations: list[ProviderInstanceProjection] = Field(default_factory=list)
-    committed_spend_micros: int = 0
-    status: str = ""
-    source: str = ""
-    created_at: str = ""
-    expires_at: str = ""
-    machine_count: int = 0
-    ready_machine_count: int = 0
     reserved_nodes: int = 0
 
 
@@ -268,109 +223,6 @@ def compute_unit_from_config(
     )
 
 
-def validate_pool_resource_compatibility(
-    existing: PrivateUnitState | None,
-    request: ComputeUnitPlan,
-) -> None:
-    if existing is None:
-        return
-    existing_gpu = _pool_gpu_types(existing)
-    request_gpu = sorted({gpu for gpu in request.gpu if gpu})
-    if existing.reserved_nodes > 0 and not existing_gpu and request_gpu:
-        msg = (
-            f"pool {existing.name!r} is configured for CPU-only nodes; "
-            "create a separate pool for GPU nodes"
-        )
-        raise ValueError(msg)
-    if existing_gpu and request.nodes > 0 and not request_gpu:
-        msg = (
-            f"pool {existing.name!r} is configured for GPU nodes; "
-            "create a separate pool for CPU-only nodes"
-        )
-        raise ValueError(msg)
-    if len(existing_gpu) > 1:
-        msg = f"pool {existing.name!r} already has mixed GPU types: {', '.join(existing_gpu)}"
-        raise ValueError(msg)
-    if len(request_gpu) > 1:
-        msg = "private pool reservations require a single GPU type"
-        raise ValueError(msg)
-    if existing_gpu and request_gpu and existing_gpu[0] != request_gpu[0]:
-        msg = (
-            f"pool {existing.name!r} is configured for GPU type {existing_gpu[0]!r}; "
-            f"create a separate pool for GPU type {request_gpu[0]!r}"
-        )
-        raise ValueError(msg)
-
-
-def project_provider_instance(
-    reservation: ProviderReservation,
-    *,
-    cost_multiplier: float = 1.0,
-) -> ProviderInstanceProjection:
-    return ProviderInstanceProjection(
-        id=reservation.id,
-        pool=reservation.pool,
-        provider=reservation.provider,
-        cloud=reservation.cloud,
-        region=reservation.region,
-        offer_id=reservation.offer_id,
-        status=reservation.status,
-        gpu_count=reservation.gpu_count,
-        hourly_cost_micros=int(reservation.hourly_cost_micros * cost_multiplier),
-        source=(
-            reservation.source.value
-            if isinstance(reservation.source, ComputeUnitSource)
-            else str(reservation.source)
-        ),
-        created_at=format_compute_time(reservation.created_at),
-        expires_at=format_compute_time(reservation.expires_at),
-        billing_renewal_at=format_compute_time(reservation.billing_renewal_at),
-        status_message=reservation.status_message,
-        terminating_reason=reservation.terminating_reason,
-        machine_id=reservation.machine_id,
-        node_count=reservation.node_count,
-        instance_type=reservation.instance_type,
-        cpu_millicores=reservation.cpu_millicores,
-        memory_mb=reservation.memory_mb,
-        storage_mb=reservation.storage_mb,
-    )
-
-
-def project_private_pool(
-    state: PrivateUnitState | None,
-    *,
-    machines: list[AgentTelemetryState] | None = None,
-    now: datetime | None = None,
-    billable_margin_pct: float = 0.10,
-) -> PrivateUnitProjection | None:
-    if state is None:
-        return None
-    machine_states = machines or []
-    cost_multiplier = 1.0 + billable_margin_pct
-    source = (
-        state.source.value if isinstance(state.source, ComputeUnitSource) else str(state.source)
-    )
-    return PrivateUnitProjection(
-        name=state.name,
-        selector=state.selector,
-        config=normalize_unit_config(state.config),
-        reservations=[
-            project_provider_instance(reservation, cost_multiplier=cost_multiplier)
-            for reservation in state.reservations
-        ],
-        committed_spend_micros=state.committed_spend_micros,
-        status=state.status,
-        source=source,
-        created_at=format_compute_time(state.created_at),
-        expires_at=format_compute_time(state.expires_at),
-        machine_count=len(machine_states),
-        ready_machine_count=sum(
-            1 for machine in machine_states if agent_machine_connected(machine, now=now)
-        ),
-        reserved_nodes=state.reserved_nodes,
-    )
-
-
 def dollars_to_micros(value: float) -> int:
     return int(value * 1_000_000)
 
@@ -390,24 +242,4 @@ def parse_ttl_seconds(value: str) -> int:
     return amount * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
 
 
-def format_compute_time(value: datetime | None) -> str:
-    if value is None:
-        return ""
-    return value.isoformat().replace("+00:00", "Z")
-
-
 _TTL_PATTERN = re.compile(r"(?P<amount>[1-9][0-9]*)(?P<unit>[smhd])")
-
-
-def _pool_gpu_types(state: PrivateUnitState) -> list[str]:
-    configured = sorted({gpu for gpu in (state.config.gpu if state.config else []) if gpu})
-    if configured:
-        return configured
-    observed = sorted(
-        {
-            reservation.gpu or ""
-            for reservation in state.reservations
-            if reservation.gpu_count > 0 and reservation.gpu
-        }
-    )
-    return [gpu for gpu in observed if gpu]

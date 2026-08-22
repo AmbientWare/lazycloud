@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from base64 import b64decode
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from api.server.services import ApiServices
@@ -27,21 +27,16 @@ from scheduler.containers import (
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
-    SchedulerContainerAddress,
     SchedulerWorkerRequest,
 )
 from shared.containers import ContainerRecord
-from shared.contracts import ContractModel
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
 from shared.image_building.records import BuildStatus
 from shared.scheduling import SchedulerContainerState
 from tests.real_redis import RealRedisActors
-from worker.container_client.control import ContainerServiceTransport
 from worker.container_client.models import (
-    ContainerClientConnectionOptions,
     ContainerExecResponse,
     ContainerKillResponse,
-    ContainerServiceMethod,
     ContainerStatusResponse,
 )
 from worker_repository.image_build_container_execution import (
@@ -748,61 +743,6 @@ class _BlockedLogClient(_FakeBuildContainerClient):
         self.stream_log_calls.append(container_id)
         self.release_log_stream.wait()
         self.log_stream_stopped.set()
-
-
-class _AddressResolver:
-    def __init__(self, addresses: dict[str, str]) -> None:
-        self.addresses = addresses
-
-    def worker_address(self, container_id: str) -> SchedulerContainerAddress | None:
-        address = self.addresses.get(container_id)
-        if address is None:
-            return None
-        return SchedulerContainerAddress(container_id=container_id, address=address)
-
-    def scheduling_failure(self, container_id: str) -> None:
-        del container_id
-        return None
-
-
-class _TransportFactory:
-    def __init__(self, transport: ContainerServiceTransport) -> None:
-        self.transport = transport
-        self.options: list[ContainerClientConnectionOptions] = []
-
-    def create_transport(
-        self,
-        options: ContainerClientConnectionOptions,
-    ) -> ContainerServiceTransport:
-        self.options.append(options)
-        return self.transport
-
-
-class _FactoryTransport:
-    def __init__(self) -> None:
-        self.unary_calls: list[tuple[ContainerServiceMethod, ContractModel, float | None]] = []
-
-    def unary(
-        self,
-        method: ContainerServiceMethod,
-        request: ContractModel,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> dict[str, bool | str | int]:
-        self.unary_calls.append((method, request, timeout_seconds))
-        if method is ContainerServiceMethod.ContainerStatus:
-            return {"ok": True, "status": "complete", "exit_code": 0}
-        return {"ok": True}
-
-    def stream(
-        self,
-        method: ContainerServiceMethod,
-        request: ContractModel,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> Iterable[ContractModel]:
-        del method, request, timeout_seconds
-        return ()
 
 
 class _ContainerRequestScheduler:

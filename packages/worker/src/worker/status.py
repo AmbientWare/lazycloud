@@ -10,9 +10,6 @@ CONTAINER_STATE_TTL_SECONDS = 120
 CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS = 600
 DEFAULT_WORKER_SPINDOWN_SECONDS = 300.0
 DEFAULT_WORKER_STOP_GRACE_SECONDS = 30
-SHUTDOWN_DRAIN_MAX_SECONDS = 5.0
-SHUTDOWN_FORCE_WAIT_SECONDS = 5.0
-SHUTDOWN_CLEANUP_RESERVE_SECONDS = 5.0
 WORKER_ORPHAN_STATE_MISSING_EVENT_ID = "worker.orphan_state_missing"
 WORKER_PENDING_RECONCILED_EVENT_ID = "worker.pending_reconciled_running"
 WORKER_STOPPING_GRACE_KILL_EVENT_ID = "worker.stopping_grace_kill"
@@ -121,15 +118,6 @@ class WorkerSpindownPlan(ContractModel):
     cleanup_workspace_storage: bool = False
     cancel_worker_context: bool = False
     reason: str = ""
-
-
-class WorkerShutdownBudgetPlan(ContractModel):
-    configured_seconds: int
-    budget_seconds: float
-    drain_timeout_seconds: float
-    stop_grace_seconds: float
-    force_wait_seconds: float = SHUTDOWN_FORCE_WAIT_SECONDS
-    cleanup_reserve_seconds: float = SHUTDOWN_CLEANUP_RESERVE_SECONDS
 
 
 def normalize_worker_container_status(
@@ -267,16 +255,6 @@ def plan_delivered_container_request(
     )
 
 
-def plan_mark_container_stopping() -> WorkerStatusHeartbeatPlan:
-    return WorkerStatusHeartbeatPlan(
-        action=WorkerStatusHeartbeatAction.UpdateStatus,
-        next_status=WorkerContainerStatus.Stopping,
-        update_status=True,
-        expiry_seconds=CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS,
-        reason="mark container stopping",
-    )
-
-
 def plan_worker_spindown(
     *,
     context_cancelled: bool = False,
@@ -310,38 +288,6 @@ def plan_worker_spindown(
         should_shutdown=False,
         reason="worker still active",
     )
-
-
-def worker_shutdown_drain_timeout(configured_seconds: int) -> float:
-    budget = _worker_shutdown_budget(configured_seconds)
-    if budget <= 10:
-        return 0.0
-    return min(budget / 6, SHUTDOWN_DRAIN_MAX_SECONDS)
-
-
-def worker_container_stop_grace(configured_seconds: int) -> float:
-    budget = _worker_shutdown_budget(configured_seconds)
-    grace = (
-        budget
-        - worker_shutdown_drain_timeout(configured_seconds)
-        - SHUTDOWN_FORCE_WAIT_SECONDS
-        - SHUTDOWN_CLEANUP_RESERVE_SECONDS
-    )
-    return budget if grace <= 0 else grace
-
-
-def plan_worker_shutdown_budget(configured_seconds: int) -> WorkerShutdownBudgetPlan:
-    budget = _worker_shutdown_budget(configured_seconds)
-    return WorkerShutdownBudgetPlan(
-        configured_seconds=configured_seconds,
-        budget_seconds=budget,
-        drain_timeout_seconds=worker_shutdown_drain_timeout(configured_seconds),
-        stop_grace_seconds=worker_container_stop_grace(configured_seconds),
-    )
-
-
-def _worker_shutdown_budget(configured_seconds: int) -> float:
-    return float(_positive_or_default(configured_seconds, DEFAULT_WORKER_STOP_GRACE_SECONDS))
 
 
 def _positive_or_default(value: int, default: int) -> int:

@@ -120,10 +120,6 @@ class AgentScopedTelemetryPlan(ContractModel):
     reason: str = ""
 
 
-class TelemetryCredentialIssuer(Protocol):
-    def issue(self, plan: TelemetryCredentialIssuePlan) -> str: ...
-
-
 class AgentMetricSnapshot(Protocol):
     timestamp_unix_nano: int
     cpu_utilization_pct: float

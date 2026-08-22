@@ -12,9 +12,7 @@ import execution.shells.service as shell_service_module
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService, StubKind
-from coordination.redis_client import RedisClient
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.service import ContainerService
 from execution.pods.service import PodControlService
@@ -59,7 +57,6 @@ from shared.shell_protocol import ShellFrameType, encode_shell_frame
 from shared.workload_keys import pod_keep_warm_lock_key
 from starlette.websockets import WebSocketDisconnect
 from tests.real_redis import RealRedisActors
-from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import services_with_redis_container_control
 from tests.url_constants import TEST_URL
 from worker.container_client import models
@@ -1010,38 +1007,6 @@ class _EchoServer:
                     connection.sendall(data)
 
 
-class _BannerServer:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
-        port = _available_loopback_port()
-        self.tcp_address = ("127.0.0.1", port)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.bind(self.tcp_address)
-        self.socket.listen(1)
-        self.address = f"127.0.0.1:{port}"
-        self.closed = threading.Event()
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def close(self) -> None:
-        self.closed.set()
-        with suppress(OSError):
-            socket.create_connection(self.tcp_address, timeout=0.1).close()
-        self.socket.close()
-        self.thread.join(timeout=1)
-
-    def _serve(self) -> None:
-        try:
-            connection = self.socket.accept()[0]
-        except OSError:
-            return
-        with connection:
-            if not self.closed.is_set():
-                connection.sendall(self.payload)
-
-
 def _ready_shell_connector(_target: ShellBackendTarget) -> socket.socket:
     client, server = socket.socketpair()
 
@@ -1106,10 +1071,6 @@ def _auth_headers(services: ApiServices) -> dict[str, str]:
         .token
     )
     return {"Authorization": f"Bearer {token}"}
-
-
-def _compute_state() -> RedisComputeStateRepository:
-    return RedisComputeStateRepository(RedisClient(FakeRedis(), key_prefix="pod-shell"))
 
 
 def _json_string_list(value: JsonValue) -> list[str]:

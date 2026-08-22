@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TypeAlias
 
@@ -142,26 +142,6 @@ class CloudEventRecord(ContractModel):
         return envelope
 
 
-class ContainerEventRecord(ContractModel):
-    type: str
-    event_id: str = ""
-    domain: str = ""
-    parent_id: str = ""
-    duration_ms: int = 0
-    timestamp: datetime | None = None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    success: bool | None = None
-    source: str = ""
-    attrs: dict[str, str] = Field(default_factory=dict)
-    container_id: str = ""
-    workspace_id: str = ""
-    stub_id: str = ""
-    task_id: str = ""
-    app_id: str = ""
-    worker_id: str = ""
-
-
 def create_cloud_event_record(
     event_type: str | EventRecordType,
     data: EventDataInput,
@@ -270,43 +250,6 @@ def event_time_for_data(
             return _first_datetime(data, "timestamp") or now or utc_now()
         case _:
             return now or utc_now()
-
-
-def metrics_bucket_key(value: datetime, interval: str) -> int:
-    current = value.astimezone(timezone.utc)
-    match interval.strip().lower():
-        case "1m" | "minute":
-            bucket = current.replace(second=0, microsecond=0)
-        case _:
-            bucket = current.replace(minute=0, second=0, microsecond=0)
-    return int(bucket.timestamp() * 1000)
-
-
-def summarize_container_lifecycle_durations(
-    records: Iterable[ContainerEventRecord],
-) -> dict[str, int]:
-    summary: dict[str, int] = {}
-    for record in records:
-        if record.type != EventRecordType.ContainerLifecycle or not record.event_id:
-            continue
-        key = f"{record.event_id.replace('.', '_')}_ms"
-        summary[key] = max(summary.get(key, 0), record.duration_ms)
-        if record.domain and not record.parent_id:
-            domain_key = f"{record.domain.replace('.', '_')}_ms"
-            summary[domain_key] = max(summary.get(domain_key, 0), record.duration_ms)
-    return summary
-
-
-def required_container_lifecycle_missing(
-    records: Iterable[ContainerEventRecord],
-    required_ids: Iterable[str],
-) -> tuple[str, ...]:
-    present = {
-        record.event_id
-        for record in records
-        if record.type == EventRecordType.ContainerLifecycle and record.event_id
-    }
-    return tuple(event_id for event_id in required_ids if event_id not in present)
 
 
 def _event_payload(data: EventDataInput) -> dict[str, JsonValue]:

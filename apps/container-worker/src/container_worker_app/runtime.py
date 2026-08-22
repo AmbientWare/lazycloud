@@ -9,6 +9,7 @@ from shared.container_requests import StopContainerReason
 from shared.scheduling import WorkerUnavailableReason
 from worker.event_bridge import WorkerEventHandlingResult
 from worker.events import WorkerStreamEvent
+from worker.memory_pressure import WorkerMemoryPressureWatcher
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.retention import WorkerRetentionService
 from worker.scheduler_requests import WorkerSchedulerRequestResult
@@ -72,6 +73,9 @@ class ContainerWorkerServices(Protocol):
 
     @property
     def retention(self) -> WorkerRetentionService | None: ...
+
+    @property
+    def memory_watcher(self) -> WorkerMemoryPressureWatcher | None: ...
 
 
 @dataclass(slots=True)

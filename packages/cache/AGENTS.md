@@ -1,8 +1,8 @@
-# Cache Package
+# Cache package
 
 Typed hot coordination and content-addressed runtime data.
 
-Redis here is coordination, not durable history—anything that has to survive
+Redis here is coordination, not durable history. Anything that has to survive
 belongs to a durable owner. Object and filesystem responsibilities stay behind
 storage protocols rather than being reimplemented.
 

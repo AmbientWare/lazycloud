@@ -380,10 +380,6 @@ class FileCacheServer:
         os.utime(metadata_path, None)
         return metadata
 
-    def reconcile_metadata(self) -> CacheMetadataReconciliationResult:
-        with self._mutation_lock:
-            return self._reconcile_metadata_locked()
-
     def touch_content_access(self, content_hash: str, *, now: datetime | None = None) -> None:
         normalized = _normalize_content_hash(content_hash)
         current = now or utc_now()

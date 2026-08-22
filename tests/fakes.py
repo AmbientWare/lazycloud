@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
 from foundation.process import ManagedCommandResult, ManagedCommandState
-from pydantic import JsonValue, TypeAdapter
 from shared.http.errors import ErrorResponse, HttpApiError
 from shared.http.gateway import (
     DeployStubRequest,
@@ -21,10 +18,6 @@ from shared.http.gateway import (
 )
 from storage_client.s3 import S3ObjectInfo
 
-type ChannelCall = tuple[str, str, dict[str, JsonValue] | None]
-
-_JSON_MAPPING = TypeAdapter(dict[str, JsonValue])
-
 
 def http_api_error(detail: str, *, status_code: int = 400) -> HttpApiError:
     return HttpApiError(
@@ -32,15 +25,6 @@ def http_api_error(detail: str, *, status_code: int = 400) -> HttpApiError:
         status_code=status_code,
         error=ErrorResponse(detail=detail),
     )
-
-
-class _RequestWithContent(Protocol):
-    @property
-    def content(self) -> bytes: ...
-
-
-def json_request_payload(request: _RequestWithContent) -> dict[str, JsonValue]:
-    return _JSON_MAPPING.validate_python(json.loads(request.content.decode()))
 
 
 @dataclass

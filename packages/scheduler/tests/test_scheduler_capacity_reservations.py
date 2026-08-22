@@ -218,12 +218,6 @@ class _Controller:
         )
 
 
-class _OwnerAgnosticController(_Controller):
-    def accepts(self, request: SchedulerWorkerRequest) -> bool:
-        _ = request
-        return True
-
-
 @dataclass(slots=True)
 class _WorkerRepository:
     workers: list[SchedulerWorkerRecord] = field(default_factory=list)

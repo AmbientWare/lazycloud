@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { stubListSchema, taskLatencyTimeseriesSchema, type Stub } from "@/lib/api/schemas";
+import { stubListSchema, taskLatencyTimeseriesSchema } from "@/lib/api/schemas";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -13,11 +13,6 @@ export function stubsQueryOptions(workspaceId: string, appId?: string) {
       apiRequest(withWorkspace(`/api/v1/stubs${appParam}`, workspaceId), stubListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
-}
-
-/** Workspace-wide stub id -> kind map so task rows resolve kinds without per-row requests. */
-export function stubKindMap(stubs: Stub[] | undefined): Map<string, string> {
-  return new Map((stubs ?? []).map((stub) => [stub.id, stub.kind]));
 }
 
 /** Per-stub task-duration percentiles (p50/p95) plus cold starts, bucketed over time. */

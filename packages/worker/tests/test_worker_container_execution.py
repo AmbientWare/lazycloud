@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -395,18 +394,6 @@ class LifecycleEvents:
 
 
 @dataclass(slots=True)
-class BlockingLifecycleEvents:
-    payloads: list[ContainerLifecyclePayload] = field(default_factory=list)
-    started: threading.Event = field(default_factory=threading.Event)
-    release: threading.Event = field(default_factory=threading.Event)
-
-    def publish_container_lifecycle(self, payload: ContainerLifecyclePayload) -> None:
-        self.started.set()
-        self.release.wait(timeout=1)
-        self.payloads.append(payload)
-
-
-@dataclass(slots=True)
 class MonitorHandle:
     result: ContainerRuntimeMonitoringResult
     stopped: bool = False
@@ -553,7 +540,13 @@ class EventSink(WorkerEventSink):
 class Stopper:
     stopped: list[tuple[str, bool]] = field(default_factory=list)
 
-    def stop_container(self, container_id: str, *, force: bool) -> None:
+    def stop_container(
+        self,
+        container_id: str,
+        *,
+        force: bool,
+        reason: StopContainerReason = StopContainerReason.Unknown,
+    ) -> None:
         self.stopped.append((container_id, force))
 
 

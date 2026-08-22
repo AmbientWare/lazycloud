@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 from pydantic import Field, field_validator, model_validator
 
 from shared.contracts import ContractModel
@@ -22,6 +26,40 @@ CONTAINER_HEALTH_PATH = "/health"
 # Matches DEFAULT_DISK in shared.deployment_records, in bytes.
 DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 
+NODE_OVERHEAD_FACTOR = 1.10
+"""How much larger than the request a node has to be before it can host it.
+
+The agent, the container runtime and the host's own daemons take their share
+before a container gets anything, so a request that exactly equals a node's
+advertised size leaves nothing for the processes that start the container.
+
+Applied to the request rather than deducted from the offer because it is a fact
+about every node this platform launches, not about any one workload. Both places
+that decide whether capacity fits a shape read it, so a pool judged able to host
+a request is sized the way a new pool would have been.
+"""
+
+
+def capacity_with_overhead(value: int) -> int:
+    """A resource floor raised by what the node spends on itself."""
+    if value <= 0:
+        return value
+    return math.ceil(value * NODE_OVERHEAD_FACTOR)
+
+
+def schedulable_capacity(total: int) -> int:
+    """What a node can give containers, after what the platform takes.
+
+    The inverse of `capacity_with_overhead`, and the reason both exist: selection
+    buys a node at least this much larger than the request, and the node then has
+    to advertise less than it physically holds or placement fills back in the
+    headroom selection just paid for.
+    """
+    if total <= 0:
+        return total
+    return int(total / NODE_OVERHEAD_FACTOR)
+
+
 # How far past its request a container may expand when its author named no limit.
 #
 # Proportional rather than a flat addend. A fixed number of gibibytes above the
@@ -43,6 +81,69 @@ CONTAINER_MEMORY_BURST_CAP_MIB = 8192
 # everything on the node degrades together. Memory is not, which is why the two
 # ceilings are not written the same way.
 CONTAINER_CPU_BURST_CEILING_MILLICORES = 16_000
+
+
+DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT = 1.0
+"""Full-stall percentage over ten seconds at which a worker stops coping.
+
+Measured rather than chosen, because the figure this replaced was chosen and
+never fired. A slot pinned at its memory limit with more than its own size
+swapped out -- a genuinely thrashing worker -- reads between 0.8 and 1.4 here,
+and an idle one reads 0.0 to 0.2. Twenty, the first guess, describes a machine
+already dead.
+
+`full` rather than `some`: `some` counts any window where one task waited, which
+a busy worker does constantly. `full` counts windows where nothing could run.
+The two tracked each other closely when measured, but only because there were
+two containers; `some` climbs with the container count whether or not anything
+is wrong.
+
+The margin over idle is about five times, which is thinner than it looks: a
+container inside its reservation is never a candidate, and the cooldown means a
+transient spike costs at most one eviction. Worth re-measuring on a node running
+zram, where reclaim is faster and the stall for the same thrash will be lower.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerMemoryReading:
+    """One container's memory, as the machine currently sees it."""
+
+    container_id: str
+    current_bytes: int
+    reserved_bytes: int
+
+    @property
+    def bytes_above_reservation(self) -> int:
+        return self.current_bytes - self.reserved_bytes
+
+
+def select_memory_eviction_candidate(
+    readings: Sequence[ContainerMemoryReading],
+    *,
+    pressure_percent: float,
+    threshold_percent: float = DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT,
+) -> ContainerMemoryReading | None:
+    """Which container to stop when the machine is running out of memory.
+
+    The one furthest above what it reserved, which is the rule a reservation
+    exists to make true: a container inside its request is never a candidate,
+    however large it is. That is the whole contract, and it is why this decision
+    cannot be left to the kernel -- `oom_badness` scores resident size and page
+    tables and has no notion of what anyone was promised, so it reaches the
+    biggest honest tenant before a small one that tripled.
+
+    Returns None when nothing is over its reservation, because then there is no
+    container whose growth caused this and stopping one would be arbitrary.
+    """
+    if pressure_percent < threshold_percent:
+        return None
+    over = [reading for reading in readings if reading.bytes_above_reservation > 0]
+    if not over:
+        return None
+    # Ties broken by container id so two workers reading the same machine cannot
+    # choose differently.
+    return max(over, key=lambda reading: (reading.bytes_above_reservation, reading.container_id))
 
 
 def container_memory_limit_mib(request_mib: int) -> int:
@@ -100,6 +201,17 @@ class StopContainerReason(StringEnum):
     as `User` it would look like they stopped it themselves.
     """
 
+    MemoryEvicted = "MEMORY_EVICTED"
+    """The machine ran short of memory and this container was using the most
+    above what it reserved.
+
+    Its own reason rather than `Preempted`, which says a machine was reclaimed.
+    Nothing was reclaimed here and the container did nothing wrong except grow
+    into headroom that stopped being spare. It is also the one reason a customer
+    can act on directly: raising the request moves them out of the candidate set,
+    which is exactly what a reservation is for.
+    """
+
     Unknown = "UNKNOWN"
 
     def describe(self) -> str:
@@ -129,6 +241,9 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
     # for routine churn tells the customer something untrue.
     StopContainerReason.Admin: "the platform stopped it",
     StopContainerReason.Unfunded: "the account has no payment method on file",
+    StopContainerReason.MemoryEvicted: (
+        "the machine ran out of memory and this container was using the most above its request"
+    ),
     StopContainerReason.Unknown: "",
 }
 
@@ -269,13 +384,16 @@ __all__ = [
     "DEFAULT_ARTIFACTS_PATH",
     "DEFAULT_ARTIFACTS_PREFIX",
     "DEFAULT_CONTAINER_DISK_LIMIT_BYTES",
+    "DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT",
     "DEFAULT_OBJECTS_PATH",
     "DEFAULT_VOLUMES_PATH",
     "DEFAULT_VOLUMES_PREFIX",
     "DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH",
+    "NODE_OVERHEAD_FACTOR",
     "WORKER_CONTAINER_VOLUME_PATH",
     "WORKER_USER_ARTIFACT_VOLUME",
     "WORKER_USER_CODE_VOLUME",
+    "ContainerMemoryReading",
     "ContainerShutdownTarget",
     "OciRuntimeName",
     "RequestMount",
@@ -285,5 +403,8 @@ __all__ = [
     "StopContainerReason",
     "WorkerContainerRequestPayload",
     "WorkerStartupKind",
+    "capacity_with_overhead",
     "container_memory_limit_mib",
+    "schedulable_capacity",
+    "select_memory_eviction_candidate",
 ]

@@ -1,4 +1,4 @@
-# Reusable Packages
+# Reusable packages
 
 Domain packages: the reusable decisions the deployable apps compose.
 
@@ -17,9 +17,9 @@ package that owns it for all of them, and one only its own package calls stays
 private to that package however generic it looks. Duplicating a function across
 packages to avoid the question is the failure this prevents; so is hoisting a
 single-caller helper somewhere central on the argument that it might be reused.
-The name to avoid is the one that describes no domain — `utils`, `helpers`,
-`common` — because nothing can be said to own it and nothing can be said not to
-belong in it.
+The name to avoid is the one that describes no domain, such as `utils`,
+`helpers`, or `common`, because nothing can be said to own it and nothing can be
+said not to belong in it.
 
 Moving a boundary updates package metadata, callers, tests, docs and examples,
 entrypoints, and the lockfile together.

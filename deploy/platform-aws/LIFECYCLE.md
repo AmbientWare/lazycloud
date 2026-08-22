@@ -81,6 +81,23 @@ aws secretsmanager put-secret-value --secret-id "$DEPLOYMENT/github-client-id" -
 # cloudflare-api-token, stripe-api-key, stripe-webhook-secret
 ```
 
+The administrator credential belongs with them, and has to be written **before
+the first converge**:
+
+```sh
+aws secretsmanager put-secret-value --secret-id "$DEPLOYMENT/administrator-token" \
+  --secret-string "rt_$(python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode())')"
+```
+
+Not merely convenient. `auth bootstrap` adopts a configured credential when it
+finds one and mints its own when it does not, and the two record different
+bootstrap request ids. Converge once without this and the minted credential
+exists only in a volume on the host, every later compose step has no bearer token
+— `fleet ensure` among them, so no managed capacity is ever registered — and
+supplying the token afterwards is refused with *"administrator bootstrap is
+already complete; use offline recovery"*. Recovery mints its own token too, so
+the way back is to reset the schema.
+
 A secret with no value is not fatal. The host writes an empty variable and names
 what was missing on stderr, so an unchosen telemetry backend does not stop the
 control plane from serving.

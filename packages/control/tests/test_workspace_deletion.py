@@ -14,7 +14,6 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from api.server.worker_repository_service import WorkerRepositoryService
-from compute.offers import ComputeOffer
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import AwsAccountConnectionRepository
@@ -66,7 +65,6 @@ from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
 from tests.fakes import FakeObjectClient
-from tests.provider_fixtures import configure_test_provider
 from tests.service_fixtures import (
     administrator_credential,
     owned_workspace,
@@ -989,23 +987,3 @@ class _BlockingPutObjectClient(FakeObjectClient):
         self.uploaded.set()
         assert self.release.wait(timeout=10)
         return result
-
-
-def _configure_workspace_provider(isolated_services: ApiServices, *, workspace: str):
-    return configure_test_provider(
-        isolated_services,
-        "workspace-delete",
-        [
-            ComputeOffer(
-                id="cpu-small",
-                provider="workspace-delete",
-                instance_type="cpu-small",
-                region="local",
-                cpu_millicores=1000,
-                memory_mb=1024,
-                hourly_cost_micros=1_000_000,
-                available=1,
-            )
-        ],
-        workspace=workspace,
-    )

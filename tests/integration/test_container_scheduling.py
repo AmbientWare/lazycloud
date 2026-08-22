@@ -12,11 +12,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from runner.invocation import cloudpickle_bytes
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
-from scheduler.fleet import SchedulerContainerStatus
 from scheduler.state import (
-    SchedulerContainerAddress,
-    SchedulerContainerAddressMap,
-    SchedulerContainerState,
     SchedulerWorkerRequest,
 )
 from shared.container_requests import (
@@ -40,8 +36,6 @@ from shared.http.functions import (
 )
 from shared.identity import WorkspaceStorageConfig
 from shared.tasks import TaskStatus
-from shared.usage import UsageMetric
-from shared.usage_query import UsageQuery
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import scheduler_request_service_for_redis
 
@@ -450,25 +444,3 @@ class _Scheduler:
             container_id=request.container_id,
             reason="queued",
         )
-
-
-class _RunningSchedulerContainers:
-    def get_container_state(self, container_id: str) -> SchedulerContainerState:
-        return SchedulerContainerState(
-            container_id=container_id,
-            stub_id="shell-stub",
-            workspace_id="workspace-1",
-            status=SchedulerContainerStatus.Running,
-        )
-
-    def get_worker_address(self, container_id: str) -> SchedulerContainerAddress | None:
-        del container_id
-        return None
-
-    def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:
-        return SchedulerContainerAddressMap(container_id=container_id)
-
-
-def _usage_quantity(services: ApiServices, workspace_id: str, metric: UsageMetric) -> float:
-    summary = services.usage.aggregate(query=UsageQuery(workspace_id=workspace_id))
-    return {row.metric: row.quantity for row in summary}.get(metric, 0)

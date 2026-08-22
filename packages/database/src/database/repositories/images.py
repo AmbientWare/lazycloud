@@ -84,13 +84,6 @@ class ImageRepository:
             return None
         return record
 
-    def list(self, *, workspace_id: str) -> list[ImageRecord]:
-        return [
-            record
-            for record in self.records.list(workspace_id=workspace_id)
-            if record.cleanup_completed_at is None
-        ]
-
     def get_updated_before(
         self,
         image_id: str,
@@ -430,17 +423,6 @@ class ImageBuildRepository:
     def list_across_workspaces(self, *, status: str | None = None) -> list[ImageBuildRecord]:
         """System listing for build reconciliation and retention."""
         return self.records.list_across_workspaces(status=status)
-
-    def list_with_workspace_ownership(
-        self,
-    ) -> list[tuple[ImageBuildRecord, str | None]]:
-        rows = self.session.scalars(
-            select(ImageBuildTable).order_by(
-                ImageBuildTable.created_at.desc(),
-                ImageBuildTable.id.asc(),
-            )
-        )
-        return [(ImageBuildRecord.model_validate(row.payload), row.workspace_id) for row in rows]
 
     def protected_artifact_resources(
         self,

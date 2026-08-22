@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field, JsonValue, field_validator, model_validator
-from shared.app_identity import MACHINE_ID_LABEL
-from shared.compute_fleet import Machine
+from pydantic import Field, field_validator, model_validator
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -21,7 +19,6 @@ from shared.contracts import ContractModel
 from shared.urls import normalize_http_origin
 
 from compute.offers import ComputeOffer
-from compute.projection import PrivateUnitState
 
 
 class ProviderMachineStatus:
@@ -30,23 +27,6 @@ class ProviderMachineStatus:
     Terminated = "terminated"
     Unhealthy = "unhealthy"
     Unknown = "unknown"
-
-
-class ProviderMachineReference(ContractModel):
-    provider_instance_id: str
-    machine_id: str
-    name: str = ""
-    status: str = ProviderMachineStatus.Unknown
-    address: str = ""
-    labels: dict[str, str] = Field(default_factory=dict)
-    storage_volume_ids: tuple[str, ...] = ()
-
-
-class ProviderReconcileResult(ContractModel):
-    observed_machines: list[ProviderMachineReference] = Field(default_factory=list)
-    missing_machine_ids: list[str] = Field(default_factory=list)
-    stale_machine_ids: list[str] = Field(default_factory=list)
-    terminated_machine_ids: list[str] = Field(default_factory=list)
 
 
 class ProviderCapacityPhase(StrEnum):
@@ -133,31 +113,8 @@ class ProviderUnitSnapshot(ContractModel):
     """
 
 
-class DirectMachineLaunchRequest(ContractModel):
-    workspace_id: str
-    pool: MachinePool
-    registration_token: str
-    machine_id: str
-    operation_id: str
-    # Logical identity is `operation_id`; this rotates per launch attempt so a
-    # compensated attempt relaunches instead of colliding with the provider's
-    # idempotency record for the previous one.
-    idempotency_key: str
-    offer: ComputeOffer
-
-
 class DirectMachineProvider(Protocol):
     def list_offers(self) -> Iterable[ComputeOffer]: ...
-
-    def launch_machine(self, request: DirectMachineLaunchRequest) -> ProviderMachineReference: ...
-
-    def reconcile_machines(
-        self,
-        pool: MachinePool,
-        expected_machine_ids: set[str],
-        *,
-        terminate_stale: bool = False,
-    ) -> ProviderReconcileResult: ...
 
     def terminate_machine(self, provider_instance_id: str, /) -> None: ...
 
@@ -297,15 +254,7 @@ def joined_unit_identity(
     return str(identity), UnitName(f"joined-{identity.hex[:24]}")
 
 
-class MachineReferenceLike(Protocol):
-    machine_id: str
-
-
 class ComputeSchedulerHooks(Protocol):
-    def register_pool(self, state: PrivateUnitState) -> None: ...
-
-    def register_machine(self, machine: Machine) -> None: ...
-
     def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None: ...
 
     def disable_machine(self, machine_id: str, reason: str) -> None: ...
@@ -320,89 +269,3 @@ class ComputeSchedulerHooks(Protocol):
     ) -> None: ...
 
     def revoke_unit_join_token(self, token_hash: str) -> None: ...
-
-
-def provider_machine_status[StatusT: StrEnum](
-    raw: JsonValue,
-    status_type: type[StatusT],
-) -> StatusT:
-    return status_type(_status_value(raw))
-
-
-def provider_machine_id_from_item(item: Mapping[str, JsonValue]) -> str:
-    raw_labels = item.get("labels")
-    labels = raw_labels if isinstance(raw_labels, dict) else {}
-    name = str(item.get("name", ""))
-    return str(labels.get(MACHINE_ID_LABEL) or name.rsplit("-", 1)[-1])
-
-
-def provider_machine_reference_fields[StatusT: StrEnum](
-    item: Mapping[str, JsonValue],
-    *,
-    status_type: type[StatusT],
-) -> dict[str, JsonValue]:
-    return {
-        "id": str(item.get("id", item.get("instance_id", ""))),
-        "name": str(item.get("name", "")),
-        "machine_id": provider_machine_id_from_item(item),
-        "status": provider_machine_status(item.get("state", item.get("status")), status_type),
-        "ip": str(item.get("public_ip", item.get("ip", "")) or ""),
-    }
-
-
-def provider_machine_reference_from_item[ReferenceT, StatusT: StrEnum](
-    item: Mapping[str, JsonValue],
-    *,
-    reference_type: type[ReferenceT],
-    status_type: type[StatusT],
-) -> ReferenceT:
-    return reference_type(**provider_machine_reference_fields(item, status_type=status_type))
-
-
-def reconcile_provider_machines[MachineT: MachineReferenceLike](
-    machines: Iterable[MachineT],
-    expected_machine_ids: set[str],
-    *,
-    terminate_stale: bool,
-    terminate: Callable[[MachineT], None],
-) -> ProviderReconcileResult:
-    machine_list = list(machines)
-    by_machine_id = {str(machine.machine_id): machine for machine in machine_list}
-    remote_ids = set(by_machine_id)
-    stale = sorted(remote_ids - expected_machine_ids)
-    terminated: list[str] = []
-    if terminate_stale:
-        for machine_id in stale:
-            terminate(by_machine_id[machine_id])
-            terminated.append(machine_id)
-    return ProviderReconcileResult(
-        missing_machine_ids=sorted(expected_machine_ids - remote_ids),
-        stale_machine_ids=stale,
-        terminated_machine_ids=terminated,
-    )
-
-
-def _status_value(raw: JsonValue) -> str:
-    value = raw.value if isinstance(raw, StrEnum) else str(raw or "")
-    normalized = value.lower()
-    if normalized in {"running", "active", "ready", "available"}:
-        return ProviderMachineStatus.Active
-    if normalized in {"pending", "creating", "booting", "provisioning", "starting"}:
-        return ProviderMachineStatus.Pending
-    if normalized in {"terminated", "deleted", "deleting"}:
-        return ProviderMachineStatus.Terminated
-    if normalized in {"failed", "error", "unhealthy"}:
-        return ProviderMachineStatus.Unhealthy
-    return ProviderMachineStatus.Unknown
-
-
-def _int(value: JsonValue) -> int:
-    if value is None or value == "":
-        return 0
-    return int(float(str(value)))
-
-
-def _float(value: JsonValue) -> float:
-    if value is None or value == "":
-        return 0.0
-    return float(str(value))

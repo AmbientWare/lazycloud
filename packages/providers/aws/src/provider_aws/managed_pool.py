@@ -323,9 +323,6 @@ class AwsManagedPoolAutoScalingClient(Protocol):
         VPCZoneIdentifier: str,
         LaunchTemplate: _LaunchTemplateRef,
     ) -> Mapping[str, object]: ...
-    def set_desired_capacity(
-        self, *, AutoScalingGroupName: str, DesiredCapacity: int, HonorCooldown: bool
-    ) -> Mapping[str, object]: ...
     def terminate_instance_in_auto_scaling_group(
         self, *, InstanceId: str, ShouldDecrementDesiredCapacity: bool
     ) -> Mapping[str, object]: ...
@@ -432,7 +429,6 @@ def _is_autoscaling_client(value: object) -> TypeGuard[AwsManagedPoolAutoScaling
             "create_auto_scaling_group",
             "delete_auto_scaling_group",
             "describe_auto_scaling_groups",
-            "set_desired_capacity",
             "terminate_instance_in_auto_scaling_group",
             "update_auto_scaling_group",
         ),

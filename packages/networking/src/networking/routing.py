@@ -5,12 +5,9 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 from enum import StrEnum
-from ipaddress import IPv4Address
 
 from pydantic import Field, JsonValue, SecretStr, computed_field, field_validator
 from shared.contracts import ContractModel
-
-from networking.resolve import EndpointAddress, resolve_endpoint
 
 BACKEND_ROUTE_DIAL_HOST = "backend.route"
 BACKEND_ROUTE_ID_METADATA_KEY = "backend_route_id"
@@ -52,12 +49,6 @@ class BackendRouteAuthenticator:
         return hmac.compare_digest(self.credential(route_id), credential)
 
 
-class RoutePrewarmReason(StrEnum):
-    PublicRoute = "public-route"
-    KeepWarm = "keep-warm"
-    Manual = "manual"
-
-
 class BackendDialTarget(ContractModel):
     scheme: GatewayProtocol = GatewayProtocol.Http
     host: str
@@ -82,50 +73,8 @@ class BackendDialTarget(ContractModel):
 
 class BackendDialPlan(ContractModel):
     target: BackendDialTarget
-    via_tailnet_peer: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class TailnetPeer(ContractModel):
-    name: str
-    hostname: str
-    ipv4: IPv4Address | None = None
-    tags: list[str] = Field(default_factory=list)
-    routes: list[str] = Field(default_factory=list)
-
-
-class GatewayRoutePrewarmPlan(ContractModel):
-    route: str
-    desired_instances: int
-    reason: RoutePrewarmReason = RoutePrewarmReason.PublicRoute
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-def dial_target_from_endpoint(endpoint: str, *, path: str = "/") -> BackendDialTarget:
-    address = resolve_endpoint(endpoint)
-    return BackendDialTarget(
-        scheme=_scheme_to_protocol(address),
-        host=address.host,
-        port=address.port,
-        path=path,
-    )
-
-
-def build_backend_dial_plan(
-    endpoint: str,
-    *,
-    path: str = "/",
-    tailnet_peer: TailnetPeer | None = None,
-    headers: dict[str, str] | None = None,
-    metadata: dict[str, JsonValue] | None = None,
-) -> BackendDialPlan:
-    return BackendDialPlan(
-        target=dial_target_from_endpoint(endpoint, path=path),
-        via_tailnet_peer=tailnet_peer.name if tailnet_peer else None,
-        headers=headers or {},
-        metadata=metadata or {},
-    )
 
 
 def build_backend_route_dial_plan(
@@ -197,29 +146,3 @@ def _normalized_route_id(route_id: str) -> str:
     if not normalized or any(character.isspace() for character in normalized):
         raise ValueError("backend route id is required")
     return normalized
-
-
-def plan_route_prewarm(
-    route: str,
-    *,
-    public: bool,
-    keep_warm: int = 0,
-) -> GatewayRoutePrewarmPlan:
-    if keep_warm > 0:
-        desired = keep_warm
-        reason = RoutePrewarmReason.KeepWarm
-    elif public:
-        desired = 1
-        reason = RoutePrewarmReason.PublicRoute
-    else:
-        desired = 0
-        reason = RoutePrewarmReason.Manual
-    return GatewayRoutePrewarmPlan(route=route, desired_instances=desired, reason=reason)
-
-
-def _scheme_to_protocol(address: EndpointAddress) -> GatewayProtocol:
-    if address.scheme == "https":
-        return GatewayProtocol.Https
-    if address.scheme == "tcp":
-        return GatewayProtocol.Tcp
-    return GatewayProtocol.Http

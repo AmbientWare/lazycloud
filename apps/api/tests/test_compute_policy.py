@@ -121,7 +121,6 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
     )
     template_identity = aws_account_connection_template_identity()
     aws_account_connection_settings = AwsAccountConnectionSettings(
-        enabled=True,
         template_url=(
             "https://assets.s3.us-east-1.amazonaws.com/templates/"
             f"{template_identity.sha256}/connection.json"

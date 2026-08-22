@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -23,80 +22,20 @@ from lazycloud.session.task import (
 from pydantic import JsonValue
 from shared.app_identity import WORKSPACE_OBJECT_BUCKET
 from shared.deployments import DeploymentKind
-from shared.events import Event
 from shared.function_payloads import FunctionCloudpickleResult
 from shared.http.deployments import DeploymentListResponse, DeploymentResponse
 from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
 from shared.http.gateway import (
     AttachToContainerResponse,
-    DeployStubRequest,
-    DeployStubResponse,
-    GetOrCreateStubRequest,
-    GetOrCreateStubResponse,
-    GetUrlRequest,
-    GetUrlResponse,
-    ResolveDeploymentTargetRequest,
-    ResolveDeploymentTargetResponse,
-    SyncContainerWorkspaceResponse,
 )
-from shared.http.images import BuildImageRequest, BuildImageResponse
 from shared.http.objects import PutObjectResponse
 from shared.http.observability import (
-    EventHistoryRequest,
-    EventQueryResponse,
-    LogQueryRequest,
-    LogQueryResponse,
     LogRecord,
 )
 from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
-from shared.http.usage import UsageRecordListResponse
-from shared.logs import LogEntry
 from shared.tasks import TaskStatus
-from shared.usage import UsageMetric
 from tests.fakes import http_api_error
 from tests.url_constants import EXAMPLE_URL, HTTP_EXAMPLE_COM_URL
-
-
-@dataclass
-class FakeSessionGateway:
-    stub_requests: list[GetOrCreateStubRequest] = field(default_factory=list)
-    deploy_requests: list[DeployStubRequest] = field(default_factory=list)
-    fail_prepare: bool = False
-    fail_deploy: bool = False
-
-    def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
-        self.stub_requests.append(request)
-        if self.fail_prepare:
-            raise http_api_error("prepare failed")
-        return GetOrCreateStubResponse(stub_id="stub-session")
-
-    def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
-        self.deploy_requests.append(request)
-        if self.fail_deploy:
-            raise http_api_error("deploy failed")
-        return DeployStubResponse(
-            stub_id=request.stub_id,
-            deployment_id="dep-session",
-            app_id="demo",
-            version=3,
-            invoke_url=f"{request.external_url}/stub/{request.stub_id}",
-        )
-
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
-        return GetUrlResponse(url=f"{request.external_url}/deploy/{request.deployment_id}")
-
-    def resolve_deployment_target(
-        self,
-        request: ResolveDeploymentTargetRequest,
-    ) -> ResolveDeploymentTargetResponse:
-        return ResolveDeploymentTargetResponse(
-            kind=request.kind,
-            stub_id="stub-worker",
-            deployment_id="dep-1",
-            deployment_name=request.name,
-            deployment_version=request.deployment_version or 1,
-            url=f"{request.external_url}/deploy/dep-1",
-        )
 
 
 @dataclass
@@ -203,114 +142,6 @@ class FakeSessionResources:
     def stop_tasks(self, task_ids: tuple[str, ...]) -> TaskStopResponse:
         self.stop_requests.append(task_ids)
         return TaskStopResponse(stopped=list(task_ids))
-
-
-@dataclass
-class FakeObservabilityClient:
-    log_requests: list[LogQueryRequest] = field(default_factory=list)
-    event_requests: list[EventHistoryRequest] = field(default_factory=list)
-
-    def logs(self, request: LogQueryRequest | None = None) -> LogQueryResponse:
-        selected = request or LogQueryRequest()
-        self.log_requests.append(selected)
-        return LogQueryResponse(
-            data=(
-                LogRecord.from_entry(
-                    LogEntry(
-                        id="log-1",
-                        task_id=selected.task_id or "task-1",
-                        stream="stdout",
-                        message="done",
-                    ),
-                    workspace_id=selected.workspace_id,
-                ),
-            ),
-            count=1,
-        )
-
-    def events(self, request: EventHistoryRequest | None = None) -> EventQueryResponse:
-        selected = request or EventHistoryRequest()
-        self.event_requests.append(selected)
-        return EventQueryResponse(
-            data=(
-                Event(
-                    id="event-1",
-                    action="task.complete",
-                    resource_type="task",
-                    resource_id=selected.task_id or "task-1",
-                    message="complete",
-                ),
-            ),
-            count=1,
-        )
-
-    def usage_records(
-        self,
-        *,
-        metric: UsageMetric | None = None,
-        resource_type: str | None = None,
-        resource_id: str | None = None,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> UsageRecordListResponse:
-        _ = metric, resource_type, resource_id, start, end, limit, cursor
-        return UsageRecordListResponse()
-
-    def stream_logs(
-        self,
-        request: LogQueryRequest | None = None,
-        *,
-        max_events: int = 0,
-        cursor: str | None = None,
-        seq_num: int | None = None,
-        wait: int | None = None,
-        wait_seconds: float = 1.0,
-        clamp: bool | None = None,
-    ) -> Iterator[LogRecord]:
-        _ = max_events, cursor, seq_num, wait, wait_seconds, clamp
-        yield from self.logs(request).data
-
-    def stream_events(
-        self,
-        request: EventHistoryRequest | None = None,
-        *,
-        max_events: int = 0,
-        wait_seconds: float = 1.0,
-        cursor: str | None = None,
-        clamp: bool | None = None,
-    ) -> str:
-        _ = request, max_events, wait_seconds, cursor, clamp
-        return ""
-
-
-@dataclass
-class FakeImageBuildClient:
-    requests: list[BuildImageRequest] = field(default_factory=list)
-    image_id: str = "img-session"
-    build_id: str = ""
-    error: str = ""
-
-    def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]:
-        self.requests.append(request)
-        yield BuildImageResponse(
-            image_id=self.image_id,
-            build_id=self.build_id,
-            done=True,
-            success=not self.error,
-            python_version=request.python_version,
-            error=self.error,
-        )
-
-
-def _recorded_payload(
-    requests: list[tuple[str, dict[str, object] | None]],
-    index: int,
-) -> dict[str, object]:
-    payload = requests[index][1]
-    assert payload is not None
-    return payload
 
 
 @pytest.mark.parametrize("resource", ["deployment", "task"])
@@ -606,38 +437,6 @@ def test_function_call_gather_can_return_exceptions_in_result_slots() -> None:
     assert results == ["first", failure, "third"]
 
 
-@dataclass
-class FakeRouteChannel:
-    posts: list[tuple[str, dict[str, object] | None]] = field(default_factory=list)
-    gets: list[str] = field(default_factory=list)
-
-    def post(self, path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
-        self.posts.append((path, payload))
-        if path == "/gateway/containers/sync-workspace":
-            assert payload is not None
-            return SyncContainerWorkspaceResponse(path=str(payload["path"])).model_dump(mode="json")
-        return {
-            "output": "",
-            "done": False,
-            "exit_code": 0,
-            "error_msg": "",
-            "input_supported": False,
-            "attach_contract": "sse-output-only",
-        }
-
-    def get(self, path: str) -> JsonValue:
-        self.gets.append(path)
-        if path.startswith("/api/v1/usage/records?"):
-            return {"data": [], "next": "cursor-2"}
-        return ""
-
-    def stream_get(self, path: str) -> Iterator[str]:
-        self.gets.append(path)
-        yield "event: done\n"
-        yield 'data: {"output": "ready\\n", "done": true, "exit_code": 0}\n'
-        yield "\n"
-
-
 class _UnsupportedTaskHandleOperations:
     def get(self, task_id: str) -> TaskResponse:
         raise AssertionError(f"unexpected task view read for {task_id}")
@@ -704,15 +503,3 @@ class RecordingFunctionCall:
         if isinstance(self.value, BaseException):
             raise self.value
         return self.value
-
-
-@dataclass
-class BlockingTaskClient(_UnsupportedTaskHandleOperations):
-    tasks: dict[str, shared.tasks.Task]
-    delays: dict[str, float] = field(default_factory=dict)
-
-    def get_result_task(self, task_id: str) -> shared.tasks.Task:
-        delay = self.delays.get(task_id)
-        if delay:
-            time.sleep(delay)
-        return self.tasks[task_id]

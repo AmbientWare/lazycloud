@@ -1,7 +1,7 @@
-# Coordination Package
+# Coordination package
 
 Backend-neutral Redis clients and settings, key and serialization helpers, and
-the primitives built on them: hot state, events, locks, leases, and pub/sub.
+the hot state, events, locks, leases, and pub/sub built on them.
 
 Domain Redis repositories and the workflow decisions that use them stay with
 their owners. Apps, database, providers, and product services stay out.

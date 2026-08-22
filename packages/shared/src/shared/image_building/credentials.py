@@ -109,6 +109,17 @@ def credential_key_names(credentials: ImageCredentialInput) -> list[str]:
     ]
 
 
+def dedupe_names(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = value.strip()
+        if item and item not in seen:
+            result.append(item)
+            seen.add(item)
+    return result
+
+
 def image_secret_names(secrets: Iterable[str]) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()

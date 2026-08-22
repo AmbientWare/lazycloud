@@ -98,22 +98,6 @@ def bootstrap_scheduler_worker(
     )
 
 
-def create_worker_token(*, name: str, workspace_id: str = "default") -> str:
-    database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.WorkerBootstrap)
-    )
-    try:
-        raw_token, _record = AuthService(IdentityDatabaseContext(database)).create_service_token(
-            name,
-            kind=TokenKind.Worker,
-            scopes=[AuthScope.Worker.value],
-            workspace_id=workspace_id,
-        )
-        return raw_token
-    finally:
-        database.dispose()
-
-
 def write_worker_token(*, name: str, output: Path, workspace_id: str = "default") -> None:
     publication = CredentialFilePublication(
         output,

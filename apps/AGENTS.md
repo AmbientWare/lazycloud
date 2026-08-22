@@ -1,9 +1,9 @@
-# Deployable Apps
+# Deployable apps
 
 `apps/` holds the deployable processes: the HTTP API, the operator CLI, the web
 dashboard, and the long-running workers, schedulers, and agents.
 
-An app owns composition and process lifetime—settings, dependency assembly,
+An app owns composition and process lifetime: settings, dependency assembly,
 request and command adapters, startup and shutdown. It does not own reusable
 decisions. Those belong to the domain package the behavior is about, so a second
 consumer can reach them without importing an app.

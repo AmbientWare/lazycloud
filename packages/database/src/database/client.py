@@ -77,7 +77,7 @@ class AsyncDatabaseClient:
     @classmethod
     def from_settings(cls, settings: DatabaseSettings) -> AsyncDatabaseClient:
         config = settings
-        engine = create_async_engine(_async_url(config.url), **_async_engine_kwargs(config))
+        engine = create_async_engine(_async_url(config.url), **_engine_kwargs(config))
         _install_sqlite_uuid_function(engine.sync_engine, config.url)
         return cls(
             settings=config,
@@ -112,33 +112,6 @@ class AsyncDatabaseClient:
 
 
 def _engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
-    if settings.url.startswith("sqlite"):
-        kwargs: dict[str, object] = {"connect_args": {"check_same_thread": False}}
-        if settings.url.endswith(":memory:"):
-            kwargs["poolclass"] = StaticPool
-        return kwargs
-
-    options: list[str] = []
-    if settings.statement_timeout_ms > 0:
-        options.extend(("-c", f"statement_timeout={settings.statement_timeout_ms}"))
-    if settings.application_name is DatabaseApplicationName.Wait:
-        options.extend(("-c", "default_transaction_read_only=on"))
-    connect_args: dict[str, object] = {
-        "application_name": settings.application_name.value,
-        "connect_timeout": settings.connect_timeout_seconds,
-    }
-    if options:
-        connect_args["options"] = " ".join(options)
-    return {
-        "connect_args": connect_args,
-        "echo": settings.echo,
-        "pool_size": settings.pool_size,
-        "max_overflow": settings.max_overflow,
-        "pool_pre_ping": True,
-    }
-
-
-def _async_engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
     if settings.url.startswith("sqlite"):
         kwargs: dict[str, object] = {"connect_args": {"check_same_thread": False}}
         if settings.url.endswith(":memory:"):

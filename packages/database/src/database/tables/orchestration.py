@@ -114,7 +114,8 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
         ),
         CheckConstraint(
             "termination_reason IN "
-            "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', 'UNKNOWN')",
+            "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', "
+            "'MEMORY_EVICTED', 'UNKNOWN')",
             name="ck_containers_termination_reason",
         ),
     )

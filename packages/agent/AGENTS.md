@@ -1,4 +1,4 @@
-# Agent Package
+# Agent package
 
 Reusable behavior for the agent that runs on customer and private-unit machines:
 installation, daemon lifecycle, enrollment, and telemetry.

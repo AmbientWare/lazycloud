@@ -1,28 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, JsonValue, SecretBytes, SecretStr, TypeAdapter, field_serializer
 from shared.serialization import to_json_value
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
-
-
-@dataclass(frozen=True)
-class _NestedDataclass:
-    created_at: datetime
-    output_path: Path
-    values: tuple[int, str]
-
-
-class _PydanticPayload(BaseModel):
-    identifier: UUID
-    nested: _NestedDataclass
-    labels: dict[str, str]
 
 
 class _SecretSerializerPayload(BaseModel):

@@ -118,10 +118,6 @@ class ContainerRootfsOverlayPlan(ContractModel):
             self.merged_dir,
         ]
 
-    @property
-    def unmount_argv(self) -> list[str]:
-        return ["umount", self.merged_dir]
-
 
 class ContainerDiskQuotaPlan(ContractModel):
     container_id: str
@@ -151,16 +147,6 @@ class ContainerDiskQuotaPlan(ContractModel):
             "-x",
             "-c",
             f"limit -p bhard={self.limit_bytes} {self.project_id}",
-            self.filesystem_root,
-        ]
-
-    @property
-    def clear_limit_argv(self) -> list[str]:
-        return [
-            "xfs_quota",
-            "-x",
-            "-c",
-            f"limit -p bhard=0 {self.project_id}",
             self.filesystem_root,
         ]
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -72,13 +71,6 @@ def case_for(kind: BenchmarkKind) -> BenchmarkCase:
             return item
     msg = f"unsupported benchmark case: {kind}"
     raise ValueError(msg)
-
-
-def merge_suite_args(*mappings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    merged: dict[str, JsonValue] = {}
-    for mapping in mappings:
-        merged.update({key: value for key, value in mapping.items() if value is not None})
-    return merged
 
 
 def available_suites() -> tuple[str, ...]:

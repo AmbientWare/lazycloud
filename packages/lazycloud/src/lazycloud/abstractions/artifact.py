@@ -48,46 +48,6 @@ class SavedArtifact:
     filename: str = ""
     remote: bool = False
 
-    def remote_stat(self, client: ArtifactMetadataClient) -> Stat:
-        if not self.artifact_id or not self.task_id:
-            raise ArtifactNotSavedError("artifact has not been saved remotely")
-        try:
-            response = client.artifact_stat(
-                ArtifactStatRequest(
-                    id=self.artifact_id,
-                    task_id=self.task_id,
-                    filename=self.filename or self.path.name,
-                )
-            )
-        except HttpApiError as exc:
-            raise ArtifactNotFoundError(exc.detail or "artifact not found") from exc
-        if response.stat is None:
-            raise ArtifactNotFoundError("artifact not found")
-        return _remote_stat(response.stat)
-
-    def remote_public_url(
-        self,
-        client: ArtifactMetadataClient,
-        *,
-        expires: int = 3600,
-    ) -> str:
-        if not self.artifact_id or not self.task_id:
-            raise ArtifactNotSavedError("artifact has not been saved remotely")
-        try:
-            response = client.artifact_public_url(
-                ArtifactPublicUrlRequest(
-                    id=self.artifact_id,
-                    task_id=self.task_id,
-                    filename=self.filename or self.path.name,
-                    expires=expires,
-                )
-            )
-        except HttpApiError as exc:
-            raise ArtifactPublicURLError(
-                exc.detail or "failed to create artifact public URL"
-            ) from exc
-        return response.public_url
-
 
 class ArtifactSaveClient(Protocol):
     def artifact_save_stream(
@@ -432,10 +392,6 @@ class ArtifactNotFoundError(RuntimeError):
     pass
 
 
-class ArtifactPublicURLError(RuntimeError):
-    pass
-
-
 class ArtifactCannotRunLocallyError(RuntimeError):
     pass
 
@@ -492,7 +448,6 @@ __all__ = [
     "ArtifactMetadataClient",
     "ArtifactNotFoundError",
     "ArtifactNotSavedError",
-    "ArtifactPublicURLError",
     "ArtifactRemoteClient",
     "ArtifactSaveClient",
     "ArtifactSaveError",

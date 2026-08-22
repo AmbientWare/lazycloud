@@ -5,7 +5,6 @@ import os
 import shlex
 import threading
 import time
-from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +20,6 @@ from benchmarks.harness.startup_report import (
     StartupReport,
     StartupSample,
     build_startup_report,
-    percentile,
     render_startup_markdown,
 )
 
@@ -427,20 +425,6 @@ def verify_exec_output(
     )
 
 
-def summarize_exec_verification(samples: Iterable[SandboxParallelSample]) -> dict[str, int]:
-    measured = [sample for sample in samples if not sample.warmup]
-    completed = [sample for sample in measured if sample.exec_exit_code is not None]
-    verified = [sample for sample in measured if sample.exec_verified]
-    mismatched = [sample for sample in measured if sample.exec_output_matched is False]
-    return {
-        "count": len(measured),
-        "completed": len(completed),
-        "verified": len(verified),
-        "mismatched": len(mismatched),
-        "failed": len(measured) - len(verified),
-    }
-
-
 def _build_sdk_sandbox(config: SandboxParallelConfig) -> Sandbox:
     image = Image.from_id(config.image_id) if config.image_id else Image.from_registry(config.image)
     sandbox = Sandbox(
@@ -744,21 +728,3 @@ def _secret_from_env(name: str) -> SecretStr | None:
 def _split_command_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     value = os.getenv(name)
     return default if not value else tuple(shlex.split(value))
-
-
-def summarize_metric(samples: Iterable[SandboxParallelSample], key: str) -> dict[str, float] | None:
-    values = [
-        float(value)
-        for sample in samples
-        if not sample.warmup and (value := getattr(sample, key)) is not None and sample.ok
-    ]
-    if not values:
-        return None
-    return {
-        "count": float(len(values)),
-        "min": min(values),
-        "p50": percentile(values, 50) or 0,
-        "p90": percentile(values, 90) or 0,
-        "p95": percentile(values, 95) or 0,
-        "max": max(values),
-    }

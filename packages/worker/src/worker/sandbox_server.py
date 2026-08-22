@@ -18,8 +18,6 @@ from worker.routes import (
 )
 from worker.runtime_config import OciRuntimeName
 
-SANDBOX_EXEC_DIAL_RETRY_DELAY_SECONDS = 0.025
-SANDBOX_PROCESS_MANAGER_READY_TIMEOUT_SECONDS = 10.0
 SANDBOX_PROCESS_MANAGER_READY_POLL_DELAY_SECONDS = 0.025
 WORKER_CONTAINER_UPLOADS_HOST_PATH = "/tmp/container-uploads"
 WORKER_CONTAINER_UPLOADS_MOUNT_PATH = f"/tmp/{HOME_DIR}"
@@ -28,14 +26,6 @@ SANDBOX_INTERNAL_PORTS = (
     WORKER_SHELL_PORT,
     CONTAINER_INNER_PORT,
 )
-
-
-class SandboxProcessManagerWaitReason(StrEnum):
-    Ready = "ready"
-    AwaitingSignal = "awaiting-signal"
-    FailedSignal = "failed-signal"
-    Cancelled = "cancelled"
-    Timeout = "timeout"
 
 
 class SandboxProcessStatus(StrEnum):
@@ -64,21 +54,6 @@ class SandboxFileOperation(StrEnum):
 class SandboxFileAccessMode(StrEnum):
     DirectHostPath = "direct-host-path"
     SandboxedRuntimeStagedUpload = "sandboxed-runtime-staged-upload"
-
-
-class SandboxProcessManagerErrorCode(StrEnum):
-    Unavailable = "unavailable"
-    Cancelled = "cancelled"
-    DeadlineExceeded = "deadline-exceeded"
-    Unknown = "unknown"
-    Other = "other"
-
-
-class SandboxProcessManagerWaitPlan(ContractModel):
-    ready: bool
-    keep_waiting: bool
-    reason: SandboxProcessManagerWaitReason
-    error_message: str = ""
 
 
 class SandboxStatusPlan(ContractModel):
@@ -160,13 +135,6 @@ class SandboxFileOperationPlan(ContractModel):
     error_message: str = ""
 
 
-class SandboxProcessManagerDialRetryPlan(ContractModel):
-    retryable: bool
-    retry_delay_seconds: float = 0
-    error_code: SandboxProcessManagerErrorCode = SandboxProcessManagerErrorCode.Other
-    reason: str = ""
-
-
 class SandboxExposePortRequest(ContractModel):
     container_id: str
     port: int
@@ -205,48 +173,6 @@ class SandboxExposePortPlan(ContractModel):
     record_port: bool = False
     existing_target: bool = False
     error_message: str = ""
-
-
-def plan_sandbox_process_manager_wait(
-    *,
-    manager_ready: bool,
-    ready_signal_received: bool = False,
-    refreshed_ready: bool = False,
-    cancelled: bool = False,
-    timed_out: bool = False,
-) -> SandboxProcessManagerWaitPlan:
-    if manager_ready or (ready_signal_received and refreshed_ready):
-        return SandboxProcessManagerWaitPlan(
-            ready=True,
-            keep_waiting=False,
-            reason=SandboxProcessManagerWaitReason.Ready,
-        )
-    if cancelled:
-        return SandboxProcessManagerWaitPlan(
-            ready=False,
-            keep_waiting=False,
-            reason=SandboxProcessManagerWaitReason.Cancelled,
-            error_message="Request cancelled",
-        )
-    if timed_out:
-        return SandboxProcessManagerWaitPlan(
-            ready=False,
-            keep_waiting=False,
-            reason=SandboxProcessManagerWaitReason.Timeout,
-            error_message="Process manager not ready within timeout",
-        )
-    if ready_signal_received:
-        return SandboxProcessManagerWaitPlan(
-            ready=False,
-            keep_waiting=False,
-            reason=SandboxProcessManagerWaitReason.FailedSignal,
-            error_message="Process manager failed to become ready",
-        )
-    return SandboxProcessManagerWaitPlan(
-        ready=False,
-        keep_waiting=True,
-        reason=SandboxProcessManagerWaitReason.AwaitingSignal,
-    )
 
 
 def plan_sandbox_status(
@@ -309,40 +235,6 @@ def plan_sandbox_process_log_ack(
         seq=seq,
         entry=entry,
         error_message=persist_error,
-    )
-
-
-def plan_sandbox_process_manager_dial_retry(
-    error_message: str,
-    *,
-    error_code: SandboxProcessManagerErrorCode | str = SandboxProcessManagerErrorCode.Unavailable,
-) -> SandboxProcessManagerDialRetryPlan:
-    code = _normalize_process_manager_error_code(error_code)
-    if code is not SandboxProcessManagerErrorCode.Unavailable:
-        return SandboxProcessManagerDialRetryPlan(
-            retryable=False,
-            error_code=code,
-            reason="process manager error is not an unavailable dial failure",
-        )
-    lowered = error_message.lower()
-    for marker in (
-        "error while dialing",
-        "connection refused",
-        "connection reset",
-        "no route to host",
-        "transport is closing",
-    ):
-        if marker in lowered:
-            return SandboxProcessManagerDialRetryPlan(
-                retryable=True,
-                retry_delay_seconds=SANDBOX_EXEC_DIAL_RETRY_DELAY_SECONDS,
-                error_code=code,
-                reason=marker,
-            )
-    return SandboxProcessManagerDialRetryPlan(
-        retryable=False,
-        error_code=code,
-        reason="unavailable error is not a dial failure",
     )
 
 
@@ -560,18 +452,6 @@ def plan_sandbox_expose_port(request: SandboxExposePortRequest) -> SandboxExpose
         record_port=ports.appended,
         existing_target=existing_target,
     )
-
-
-def _normalize_process_manager_error_code(
-    value: SandboxProcessManagerErrorCode | str,
-) -> SandboxProcessManagerErrorCode:
-    if isinstance(value, SandboxProcessManagerErrorCode):
-        return value
-    normalized = value.strip().lower().replace("_", "-")
-    for code in SandboxProcessManagerErrorCode:
-        if normalized == code.value:
-            return code
-    return SandboxProcessManagerErrorCode.Other
 
 
 def _is_sandboxed_oci_runtime(value: OciRuntimeName | str) -> bool:

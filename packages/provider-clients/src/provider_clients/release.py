@@ -127,7 +127,6 @@ def deployment_release(
             instance_hourly_micros=aws_capacity.instance_hourly_micros,
         ),
         aws_connections=AwsAccountConnectionSettings(
-            enabled=aws_connections.enabled,
             template_url=(
                 "" if manifest is None else manifest.connection_template_object.public_url
             ),

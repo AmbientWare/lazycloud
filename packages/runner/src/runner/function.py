@@ -51,8 +51,6 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from shared.http.gateway_tasks import (
-    AppendTaskLogRequest,
-    AppendTaskLogResponse,
     EndTaskRequest,
     EndTaskResponse,
     StartTaskRequest,
@@ -77,9 +75,11 @@ from runner.runtime import (
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
     RunnerTaskLogStream,
     install_context_routed_output,
+    post_task_log,
     required_env,
     routed_output,
 )
+from runner.worker_processes import stop_worker_processes
 
 # How often an idle container asks for work. Short enough that a call arriving
 # at a warm container is served promptly, which is the whole point of holding
@@ -343,18 +343,7 @@ class FunctionRunner:
         )
 
     def append_task_log(self, task_id: str, stream: str, message: str) -> None:
-        if not message:
-            return
-        AppendTaskLogResponse.model_validate(
-            self.control.post(
-                "/gateway/tasks/log",
-                AppendTaskLogRequest(
-                    task_id=task_id,
-                    stream=stream,
-                    message=message,
-                ).model_dump(mode="json"),
-            )
-        )
+        post_task_log(self.control, task_id, stream, message)
 
     def append_container_log(self, stream: str, message: str) -> None:
         """Write to the container's own stream, for output no task owns."""
@@ -773,17 +762,7 @@ class FunctionProcessManager:
         return 0
 
     def stop(self) -> None:
-        self.shutdown.set()
-        for process in self.processes:
-            if process.is_alive():
-                process.terminate()
-        deadline = time.monotonic() + 5.0
-        for process in self.processes:
-            process.join(timeout=max(deadline - time.monotonic(), 0.0))
-        for process in self.processes:
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=1)
+        stop_worker_processes(self.shutdown, self.processes)
 
     def _start_worker(self, index: int) -> Process:
         process = Process(

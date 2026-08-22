@@ -8,7 +8,6 @@ from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.client_manifests import ClientManifestResource
 from shared.http.deployments import (
-    DeploymentActionCapabilitiesResponse,
     DeploymentListResponse,
     DeploymentPackagePlanResponse,
     DeploymentResponse,
@@ -23,37 +22,11 @@ from shared.identity import AuthScope
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
-from api.server.response_mapping import deployment_response
+from api.server.response_mapping import actionable_deployment_response
 from api.server.routers.resource_api.common import STUB_TYPE_ALIASES, _management
 from api.server.services import ApiServices
 
 router = APIRouter()
-
-
-def _deployment_response(
-    deployment: Deployment,
-    *,
-    can_write: bool,
-    app_active: bool,
-    scaling: DeploymentScalingResponse | None,
-) -> DeploymentResponse:
-    available = deployment.deleted_at is None
-    return deployment_response(
-        deployment,
-        scaling=scaling,
-        actions=DeploymentActionCapabilitiesResponse(
-            can_start=(can_write and available and app_active and not deployment.active),
-            can_stop=can_write and available and deployment.active,
-            can_scale=(
-                can_write
-                and available
-                and app_active
-                and deployment.active
-                and deployment.kind is DeploymentKind.Pod
-            ),
-            can_delete=can_write and available,
-        ),
-    )
 
 
 def _deployment_scaling_responses(
@@ -112,7 +85,7 @@ def _deployment_list_response(
     scaling = _deployment_scaling_responses(deployments, workspace=workspace, services=services)
     return DeploymentListResponse(
         data=[
-            _deployment_response(
+            actionable_deployment_response(
                 deployment,
                 can_write=can_write,
                 app_active=(
@@ -189,7 +162,7 @@ def create_deployment(
 ) -> DeploymentResponse:
     deployment = services.deployments.deploy(request, workspace=workspace_id)
     scaling = _deployment_scaling_responses([deployment], workspace=workspace_id, services=services)
-    return _deployment_response(
+    return actionable_deployment_response(
         deployment,
         can_write=True,
         app_active=_deployment_app_active(deployment, workspace_id, services),
@@ -245,7 +218,7 @@ def deployment_url_by_name(
         external_url=external_url,
     )
     return DeploymentUrlResponse(
-        deployment=_deployment_response(
+        deployment=actionable_deployment_response(
             result.deployment,
             can_write=token_has_scope(token, AuthScope.Write),
             app_active=_deployment_app_active(result.deployment, workspace_id, services),
@@ -299,7 +272,7 @@ def deployment_url(
         external_url=external_url,
     )
     return DeploymentUrlResponse(
-        deployment=_deployment_response(
+        deployment=actionable_deployment_response(
             result.deployment,
             can_write=token_has_scope(token, AuthScope.Write),
             app_active=_deployment_app_active(result.deployment, workspace_id, services),
@@ -346,7 +319,7 @@ def stop_deployment(
         deployment_id,
         active=False,
     )
-    return _deployment_response(
+    return actionable_deployment_response(
         deployment,
         can_write=True,
         app_active=_deployment_app_active(deployment, workspace_id, services),
@@ -371,7 +344,7 @@ def start_deployment(
         deployment_id,
         active=True,
     )
-    return _deployment_response(
+    return actionable_deployment_response(
         deployment,
         can_write=True,
         app_active=_deployment_app_active(deployment, workspace_id, services),
@@ -397,7 +370,7 @@ def scale_deployment(
         deployment_id,
         containers=request.replicas,
     )
-    return _deployment_response(
+    return actionable_deployment_response(
         deployment,
         can_write=True,
         app_active=_deployment_app_active(deployment, workspace_id, services),
@@ -419,7 +392,7 @@ def get_deployment(
     services: ApiServices = Depends(current_services),
 ) -> DeploymentResponse:
     deployment = _management(services).retrieve_deployment(workspace_id, deployment_id)
-    return _deployment_response(
+    return actionable_deployment_response(
         deployment,
         can_write=token_has_scope(token, AuthScope.Write),
         app_active=_deployment_app_active(deployment, workspace_id, services),

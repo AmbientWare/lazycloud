@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Never
 
 import pytest
-from storage_client.mounts import StorageMountResult
 from worker.adapters import (
     WorkerFinalizationCleanup,
     WorkerRuntimeContainerStopper,
@@ -13,7 +12,6 @@ from worker.adapters import (
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.events import ContainerRequestContext
-from worker.execution import PortBinding
 from worker.runtime_config import RuntimeContainerStatus
 
 
@@ -135,37 +133,6 @@ def _request() -> ContainerRequestContext:
 
 
 @dataclass(slots=True)
-class _StaticContainerIp:
-    value: str
-
-    def container_ip(self, container_id: str) -> str:
-        _ = container_id
-        return self.value
-
-
-@dataclass(slots=True)
-class _StaticPortAllocator:
-    port: int
-    requests: list[int] = field(default_factory=list)
-
-    def allocate_ports(self, count: int) -> list[int]:
-        self.requests.append(count)
-        return [self.port]
-
-
-@dataclass(slots=True)
-class _PortExposer:
-    calls: list[tuple[str, PortBinding]] = field(default_factory=list)
-    unexpose_calls: list[tuple[str, PortBinding]] = field(default_factory=list)
-
-    def expose_port(self, container_id: str, binding: PortBinding) -> None:
-        self.calls.append((container_id, binding))
-
-    def unexpose_port(self, container_id: str, binding: PortBinding) -> None:
-        self.unexpose_calls.append((container_id, binding))
-
-
-@dataclass(slots=True)
 class _RuntimeController:
     status_value: str = "created"
     kill_calls: list[tuple[str, int, bool]] = field(default_factory=list)
@@ -206,19 +173,3 @@ class _DeleteStore:
     def delete_container_instance(self, container_id: str) -> bool:
         self.deleted.append(container_id)
         return True
-
-
-@dataclass(slots=True)
-class _WorkspaceStorageCleaner:
-    active_workspace_calls: list[set[str]] = field(default_factory=list)
-
-    def ensure_workspace_storage(self, request: ContainerRequestContext) -> None:
-        _ = request
-
-    def cleanup_unused(
-        self,
-        *,
-        active_workspace_names: set[str],
-    ) -> list[StorageMountResult]:
-        self.active_workspace_calls.append(set(active_workspace_names))
-        return []

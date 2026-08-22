@@ -187,10 +187,6 @@ export const workspaceQueryKeys = {
     list: (workspaceId: string, configKey: string) =>
       [...workspaceRoot(workspaceId), "resources", configKey] as const,
   },
-  settings: {
-    concurrency: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "settings", "concurrency"] as const,
-  },
 } as const;
 
 const accountRoot = ["account"] as const;

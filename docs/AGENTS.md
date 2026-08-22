@@ -11,7 +11,7 @@ itself is not documented here, and neither is the internal operator CLI.
 
 Keep examples runnable. Keep configuration truth with its typed owner and
 reference it instead of restating it, so there is one place to be wrong. Document
-secret names and how they are injected—never their values.
+secret names and how they are injected, never their values.
 
 When behavior goes away, delete the page that described it rather than building a
 parallel registry of what is still true.

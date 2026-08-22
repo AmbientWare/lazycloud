@@ -50,7 +50,6 @@ class AgentTelemetryBuffer:
     _logs: list[AgentLogRecord] = field(default_factory=list, init=False)
     _events: list[AgentEventRecord] = field(default_factory=list, init=False)
     _metrics: AgentMetricSnapshot | None = field(default=None, init=False)
-    _dropped_records: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def __post_init__(self) -> None:
@@ -60,11 +59,6 @@ class AgentTelemetryBuffer:
         if self.batch_size <= 0:
             msg = "agent telemetry batch size must be positive"
             raise ValueError(msg)
-
-    @property
-    def dropped_records(self) -> int:
-        with self._lock:
-            return self._dropped_records
 
     def size(self) -> int:
         with self._lock:
@@ -139,7 +133,6 @@ class AgentTelemetryBuffer:
         with self._lock:
             current_size = _telemetry_record_count(self._logs, self._events, self._metrics)
             if current_size + size > self.max_records:
-                self._dropped_records += size
                 return False
             self._logs.extend(request.logs)
             self._events.extend(request.events)
@@ -172,46 +165,6 @@ class AgentTelemetryBuffer:
                 raise RuntimeError(msg)
             sent += 1
         return sent
-
-
-@dataclass(slots=True)
-class AgentTelemetryLineWriter:
-    telemetry: AgentTelemetryBuffer
-    source: AgentTelemetrySource | str = AgentTelemetrySource.Agent
-    stream: AgentTelemetryStream | str = AgentTelemetryStream.Stdout
-    worker_id: str = ""
-    level: str = "info"
-    _buffer: str = field(default="", init=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
-
-    def write(self, data: str | bytes) -> int:
-        text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
-        with self._lock:
-            self._buffer += text
-            while "\n" in self._buffer:
-                line, self._buffer = self._buffer.split("\n", 1)
-                self.telemetry.enqueue_log(
-                    line,
-                    source=self.source,
-                    stream=self.stream,
-                    worker_id=self.worker_id,
-                    level=self.level,
-                )
-        return len(data)
-
-    def close(self) -> None:
-        with self._lock:
-            if not self._buffer:
-                return
-            line = self._buffer
-            self._buffer = ""
-        self.telemetry.enqueue_log(
-            line,
-            source=self.source,
-            stream=self.stream,
-            worker_id=self.worker_id,
-            level=self.level,
-        )
 
 
 def _build_telemetry_batches(

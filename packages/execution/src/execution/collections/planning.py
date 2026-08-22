@@ -134,10 +134,6 @@ def plan_map_live_keys(
     )
 
 
-def simple_queue_prefix() -> str:
-    return SIMPLE_QUEUE_KEY_PREFIX
-
-
 def simple_queue_name(workspace_id: str, name: str) -> str:
     return f"{SIMPLE_QUEUE_KEY_PREFIX}:{workspace_id}:{name}"
 

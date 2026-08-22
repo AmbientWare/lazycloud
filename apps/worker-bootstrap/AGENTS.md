@@ -1,4 +1,4 @@
-# Worker Bootstrap App
+# Worker bootstrap app
 
 Settings and bootstrap sequencing for scheduler-managed workers.
 

@@ -149,6 +149,78 @@ Resources:
                   - ecr-public:PutImage
                   - ecr-public:UploadLayerPart
                 Resource: !GetAtt ContainerWorkerRepository.Arn
+              # The bake launches a throwaway instance, stops it, and captures
+              # it. Every resource it creates carries the managed tag, so the
+              # mutating actions below are scoped to that tag rather than to the
+              # whole account: this role publishes releases and is reachable by
+              # any job in the release environment.
+              - Sid: ResolveBakeBaseImage
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*
+              - Sid: InspectBakeResources
+                Effect: Allow
+                Action:
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                Resource: "*"
+              # How the bake reports. The instance carries no key pair and no
+              # instance profile, so its console is the only channel it has, and
+              # without this the baker reads an empty string from every call and
+              # cannot tell a finished bake from a failed one.
+              - Sid: ReadBakeConsole
+                Effect: Allow
+                Action: ec2:GetConsoleOutput
+                Resource: !Sub "arn:aws:ec2:*:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/cloud-pool:managed-by: control-plane
+              - Sid: LaunchBakeInstanceInfrastructure
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource:
+                  - arn:aws:ec2:*::image/*
+                  - !Sub "arn:aws:ec2:*:${AWS::AccountId}:subnet/*"
+                  - !Sub "arn:aws:ec2:*:${AWS::AccountId}:network-interface/*"
+                  - !Sub "arn:aws:ec2:*:${AWS::AccountId}:security-group/*"
+              - Sid: LaunchBakeInstance
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource:
+                  - !Sub "arn:aws:ec2:*:${AWS::AccountId}:instance/*"
+                  - !Sub "arn:aws:ec2:*:${AWS::AccountId}:volume/*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/cloud-pool:managed-by: control-plane
+              - Sid: TagBakeResourcesOnCreation
+                Effect: Allow
+                Action: ec2:CreateTags
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    ec2:CreateAction:
+                      - RunInstances
+                      - CreateImage
+              - Sid: CaptureBakeImageFromInstance
+                Effect: Allow
+                Action: ec2:CreateImage
+                Resource: !Sub "arn:aws:ec2:*:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/cloud-pool:managed-by: control-plane
+              - Sid: CaptureBakeImageArtifacts
+                Effect: Allow
+                Action: ec2:CreateImage
+                Resource:
+                  - arn:aws:ec2:*::image/*
+                  - arn:aws:ec2:*::snapshot/*
+              - Sid: RemoveBakeInstance
+                Effect: Allow
+                Action: ec2:TerminateInstances
+                Resource: !Sub "arn:aws:ec2:*:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/cloud-pool:managed-by: control-plane
 
 Outputs:
   AssetBucket:

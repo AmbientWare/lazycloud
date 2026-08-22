@@ -1,6 +1,6 @@
-# Provider Adapters
+# Provider adapters
 
-Thin adapters over external infrastructure providers—one distribution per
+Thin adapters over external infrastructure providers: one distribution per
 provider, sources under `packages/providers/<name>`, with `provider-*`
 distribution names and `provider_*` imports.
 

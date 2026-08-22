@@ -4,12 +4,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from coordination.event_bus import (
-    EventBusSendStatus,
-    RedisEventBus,
-    plan_stop_build_events,
-)
-from coordination.redis_client import RedisClient
 from pydantic import Field
 from shared.contracts import ContractModel
 
@@ -17,7 +11,6 @@ from images.building import (
     ImageBuildCancellationPlan,
     ImageBuildLifecycleAction,
     ImageBuildSessionPlan,
-    image_build_container_ttl_key,
     plan_image_build_cancellation,
 )
 
@@ -60,8 +53,6 @@ class ImageBuildContainerLifecycleResult(ContractModel):
 
 class ImageBuildContainerTtlStore(Protocol):
     def set_build_container_ttl(self, container_id: str, ttl_seconds: int) -> bool: ...
-
-    def has_build_container_ttl(self, container_id: str) -> bool: ...
 
 
 class ImageBuildStopEventPublisher(Protocol):
@@ -229,54 +220,6 @@ class ImageBuildContainerLifecycleService:
                 return killed, [], plan.reason if killed else "build container kill failed"
             case _:
                 return True, [], plan.reason
-
-
-@dataclass(slots=True)
-class RedisImageBuildContainerTtlStore:
-    redis: RedisClient
-
-    def set_build_container_ttl(self, container_id: str, ttl_seconds: int) -> bool:
-        return bool(
-            self.redis.set(
-                self.redis.key(image_build_container_ttl_key(container_id)),
-                "1",
-                ex=ttl_seconds,
-            )
-        )
-
-    def has_build_container_ttl(self, container_id: str) -> bool:
-        return bool(self.redis.exists(self.redis.key(image_build_container_ttl_key(container_id))))
-
-
-@dataclass(slots=True)
-class EventBusImageBuildStopPublisher:
-    event_bus: RedisEventBus
-
-    def send_stop_build(self, container_id: str) -> ImageBuildStopEventResult:
-        plan = plan_stop_build_events(container_id)
-        if not plan.events:
-            return ImageBuildStopEventResult(
-                status=ImageBuildContainerLifecycleStatus.Error,
-                container_id=container_id,
-                reason=plan.reason,
-            )
-        event_ids: list[str] = []
-        for event in plan.events:
-            sent = self.event_bus.send(event)
-            if sent.status not in {EventBusSendStatus.Sent, EventBusSendStatus.Duplicate}:
-                return ImageBuildStopEventResult(
-                    status=ImageBuildContainerLifecycleStatus.Error,
-                    container_id=container_id,
-                    event_ids=event_ids,
-                    reason=sent.reason,
-                )
-            event_ids.append(sent.event_id)
-        return ImageBuildStopEventResult(
-            status=ImageBuildContainerLifecycleStatus.Complete,
-            container_id=container_id,
-            event_ids=event_ids,
-            reason=plan.reason,
-        )
 
 
 def image_build_lifecycle_session_metadata(

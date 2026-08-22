@@ -30,22 +30,6 @@ from tests.service_fixtures import owned_workspace
 CONTAINER_ID = "00000000-0000-4000-8000-000000000101"
 
 
-@dataclass(frozen=True, slots=True)
-class _ExposedPortsResponse:
-    ports: tuple[int, ...]
-    ok: bool = True
-    error_msg: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class _ExposedPortsClient:
-    ports: tuple[int, ...]
-
-    def sandbox_list_exposed_ports(self, container_id: str) -> _ExposedPortsResponse:
-        _ = container_id
-        return _ExposedPortsResponse(ports=self.ports)
-
-
 @dataclass(slots=True)
 class _TerminalTransitionRepository:
     services: ExecutionServices

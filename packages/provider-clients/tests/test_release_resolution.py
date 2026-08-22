@@ -95,7 +95,6 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
             instance_hourly_micros={"m7i.xlarge": 340_000},
         ),
         aws_connections=AwsAccountConnectionEnvironmentSettings(
-            enabled=True,
             control_principal_arn="arn:aws:iam::123456789012:role/control-plane",
         ),
     )

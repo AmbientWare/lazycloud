@@ -1,4 +1,4 @@
-# Provider Client Composition
+# Provider client composition
 
 The mapping from persisted provider configuration and process settings to
 concrete adapter instances.
@@ -12,14 +12,14 @@ owns the published release manifest contract and the resolution of a deployment'
 settings from it. A deployment points at one release; the agent artifact version
 and digest, the URL that serves it, the container-worker image, the customer
 authorization template, and any baked CPU AMIs are then read from that release
-rather than authored beside it. Values a release cannot know — the local artifact
-mount, GPU AMIs, instance prices, the control principal — stay environment-owned,
-and a rule that spans both halves says which half is missing. A deployment with no
-manifest resolves the same way to an absent release: that is a control plane with
-no managed capacity, not a second mode.
+rather than authored beside it. Values a release cannot know, such as the local
+artifact mount, GPU AMIs, instance prices, and the control principal, stay
+environment-owned, and a rule that spans both halves says which half is missing.
+A deployment with no manifest resolves the same way to an absent release: that is
+a control plane with no managed capacity, not a second mode.
 
 The production registry admits only providers with live evidence behind them. A
 persisted kind that is not supported fails explicitly and by name; it never
 resolves to a stand-in that appears to work. Keep exports explicit, and let
-credential and construction failures surface rather than collapsing into a null
+credential and construction failures propagate rather than collapsing into a null
 adapter that fails later somewhere less informative.

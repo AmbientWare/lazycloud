@@ -11,9 +11,9 @@ root `AGENTS.md`. This file covers where tests live and what they may assert.
   isolation. Pull in the full service graph only through the owner or integration
   `conftest.py` that actually needs it.
 - Make production behavior work first. Assert the resulting state, response,
-  error, side effect, resource residue, or cleanup—not construction, constants,
-  types, signatures, calls, ordering, plans, commands, mocks, or source
-  inventories.
+  error, side effect, resource residue, or cleanup. Do not assert construction,
+  constants, types, signatures, calls, ordering, plans, commands, mocks, or
+  source inventories.
 - Prove each invariant once, at its cheapest authoritative owner. Duplicate a
   scenario higher up only for a boundary risk the lower test cannot see.
 - Reserve broad matrices for distinct authorization, irreversible data-loss,

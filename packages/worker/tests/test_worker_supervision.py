@@ -7,6 +7,7 @@ import pytest
 from api.server.services import ApiServices
 from database.repositories.observability import UsageRepository
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from shared.container_requests import StopContainerReason
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
@@ -62,7 +63,13 @@ class EventSink:
 class Stopper:
     stopped: list[tuple[str, bool]] = field(default_factory=list)
 
-    def stop_container(self, container_id: str, *, force: bool) -> None:
+    def stop_container(
+        self,
+        container_id: str,
+        *,
+        force: bool,
+        reason: StopContainerReason = StopContainerReason.Unknown,
+    ) -> None:
         self.stopped.append((container_id, force))
 
 

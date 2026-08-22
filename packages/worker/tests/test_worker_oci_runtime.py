@@ -125,20 +125,6 @@ def _json_object(value: JsonValue, name: str) -> JsonObject:
         raise AssertionError(f"expected {name} to be an object") from exc
 
 
-def _json_str_list(value: JsonValue, name: str) -> list[str]:
-    try:
-        return _STRING_LIST.validate_python(value)
-    except ValueError as exc:
-        raise AssertionError(f"expected {name} to be a list of strings") from exc
-
-
-def _json_object_list(value: JsonValue, name: str) -> list[JsonObject]:
-    try:
-        return _JSON_OBJECT_LIST.validate_python(value)
-    except ValueError as exc:
-        raise AssertionError(f"expected {name} to be a list of objects") from exc
-
-
 @dataclass(slots=True)
 class _Runner:
     commands: list[list[str]] = field(default_factory=list)

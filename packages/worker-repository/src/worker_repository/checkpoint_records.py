@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -11,7 +11,6 @@ from coordination.redis_client import RedisClient
 from database.repositories.images import CheckpointRepository
 from shared.checkpoints import (
     AutomaticCheckpointCreationLease,
-    CheckpointPruneResult,
     CheckpointRecord,
     CheckpointStatus,
 )
@@ -129,19 +128,9 @@ class CheckpointRecordContext(Protocol):
     def paths(self) -> CheckpointRecordContextPaths: ...
 
 
-class CheckpointRetention(Protocol):
-    def prune(
-        self,
-        active_recent_stub_keys: list[str],
-        *,
-        now: datetime | None = None,
-    ) -> CheckpointPruneResult: ...
-
-
 @dataclass(slots=True)
 class CheckpointService:
     context: CheckpointRecordContext
-    retention: CheckpointRetention | None = None
     retention_seconds: int = DEFAULT_DURABLE_CHECKPOINT_RETENTION_SECONDS
     restore_lease_seconds: int = DEFAULT_CHECKPOINT_RESTORE_LEASE_SECONDS
 
@@ -183,16 +172,6 @@ class CheckpointService:
         """Worker-side system lookup by checkpoint id."""
         with self.context.database.session() as session:
             return CheckpointRepository(session).get_across_workspaces(checkpoint_id)
-
-    def prune_stale_cache_checkpoints(
-        self,
-        active_recent_stub_keys: list[str],
-        *,
-        now: datetime | None = None,
-    ) -> CheckpointPruneResult:
-        if self.retention is None:
-            raise RuntimeError("durable checkpoint retention service is required")
-        return self.retention.prune(active_recent_stub_keys, now=now)
 
 
 def checkpoint_record_from_payload(

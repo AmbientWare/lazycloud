@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import JsonValue
 from shared.image_building.authoring import ImageBuildStepKind, ImageSpec
 from shared.image_building.context import fingerprint_build_context
-from shared.image_building.credentials import image_secret_names
+from shared.image_building.credentials import dedupe_names, image_secret_names
 from shared.image_building.planning import ImageBuildPlan
 from shared.image_building.requirements import sanitize_python_packages
 
@@ -83,7 +83,7 @@ def _normalize_image_spec(image: ImageSpec, *, context_digest: str | None) -> Im
             "packages": sanitize_python_packages(image.packages),
             "commands": [command.strip() for command in image.commands if command.strip()],
             "build_steps": [step for step in steps if step.args or step.command],
-            "credential_keys": _dedupe(image.credential_keys),
+            "credential_keys": dedupe_names(image.credential_keys),
             "secrets": image_secret_names(image.secrets),
             "build_secret_versions": dict(sorted(image.build_secret_versions.items())),
             "context_digest": context_digest,
@@ -150,14 +150,3 @@ def _valid_env_name(value: str) -> bool:
 def _sha256_json(value: JsonValue) -> str:
     payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-def _dedupe(values: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        item = value.strip()
-        if item and item not in seen:
-            result.append(item)
-            seen.add(item)
-    return result

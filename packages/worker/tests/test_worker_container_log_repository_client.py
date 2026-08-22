@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import JsonValue, ValidationError
+from pydantic import ValidationError
 from worker.repository_payloads import (
     AppendContainerLogsRequest,
-    AppendContainerLogsResponse,
     ContainerLogBatchEntry,
     ContainerLogEntryKind,
     ContainerLogStream,
@@ -46,30 +43,3 @@ def _entry(
         kind=kind,
         dropped_count=dropped_count,
     )
-
-
-@dataclass(slots=True)
-class _Transport:
-    posts: list[tuple[str, dict[str, JsonValue]]] = field(default_factory=list)
-
-    def set_bearer_token(self, token: str) -> None:
-        _ = token
-
-    def post(
-        self,
-        path: str,
-        payload: Mapping[str, JsonValue],
-    ) -> dict[str, JsonValue]:
-        self.posts.append((path, dict(payload)))
-        return AppendContainerLogsResponse(
-            accepted_through=3,
-            appended_count=4,
-        ).model_dump(mode="json")
-
-    def stream(
-        self,
-        path: str,
-        payload: Mapping[str, JsonValue],
-    ) -> Iterator[dict[str, JsonValue]]:
-        _ = path, payload
-        return iter(())

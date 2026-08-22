@@ -34,7 +34,7 @@ substitutes, and gives every service an explicit owner and health check.
   account resolves the agent binary, the worker image, and the node AMI out of
   its manifest, so rebuilding one per code deploy churns artifacts other
   people's infrastructure already points at. Sequencing them is the part that
-  cannot be left to chance — both once triggered on `v*` independently, so a
+  cannot be left to chance. Both once triggered on `v*` independently, so a
   tagged deploy raced the release it was meant to run.
 - Which release a deployment runs lives beside its bundle, not in Terraform. It
   is a fact about the deployment rather than its infrastructure, it changes on a

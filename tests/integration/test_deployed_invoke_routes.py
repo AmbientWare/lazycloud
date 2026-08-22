@@ -13,7 +13,6 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubRecord
 from execution.endpoints.dispatch import EndpointDispatchTarget, EndpointResponseStream
 from execution.endpoints.service import EndpointIngressDispatchSession
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from operations.management import ManagementService
@@ -58,10 +57,6 @@ class _RouteContext(Protocol):
 @runtime_checkable
 class _EffectiveRouteProvider(Protocol):
     def effective_route_contexts(self) -> Iterator[_RouteContext]: ...
-
-
-def _http_route_paths(app: FastAPI) -> set[str]:
-    return set(_http_routes(app.routes))
 
 
 def _http_routes(routes: Sequence[BaseRoute], *, prefix: str = "") -> Iterator[str]:
@@ -534,14 +529,6 @@ def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecor
     ]
     assert len(matches) == 1
     return matches[0]
-
-
-def _path(url: str) -> str:
-    return urlsplit(url).path
-
-
-def _host(url: str) -> str:
-    return urlsplit(url).netloc
 
 
 def _base_host(url: str) -> str:

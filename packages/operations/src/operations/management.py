@@ -567,19 +567,6 @@ def _percentile(sorted_values: list[float], quantile: float) -> float | None:
     return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * fraction
 
 
-_INTERVAL_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-
-
-def _interval_seconds(interval: str) -> int:
-    normalized = interval.strip().lower()
-    unit = normalized[-1:] if normalized else ""
-    amount = normalized[:-1]
-    if unit not in _INTERVAL_UNIT_SECONDS or not amount.isdigit() or int(amount) < 1:
-        msg = f"invalid metrics interval {interval!r}; expected forms like 30s, 1m, 5m, 1h, 1d"
-        raise InvalidInputError(msg)
-    return int(amount) * _INTERVAL_UNIT_SECONDS[unit]
-
-
 @dataclass
 class ManagementService:
     services: ManagementServices
@@ -590,14 +577,6 @@ class ManagementService:
             self.services.context,
             workspace_changes=self.services.deployments.workspace_changes,
         )
-
-    def deployment_ids_for_workspace(self, workspace: str) -> set[str]:
-        return {
-            resource.deployment.id
-            for resource in self.services.deployment_resources.list(
-                workspace=workspace, active=None
-            )
-        }
 
     def list_deployments(
         self,

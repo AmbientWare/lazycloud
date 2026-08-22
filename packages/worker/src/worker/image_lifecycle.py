@@ -52,15 +52,10 @@ class WorkerImagePaths(ContractModel):
     image_cache_path: str = DEFAULT_IMAGE_CACHE_PATH
     image_mount_root: str = DEFAULT_IMAGE_MOUNT_ROOT
     image_archive_extension: str = DEFAULT_IMAGE_ARCHIVE_EXTENSION
-    local_archive_extension: str = LOCAL_IMAGE_ARCHIVE_EXTENSION
 
     @property
     def mount_point(self) -> str:
         return image_mount_point(self.image_id, mount_root=self.image_mount_root)
-
-    @property
-    def archive_source_key(self) -> str:
-        return image_archive_source_key(self.image_id, extension=self.image_archive_extension)
 
     @property
     def local_archive_path(self) -> str:
@@ -69,51 +64,6 @@ class WorkerImagePaths(ContractModel):
             cache_path=self.image_cache_path,
             extension=self.image_archive_extension,
         )
-
-    @property
-    def clip_v1_archive_cache_path(self) -> str:
-        return clip_v1_archive_cache_path(self.image_id)
-
-    @property
-    def clip_v1_archive_data_cache_path(self) -> str:
-        return clip_v1_archive_data_cache_path(
-            self.image_id,
-            cache_path=self.image_cache_path,
-            extension=self.local_archive_extension,
-        )
-
-    @property
-    def clip_v1_archive_data_source_key(self) -> str:
-        return clip_v1_archive_data_source_key(
-            self.image_id,
-            extension=self.local_archive_extension,
-        )
-
-
-class ImageArchiveRegistryConfig(ContractModel):
-    bucket_name: str = ""
-    region: str = ""
-    endpoint_url: str = ""
-    force_path_style: bool = False
-    has_access_key: bool = False
-    has_secret_key: bool = False
-
-    @property
-    def usable(self) -> bool:
-        return self.bucket_name != ""
-
-
-class LazyImageArchivePlan(ContractModel):
-    image_id: str
-    path: str
-    storage_mode: ImageArchiveStorageMode = ImageArchiveStorageMode.Unknown
-    source_registry: ImageArchiveRegistryConfig | None = None
-    content_cache_path: str = ""
-    use_checkpoints: bool = False
-
-    @property
-    def uses_oci_storage(self) -> bool:
-        return is_oci_storage_mode(self.storage_mode)
 
 
 class RestoredImageArchiveValidation(ContractModel):
@@ -201,17 +151,6 @@ def local_archive_path(
     )
 
 
-def clip_v1_archive_cache_path(
-    image_id: str,
-    *,
-    agent_images_path: str = "/images",
-    extension: str = LOCAL_IMAGE_ARCHIVE_EXTENSION,
-) -> str:
-    return posixpath.join(
-        agent_images_path.rstrip("/"), image_archive_source_key(image_id, extension=extension)
-    )
-
-
 def image_archive_cache_path(
     image_id: str,
     *,
@@ -221,25 +160,6 @@ def image_archive_cache_path(
     return posixpath.join(
         agent_images_path.rstrip("/"), image_archive_source_key(image_id, extension=extension)
     )
-
-
-def clip_v1_archive_data_cache_path(
-    image_id: str,
-    *,
-    cache_path: str = DEFAULT_IMAGE_CACHE_PATH,
-    extension: str = LOCAL_IMAGE_ARCHIVE_EXTENSION,
-) -> str:
-    return posixpath.join(
-        cache_path.rstrip("/"), image_archive_source_key(image_id, extension=extension)
-    )
-
-
-def clip_v1_archive_data_source_key(
-    image_id: str,
-    *,
-    extension: str = LOCAL_IMAGE_ARCHIVE_EXTENSION,
-) -> str:
-    return image_archive_source_key(image_id, extension=extension)
 
 
 def normalize_archive_storage_mode(
@@ -252,10 +172,6 @@ def normalize_archive_storage_mode(
         if normalized == mode.value:
             return mode
     return ImageArchiveStorageMode.Unknown
-
-
-def is_oci_storage_mode(value: str | ImageArchiveStorageMode | None) -> bool:
-    return normalize_archive_storage_mode(value) is ImageArchiveStorageMode.Oci
 
 
 def validate_restored_image_archive(

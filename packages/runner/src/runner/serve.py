@@ -6,7 +6,6 @@ import os
 import signal
 import sys
 import threading
-import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -38,7 +37,6 @@ from shared.env import (
 )
 from shared.http.endpoint_forwarding import ASGIMessage, ASGIReceive, ASGISend
 from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
-from shared.http.gateway_tasks import AppendTaskLogRequest, AppendTaskLogResponse
 from shared.http.task_payload import serialize_http_task_payload
 from shared.http_transport import HttpChannel
 from shared.lifecycle import (
@@ -57,7 +55,8 @@ from runner.endpoint_forwarding import (
 from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
 from runner.invocation import invoke_handler
 from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
-from runner.runtime import DEFAULT_GATEWAY_ENDPOINT, DEFAULT_RUNNER_TIMEOUT_SECONDS
+from runner.runtime import DEFAULT_GATEWAY_ENDPOINT, DEFAULT_RUNNER_TIMEOUT_SECONDS, post_task_log
+from runner.worker_processes import stop_worker_processes
 
 ENDPOINT_SERVE_PORT_ENV = "BIND_PORT"
 ENDPOINT_HANDLER_ENV = "HANDLER"
@@ -185,18 +184,7 @@ class EndpointServeRunner:
         return response_from_endpoint_result(resolve_endpoint_result(result))
 
     def append_task_log(self, task_id: str, stream: str, message: str) -> None:
-        if not message:
-            return
-        AppendTaskLogResponse.model_validate(
-            self.control.post(
-                "/gateway/tasks/log",
-                AppendTaskLogRequest(
-                    task_id=task_id,
-                    stream=stream,
-                    message=message,
-                ).model_dump(mode="json"),
-            )
-        )
+        post_task_log(self.control, task_id, stream, message)
 
     def run_startup_hooks(self) -> None:
         self.handler()
@@ -397,17 +385,7 @@ class EndpointProcessManager:
                 signal.signal(handled_signal, previous_handler)
 
     def stop(self) -> None:
-        self.shutdown.set()
-        for process in self.processes:
-            if process.is_alive():
-                process.terminate()
-        deadline = time.monotonic() + 5.0
-        for process in self.processes:
-            process.join(timeout=max(deadline - time.monotonic(), 0.0))
-        for process in self.processes:
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=1)
+        stop_worker_processes(self.shutdown, self.processes)
 
     def _start_worker(self, index: int) -> Process:
         process = Process(

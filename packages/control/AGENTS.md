@@ -1,7 +1,7 @@
-# Control Package
+# Control package
 
 Workspace, app, stub, deployment, resource, route, schedule, and concurrency
-workflows—the control plane's decisions.
+workflows: the control plane's decisions.
 
 Services decide, database repositories persist, apps format. Use typed domain
 errors and narrow event, context, and storage protocols rather than depending on

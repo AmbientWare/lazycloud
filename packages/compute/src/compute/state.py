@@ -483,16 +483,6 @@ class RedisComputeStateRepository:
         )
         return True
 
-    def delete_join_token_state(self, token_hash: str) -> bool:
-        state = self.get_join_token_state(token_hash)
-        deleted = bool(self.redis.delete(self.keys.join_token(token_hash)))
-        if state is not None:
-            self.redis.set_remove(
-                self.keys.join_token_index(state.workspace_id, state.capacity_owner_id),
-                token_hash,
-            )
-        return deleted
-
     def save_agent_token_state(
         self,
         state: ComputeAgentTokenState,

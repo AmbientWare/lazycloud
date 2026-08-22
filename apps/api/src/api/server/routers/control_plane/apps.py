@@ -8,7 +8,6 @@ from fastapi.responses import Response
 from identity.authz import token_has_scope
 from operations.management import AppOperationalSummary, ManagementService
 from shared.app_lifecycle import AppLifecycleState, AppLifecycleTarget
-from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.http.apps import (
     AppActionCapabilitiesResponse,
@@ -19,8 +18,6 @@ from shared.http.apps import (
     AppSummaryResponse,
 )
 from shared.http.deployments import (
-    DeploymentActionCapabilitiesResponse,
-    DeploymentResponse,
     DeploymentScalingResponse,
 )
 from shared.http.stubs import StubResponse
@@ -28,7 +25,7 @@ from shared.identity import AuthScope
 
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
-from api.server.response_mapping import deployment_response
+from api.server.response_mapping import actionable_deployment_response
 from api.server.services import ApiServices
 
 router = APIRouter()
@@ -63,32 +60,6 @@ def _app_response(record: AppRecord, *, can_write: bool) -> AppResponse:
     )
 
 
-def _deployment_response(
-    record: Deployment,
-    *,
-    can_write: bool,
-    app_active: bool,
-    scaling: DeploymentScalingResponse | None,
-) -> DeploymentResponse:
-    available = record.deleted_at is None
-    return deployment_response(
-        record,
-        scaling=scaling,
-        actions=DeploymentActionCapabilitiesResponse(
-            can_start=can_write and available and app_active and not record.active,
-            can_stop=can_write and available and record.active,
-            can_scale=(
-                can_write
-                and available
-                and app_active
-                and record.active
-                and record.kind is DeploymentKind.Pod
-            ),
-            can_delete=can_write and available,
-        ),
-    )
-
-
 def _app_list_response(records: Sequence[AppRecord], *, can_write: bool) -> AppListResponse:
     return AppListResponse(data=[_app_response(item, can_write=can_write) for item in records])
 
@@ -105,7 +76,7 @@ def _app_summary_response(
             StubResponse.model_validate(record.latest_workload) if record.latest_workload else None
         ),
         latest_deployment=(
-            _deployment_response(
+            actionable_deployment_response(
                 record.latest_deployment,
                 can_write=can_write,
                 app_active=record.app.active,

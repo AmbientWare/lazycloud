@@ -14,7 +14,7 @@ import {
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
 export const accountComputeQueryKeys = accountQueryKeys.compute;
-export const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
+const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 
 /** Machines this account connected. They serve every workspace it owns. */
 export function machinesQueryOptions() {

@@ -166,11 +166,6 @@ class ImageBuildExecutionController:
             return self._error
 
     @property
-    def owned_build_id(self) -> str:
-        with self._state_lock:
-            return self._owned_build_id
-
-    @property
     def cancel_error(self) -> Exception | None:
         with self._state_lock:
             return self._cancel_error
@@ -240,10 +235,6 @@ class ImageBuildExecutionController:
 
 class ImageBuildShutdownIncompleteError(RuntimeError):
     """Raised when database-using image work did not quiesce before timeout."""
-
-
-def image_fingerprint(image: ImageSpec) -> str:
-    return build_image_plan(image).cache_key
 
 
 def _build_record_matches_executor(
@@ -389,9 +380,6 @@ class ImageBuildService:
         with self._execution_lock:
             if self._closed:
                 raise RuntimeError("image build service is closed")
-
-    def can_reuse(self, record: ImageBuildRecord) -> bool:
-        return _build_record_matches_executor(record, self.executor)
 
     def build(
         self,
@@ -689,24 +677,6 @@ class ImageBuildService:
             self.sleep(max(self.duplicate_wait_poll_seconds, 0.0))
             current = self.get(record.id, workspace_id=workspace_id)
         return current
-
-    def _start_build(
-        self,
-        plan: ImageBuildPlan,
-        *,
-        workspace_id: str,
-        tag: str | None,
-    ) -> ImageBuildRecord:
-        with self.context.database.session() as session:
-            repository = ImageBuildRepository(session)
-            saved = self._create_build_record(
-                repository,
-                plan,
-                workspace_id=workspace_id,
-                tag=tag,
-            )
-        self._emit("started", saved, workspace_id=workspace_id)
-        return saved
 
     def _claim_build(
         self,
@@ -1405,12 +1375,6 @@ class ImageBuildService:
                 image_id,
                 workspace_id=workspace_id,
             )
-
-    def list_image_metadata(self, *, workspace_id: str) -> list[ImageRecord]:
-        with self.context.database.session() as session:
-            records = ImageRepository(session).list(workspace_id=workspace_id)
-        records.sort(key=lambda item: item.image_id)
-        return records
 
     def cleanup_build(
         self,

@@ -7,7 +7,6 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
-from httpx2 import Response
 from identity.auth import AuthService
 from pydantic import JsonValue
 from shared.identity import TokenKind
@@ -60,8 +59,3 @@ def test_workspace_token_cannot_forge_operator_workspace_override(
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
-
-
-def _successful(response: Response, status_code: int = 200) -> Response:
-    assert response.status_code == status_code, response.text
-    return response

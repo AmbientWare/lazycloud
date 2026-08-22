@@ -17,7 +17,7 @@ import { accountQueryKeys } from "./workspace-keys";
  * person, and somebody holding three workspaces holds one payment relationship,
  * so switching workspace cannot change the answer.
  */
-export const CARDLESS_SUMMARY_POLL_INTERVAL_MS = 5_000;
+const CARDLESS_SUMMARY_POLL_INTERVAL_MS = 5_000;
 /**
  * How often the summary is re-read while the account still has no card.
  *

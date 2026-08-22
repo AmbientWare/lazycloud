@@ -368,11 +368,6 @@ def agent_machine_id(workspace_id: str, pool: str, fingerprint: str, *, seed: st
     return str(uuid5(NAMESPACE_URL, f"agent-machine\x00{workspace_id}\x00{pool}\x00{id_seed}"))
 
 
-def managed_machine_id(workspace_id: str, pool: str, seed: str) -> str:
-    id_seed = seed or str(int(utc_now().timestamp() * 1_000_000_000))
-    return str(uuid5(NAMESPACE_URL, f"managed-machine\x00{workspace_id}\x00{pool}\x00{id_seed}"))
-
-
 def agent_machine_worker_id(machine_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"agent-worker\x00{machine_id}"))
 
@@ -472,15 +467,6 @@ def plan_join_token_creation(
         expires_at=expires_at,
         state=state,
     )
-
-
-def pool_created_by_principal(
-    pool: PrivateUnitState | None,
-    principal: ComputePrincipal | None,
-) -> bool:
-    if pool is None or principal is None or pool.created_by_token_id == "":
-        return False
-    return pool.created_by_token_id == principal.owner_token_id
 
 
 def plan_join_token_binding(

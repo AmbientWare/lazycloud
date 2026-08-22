@@ -18,7 +18,6 @@ from identity.device_auth import (
     DeviceAuthorizationService,
 )
 from identity.users import UserService
-from pydantic import JsonValue
 from shared.identity import (
     DeviceAuthorizationStatus,
     TokenKind,
@@ -205,14 +204,3 @@ def test_device_claim_rolls_back_consumption_when_token_insert_fails(
     claimed = service.claim(started.device_code)
     assert claimed.status is DeviceAuthorizationStatus.Approved
     assert claimed.token
-
-
-def _device_start_payload() -> dict[str, JsonValue]:
-    return {
-        "device_code": "dc_secret",
-        "user_code": "BCDF-GHJK",
-        "verification_uri": "http://127.0.0.1:9000/activate",
-        "verification_uri_complete": "http://127.0.0.1:9000/activate?code=BCDF-GHJK",
-        "expires_in_seconds": 900,
-        "poll_interval_seconds": 5,
-    }

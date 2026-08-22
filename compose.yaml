@@ -98,7 +98,6 @@ x-agent-binary-env: &agent-binary-env
   LAZYCLOUD_AGENT_BINARY_DIR: "${LAZYCLOUD_AGENT_BINARY_DIR:-/var/lib/lazycloud/agent-binarys}"
 
 x-aws-compute-env: &aws-compute-env
-  LAZYCLOUD_AWS_CONNECTION_ENABLED: "${LAZYCLOUD_AWS_CONNECTION_ENABLED:-false}"
   LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN: "${LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN:-}"
   LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS: "${LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS:-{}}"
 
@@ -164,6 +163,12 @@ x-container-worker-settings: &container-worker-settings
   restart: unless-stopped
   privileged: true
   cgroup: host
+  # The slot a deployed worker gets from the agent, so a local one is bounded the
+  # same way. Without it the worker's cgroup is unlimited, its memory pressure
+  # describes the whole development machine rather than its own share, and the
+  # eviction watcher correctly refuses to run -- which means the path is never
+  # exercised anywhere a person would notice it breaking.
+  mem_limit: "${LAZYCLOUD_WORKER_MEMORY_LIMIT:-4g}"
   cap_add:
     - NET_ADMIN
     - SYS_ADMIN

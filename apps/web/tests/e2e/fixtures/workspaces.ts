@@ -11,7 +11,3 @@ export const activeWorkspaceDefaults = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 } as const satisfies Omit<Workspace, "id" | "name">;
-
-export function activeWorkspace(id: string, name: string): Workspace {
-  return { id, name, ...activeWorkspaceDefaults };
-}

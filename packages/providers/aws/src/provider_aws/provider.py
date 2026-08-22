@@ -7,14 +7,13 @@ from enum import StrEnum
 from typing import Literal, Protocol, Self, TypeGuard, TypeVar, overload, runtime_checkable
 
 from boto3.session import Session
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.app_identity import NAME
 from shared.image_building.credentials import (
     EcrRegistryRef,
     parse_ecr_registry,
     registry_hosts_equal,
 )
-from storage.backends import ObjectBackendKind, ObjectLocation, RangeRequest
 
 
 class AwsCredentialSource(StrEnum):
@@ -25,7 +24,6 @@ class AwsCredentialSource(StrEnum):
 
 class AwsService(StrEnum):
     Ecr = "ecr"
-    S3 = "s3"
 
 
 class AwsModel(BaseModel):
@@ -91,27 +89,6 @@ class AwsClientOptions(AwsModel):
         return {"endpoint_url": self.endpoint_url}
 
 
-class AwsK3sClusterPlan(AwsModel):
-    name: str
-    region: str
-    server_instance_type: str = "t3.large"
-    worker_instance_type: str = "t3.large"
-    worker_count: int = 1
-    database_engine: str = "postgres"
-    object_buckets: list[str] = Field(default_factory=list)
-
-
-class AwsS3Location(AwsModel):
-    bucket: str
-    key: str
-    region: str
-    endpoint_url: str | None = None
-
-    @property
-    def uri(self) -> str:
-        return f"s3://{self.bucket}/{self.key}"
-
-
 class EcrAuthorizationPlan(AwsModel):
     registry: EcrRegistryRef
     region: str
@@ -137,47 +114,6 @@ class _EcrAuthorizationResponse(AwsModel):
 @runtime_checkable
 class EcrAuthorizationClient(Protocol):
     def get_authorization_token(self, *, registryIds: list[str]) -> object: ...
-
-
-class AwsS3Body(Protocol):
-    def read(self) -> bytes: ...
-
-
-class AwsS3GetObjectResponse(Protocol):
-    def __getitem__(self, key: Literal["Body"], /) -> AwsS3Body: ...
-
-
-type AwsS3RequestValue = JsonValue | bytes
-
-
-@runtime_checkable
-class AwsS3Client(Protocol):
-    def get_object(self, **kwargs: AwsS3RequestValue) -> AwsS3GetObjectResponse: ...
-
-    def put_object(self, **kwargs: AwsS3RequestValue) -> None: ...
-
-
-@dataclass
-class AwsS3ObjectBackend:
-    s3_client: AwsS3Client
-    kind: ObjectBackendKind = ObjectBackendKind.S3Compatible
-
-    def read_bytes(
-        self,
-        location: ObjectLocation,
-        range_request: RangeRequest | None = None,
-    ) -> bytes:
-        params: dict[str, AwsS3RequestValue] = {
-            "Bucket": location.bucket,
-            "Key": location.key,
-        }
-        if range_request is not None:
-            params["Range"] = range_request.header_value()
-        response = self.s3_client.get_object(**params)
-        return response["Body"].read()
-
-    def write_bytes(self, location: ObjectLocation, data: bytes) -> None:
-        self.s3_client.put_object(Bucket=location.bucket, Key=location.key, Body=data)
 
 
 _SessionT = TypeVar("_SessionT", covariant=True)
@@ -270,20 +206,12 @@ class AwsProvider:
         session: None = None,
     ) -> EcrAuthorizationClient: ...
 
-    @overload
-    def client(
-        self,
-        service: Literal[AwsService.S3],
-        *,
-        session: None = None,
-    ) -> AwsS3Client: ...
-
     def client(
         self,
         service: AwsService,
         *,
         session: AwsClientSession[_ClientT] | None = None,
-    ) -> _ClientT | EcrAuthorizationClient | AwsS3Client:
+    ) -> _ClientT | EcrAuthorizationClient:
         options = self.client_options(service)
         if session is not None:
             return session.client(options.service.value, **options.boto3_kwargs())
@@ -293,34 +221,7 @@ class AwsProvider:
         candidate = source.client(options.service.value, **options.boto3_kwargs())
         if service is AwsService.Ecr and isinstance(candidate, EcrAuthorizationClient):
             return candidate
-        if service is AwsService.S3 and isinstance(candidate, AwsS3Client):
-            return candidate
         raise RuntimeError(f"boto3 {service.value} client lacks required operations")
-
-    def k3s_cluster_plan(
-        self,
-        name: str,
-        *,
-        worker_count: int = 1,
-        object_buckets: list[str] | None = None,
-    ) -> AwsK3sClusterPlan:
-        return AwsK3sClusterPlan(
-            name=name,
-            region=self.settings.region,
-            worker_count=worker_count,
-            object_buckets=object_buckets or [f"{name}-objects", f"{name}-images"],
-        )
-
-    def s3_location(self, bucket: str, key: str) -> AwsS3Location:
-        return AwsS3Location(
-            bucket=bucket,
-            key=key,
-            region=self.settings.region,
-            endpoint_url=self.settings.endpoint_url,
-        )
-
-    def s3_backend(self) -> AwsS3ObjectBackend:
-        return AwsS3ObjectBackend(self.client(AwsService.S3))
 
     def ecr_authorization_plan(self, registry_host: str) -> EcrAuthorizationPlan:
         registry = parse_ecr_registry(registry_host)
@@ -372,11 +273,8 @@ class AwsProvider:
 __all__ = [
     "AwsClientOptions",
     "AwsCredentialSource",
-    "AwsK3sClusterPlan",
     "AwsProvider",
     "AwsProviderSettings",
-    "AwsS3Location",
-    "AwsS3ObjectBackend",
     "AwsService",
     "AwsSessionOptions",
     "EcrAuthorization",

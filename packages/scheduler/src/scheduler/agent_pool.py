@@ -6,7 +6,6 @@ from enum import StrEnum
 from typing import Protocol
 
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
-from compute.offers import schedulable_capacity
 from compute.projection import PoolConfig, normalize_unit_config
 from compute.state import ComputeAgentTokenState, ComputeUnitState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
@@ -17,7 +16,7 @@ from shared.compute_policy import (
     ComputeUnitRecord,
     MachinePool,
 )
-from shared.container_requests import OciRuntimeName
+from shared.container_requests import OciRuntimeName, schedulable_capacity
 from shared.contracts import ContractModel
 from shared.scheduling import (
     SchedulerWorkerRecord,

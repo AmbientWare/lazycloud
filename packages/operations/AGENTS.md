@@ -1,6 +1,6 @@
-# Operations Package
+# Operations package
 
-Management workflows genuinely reused by more than one caller—API, CLI, or
+Management workflows genuinely reused by more than one caller: API, CLI, or
 gateway.
 
 A workflow earns a place here by having a real second consumer, not by looking

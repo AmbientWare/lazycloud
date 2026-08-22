@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass, field
 
 import pytest
 from api.fastapi_app import create_app
@@ -350,21 +348,3 @@ def _append_container_log(
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
-
-
-@dataclass
-class _RouteChannel:
-    gets: list[str] = field(default_factory=list)
-
-    def get(self, path: str) -> dict[str, JsonValue]:
-        self.gets.append(path)
-        return {"data": [], "count": 0}
-
-    def stream_get(self, path: str) -> Iterator[str]:
-        self.gets.append(path)
-        yield "event: log\n"
-        yield (
-            'data: {"id": "log-1", "seq_num": 1, '
-            '"timestamp": "2026-01-01T00:00:00+00:00", "message": "streamed"}\n'
-        )
-        yield "\n"

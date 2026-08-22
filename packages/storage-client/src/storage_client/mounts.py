@@ -25,7 +25,6 @@ from shared.contracts import ContractModel
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MOUNT_TIMEOUT_SECONDS = 30.0
-DEFAULT_FORMAT_TIMEOUT_SECONDS = 60.0
 DEFAULT_UNMOUNT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MOUNT_POLL_SECONDS = 0.1
 DEFAULT_CLEANUP_RETRIES = 3
@@ -514,26 +513,6 @@ def _wait_for_mount(
         StorageMountStatus.Failed,
         output=command.output(),
         reason="timed out waiting for storage mount",
-    )
-
-
-def _process_result(
-    mode: StorageMountMode,
-    local_path: str,
-    command: list[str],
-    env: dict[str, str],
-    result: ProcessResult,
-    success_reason: str,
-) -> StorageMountResult:
-    return StorageMountResult(
-        mode=mode,
-        local_path=local_path,
-        status=StorageMountStatus.Mounted if result.ok else StorageMountStatus.Failed,
-        command=command,
-        env_keys=sorted(env),
-        exit_code=result.exit_code,
-        output="\n".join(part for part in (result.stdout, result.stderr) if part).strip(),
-        reason=success_reason if result.ok else "storage command failed",
     )
 
 

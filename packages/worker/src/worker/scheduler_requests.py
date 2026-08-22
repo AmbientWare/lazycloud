@@ -39,7 +39,9 @@ from worker.image_build_execution import (
     is_image_build_scheduler_request,
 )
 from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
+from worker.memory_pressure import ResidentContainer
 from worker.monitoring import WorkerUsageWindowRecorder
+from worker.runtime_config import absolute_container_cgroup_path
 from worker.status import (
     WorkerDeliveredRequestPlan,
     WorkerSchedulerRequestAction,
@@ -141,6 +143,8 @@ class _BackgroundExecution:
     request: SchedulerWorkerRequest
     thread: threading.Thread | None = None
     result: WorkerSchedulerRequestResult | None = None
+    pid: int = 0
+    """The sandbox process, once the runtime has started one."""
 
 
 @dataclass(slots=True)
@@ -172,6 +176,14 @@ class WorkerSchedulerRequestProcessor:
 
     No default: it is what every container this worker runs is billed for, and a
     machine that silently reports the wrong card bills the wrong rate.
+    """
+
+    node_cpu_millicores: int = 0
+    node_memory_mib: int = 0
+    """What this worker's machine holds, or zero when it could not be read.
+
+    Only bounds a container's hard memory ceiling, so an unreadable machine costs
+    a ceiling that may be too generous rather than a container that will not run.
     """
 
     lifecycle: WorkerSchedulerRequestLifecycle | None = None
@@ -239,7 +251,10 @@ class WorkerSchedulerRequestProcessor:
 
         try:
             context = container_execution_context_from_scheduler_request(
-                request, worker_gpu_type=self.worker_gpu_type
+                request,
+                worker_gpu_type=self.worker_gpu_type,
+                node_cpu_millicores=self.node_cpu_millicores,
+                node_memory_mib=self.node_memory_mib,
             )
             if runs_in_background(context.startup_kind):
                 return self._start_background(request, context)
@@ -457,6 +472,40 @@ class WorkerSchedulerRequestProcessor:
             request=request,
             background=True,
         )
+
+    def record_container_started(self, container_id: str, pid: int) -> None:
+        """Note the sandbox a running container got.
+
+        Called from the execution thread the moment the runtime reports one. A
+        long-running container has no pid when it is registered and reports none
+        again until it exits, so without this it is invisible to anything reading
+        live containers.
+        """
+        active = self._background.get(container_id)
+        if active is not None:
+            active.pid = pid
+
+    def resident_containers(self) -> list[ResidentContainer]:
+        """The containers this worker is holding, and the cgroup accounting for each.
+
+        Background executions only. A foreground container runs inside the call
+        that started it, so the loop asking this question is not running while
+        one exists.
+
+        The cgroup rather than the sandbox's pid: a pid is reused by Linux once
+        the process it named exits, so a container recorded as it went away could
+        hand the watcher a live pid belonging to something else entirely, whose
+        size would then be weighed against this container's reservation. A cgroup
+        path names the container and nothing else, and reads as gone rather than
+        as someone else.
+        """
+        return [
+            ResidentContainer(
+                container_id=container_id,
+                cgroup_path=absolute_container_cgroup_path(container_id),
+            )
+            for container_id in self._background
+        ]
 
     def _run_background(
         self,
@@ -772,6 +821,8 @@ def container_execution_context_from_scheduler_request(
     request: SchedulerWorkerRequest,
     *,
     worker_gpu_type: str,
+    node_cpu_millicores: int = 0,
+    node_memory_mib: int = 0,
 ) -> ContainerExecutionContext:
     """Build the execution context for one scheduled container.
 
@@ -835,6 +886,8 @@ def container_execution_context_from_scheduler_request(
         memory_enforced=payload.memory_enforced,
         memory_limit_bytes=memory_limit_bytes,
         cpu_limit_millicores=payload.cpu_limit_millicores,
+        node_cpu_millicores=node_cpu_millicores,
+        node_memory_mib=node_memory_mib,
         cgroup_path=payload.cgroup_path,
         run_delayed_cleanup=payload.run_delayed_cleanup,
     )

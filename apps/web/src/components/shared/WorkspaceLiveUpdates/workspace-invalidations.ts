@@ -104,7 +104,7 @@ export function workspaceInvalidationTargets(
     case "usage":
       return [{ queryKey: accountQueryKeys.usage.root(), expensive: true }];
     case "settings.concurrency":
-      return [{ queryKey: workspaceQueryKeys.settings.concurrency(workspaceId) }];
+      return [];
   }
 }
 

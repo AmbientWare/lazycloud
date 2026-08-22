@@ -544,14 +544,6 @@ class Scheduler:
         return pools
 
     @property
-    def capacity_reservation_service(self) -> CapacityReservationService:
-        service = self.capacity.capacity_reservations
-        if service is None:
-            msg = "scheduler capacity reservation service was not injected"
-            raise RuntimeError(msg)
-        return service
-
-    @property
     def worker_pool_drain_service(self) -> WorkerPoolDrainService:
         service = self.capacity.worker_pool_drain
         if service is None:

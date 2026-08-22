@@ -1,4 +1,4 @@
-# Scheduler App
+# Scheduler app
 
 Scheduler settings, concrete adapter composition, and the process loop.
 

@@ -18,11 +18,6 @@ from gateway.events import GatewayRequestEventMiddleware
 from httpx2 import Response
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
-from scheduler.state import (
-    SchedulerContainerAddress,
-    SchedulerContainerAddressMap,
-    SchedulerContainerState,
-)
 from shared.compute_policy import (
     MachinePool,
     UnitName,
@@ -588,25 +583,6 @@ class _RecordingTransportFactory:
     ) -> _RecordingTransport:
         _ = options
         return self.transport
-
-
-@dataclass
-class _SchedulerContainers:
-    state: SchedulerContainerState | None = None
-    worker_address: SchedulerContainerAddress | None = None
-
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
-        if self.state is not None and self.state.container_id == container_id:
-            return self.state
-        return None
-
-    def get_worker_address(self, container_id: str) -> SchedulerContainerAddress | None:
-        if self.worker_address is not None and self.worker_address.container_id == container_id:
-            return self.worker_address
-        return None
-
-    def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:
-        return SchedulerContainerAddressMap(container_id=container_id)
 
 
 @dataclass

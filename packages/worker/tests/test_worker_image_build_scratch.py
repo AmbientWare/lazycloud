@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from shared.timestamps import utc_now
@@ -13,16 +12,8 @@ from worker.image_build_scratch import (
 )
 
 
-def _disk_usage_with_free(_path: str | os.PathLike[str]) -> SimpleNamespace:
-    return SimpleNamespace(free=16 * 1024 * 1024)
-
-
 def _buildah_path(_binary: str) -> str:
     return "/usr/bin/buildah"
-
-
-def _statvfs_noexec(_path: str | os.PathLike[str]) -> SimpleNamespace:
-    return SimpleNamespace(f_flag=8)
 
 
 def _manager(

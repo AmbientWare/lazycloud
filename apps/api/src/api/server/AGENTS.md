@@ -1,11 +1,11 @@
-# API Server
+# API server
 
-Routers, shared dependencies, and authentication for the HTTP surface.
+Routers, shared dependencies, and authentication for the HTTP API.
 
 Keep routers thin and grouped by resource: validate, authorize, call one
 service, map the typed result. Use the framework's own dependencies, typed
 shared request and response models, app state, lifespan, and background tasks
-rather than local reimplementations—no per-router auth aliases, custom router
+rather than local reimplementations. No per-router auth aliases, custom router
 builders, or app-local response serializers.
 
 Workspace scope comes from bearer authentication, and the override is available
@@ -30,16 +30,17 @@ the workspace from its query, and a route that names the workspace in its path
 calls it directly rather than deciding for itself. A user credential reaches a
 workspace only through a membership row naming them, and keeping that read in one
 function is what makes the rule identical on every path. A request that names no
-workspace resolves the default and is then checked against membership: guessing
-among the workspaces a person holds would sometimes act on the wrong one silently,
-where this refuses and says why.
+workspace resolves the default and is then checked against membership. Guessing
+among the workspaces a person holds would sometimes act on the wrong one
+silently, where this refuses and says why.
 
 The shell WebSocket ticket is the one credential that does not arrive as a bearer
 header, so it carries its own membership read in `identity.websocket_tickets`
 against the workspace the ticket was minted for. Keep that decision equivalent to
 this one; a ticket is redeemed once and cannot fall back to the header path.
 
-Resources a person owns rather than a workspace—their connected cloud account,
-their registered domains, the machines they join—take `read_user`/`write_user`. A
-workspace-scoped automation token deliberately fails there: it carries no
-authority over the account that owns the workspace it was minted for.
+Resources a person owns rather than a workspace, such as their connected cloud
+account, their registered domains, and the machines they join, take
+`read_user`/`write_user`. A workspace-scoped automation token deliberately fails
+there: it carries no authority over the account that owns the workspace it was
+minted for.

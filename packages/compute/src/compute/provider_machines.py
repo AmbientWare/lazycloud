@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -40,13 +40,12 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     TailnetEnrollmentPhase,
 )
-from shared.compute_fleet import Machine, ResourceStatus
+from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
 )
 from shared.contracts import ContractModel
 from shared.errors import (
@@ -82,39 +81,7 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS = 30
 
 
-@dataclass(frozen=True, slots=True)
-class LaunchedProviderInstance:
-    """A provider instance created during one launch flow, keyed to its owner."""
-
-    provider: str
-    provider_instance_id: str
-    machine_id: str
-    status: str
-    address: str
-    storage_volume_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedProviderLaunch:
-    """Durable provider launch intent plus its one-time registration credential."""
-
-    provider: str
-    offer: ComputeOffer
-    machine: Machine
-    provider_record_id: str
-    registration_token: str = field(repr=False)
-
-
 _LAUNCH_STATE_INTENT = "intent"
-
-
-_LAUNCH_STATE_COMMITTED = "committed"
-
-
-_LAUNCH_STATE_COMPENSATING = "compensating"
-
-
-_LAUNCH_STATE_COMPENSATED = "compensated"
 
 
 def _reservation_status_from_provider(status: str) -> ReservationStatus:
@@ -138,10 +105,6 @@ def _provider_storage_volume_ids(record: ComputeProviderInstanceRecord) -> tuple
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, str) and item)
-
-
-def _provider_launch_state(record: ComputeProviderInstanceRecord) -> str:
-    return str(_provider_instance_metadata(record).get("launch_state") or "")
 
 
 def _provider_booted_template_version(record: ComputeProviderInstanceRecord) -> str:
@@ -198,12 +161,6 @@ def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputeUnitPhase:
 
 def _unique_nonempty(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
-
-
-def _whole_hours(seconds: int) -> int:
-    if seconds <= 0:
-        return 0
-    return max((seconds + 3599) // 3600, 1)
 
 
 def _utc(value: datetime | None) -> datetime:
@@ -280,170 +237,6 @@ class ProviderMachineReconciler:
     workspace_changes: WorkspaceChangePublisher | None
     scheduler_hooks: ComputeSchedulerHooks | None
     source_cache_lifecycle: SourceCacheStorageLifecycleService
-    stale_first_seen: dict[tuple[str, str, str], datetime] = field(default_factory=dict)
-
-    def _reconcile_provider_machines(
-        self,
-        session: DatabaseSession,
-        pool: ComputeUnitRecord,
-        instances: list[ComputeProviderInstanceRecord],
-        *,
-        clients: Mapping[str, DirectMachineProvider],
-        now: datetime,
-    ) -> tuple[bool, set[str], set[str]]:
-        changed = False
-        updated_machine_ids: set[str] = set()
-        reclaimed_machine_ids: set[str] = set()
-        by_provider: dict[str, list[ComputeProviderInstanceRecord]] = {}
-        for record in instances:
-            if _reservation_open(record.status):
-                by_provider.setdefault(record.provider, []).append(record)
-        for provider_name, records in by_provider.items():
-            client = clients.get(provider_name)
-            if client is None:
-                continue
-            overdue_intents = [
-                record
-                for record in records
-                if _provider_launch_state(record) == _LAUNCH_STATE_INTENT
-                and self._launch_intent_overdue(record, now=now)
-            ]
-            overdue_machine_ids = {
-                record.machine_id for record in overdue_intents if record.machine_id
-            }
-            expected = {
-                record.machine_id
-                for record in records
-                if record.machine_id and record.machine_id not in overdue_machine_ids
-            }
-            probe = client.reconcile_machines(pool.pool, expected, terminate_stale=False)
-            stale = set(probe.stale_machine_ids)
-            if overdue_machine_ids:
-                observed = {item.machine_id: item for item in probe.observed_machines}
-                provider_instances = ComputeProviderInstanceRepository(session)
-                machines = MachineRepository(session)
-                for record in overdue_intents:
-                    if record.machine_id is None:
-                        continue
-                    remote = observed.get(record.machine_id)
-                    updated = record.model_copy(
-                        update={
-                            "instance_id": (
-                                remote.provider_instance_id
-                                if remote is not None
-                                else record.instance_id
-                            ),
-                            "status": (
-                                ReservationStatus.Terminating.value
-                                if remote is not None
-                                else ReservationStatus.Failed.value
-                            ),
-                            "metadata": {
-                                **_provider_instance_metadata(record),
-                                "storage_volume_ids": (
-                                    list(remote.storage_volume_ids) if remote is not None else []
-                                ),
-                                "launch_state": (
-                                    _LAUNCH_STATE_COMPENSATING
-                                    if remote is not None
-                                    else _LAUNCH_STATE_COMPENSATED
-                                ),
-                            },
-                            "updated_at": utc_now(),
-                        }
-                    )
-                    provider_instances.upsert(updated)
-                    reclaimed = False
-                    if remote is not None:
-                        reclaimed = self._terminate_provider_record(
-                            session,
-                            updated,
-                            clients=clients,
-                            reason="abandoned_launch_intent",
-                            message="provider launch did not commit to durable active state",
-                        )
-                    self._revoke_provider_join_credential(session, record)
-                    machine = machines.get_across_workspaces(record.machine_id)
-                    if machine is not None:
-                        if reclaimed:
-                            machines.upsert(
-                                machine.model_copy(update={"status": ResourceStatus.Deleted})
-                            )
-                        elif remote is None:
-                            machines.upsert(
-                                machine.model_copy(update={"status": ResourceStatus.Failed})
-                            )
-                    if reclaimed:
-                        reclaimed_machine_ids.add(record.machine_id)
-                    else:
-                        updated_machine_ids.add(record.machine_id)
-                    changed = True
-                records = [
-                    record for record in records if record.machine_id not in overdue_machine_ids
-                ]
-            self._terminate_overdue_stale_machines(
-                client,
-                provider_name=provider_name,
-                pool=pool.pool,
-                expected=expected,
-                stale=stale - overdue_machine_ids,
-                now=now,
-            )
-            missing = set(probe.missing_machine_ids)
-            for record in records:
-                if record.machine_id is not None and record.machine_id in missing:
-                    if _provider_launch_state(record) == _LAUNCH_STATE_INTENT:
-                        continue
-                    reclaimed = self._terminate_provider_record(
-                        session,
-                        record,
-                        clients=clients,
-                        reason="provider_machine_missing",
-                        message=(
-                            "provider active inventory is missing the machine; "
-                            "requesting termination and exact absence proof"
-                        ),
-                    )
-                    if reclaimed:
-                        reclaimed_machine_ids.add(record.machine_id)
-                    else:
-                        updated_machine_ids.add(record.machine_id)
-                    changed = True
-                    continue
-                bootstrap_failure = self._provider_bootstrap_failure_to_reclaim(
-                    session,
-                    pool,
-                    record,
-                    now=now,
-                )
-                if bootstrap_failure is not None:
-                    reclaimed = self._terminate_provider_record(
-                        session,
-                        record,
-                        clients=clients,
-                        reason="bootstrap_deadline_exceeded",
-                        message=(
-                            "machine did not produce an available worker before "
-                            "the bootstrap phase deadline"
-                        ),
-                        bootstrap_failure_reason=bootstrap_failure,
-                        bootstrap_observed_at=now,
-                    )
-                    if not reclaimed:
-                        continue
-                    changed = True
-                    if record.machine_id is not None:
-                        reclaimed_machine_ids.add(record.machine_id)
-                    LOGGER.warning(
-                        "reclaimed provider machine that did not become ready",
-                        extra={
-                            "provider": provider_name,
-                            "pool": pool.name,
-                            "machine_id": record.machine_id,
-                            "provider_instance_id": record.instance_id or record.id,
-                        },
-                    )
-        return changed, updated_machine_ids, reclaimed_machine_ids
 
     def _sync_pooled_instances(
         self,
@@ -722,92 +515,6 @@ class ProviderMachineReconciler:
         )
         return updated
 
-    def _record_failed_launch_cleanup(
-        self,
-        prepared_launches: list[PreparedProviderLaunch],
-        *,
-        created_instances: list[LaunchedProviderInstance],
-        attempted_machine_ids: set[str],
-        terminated_machine_ids: set[str],
-        failure: str,
-    ) -> None:
-        created_by_machine = {item.machine_id: item for item in created_instances}
-        with self.context.database.session() as session:
-            provider_instances = ComputeProviderInstanceRepository(session)
-            machines = MachineRepository(session)
-            for prepared in prepared_launches:
-                record = provider_instances.records.get(prepared.provider_record_id)
-                if record is None:
-                    continue
-                created = created_by_machine.get(prepared.machine.id)
-                outcome_unknown = created is None and prepared.machine.id in attempted_machine_ids
-                terminated = prepared.machine.id in terminated_machine_ids
-                if outcome_unknown:
-                    provider_instances.upsert(
-                        record.model_copy(
-                            update={
-                                "bootstrap_phase": MachineBootstrapPhase.Failed,
-                                "bootstrap_failure_reason": (MachineBootstrapFailureReason.Unknown),
-                                "bootstrap_observed_at": utc_now(),
-                                "metadata": {
-                                    **_provider_instance_metadata(record),
-                                    "last_error": failure,
-                                    "launch_outcome": "unknown",
-                                },
-                                "updated_at": utc_now(),
-                            }
-                        )
-                    )
-                    continue
-                status = (
-                    ReservationStatus.Deleted.value
-                    if terminated
-                    else (
-                        ReservationStatus.Terminating.value
-                        if created is not None
-                        else ReservationStatus.Failed.value
-                    )
-                )
-                provider_instances.upsert(
-                    record.model_copy(
-                        update={
-                            "instance_id": (
-                                created.provider_instance_id
-                                if created is not None
-                                else record.instance_id
-                            ),
-                            "status": status,
-                            "bootstrap_phase": MachineBootstrapPhase.Failed,
-                            "bootstrap_failure_reason": MachineBootstrapFailureReason.Unknown,
-                            "bootstrap_observed_at": utc_now(),
-                            "metadata": {
-                                **_provider_instance_metadata(record),
-                                "storage_volume_ids": (
-                                    list(created.storage_volume_ids) if created is not None else []
-                                ),
-                                "launch_state": (
-                                    _LAUNCH_STATE_COMPENSATED
-                                    if terminated or created is None
-                                    else _LAUNCH_STATE_COMPENSATING
-                                ),
-                                "last_error": failure,
-                            },
-                            "updated_at": utc_now(),
-                        }
-                    )
-                )
-                self._revoke_provider_join_credential(session, record)
-                machine = machines.get_across_workspaces(prepared.machine.id)
-                if machine is not None:
-                    if terminated:
-                        machines.upsert(
-                            machine.model_copy(update={"status": ResourceStatus.Deleted})
-                        )
-                    elif created is None:
-                        machines.upsert(
-                            machine.model_copy(update={"status": ResourceStatus.Failed})
-                        )
-
     def _terminate_provider_record(
         self,
         session: DatabaseSession,
@@ -994,59 +701,6 @@ class ProviderMachineReconciler:
             now=_utc(now),
         )
 
-    def _terminate_overdue_stale_machines(
-        self,
-        client: DirectMachineProvider,
-        *,
-        provider_name: str,
-        pool: MachinePool,
-        expected: set[str],
-        stale: set[str],
-        now: datetime,
-    ) -> None:
-        """Terminate provider machines unknown to durable state, after a grace window.
-
-        Staleness is first observed, then enforced only once the machine has
-        stayed stale for the provider's configured grace window, so machines
-        created by a still-open launch transaction are never reaped mid-boot.
-        First-seen tracking is process-local: a restart only delays reclaim by
-        at most one grace window and can never terminate early.
-        """
-        for key in [
-            key
-            for key in self.stale_first_seen
-            if key[0] == provider_name and key[1] == pool and key[2] not in stale
-        ]:
-            del self.stale_first_seen[key]
-        if not stale:
-            return
-        grace = self.reclaim.stale_grace_for(provider_name)
-        overdue: set[str] = set()
-        for machine_id in stale:
-            first_seen = self.stale_first_seen.setdefault(
-                (provider_name, pool, machine_id),
-                now,
-            )
-            if now - first_seen >= grace:
-                overdue.add(machine_id)
-        if not overdue:
-            return
-        result = client.reconcile_machines(
-            pool,
-            expected | (stale - overdue),
-            terminate_stale=True,
-        )
-        for machine_id in result.terminated_machine_ids:
-            self.stale_first_seen.pop((provider_name, pool, machine_id), None)
-            LOGGER.warning(
-                "terminated stale provider machine unknown to durable state",
-                extra={
-                    "provider": provider_name,
-                    "pool": pool,
-                    "machine_id": machine_id,
-                },
-            )
-
     def _provider_bootstrap_failure_to_reclaim(
         self,
         session: DatabaseSession,
@@ -1184,12 +838,3 @@ class ProviderMachineReconciler:
                 credentials.save_for_workspace_deletion(revoked)
             else:
                 credentials.save(revoked)
-
-    def _launch_intent_overdue(
-        self,
-        record: ComputeProviderInstanceRecord,
-        *,
-        now: datetime,
-    ) -> bool:
-        deadline = self.reclaim.launch_intent_settle_for(record.provider)
-        return now - _utc(record.created_at) >= deadline

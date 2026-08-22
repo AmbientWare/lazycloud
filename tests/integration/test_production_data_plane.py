@@ -4,12 +4,10 @@ import hashlib
 from base64 import b64encode
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
 from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from boto3.s3.transfer import TransferConfig
 from botocore.awsrequest import AWSRequest
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
@@ -31,11 +29,6 @@ from database import (
     DatabaseClient,
     DatabaseSettings,
 )
-
-
-class _UploadExtraArgs(TypedDict):
-    ContentType: str
-    Metadata: dict[str, str]
 
 
 def _services(root: Path) -> ApiServices:
@@ -145,27 +138,3 @@ def test_s3_delete_objects_requests_include_content_md5() -> None:
     assert request.headers["Content-MD5"] == b64encode(
         hashlib.md5(body, usedforsecurity=False).digest()
     ).decode("ascii")
-
-
-class _RecordingS3TransferClient:
-    def __init__(self, download_payload: bytes = b"") -> None:
-        self.download_payload = download_payload
-        self.uploads: list[tuple[str, str, str, _UploadExtraArgs, TransferConfig]] = []
-        self.downloads: list[tuple[str, str, str]] = []
-
-    def upload_file(
-        self,
-        Filename: str,
-        Bucket: str,
-        Key: str,
-        *,
-        ExtraArgs: _UploadExtraArgs,
-        Config: TransferConfig,
-    ) -> None:
-        self.uploads.append((Filename, Bucket, Key, ExtraArgs, Config))
-
-    def download_file(self, bucket: str, key: str, filename: str) -> None:
-        target = Path(filename)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(self.download_payload)
-        self.downloads.append((bucket, key, filename))

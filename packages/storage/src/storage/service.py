@@ -623,13 +623,6 @@ class ObjectStorage:
             bucket=self.physical_bucket(bucket),
         )
 
-    def read_by_id(self, object_id: str) -> bytes:
-        record = self.get_by_id(object_id)
-        return self.object_client.read_bytes(
-            self.physical_key_for_record(record),
-            bucket=self.physical_bucket(record.bucket),
-        )
-
     def download_file(self, bucket: str, key: str, target: str | Path) -> ObjectRecord:
         return self.download_file_for_workspace(
             workspace_id=self._workspace_id(),
@@ -659,13 +652,6 @@ class ObjectStorage:
             bucket=self.physical_bucket(bucket),
         )
         return record
-
-    def download_by_id(self, object_id: str, target: str | Path) -> ObjectRecord:
-        return self.download_by_id_for_workspace(
-            object_id,
-            target,
-            workspace_id=self._workspace_id(),
-        )
 
     def download_by_id_for_workspace(
         self,

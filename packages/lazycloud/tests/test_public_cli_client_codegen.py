@@ -153,35 +153,6 @@ class _FakeClientManifestGateway:
         )
 
 
-@dataclass
-class _FakeUntypedClientManifestGateway:
-    requests: list[ClientManifestRequest] = field(default_factory=list)
-
-    def client_manifest(self, request: ClientManifestRequest) -> ClientManifestResponse:
-        self.requests.append(request)
-        return ClientManifestResponse(
-            app=request.app,
-            workspace=request.workspace,
-            resources=[
-                ClientManifestResource(
-                    app=request.app,
-                    name="health",
-                    kind=DeploymentKind.Endpoint,
-                    stub_id="stub-health",
-                    deployment_id="dep-health",
-                    deployment_version=3,
-                    invoke_url=f"{request.external_url}/endpoint/public/stub-health",
-                    invoke_path="/api/v1/endpoints/health/latest",
-                    route="/health",
-                    methods=["GET"],
-                    inputs={"fields": {}},
-                    outputs={"fields": {"status": {"type": "string"}}},
-                    client_contract=None,
-                )
-            ],
-        )
-
-
 @runtime_checkable
 class _GeneratedHealthDetails(Protocol):
     code: int

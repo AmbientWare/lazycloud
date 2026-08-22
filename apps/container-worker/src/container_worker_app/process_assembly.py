@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
@@ -66,10 +67,21 @@ from worker.image_build_execution import (
     WorkerImageBuildExecutionService,
 )
 from worker.image_build_runtime_credentials import ImageBuildCredentialLoader
+from worker.memory_pressure import WorkerMemoryPressureWatcher
 from worker.monitoring import ContainerRuntimeMonitor
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
+from worker.runtime_config import (
+    prepare_worker_cgroup,
+    read_cgroup_memory_current_bytes,
+    read_cgroup_memory_low_bytes,
+    read_memory_pressure_percent,
+    read_worker_cpu_millicores,
+    read_worker_memory_mib,
+    worker_cgroup_path,
+    worker_memory_limit_mib,
+)
 from worker.scheduler_requests import (
     WorkerSchedulerRequestContainerRepository,
     WorkerSchedulerRequestProcessor,
@@ -178,7 +190,11 @@ class WorkerProcessServices:
     worker_events: WorkerStreamEventHandler
     event_source: WorkerProcessEventSource | None
     processor: WorkerSchedulerRequestProcessor
+    memory_watcher: WorkerMemoryPressureWatcher | None = None
     retention: WorkerRetentionService | None = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def assemble_worker_process_services(
@@ -328,6 +344,27 @@ def assemble_worker_process_services(
         and image_build_dependencies.image_archive_publisher is not None
         else None
     )
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id=identity.worker_id,
+        workers=worker_repository,
+        containers=container_repository,
+        execution=execution,
+        lifecycle=lifecycle,
+        image_builds=image_builds,
+        usage_recorder=usage_supervisor,
+        worker_gpu_type=registration.gpu_type,
+        # The worker's own slot, not the machine: several workers share a host,
+        # each started with its own `--memory`, and reading the host would hand
+        # every container a ceiling the worker cannot honour.
+        node_cpu_millicores=read_worker_cpu_millicores(),
+        node_memory_mib=read_worker_memory_mib(),
+    )
+
+    # Set after both exist rather than passed in: execution has to tell the
+    # processor a pid, and the processor is built from execution. Without it a
+    # long-running container is never seen by anything watching live containers.
+    execution.container_started = processor.record_container_started
+
     return WorkerProcessServices(
         identity=identity,
         workers=worker_repository,
@@ -346,15 +383,58 @@ def assemble_worker_process_services(
             worker_id=identity.worker_id,
         ),
         event_source=event_source,
-        processor=WorkerSchedulerRequestProcessor(
-            worker_id=identity.worker_id,
-            workers=worker_repository,
-            containers=container_repository,
-            execution=execution,
-            lifecycle=lifecycle,
-            image_builds=image_builds,
-            usage_recorder=usage_supervisor,
-            worker_gpu_type=registration.gpu_type,
-        ),
+        processor=processor,
+        memory_watcher=_memory_pressure_watcher(processor, stopper=runtime_stopper),
         retention=retention,
+    )
+
+
+def _memory_pressure_watcher(
+    processor: WorkerSchedulerRequestProcessor,
+    *,
+    stopper: WorkerRuntimeContainerStopper,
+) -> WorkerMemoryPressureWatcher | None:
+    """Watch this worker's slot, if the slot is this worker's to account for.
+
+    The condition is a memory limit on the worker's own cgroup, not the presence
+    of a cgroup. Both deployments give a worker its own cgroup -- the agent
+    passes `--cgroupns host` and Compose sets `cgroup: host` -- so having one
+    distinguishes nothing and a guard testing for that is always satisfied.
+
+    What actually disqualifies a worker is an unlimited cgroup: the pressure
+    there describes the whole machine rather than this worker's share of it, and
+    evicting on it would stop this worker's containers because something else on
+    the host grew.
+    """
+    # Done before anything reads the path, because it moves this process into a
+    # leaf and therefore changes what the path is.
+    prepared = prepare_worker_cgroup()
+    cgroup_path = worker_cgroup_path()
+    # The cgroup's own bound, not the reader that falls back to the machine: the
+    # fallback answers with the host, which enables the watcher on exactly the
+    # unbounded workers this is meant to skip.
+    memory_mib = worker_memory_limit_mib()
+    if not prepared or not cgroup_path or not memory_mib or memory_mib <= 0:
+        # Said out loud. A worker that silently does not watch looks exactly like
+        # one that does, right up until the kernel picks a victim by size.
+        LOGGER.warning(
+            "memory eviction is off: prepared=%s cgroup=%r memory=%s MiB",
+            prepared,
+            cgroup_path,
+            memory_mib,
+        )
+        return None
+    return WorkerMemoryPressureWatcher(
+        worker_cgroup_path=cgroup_path,
+        residents=processor.resident_containers,
+        read_pressure_percent=read_memory_pressure_percent,
+        read_memory_current=read_cgroup_memory_current_bytes,
+        read_memory_low=read_cgroup_memory_low_bytes,
+        # Forced, because a machine already out of memory is one where a graceful
+        # stop may never complete.
+        stop_container=lambda container_id, reason: stopper.stop_container(
+            container_id,
+            force=True,
+            reason=reason,
+        ),
     )

@@ -42,7 +42,7 @@ export const unitAxisLabels = {
  * the figure says so rather than rounding to the answer a resource nothing used
  * would give.
  */
-export function formatQuantity(value: number, unit: AccountActivityUnit): string {
+function formatQuantity(value: number, unit: AccountActivityUnit): string {
   if (unit === "starts") return Math.round(value).toLocaleString();
   if (value <= 0) return "0";
   if (value < 0.01) return "<0.01";

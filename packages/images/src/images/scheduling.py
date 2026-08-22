@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
 from uuid import uuid4
 
 from pydantic import Field, JsonValue
@@ -12,7 +10,6 @@ from shared.managed_runtime_integrity import managed_package_source_digest
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
-    SchedulerWorkerRecord,
     SchedulerWorkerRequest,
 )
 
@@ -29,11 +26,6 @@ DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_SECONDS = 180.0
 DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_SECONDS = 0.1
 DEFAULT_SCHEDULER_BUILD_REGISTRY_CREDENTIAL_TTL_SECONDS = 5 * 60
 IMAGE_BUILD_REQUEST_KIND = "image-build"
-
-
-class ImageBuildContainerScheduleStatus(StrEnum):
-    Submitted = "submitted"
-    Error = "error"
 
 
 class ImageBuildSchedulerCredentialSource(StrEnum):
@@ -81,56 +73,6 @@ class ImageBuildSchedulingFailureEvidence(ContractModel):
     build_id: str
     workspace_id: str
     reason: str
-
-
-class ImageBuildContainerScheduleResult(ContractModel):
-    status: ImageBuildContainerScheduleStatus
-    worker_id: str
-    container_id: str
-    worker_status: str = ""
-    reason: str = ""
-
-    @property
-    def submitted(self) -> bool:
-        return self.status is ImageBuildContainerScheduleStatus.Submitted
-
-
-class ImageBuildWorkerRequestRepository(Protocol):
-    def schedule_container_request(
-        self,
-        worker_id: str,
-        request: SchedulerWorkerRequest,
-    ) -> SchedulerWorkerRecord: ...
-
-
-@dataclass(slots=True)
-class ImageBuildContainerSchedulerService:
-    worker_repository: ImageBuildWorkerRequestRepository
-
-    def submit(
-        self,
-        worker_id: str,
-        plan: ImageBuildContainerRequestPlan,
-    ) -> ImageBuildContainerScheduleResult:
-        try:
-            worker = self.worker_repository.schedule_container_request(
-                worker_id,
-                plan.scheduler_request,
-            )
-        except Exception as exc:
-            return ImageBuildContainerScheduleResult(
-                status=ImageBuildContainerScheduleStatus.Error,
-                worker_id=worker_id,
-                container_id=plan.scheduler_request.container_id,
-                reason=str(exc),
-            )
-        return ImageBuildContainerScheduleResult(
-            status=ImageBuildContainerScheduleStatus.Submitted,
-            worker_id=worker_id,
-            container_id=plan.scheduler_request.container_id,
-            worker_status=worker.status.value,
-            reason="image build container request submitted",
-        )
 
 
 def plan_image_build_container_request(

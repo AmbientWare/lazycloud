@@ -217,17 +217,6 @@ class TailscaleTailnetControlConfig(BaseModel):
             raise ValueError("Tailscale tag must use the tag:<name> form")
         return normalized
 
-    @property
-    def issuable_tags(self) -> tuple[str, ...]:
-        """The tags this control plane may mint auth keys for.
-
-        Its own tag is here because it joins the tailnet the same way every agent
-        does. `tailscale up` carries no tag of its own, so the tag can only come
-        from the key that redeems it: an untagged key produces an untagged device
-        and a silently different set of grants.
-        """
-        return (self.agent_tag, self.control_plane_tag)
-
 
 class _TailscaleResponseModel(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)

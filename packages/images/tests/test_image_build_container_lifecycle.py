@@ -97,18 +97,11 @@ class _FakeTtlStore:
         self.sets.append((container_id, ttl_seconds))
         return True
 
-    def has_build_container_ttl(self, container_id: str) -> bool:
-        return any(item[0] == container_id for item in self.sets)
-
 
 class _FailingTtlStore:
     def set_build_container_ttl(self, container_id: str, ttl_seconds: int) -> bool:
         del container_id, ttl_seconds
         raise RuntimeError("ttl unavailable")
-
-    def has_build_container_ttl(self, container_id: str) -> bool:
-        del container_id
-        return False
 
 
 class _FakeStopPublisher:

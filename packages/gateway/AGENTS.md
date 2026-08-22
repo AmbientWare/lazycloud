@@ -1,4 +1,4 @@
-# Gateway Package
+# Gateway package
 
 Gateway control, backend dialing and prewarming, view projection, private-unit
 gateway state, and request-event middleware, all behind explicit protocols.
