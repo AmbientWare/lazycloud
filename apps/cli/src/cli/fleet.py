@@ -37,6 +37,14 @@ def fleet_ensure(
     security_group_id: Annotated[
         str, typer.Option("--security-group-id", help="Security group nodes join.")
     ],
+    external_id: Annotated[
+        str,
+        typer.Option(
+            "--external-id",
+            help="External ID the connection role already enforces.",
+            envvar="LAZYCLOUD_FLEET_EXTERNAL_ID",
+        ),
+    ],
 ) -> None:
     """Connect the platform's own account, or report the connection already there.
 
@@ -44,6 +52,10 @@ def fleet_ensure(
     present is left alone rather than replaced: reconnecting mints a new
     authorization generation, and doing that on every deploy would churn the
     credential every pool depends on.
+
+    This is the ordinary existing-role connection, not a private path: the role
+    exists before the connection does, so its external ID is supplied rather
+    than minted. A customer bringing their own role is in exactly that position.
     """
     if len(subnet_id) != 2:
         raise typer.BadParameter(
@@ -66,6 +78,11 @@ def fleet_ensure(
     response = client.connect_account(
         account_id=account_id,
         role_arn=role_arn,
+        # The role is declared beside this deployment and its trust already
+        # enforces this, so the platform is told rather than choosing. A minted
+        # one would have to be written into a trust policy Terraform owns, by
+        # something other than Terraform.
+        external_id=external_id,
         network=AwsAccountNetwork(
             vpc_id=vpc_id,
             subnet_ids=(subnet_id[0], subnet_id[1]),

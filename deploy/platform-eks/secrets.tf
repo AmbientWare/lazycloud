@@ -55,6 +55,10 @@ locals {
       LAZYCLOUD_DATABASE_URL           = local.platform_secret
       LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY = local.platform_secret
       LAZYCLOUD_CACHE_SERVICE_TOKEN    = local.platform_secret
+      # Both halves of this are the module's: the condition on the connection
+      # role's trust, and the value the registration presents. Declaring one
+      # without giving the other is a role that enforces an ID nothing sends.
+      LAZYCLOUD_FLEET_EXTERNAL_ID = local.platform_secret
     },
   )
 

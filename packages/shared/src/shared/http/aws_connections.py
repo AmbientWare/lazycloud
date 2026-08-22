@@ -25,6 +25,19 @@ class AwsConnectionCreateRequest(HttpModel):
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
     network: AwsAccountNetwork | None = None
+    # The external ID a role that already exists enforces.
+    #
+    # Only with a role, because the two modes differ in who the value belongs
+    # to. Where this platform creates the role, it chooses the ID and the far
+    # side is told. Where the role is already there, its trust is already
+    # written, and the ID is a fact about it rather than something to mint: an
+    # ID chosen here would have to be added to a trust policy by hand before the
+    # first assume could work.
+    #
+    # Supplying it grants nothing. The ID is a confused-deputy guard, and it
+    # guards this platform: naming a role somebody else owns fails at the assume,
+    # because their trust does not name this principal.
+    external_id: str | None = Field(default=None, min_length=16, max_length=1224)
 
     @model_validator(mode="after")
     def validate_role_account(self) -> AwsConnectionCreateRequest:
@@ -32,6 +45,8 @@ class AwsConnectionCreateRequest(HttpModel):
             raise ValueError("AWS role ARN must belong to account_id")
         if self.network is not None and self.role_arn is None:
             raise ValueError("AWS network may only be supplied with an existing role")
+        if self.external_id is not None and self.role_arn is None:
+            raise ValueError("AWS external ID may only be supplied with an existing role")
         return self
 
 
