@@ -138,6 +138,64 @@ jobs:
           print(f"{len(documents)} objects, all complete")
           PY
 
+      # Two orderings the cluster cannot recover from on its own.
+      #
+      # Argo holds a sync wave until it is healthy, so anything the workloads
+      # depend on has to be in an earlier one. A Job behind them waits on a
+      # control plane that is itself waiting on the schema that Job creates, and
+      # the only way out of that is a person terminating the sync.
+      #
+      # And a container that reads agent binaries out of a directory nothing
+      # mounted finds an empty one: the release resolves, the install route
+      # serves 404, and nothing says the volume was the missing piece.
+      - name: The order and the mounts hold
+        run: |
+          python - <<'PY'
+          import sys, yaml
+
+          documents = [d for d in yaml.safe_load_all(open("rendered.yaml")) if d]
+
+          def wave(document):
+              annotations = document["metadata"].get("annotations") or {}
+              return int(annotations.get("argocd.argoproj.io/sync-wave", "0"))
+
+          problems = []
+          workloads = [d for d in documents if d["kind"] == "Deployment"]
+          earlier = [d for d in documents if d["kind"] in ("Job", "ExternalSecret", "StorageClass")]
+          for workload in workloads:
+              for prerequisite in earlier:
+                  if wave(prerequisite) >= wave(workload):
+                      problems.append(
+                          f"{prerequisite['kind']}/{prerequisite['metadata']['name']} is in wave "
+                          f"{wave(prerequisite)} and Deployment/{workload['metadata']['name']} is in "
+                          f"wave {wave(workload)}; the workload must come after what it depends on"
+                      )
+
+          for document in documents:
+              pod = (document.get("spec", {}).get("template", {}) or {}).get("spec", {})
+              mounted = {v["name"] for v in pod.get("volumes", [])}
+              for container in pod.get("containers", []) + pod.get("initContainers", []):
+                  directories = [
+                      entry["value"]
+                      for entry in container.get("env", [])
+                      if entry.get("name") == "LAZYCLOUD_AGENT_BINARY_DIR" and "value" in entry
+                  ]
+                  if not directories:
+                      continue
+                  paths = {m["mountPath"] for m in container.get("volumeMounts", []) if m["name"] in mounted}
+                  for directory in directories:
+                      if directory not in paths:
+                          problems.append(
+                              f"{document['kind']}/{document['metadata']['name']}/{container['name']} "
+                              f"serves agent binaries from {directory}, which no volume mounts"
+                          )
+
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              raise SystemExit(1)
+          print(f"{len(workloads)} workloads ordered after {len(earlier)} prerequisites")
+          PY
+
       - name: Argo applications parse
         run: |
           python - <<'PY'

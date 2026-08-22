@@ -36,6 +36,30 @@ spec:
             type: CharDevice
         - name: state
           emptyDir: {}
+        # Per pod, because the artifact is immutable and 48MB: a shared volume
+        # would tie replicas to one zone to save a fetch that costs seconds.
+        - name: agent-binarys
+          emptyDir: {}
+      initContainers:
+        # The release publishes the agent binary; the deployment says where it
+        # keeps one. Neither holds the whole path, so it is assembled here, and
+        # the artifact is fetched before the process that serves it starts:
+        # `AgentBinarySettings` refuses to build without a directory, so a
+        # download after startup would be after the refusal.
+        - name: agent-artifact
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
+          command:
+            - lazycloud-admin
+            - --json
+            - release
+            - fetch-agent
+            - --into
+            - /var/lib/lazycloud/agent-binarys
+          env:
+            {{- include "lazycloud.env" . | nindent 12 }}
+          volumeMounts:
+            - name: agent-binarys
+              mountPath: /var/lib/lazycloud/agent-binarys
       containers:
         - name: control-plane
           image: {{ include "lazycloud.image" (list . "api") }}
@@ -50,6 +74,8 @@ spec:
             # An emptyDir, because the identity here is worth less than the
             # restart it would delay: the device is ephemeral and re-registers
             # in seconds, and a PVC would tie a replica to one zone.
+            - name: LAZYCLOUD_AGENT_BINARY_DIR
+              value: /var/lib/lazycloud/agent-binarys
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
             # The device goes away with the pod. Callers reach the advertised
@@ -58,6 +84,8 @@ spec:
             - name: LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE
               value: "true"
           volumeMounts:
+            - name: agent-binarys
+              mountPath: /var/lib/lazycloud/agent-binarys
             - name: tun
               mountPath: /dev/net/tun
             - name: state
