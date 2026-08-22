@@ -7,13 +7,12 @@ name: Release Artifacts
 #
 # `ship.yml` runs this and then the deploy, which is how a tag becomes both.
 
+# Called by `ship.yml`, never dispatched on its own. Publishing a release
+# finishes nothing by itself: the artifacts are immutable and public, and
+# nothing runs them until a deploy records the manifest URL against a
+# deployment. Running this alone is how a control plane ends up refusing to
+# start against a release that exists and that it was never told about.
 on:
-  workflow_dispatch:
-    inputs:
-      bake_ami:
-        description: Bake the per-region connected AWS node AMI
-        type: boolean
-        default: true
   workflow_call:
     inputs:
       bake_ami:

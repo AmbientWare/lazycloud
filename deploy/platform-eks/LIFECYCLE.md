@@ -134,14 +134,25 @@ same grant.
 ### 5. The first deploy
 
 ```sh
-gh workflow run release.yml -f deployment=lazycloud-prod
-gh workflow run deploy.yml -f deployment=lazycloud-prod
+gh workflow run ship.yml -f deployment=lazycloud-prod
 ```
 
-The release publishes the agent, the container-worker image and the node AMI. The
-deploy builds the control-plane images, tags them with the commit, and pushes the
-rendered values to the deployment branch. Argo takes it from there: External
-Secrets first, then the chart, then the bootstrap Jobs in wave order.
+`ship` publishes the release and then deploys onto it, handing the manifest URL
+from the first half to the second. Do that for a first bring-up, and for any
+change to the agent, the container-worker image, or the node AMI.
+
+`deploy` on its own is the ordinary case afterwards, and runs many times against
+one release: it builds the control-plane images, tags them with the commit, and
+pushes the rendered values to the deployment branch, carrying forward whichever
+release is already recorded.
+
+Run it before there is a release and the control plane starts, reads a price map
+that says managed capacity is wanted, finds no worker image, agent binary or AMI
+catalog to serve it with, and refuses. That is a half-configured deployment being
+rejected rather than a fault, and the way out is `ship`.
+
+Argo takes it from there: External Secrets first, then the chart, then the
+bootstrap Jobs in wave order.
 
 Watch it rather than assume it:
 
