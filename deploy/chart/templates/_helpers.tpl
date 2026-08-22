@@ -37,3 +37,12 @@ forgot it, and reported as though the image were wrong rather than missing.
 {{- end -}}
 {{- printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.repositoryPrefix $name $tag -}}
 {{- end -}}
+
+{{/*
+The SDK profile the chain is written under and the workloads read.
+
+Both ends are in this chart, so it is a name rather than a setting: nothing
+outside picks it, and a value would be a way for the file and the process that
+reads it to disagree.
+*/}}
+{{- define "lazycloud.awsProfile" -}}control{{- end -}}

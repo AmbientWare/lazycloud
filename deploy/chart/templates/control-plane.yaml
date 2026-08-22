@@ -82,7 +82,7 @@ spec:
             - name: AWS_CONFIG_FILE
               value: /run/lazycloud/aws/config
             - name: AWS_PROFILE
-              value: {{ .Values.aws.profile | quote }}
+              value: {{ include "lazycloud.awsProfile" . | quote }}
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
             # The device goes away with the pod. Callers reach the advertised
