@@ -29,8 +29,12 @@ on:
     tags:
       - "v*"
 
+# What the called workflows need, because a caller cannot grant less than they
+# ask for: the deploy records its build as a commit on the deployment branch,
+# and a caller offering only `contents: read` fails the whole run before any job
+# starts, with no logs to read.
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
