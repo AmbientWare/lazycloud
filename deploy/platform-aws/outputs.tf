@@ -71,6 +71,12 @@ output "runtime_configuration" {
     # nothing fails, and the authorization templates and OAuth redirects a
     # customer receives point at their own machine.
     LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
+    # Where GitHub returns a person after they sign in. Configuration rather than
+    # something derived from the request: the Host header belongs to whoever sent
+    # it, so deriving the callback would let a caller choose a redirect target
+    # GitHub then honours. Absent, sign-in is refused as provider_unavailable and
+    # the dashboard reports that sign-ins are not supported.
+    LAZYCLOUD_GITHUB_REDIRECT_URI = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}/auth/github/callback"
   }
 }
 

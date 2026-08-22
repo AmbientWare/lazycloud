@@ -86,6 +86,11 @@ REQUIRED_RUNTIME_VARIABLES = {
         "OAuth redirects"
     ),
     "LAZYCLOUD_OBJECT_STORE_BUCKET": ("the bucket every artifact, package and log is written to"),
+    "LAZYCLOUD_GITHUB_REDIRECT_URI": (
+        "where GitHub returns a person after sign-in; without it the deployment "
+        "refuses every sign-in as provider_unavailable and nobody can reach the "
+        "dashboard"
+    ),
 }
 
 
