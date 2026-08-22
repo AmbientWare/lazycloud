@@ -7,15 +7,16 @@ neither binds to nothing and reports "no storage class is set", which stalls the
 whole sync: Argo waits for the claim to become healthy and every resource behind
 it waits with it.
 
-Default, so a claim that names no class gets this rather than nothing.
+Default, so a claim that names no class gets this rather than nothing, and in
+the first wave, because a claim applied before it exists records an empty class
+and that field cannot be changed afterwards.
 */}}
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: {{ .Values.storage.className }}
   annotations:
-    storageclass.kubernetes.io/is-default-class: "true"
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-4"
 provisioner: ebs.csi.eks.amazonaws.com
 volumeBindingMode: WaitForFirstConsumer
 # The cache is rebuilt on a miss, so a volume that outlived its claim would be

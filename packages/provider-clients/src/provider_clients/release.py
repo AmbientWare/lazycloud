@@ -10,8 +10,11 @@ together or not at all.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinaryEnvironmentSettings, AgentBinarySettings
@@ -29,6 +32,7 @@ from provider_clients.settings import (
 )
 
 _MAXIMUM_MANIFEST_BYTES = 1024 * 1024
+_TRANSFER_CHUNK_BYTES = 1024 * 1024
 
 
 class ReleaseManifestError(RuntimeError):
@@ -164,6 +168,83 @@ def fetch_release_manifest(url: str, *, timeout_seconds: float = 15.0) -> AwsRel
     return manifest
 
 
+def materialize_agent_artifact(
+    manifest: AwsReleaseManifest,
+    *,
+    into: Path,
+    timeout_seconds: float = 300.0,
+) -> Path:
+    """Put the release's agent binary where the install routes serve it from.
+
+    The manifest names the artifact and the deployment says where it keeps one,
+    so neither knows the whole path alone. The layout is the release's, not a
+    convention repeated here: the object's own `local_path` carries the file
+    name, and the version directory is what `/install` appends before opening
+    it.
+
+    Idempotent, because this runs before every replica and a pod that restarts
+    should not re-fetch what it already holds. An artifact already present and
+    already matching its digest is left alone; one present and not matching is
+    replaced, since a release is immutable and the wrong bytes under the right
+    name can only be a bad transfer.
+    """
+
+    artifact = manifest.agent_artifact_object
+    destination = into / manifest.agent_artifact_version / PurePosixPath(artifact.local_path).name
+    if destination.is_file() and _file_sha256(destination) == artifact.sha256:
+        return destination
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged = destination.with_name(f".{destination.name}.partial")
+    digest = hashlib.sha256()
+    request = urllib.request.Request(
+        artifact.public_url,
+        method="GET",
+        headers={"User-Agent": "lazycloud-release-resolver/1"},
+    )
+    try:
+        with (
+            urllib.request.urlopen(request, timeout=timeout_seconds) as response,
+            staged.open("wb") as handle,
+        ):
+            while chunk := response.read(_TRANSFER_CHUNK_BYTES):
+                digest.update(chunk)
+                handle.write(chunk)
+    except OSError as exc:
+        staged.unlink(missing_ok=True)
+        raise ReleaseManifestError(
+            f"agent artifact is not readable: {artifact.public_url}"
+        ) from exc
+
+    written = staged.stat().st_size
+    if written != artifact.size_bytes:
+        staged.unlink(missing_ok=True)
+        raise ReleaseManifestError(
+            f"agent artifact is {written} bytes, and release "
+            f"{manifest.release_version} publishes {artifact.size_bytes}"
+        )
+    if digest.hexdigest() != artifact.sha256:
+        staged.unlink(missing_ok=True)
+        raise ReleaseManifestError(
+            f"agent artifact does not match the digest release "
+            f"{manifest.release_version} publishes for it"
+        )
+
+    # Executable, because this is the file a node downloads and runs. Replaced by
+    # rename so a reader never opens a partial one.
+    staged.chmod(0o755)
+    os.replace(staged, destination)
+    return destination
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(_TRANSFER_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _download_manifest(url: str, *, timeout_seconds: float) -> bytes:
     request = urllib.request.Request(
         url,
@@ -188,5 +269,6 @@ __all__ = [
     "ReleaseManifestSettings",
     "deployment_release",
     "fetch_release_manifest",
+    "materialize_agent_artifact",
     "resolve_deployment_release",
 ]

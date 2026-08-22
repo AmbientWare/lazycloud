@@ -2,10 +2,15 @@
 One replica, and that is a capacity decision rather than a correctness one.
 
 The scheduler serialises its work on Redis token locks and tolerates overlapping
-ticks by design -- `packages/scheduler/AGENTS.md`: "where two overlap anyway the
+ticks by design. `packages/scheduler/AGENTS.md`: "where two overlap anyway the
 second finds the row already terminal and settles nothing twice". What made more
 than one impossible before was a Redis per host, which is why that moved out of
 the cluster.
+
+It fetches the agent artifact it never serves. Resolving the release is what
+gives it the worker image and the AMI catalogue, and that resolution validates
+the artifact directory as one fact. A path here that named an empty directory
+would satisfy the check and describe something untrue.
 */}}
 apiVersion: apps/v1
 kind: Deployment
@@ -22,10 +27,33 @@ spec:
         app: scheduler
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
+      volumes:
+        - name: agent-binarys
+          emptyDir: {}
+      initContainers:
+        - name: agent-artifact
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
+          command:
+            - lazycloud-admin
+            - --json
+            - release
+            - fetch-agent
+            - --into
+            - /var/lib/lazycloud/agent-binarys
+          env:
+            {{- include "lazycloud.env" . | nindent 12 }}
+          volumeMounts:
+            - name: agent-binarys
+              mountPath: /var/lib/lazycloud/agent-binarys
       containers:
         - name: scheduler
           image: {{ include "lazycloud.image" (list . "scheduler") }}
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
+            - name: LAZYCLOUD_AGENT_BINARY_DIR
+              value: /var/lib/lazycloud/agent-binarys
+          volumeMounts:
+            - name: agent-binarys
+              mountPath: /var/lib/lazycloud/agent-binarys
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}

@@ -1313,10 +1313,10 @@ def aws_account_connection_template_bytes() -> bytes:
 def require_resolvable_aws_credentials() -> None:
     """Refuse a connected deployment whose credentials resolve to nothing.
 
-    Without this a stack with no AWS configuration mounted starts, reports
-    healthy, and cannot validate a single connection — surfacing much later as a
-    connection stuck in `awaiting_authorization`, which names nothing about
-    credentials. Resolution is deferred, so a role chain costs no call here.
+    Without this a deployment holding no AWS credentials starts, reports healthy,
+    and cannot validate a single connection, surfacing much later as a connection
+    stuck in `awaiting_authorization`, which names nothing about credentials.
+    Resolution is deferred, so a role chain costs no call here.
     """
     try:
         credentials = Session().get_credentials()
@@ -1324,8 +1324,11 @@ def require_resolvable_aws_credentials() -> None:
         raise ValueError(f"connected AWS credentials are unavailable: {exc}") from exc
     if credentials is None:
         raise ValueError(
-            "connected AWS is enabled but no credentials resolve; mount the role-chain "
-            "configuration directory with LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR"
+            "connected AWS is enabled but no credentials resolve. They come from "
+            "the ambient chain, so the fix depends on where this runs: in a "
+            "cluster, a Pod Identity association for this workload's service "
+            "account; under Compose, the role-chain configuration directory named "
+            "by LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR"
         )
 
 

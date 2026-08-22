@@ -5,6 +5,13 @@ Argo sync waves rather than `depends_on`: the schema must exist before an
 administrator can be created against it. Running them together produces a
 bootstrap that fails on a table it cannot see, which reads as a database problem.
 
+Both run in negative waves, ahead of every workload. That is the order the
+control plane needs, and it is also what keeps the release able to recover.
+Argo holds a wave until it is healthy, so a Job behind the Deployments would
+wait on a control plane that is itself waiting on the schema that Job creates.
+Nothing waits on a Deployment now, and a workload that cannot start fails alone
+instead of freezing the sync that would fix it.
+
 Both name their command. The images they run default to `--help` and to
 `database status`, either of which exits 0 without doing the work, so a Job that
 inherited its image's default would report success and leave the deployment
@@ -27,7 +34,7 @@ kind: Job
 metadata:
   name: database-bootstrap
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   backoffLimit: 3
   template:
@@ -48,7 +55,7 @@ kind: Job
 metadata:
   name: administrator-bootstrap
   annotations:
-    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-wave: "-1"
 spec:
   backoffLimit: 3
   template:
