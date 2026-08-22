@@ -13,8 +13,8 @@ name: Deploy EKS
 # which is why `deploy/release.py` refuses one and why this does not build images
 # job by job.
 #
-# Nothing here holds a long-lived AWS key. The job assumes a role through OIDC,
-# and reaches GitHub as the organisation App rather than as a user.
+# Nothing here holds a long-lived AWS key or a GitHub one. The job assumes a role
+# through OIDC and pushes with the token GitHub gives it for this repository.
 
 on:
   workflow_dispatch:
@@ -38,7 +38,11 @@ on:
         default: ""
 
 permissions:
-  contents: read
+  # Write, because recording a build is a commit on the deployment branch. The
+  # branch is in this repository, so the workflow's own token reaches it and no
+  # other credential is involved -- Argo's App credential exists to read the
+  # repository from inside the cluster, which is a different direction.
+  contents: write
   id-token: write
 
 concurrency:
@@ -144,18 +148,10 @@ jobs:
       - name: Record it on the deployment branch
         run: |
           set -euo pipefail
-          # The App rather than the workflow's own token: the same credential
-          # Argo reads with, installed on the organisation, so a second
-          # repository needs no second secret.
-          token="$(uv run --group workspace python deploy/github_app_token.py \
-            --app-id "${{ vars.GITHUB_APP_ID }}" \
-            --installation-id "${{ vars.GITHUB_APP_INSTALLATION_ID }}" \
-            --private-key-secret "$DEPLOYMENT/github-app-private-key")"
-
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
           git remote set-url origin \
-            "https://x-access-token:${token}@github.com/${GITHUB_REPOSITORY}.git"
+            "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
 
           # Branched from this commit rather than merged into: the deployment
           # branch is the source that produced the images plus the file naming
