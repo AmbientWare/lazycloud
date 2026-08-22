@@ -22,16 +22,19 @@ than discovered.
 {{- end -}}
 
 {{/*
-Refuse to render an image that was not pinned.
+One image reference, built from the registry, the repository and the tag.
 
-Helm's default for a missing value is the empty string, which renders a
-Deployment whose image is `""` and fails at the pod with `InvalidImageName` --
-several steps from the values file that forgot it.
+Refuses to render when the tag is absent. Helm's default for a missing value is
+the empty string, which produces a Deployment whose image ends in `:` and fails
+at the pod with `InvalidImageName` -- several steps from the values file that
+forgot it, and reported as though the image were wrong rather than missing.
 */}}
 {{- define "lazycloud.image" -}}
-{{- $ref := . -}}
-{{- if not $ref -}}
-{{- fail "an image digest was not supplied; the deploy renders these from what it pushed" -}}
+{{- $root := index . 0 -}}
+{{- $name := index . 1 -}}
+{{- $tag := $root.Values.image.tag -}}
+{{- if not $tag -}}
+{{- fail "image.tag was not supplied; CI writes it to the deployment branch after it builds" -}}
 {{- end -}}
-{{- $ref -}}
+{{- printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.repositoryPrefix $name $tag -}}
 {{- end -}}

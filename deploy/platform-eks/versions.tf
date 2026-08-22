@@ -22,6 +22,14 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.17"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.35"
+    }
   }
 }
 
@@ -33,5 +41,22 @@ provider "aws" {
       "lazycloud:deployment" = var.deployment
       "lazycloud:managed-by" = "terraform"
     }
+  }
+}
+
+# Both authenticate from the cluster this module creates, so nothing reads a
+# kubeconfig from the machine running the apply. An apply from a laptop and an
+# apply from CI then reach the same cluster the same way.
+provider "kubernetes" {
+  host                   = aws_eks_cluster.control_plane.endpoint
+  cluster_ca_certificate = base64decode(aws_eks_cluster.control_plane.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.control_plane.token
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = aws_eks_cluster.control_plane.endpoint
+    cluster_ca_certificate = base64decode(aws_eks_cluster.control_plane.certificate_authority[0].data)
+    token                  = data.aws_eks_cluster_auth.control_plane.token
   }
 }

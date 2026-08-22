@@ -226,3 +226,52 @@ variable "redis_engine_version" {
   type        = string
   default     = "7.1"
 }
+
+variable "argocd_namespace" {
+  description = "Namespace Argo CD runs in."
+  type        = string
+  default     = "argocd"
+}
+
+variable "argocd_chart_version" {
+  description = <<-EOT
+    Argo CD chart version, pinned.
+
+    A controller that reconciles everything else is the last thing that should
+    move on its own: an unpinned upgrade changes how every other workload is
+    applied, at whatever moment the next apply happens to run.
+  EOT
+  type        = string
+  default     = "7.7.11"
+}
+
+variable "github_organization" {
+  description = "Organisation whose repositories Argo may read."
+  type        = string
+  default     = "AmbientWare"
+}
+
+
+variable "deployment_branch" {
+  description = <<-EOT
+    Branch Argo syncs from.
+
+    Separate from `main` because what is deployed and what is merged are
+    different questions. CI moves this branch forward with the image tag it just
+    built, so the branch is the record of what the cluster is meant to be running.
+  EOT
+  type        = string
+  default     = "prod"
+}
+
+variable "github_app_id" {
+  description = "GitHub App id. The AmbientWare App is 3246255."
+  type        = string
+  default     = "3246255"
+}
+
+variable "github_app_installation_id" {
+  description = "Installation id of that App on the organisation."
+  type        = string
+  default     = "124042395"
+}
