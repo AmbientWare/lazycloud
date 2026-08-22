@@ -14,6 +14,7 @@ from networking.settings import (
     TailnetControlSettings,
     TailnetRuntimeSettings,
 )
+from observability.process_logs import configure_process_logging
 from observability.settings import (
     TelemetrySettings,
     VolumeMeteringSettings,
@@ -298,6 +299,9 @@ def build_scheduler_runtime(
 
 
 def main(argv: list[str] | None = None) -> None:
+    # First, because everything this process reports about what it reconciled,
+    # skipped or declined goes through the root logger.
+    configure_process_logging()
     args = parse_scheduler_args(argv)
     gateway_settings = GatewaySettings()
     # The autoscalers record here, not in the API, so this process needs its own

@@ -4,6 +4,7 @@ import argparse
 
 import uvicorn
 from foundation.environment_file import load_environment_file
+from observability.process_logs import configure_process_logging
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
 
 
@@ -42,6 +43,9 @@ def run_api_server(
 
 def main(argv: list[str] | None = None) -> None:
     load_environment_file()
+    # Before anything else builds, so a failure while composing the service
+    # graph is written rather than discarded.
+    configure_process_logging()
     args = ApiServerArguments()
     build_parser().parse_args(argv, namespace=args)
     run_api_server(
