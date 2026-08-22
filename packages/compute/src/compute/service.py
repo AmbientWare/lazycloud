@@ -2037,6 +2037,11 @@ class ComputeService:
         mutations = self._required_capacity_owner_mutations()
         with self.context.database.session() as session:
             pools = ComputeUnitRepository(session).list_internal_across_workspaces()
+        # Every step from here is a silent no-op when it declines, and the whole
+        # path is what stands between a configured floor and a machine that
+        # exists. An empty pass says so rather than looking like a pass that had
+        # nothing to do.
+        LOGGER.info("pooled capacity reconciliation covering %d internal pool(s)", len(pools))
         reconciled: list[ComputeUnitRecord] = []
         for pool in pools:
             try:
@@ -2046,9 +2051,22 @@ class ComputeService:
                         now=current_time,
                     )
             except ConflictError:
+                LOGGER.info("pooled capacity for %s is held by another mutation", pool.name)
                 continue
             if current is not None:
                 reconciled.append(current)
+                LOGGER.info(
+                    "pooled capacity for %s: desired=%d observed=%d phase=%s%s",
+                    current.name,
+                    current.desired_machines,
+                    current.observed_machines,
+                    current.phase.value,
+                    (
+                        ""
+                        if current.provider_state.degraded_reason is None
+                        else f" degraded={current.provider_state.degraded_reason}"
+                    ),
+                )
         return reconciled
 
     def _reconcile_pooled_pool(
