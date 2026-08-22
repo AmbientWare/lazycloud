@@ -45,17 +45,16 @@ spec:
           ports:
             - name: http
               containerPort: 9000
-            - name: tcp-ingress
-              containerPort: 1995
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
-            # Carries the deployment name because a tailnet is shared across
-            # accounts, and two deployments advertising one hostname collide.
+            # An emptyDir, because the identity here is worth less than the
+            # restart it would delay: the device is ephemeral and re-registers
+            # in seconds, and a PVC would tie a replica to one zone.
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
-            # The device goes away with the pod. Nothing was given its address --
-            # callers reach the Tailscale Service, not this device -- and a
-            # durable one would leave a dead peer per restart.
+            # The device goes away with the pod. Callers reach the advertised
+            # service rather than this device, so no address is lost with it,
+            # and a durable device would leave a dead peer behind per restart.
             - name: LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE
               value: "true"
           volumeMounts:
@@ -92,6 +91,3 @@ spec:
     - name: http
       port: 9000
       targetPort: http
-    - name: tcp-ingress
-      port: 1995
-      targetPort: tcp-ingress

@@ -29,25 +29,6 @@ serviceAccounts:
   scheduler: scheduler
   externalSecrets: external-secrets
 
-# Variables every workload reads from the Secret above. Named here rather than
-# discovered, because a workload that silently starts without one is the failure
-# this list exists to prevent.
-env:
-  - LAZYCLOUD_DATABASE_URL
-  - LAZYCLOUD_TOKEN
-  - LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY
-  - LAZYCLOUD_CACHE_SERVICE_TOKEN
-  - LAZYCLOUD_CLOUDFLARE_API_TOKEN
-  - LAZYCLOUD_GITHUB_CLIENT_ID
-  - LAZYCLOUD_GITHUB_CLIENT_SECRET
-  - LAZYCLOUD_STRIPE_API_KEY
-  - LAZYCLOUD_STRIPE_WEBHOOK_SECRET
-  - LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID
-  - LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET
-  - LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT
-  - LAZYCLOUD_TELEMETRY_BACKEND_USERNAME
-  - LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD
-
 controlPlane:
   replicas: 1
   resources:

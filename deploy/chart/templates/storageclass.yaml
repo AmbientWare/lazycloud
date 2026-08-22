@@ -3,9 +3,9 @@ The class Auto Mode does not create for you.
 
 Auto Mode runs the EBS CSI driver but declares no StorageClass, and the cluster's
 only other one is a legacy `gp2` that is not marked default. A claim naming
-neither binds to nothing and reports "no storage class is set" -- which stalls
-the whole sync, because Argo waits for the claim to become healthy and every
-resource behind it waits with it.
+neither binds to nothing and reports "no storage class is set", which stalls the
+whole sync: Argo waits for the claim to become healthy and every resource behind
+it waits with it.
 
 Default, so a claim that names no class gets this rather than nothing.
 */}}
@@ -18,8 +18,8 @@ metadata:
     argocd.argoproj.io/sync-wave: "-1"
 provisioner: ebs.csi.eks.amazonaws.com
 volumeBindingMode: WaitForFirstConsumer
-# Retained rather than deleted with the claim: the cache is rebuilt on a miss, so
-# this is about not losing a volume to a resync that recreated the claim.
+# The cache is rebuilt on a miss, so a volume that outlived its claim would be
+# paid for and never read again.
 reclaimPolicy: Delete
 allowVolumeExpansion: true
 parameters:

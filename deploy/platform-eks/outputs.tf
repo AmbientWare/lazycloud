@@ -51,7 +51,6 @@ output "runtime_configuration" {
     # Carries the deployment name because a tailnet is shared across accounts.
     # Two deployments advertising one hostname collide, and the loser keeps a
     # "-1" suffix that every configured origin naming the old name then misses.
-    LAZYCLOUD_TAILNET_REPLICA_HOSTNAME = "${var.deployment}-control-plane"
     LAZYCLOUD_OBJECT_STORE_REGION_NAME = var.region
     # Empty is meaningful and distinct from omitted: it tells the object store to
     # resolve the platform role through the SDK credential chain and to presign
@@ -86,6 +85,16 @@ output "runtime_configuration" {
     # `redis://` here connects, gets refused at the handshake, and reports it as
     # a connection error rather than as a scheme.
     LAZYCLOUD_REDIS_URL = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
+    # Managed, and stated rather than defaulted. The runtime's own default is
+    # `disabled`, so a deployment that says nothing comes up with no tailnet
+    # device at all: it serves, reports healthy, and no worker can reach it.
+    # Stated because the runtime will not infer it. A tailnet daemon is opted
+    # into rather than inherited, so the default is off and a deployment that
+    # says nothing serves, reports healthy, and holds no address any worker can
+    # reach. Everything else about the tailnet is a default that is already
+    # right: the device name is a constant the enrolment origin is built from,
+    # and the two tags match the policy `deploy/tailnet` grants.
+    LAZYCLOUD_TAILNET_MODE = "managed"
   }
 }
 

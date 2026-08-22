@@ -67,6 +67,8 @@ jobs:
             --set runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME=us-east-1 \
             --set cloudflared.tunnelId=00000000-0000-0000-0000-000000000000 \
             --set cloudflared.apex=example.invalid \
+            --set secrets.map.LAZYCLOUD_DATABASE_URL=deployment/database-url \
+            --set secrets.map.LAZYCLOUD_TOKEN=deployment/administrator-token \
             >rendered.yaml
           test -s rendered.yaml
 
@@ -75,11 +77,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Every object carries an image and every environment variable has a
-      # source. Both have shipped absent: an empty image renders a Deployment
-      # that fails at the pod with InvalidImageName, and an environment entry
-      # with neither value nor valueFrom is accepted by Kubernetes and read by
-      # the process as unset.
+      # Every object carries an image, every environment variable has a source,
+      # and every source resolves. All three have shipped absent. An empty image
+      # renders a Deployment that fails at the pod with InvalidImageName. An
+      # environment entry with neither value nor valueFrom is accepted by
+      # Kubernetes and read by the process as unset. And a secretKeyRef naming a
+      # key the Secret does not hold has a source, passes both earlier checks,
+      # and stops every pod in the release at CreateContainerConfigError.
+      #
+      # The map above is why this renders with one at all: an empty
+      # `secrets.map` produces an ExternalSecret with no entries and containers
+      # with almost no environment, so the gate would pass without looking at
+      # the wiring it exists to check. What is in the map does not matter. That
+      # both sides derive from the same one does.
       - name: Nothing rendered is empty
         run: |
           python - <<'PY'
@@ -87,6 +97,14 @@ jobs:
 
           problems = []
           documents = [d for d in yaml.safe_load_all(open("rendered.yaml")) if d]
+          provided = {
+              entry["secretKey"]
+              for document in documents
+              if document["kind"] == "ExternalSecret"
+              for entry in document["spec"]["data"]
+          }
+          if not provided:
+              raise SystemExit("the render provided no secret keys, so nothing checked the wiring")
           for document in documents:
               name = f"{document['kind']}/{document['metadata']['name']}"
               pod = (document.get("spec", {}).get("template", {}) or {}).get("spec", {})
@@ -97,6 +115,12 @@ jobs:
                   for entry in container.get("env", []):
                       if "value" not in entry and "valueFrom" not in entry:
                           problems.append(f"{name}: env {entry.get('name')} has no source")
+                      reference = (entry.get("valueFrom") or {}).get("secretKeyRef")
+                      if reference and reference["key"] not in provided:
+                          problems.append(
+                              f"{name}: env {entry['name']} reads secret key "
+                              f"{reference['key']}, which no ExternalSecret provides"
+                          )
           if problems:
               print("\n".join(problems), file=sys.stderr)
               raise SystemExit(1)
