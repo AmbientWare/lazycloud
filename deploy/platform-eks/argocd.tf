@@ -33,7 +33,52 @@ resource "helm_release" "argocd" {
       service   = { type = "ClusterIP" }
       extraArgs = ["--insecure"]
     }
+
+    # The only Application Terraform declares; everything else is a file in the
+    # repository that this one finds.
+    #
+    # Carried by the release rather than as its own `kubernetes_manifest`,
+    # because that resource reads the cluster's API at plan time and the cluster
+    # does not exist when a fresh deployment is planned. Planning would fail on
+    # the resource whose whole purpose is to run after the cluster exists, and
+    # "one apply" would quietly become two.
+    extraObjects = [{
+      apiVersion = "argoproj.io/v1alpha1"
+      kind       = "Application"
+      metadata = {
+        name      = "root"
+        namespace = var.argocd_namespace
+      }
+      spec = {
+        project = "default"
+        source = {
+          repoURL        = "https://github.com/${var.github_repository}"
+          targetRevision = var.deployment_branch
+          path           = "deploy/argocd/apps"
+        }
+        destination = {
+          server    = "https://kubernetes.default.svc"
+          namespace = var.argocd_namespace
+        }
+        syncPolicy = {
+          automated = {
+            # Both, deliberately. Without prune, deleting an Application from
+            # the repository leaves it running with nothing declaring it;
+            # without selfHeal, a change made with kubectl outlives the next
+            # sync and the cluster stops matching what the repository says.
+            prune    = true
+            selfHeal = true
+          }
+          syncOptions = ["CreateNamespace=true"]
+        }
+      }
+    }]
   })]
+
+  # The credential has to exist before the root Application is reconciled, or the
+  # first sync fails on a repository it cannot read and retries with a backoff
+  # nobody is watching.
+  depends_on = [kubernetes_secret.argocd_repository_credentials]
 }
 
 # How Argo reaches every repository in the organisation.
@@ -67,43 +112,5 @@ resource "kubernetes_secret" "argocd_repository_credentials" {
     githubAppPrivateKey     = data.aws_secretsmanager_secret_version.github_app_private_key.secret_string
   }
 
-  depends_on = [helm_release.argocd]
 }
 
-# The only Application Terraform declares. Everything else is a file in the
-# repository that this one finds.
-resource "kubernetes_manifest" "root_application" {
-  manifest = {
-    apiVersion = "argoproj.io/v1alpha1"
-    kind       = "Application"
-    metadata = {
-      name      = "root"
-      namespace = kubernetes_namespace.argocd.metadata[0].name
-    }
-    spec = {
-      project = "default"
-      source = {
-        repoURL        = "https://github.com/${var.github_repository}"
-        targetRevision = var.deployment_branch
-        path           = "deploy/argocd/apps"
-      }
-      destination = {
-        server    = "https://kubernetes.default.svc"
-        namespace = kubernetes_namespace.argocd.metadata[0].name
-      }
-      syncPolicy = {
-        automated = {
-          # Both, deliberately. Without prune, deleting an Application from the
-          # repository leaves it running with nothing declaring it; without
-          # selfHeal, a change made with kubectl outlives the next sync and the
-          # cluster stops matching what the repository says.
-          prune    = true
-          selfHeal = true
-        }
-        syncOptions = ["CreateNamespace=true"]
-      }
-    }
-  }
-
-  depends_on = [kubernetes_secret.argocd_repository_credentials]
-}
