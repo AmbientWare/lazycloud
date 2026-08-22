@@ -1,19 +1,18 @@
 {{/*
 The env block every workload shares.
 
-One Secret, keyed by variable name, so this is a list of names rather than a
-list of mappings. A variable named here and absent from the Secret leaves the
-pod unable to start, which is the visible failure; a variable the process needs
-and nobody named is the silent one, which is why the list is authored rather
-than discovered.
+Derived from the secret map, because a list of names beside a map of the same
+names is two statements of which variables exist and they drift apart silently.
+The Secret holds what the map names; a pod asking for a key the Secret lacks
+does not start, and nothing reports which of the two was wrong.
 */}}
 {{- define "lazycloud.env" -}}
-{{- range $.Values.env }}
-- name: {{ . }}
+{{- range $variable, $secret := $.Values.secrets.map }}
+- name: {{ $variable }}
   valueFrom:
     secretKeyRef:
       name: {{ $.Values.secrets.name }}
-      key: {{ . }}
+      key: {{ $variable }}
 {{- end }}
 {{- range $key, $value := $.Values.runtime }}
 - name: {{ $key }}

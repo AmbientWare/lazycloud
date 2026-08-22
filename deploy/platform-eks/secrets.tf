@@ -1,13 +1,15 @@
 locals {
-  # Every credential the Compose stack reads. Terraform declares the container and
-  # the access to it; the values are written by `lazycloud-admin bootstrap publish`
-  # or pasted by an operator, never by this configuration. A secret whose value is
-  # in Terraform is a secret in the state file.
+  # Every credential this deployment reads, and every one has a writer. Terraform
+  # writes the ones it generates or obtains from another module; an operator
+  # writes the rest before the first sync, because Secrets Manager has no such
+  # thing as a container that exists and answers blank. An empty SecretString
+  # is rejected, and a container with no version answers ResourceNotFoundException
+  # that fails the whole materialisation rather than the one key. A secret that
+  # would be declared here and filled by nobody is one the cluster waits on
+  # forever, so it is not declared.
   runtime_secrets = {
     database-url                  = "PostgreSQL URL, direct connection. PgBouncer breaks the session advisory locks."
     administrator-token           = "Platform administrator bearer, minted by bootstrap."
-    worker-token                  = "Shared fleet worker service token."
-    worker-capacity-owner         = "Capacity owner id the shared fleet registers against."
     cache-service-token           = "Cache server service token."
     tailnet-oauth-client-id       = "Tailscale OAuth client id, from deploy/tailnet outputs."
     tailnet-oauth-client-secret   = "Tailscale OAuth client secret, from deploy/tailnet outputs."
@@ -19,12 +21,6 @@ locals {
     github-client-secret          = "GitHub App client secret."
     backend-route-auth-key        = "Shared key authenticating backend routes. At least 32 bytes."
     fleet-external-id             = "External ID the platform's own connection role enforces."
-    telemetry-backend-endpoint    = "OTLP endpoint the collector exports to."
-    telemetry-backend-username    = "Telemetry backend basic-auth username."
-    telemetry-backend-password    = "Telemetry backend basic-auth password."
-    object-store-access-key       = "Empty when the platform role vends S3 access through the SDK chain."
-    object-store-secret-key       = "Empty when the platform role vends S3 access through the SDK chain."
-    github-app-private-key        = "PEM for the AmbientWare GitHub App, which is how Argo reads every repository in the organisation."
   }
 }
 
@@ -39,12 +35,11 @@ resource "aws_secretsmanager_secret" "runtime" {
   recovery_window_in_days = 0
 }
 
-# Which environment variable each secret becomes on the host. The names are the
-# ones `compose.yaml` already reads, so a deployment differs from the local stack
-# by where the value comes from and not by what it is called.
+# Which environment variable each secret becomes in the cluster. These are the
+# names the processes read.
 locals {
   secret_environment = {
-    LAZYCLOUD_COMPOSE_DATABASE_URL        = aws_secretsmanager_secret.runtime["database-url"].name
+    LAZYCLOUD_DATABASE_URL                = aws_secretsmanager_secret.runtime["database-url"].name
     LAZYCLOUD_TOKEN                       = aws_secretsmanager_secret.runtime["administrator-token"].name
     LAZYCLOUD_CACHE_SERVICE_TOKEN         = aws_secretsmanager_secret.runtime["cache-service-token"].name
     LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID     = aws_secretsmanager_secret.runtime["tailnet-oauth-client-id"].name
@@ -54,23 +49,24 @@ locals {
     LAZYCLOUD_STRIPE_WEBHOOK_SECRET       = aws_secretsmanager_secret.runtime["stripe-webhook-secret"].name
     LAZYCLOUD_GITHUB_CLIENT_ID            = aws_secretsmanager_secret.runtime["github-client-id"].name
     LAZYCLOUD_GITHUB_CLIENT_SECRET        = aws_secretsmanager_secret.runtime["github-client-secret"].name
-    LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT  = aws_secretsmanager_secret.runtime["telemetry-backend-endpoint"].name
-    LAZYCLOUD_TELEMETRY_BACKEND_USERNAME  = aws_secretsmanager_secret.runtime["telemetry-backend-username"].name
-    LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD  = aws_secretsmanager_secret.runtime["telemetry-backend-password"].name
     LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY      = aws_secretsmanager_secret.runtime["backend-route-auth-key"].name
   }
 }
 
-# Generated rather than configured, like the fleet external ID. It authenticates
-# backend routes between the control plane and the processes behind them, so both
-# sides must agree on it and nothing outside this deployment should know it. The
-# owner reads it at 32 bytes minimum and refuses to start below that.
-resource "random_password" "backend_route_auth_key" {
+# Generated rather than configured, like the fleet external ID. Both authenticate
+# one part of this deployment to another and mean nothing outside it, so there is
+# nobody to obtain them from and no operator step that could go missing. The
+# backend route key is read at 32 bytes minimum and refuses to start below that.
+resource "random_password" "shared" {
+  for_each = toset(["backend-route-auth-key", "cache-service-token"])
+
   length  = 64
   special = false
 }
 
-resource "aws_secretsmanager_secret_version" "backend_route_auth_key" {
-  secret_id     = aws_secretsmanager_secret.runtime["backend-route-auth-key"].id
-  secret_string = random_password.backend_route_auth_key.result
+resource "aws_secretsmanager_secret_version" "shared" {
+  for_each = random_password.shared
+
+  secret_id     = aws_secretsmanager_secret.runtime[each.key].id
+  secret_string = each.value.result
 }

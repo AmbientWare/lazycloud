@@ -2,16 +2,24 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from shared.deployment_settings import MissingDeploymentSettingError
 from shared.urls import normalize_http_origin
+
+PUBLIC_HTTP_URL_VARIABLE = "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"
 
 
 class GatewaySettings(BaseSettings):
-    public_http_url: str = Field(
-        default="http://localhost:9000",
-        validation_alias="LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL",
-    )
+    # Blank marks "nobody said", not an origin. This one is quoted back to
+    # people and to other systems: it is the OAuth redirect GitHub matches, the
+    # origin in the authorization template a customer applies to their own AWS
+    # account, and the address a node enrols against. A localhost default would
+    # be accepted everywhere and correct nowhere.
+    public_http_url: str = Field(default="", validation_alias=PUBLIC_HTTP_URL_VARIABLE)
+    # Only the scheme and port survive. The control plane replaces the host with
+    # the tailnet device it registered before publishing the origin, so this is
+    # how it is reached on that device rather than where it is.
     runtime_callback_http_url: str = Field(
         default="http://127.0.0.1:9000",
         validation_alias="LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",
@@ -25,7 +33,18 @@ class GatewaySettings(BaseSettings):
     @field_validator("public_http_url", "runtime_callback_http_url")
     @classmethod
     def normalize_url(cls, value: str) -> str:
+        if not value.strip():
+            return value
         return normalize_http_origin(value, field_name="gateway HTTP URL")
+
+    @model_validator(mode="after")
+    def require_public_http_url(self) -> GatewaySettings:
+        if not self.public_http_url.strip():
+            raise MissingDeploymentSettingError(
+                PUBLIC_HTTP_URL_VARIABLE,
+                purpose="the public origin this deployment is reached on",
+            )
+        return self
 
     @property
     def public_base_domain(self) -> str:
@@ -39,4 +58,4 @@ class GatewaySettings(BaseSettings):
         return (urlparse(self.public_http_url).hostname or "").lower()
 
 
-__all__ = ["GatewaySettings"]
+__all__ = ["PUBLIC_HTTP_URL_VARIABLE", "GatewaySettings"]

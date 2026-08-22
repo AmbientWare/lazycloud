@@ -91,10 +91,12 @@ the Job run without this and the credential exists only inside that pod, nothing
 afterwards has a bearer token, and supplying the value later is refused as an
 already completed bootstrap. The way back is resetting the schema.
 
-**The GitHub App private key** goes to Terraform rather than here, because
-Terraform declares this deployment's secret containers and cannot read a value
-out of one it has only just created. Put it beside the other operator
-credentials:
+**The GitHub App private key** goes to Terraform rather than here. It is the one
+credential that never reaches Secrets Manager: Argo needs it to read this
+repository, and reading this repository is how External Secrets gets installed,
+so a copy behind External Secrets would be behind itself. Terraform writes it
+straight into Argo's repository-credentials Secret. Put it beside the other
+operator credentials:
 
 ```sh
 echo "export TF_VAR_github_app_private_key=\"$(cat ambientware.private-key.pem)\"" \
@@ -108,7 +110,11 @@ the App's settings and cannot be read back from GitHub, so a lost one is replace
 rather than recovered.
 
 A secret with no value is otherwise normal rather than fatal. An unchosen
-telemetry backend does not stop the control plane from serving.
+telemetry backend does not stop the control plane from serving. Terraform gives
+every container an empty first version so that absence answers as a blank
+instead of `ResourceNotFoundException`, which External Secrets treats as a
+failure of the whole set rather than of the one key. A value written afterwards
+replaces the blank and no later apply resets it.
 
 ### 4. Repository variables
 

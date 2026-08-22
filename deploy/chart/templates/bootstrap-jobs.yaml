@@ -1,10 +1,14 @@
 {{/*
-Bootstrap, in the order the schema and the credential require.
+Bootstrap: the schema, then the administrator created against it.
 
-Argo sync waves rather than `depends_on`: the database schema must exist before
-an administrator can be created against it, and the administrator must exist
-before anything authenticates. Running them together produces a bootstrap that
-fails on a table it cannot see, which reads as a database problem.
+Argo sync waves rather than `depends_on`: the schema must exist before an
+administrator can be created against it. Running them together produces a
+bootstrap that fails on a table it cannot see, which reads as a database problem.
+
+Both name their command. The images they run default to `--help` and to
+`database status`, either of which exits 0 without doing the work, so a Job that
+inherited its image's default would report success and leave the deployment
+empty.
 
 Waves rather than Helm hooks, because this chart is synced rather than installed.
 Argo does honour hooks, but a hook is deleted and recreated on every sync while a
@@ -70,25 +74,5 @@ spec:
                 --token-file /tmp/administrator-token \
                 ${github_id:+--github-user-id "$github_id"}
               rm -f /tmp/administrator-token
-          env:
-            {{- include "lazycloud.env" . | nindent 12 }}
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: cache-token
-  annotations:
-    argocd.argoproj.io/sync-wave: "3"
-spec:
-  backoffLimit: 3
-  template:
-    metadata:
-      name: cache-token
-    spec:
-      restartPolicy: Never
-      serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
-      containers:
-        - name: cache-token
-          image: {{ include "lazycloud.image" (list . "worker-bootstrap") }}
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
