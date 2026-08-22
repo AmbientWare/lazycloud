@@ -55,15 +55,6 @@ env:
 
 controlPlane:
   replicas: 1
-  # The node group the platform module declares for a tailnet device, and the
-  # taint that keeps everything else off it.
-  nodeSelector:
-    lazycloud.dev/tailnet: "true"
-  tolerations:
-    - key: lazycloud.dev/tailnet
-      operator: Equal
-      value: "true"
-      effect: NoSchedule
   resources:
     requests: { cpu: 500m, memory: 1Gi }
     limits: { memory: 2Gi }

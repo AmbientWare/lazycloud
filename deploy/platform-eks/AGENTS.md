@@ -21,12 +21,13 @@ runbook and states the two deployment models.
   names it, and `prevent_destroy` exists because AWS resolves that name to a
   unique ID that recreating cannot restore.
 
-- Auto Mode provisions general workloads, and the control plane does not use it.
-  A pod holding a tailnet device needs `NET_ADMIN`, `NET_RAW` and a real
-  `/dev/net/tun`, and Auto Mode gives no say over the node image, so the control
-  plane runs on a node group this module owns and reaches through a taint. That
-  taint is what stops an ordinary workload drifting onto nodes whose only reason
-  to exist is a device it does not need.
+- Auto Mode provisions everything, including the control plane. No node group is
+  declared here and no workload names a node: Karpenter sizes from what the pods
+  request, so a hand-declared pool would be choosing hardware on its behalf and
+  paying for it whether or not anything lands there.
+  The control plane does need `NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`
+  for the tailnet device it holds. Those are properties of a pod and of the node
+  image every node already runs, not reasons to pick an instance type.
 - A workload's AWS identity is its own, assumed through the cluster's OIDC
   provider, and never the node's. The subject names service accounts exactly: a
   wildcard would let any pod in the namespace hold the role that reaches every

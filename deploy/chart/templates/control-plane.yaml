@@ -7,8 +7,10 @@ control plane dials each agent's route proxy outbound by name too. An operator
 that exposed this as a Service would answer the inbound half and leave the
 outbound half needing tailscaled anyway.
 
-That is what NET_ADMIN, NET_RAW and /dev/net/tun below are for, and why this
-lands on its own node group through a taint.
+That is what NET_ADMIN, NET_RAW and /dev/net/tun below are for. Where it runs is
+Auto Mode's decision: the device is a property of the node image rather than of
+one instance type, and pinning a pool would be choosing hardware to obtain
+something every node already has.
 */}}
 apiVersion: apps/v1
 kind: Deployment
@@ -25,10 +27,6 @@ spec:
         app: control-plane
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
-      nodeSelector:
-        {{- toYaml .Values.controlPlane.nodeSelector | nindent 8 }}
-      tolerations:
-        {{- toYaml .Values.controlPlane.tolerations | nindent 8 }}
       volumes:
         - name: tun
           hostPath:

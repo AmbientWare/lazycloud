@@ -173,9 +173,16 @@ variable "cluster_subnet_count" {
 }
 
 variable "kubernetes_version" {
-  description = "EKS control plane version."
+  description = <<-EOT
+    EKS control plane version, and a billing decision as much as a technical one.
+
+    A cluster past its standard support date keeps running and costs roughly six
+    times the hourly rate, which is a change nothing in the console announces.
+    Check `aws eks describe-cluster-versions` before pinning: the value here
+    should be the newest version offered, not the newest one remembered.
+  EOT
   type        = string
-  default     = "1.31"
+  default     = "1.36"
 }
 
 variable "kubernetes_namespace" {
@@ -206,23 +213,6 @@ variable "external_secrets_service_account" {
   description = "Service account the External Secrets Operator runs as."
   type        = string
   default     = "external-secrets"
-}
-
-variable "tailnet_node_instance_type" {
-  description = <<-EOT
-    Instance type for the nodes the control plane runs on.
-
-    Its own node group rather than an Auto Mode pool, because the control plane
-    holds a tailnet device and Auto Mode gives no say over the node image.
-  EOT
-  type        = string
-  default     = "m7i.large"
-}
-
-variable "tailnet_node_count" {
-  description = "How many of those nodes to run."
-  type        = number
-  default     = 1
 }
 
 variable "redis_node_type" {

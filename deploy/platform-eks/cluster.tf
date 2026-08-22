@@ -10,6 +10,11 @@ resource "aws_eks_cluster" "control_plane" {
   role_arn = aws_iam_role.cluster.arn
   version  = var.kubernetes_version
 
+  # Auto Mode brings its own CNI, kube-proxy and CoreDNS, and refuses to be
+  # created alongside the self-managed ones. Left at its default the API rejects
+  # the whole cluster rather than ignoring the pair it cannot honour.
+  bootstrap_self_managed_addons = false
+
   vpc_config {
     subnet_ids = aws_subnet.cluster[*].id
     # Reachable from outside, because the deploy runs from GitHub Actions and an
@@ -55,47 +60,6 @@ resource "aws_eks_cluster" "control_plane" {
   ]
 
   tags = { Name = var.deployment }
-}
-
-# Where the control plane runs, and the reason this pool exists.
-#
-# The control plane holds its own tailnet device: it needs NET_ADMIN, NET_RAW and
-# a real /dev/net/tun, because workers reach it inbound by tailnet name and
-# userspace networking cannot bind that. Auto Mode's own node pools are managed
-# and give no say over the node image, so a pool this deployment owns is what
-# makes the device a property of the node rather than a hope about it.
-resource "aws_eks_node_group" "tailnet" {
-  cluster_name    = aws_eks_cluster.control_plane.name
-  node_group_name = "${var.deployment}-tailnet"
-  node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = aws_subnet.cluster[*].id
-  instance_types  = [var.tailnet_node_instance_type]
-  ami_type        = "AL2023_x86_64_STANDARD"
-
-  scaling_config {
-    desired_size = var.tailnet_node_count
-    min_size     = var.tailnet_node_count
-    max_size     = var.tailnet_node_count
-  }
-
-  # Only workloads that ask land here. The control plane tolerates it; nothing
-  # else does, so a general workload cannot drift onto the nodes whose whole
-  # purpose is a device it does not need.
-  taint {
-    key    = "lazycloud.dev/tailnet"
-    value  = "true"
-    effect = "NO_SCHEDULE"
-  }
-
-  labels = {
-    "lazycloud.dev/tailnet" = "true"
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.node,
-  ]
-
-  tags = { Name = "${var.deployment}-tailnet" }
 }
 
 data "aws_eks_cluster_auth" "control_plane" {
