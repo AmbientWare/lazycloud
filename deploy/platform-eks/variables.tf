@@ -275,3 +275,19 @@ variable "github_app_installation_id" {
   type        = string
   default     = "124042395"
 }
+
+variable "github_app_private_key" {
+  description = <<-EOT
+    PEM for the organisation's GitHub App, which is how Argo reads the repository.
+
+    Supplied from the operator environment as `TF_VAR_github_app_private_key`,
+    beside the PlanetScale and Cloudflare credentials, because Terraform declares
+    this deployment's secret containers and cannot read a value out of one it has
+    only just created.
+
+    Generated in the App's settings and not readable back from GitHub, so a lost
+    key is replaced rather than recovered.
+  EOT
+  type        = string
+  sensitive   = true
+}

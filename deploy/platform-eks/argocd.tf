@@ -90,9 +90,13 @@ resource "helm_release" "argocd" {
 #
 # Written by Terraform rather than by External Secrets, because External Secrets
 # is one of the things Argo installs and cannot also be what Argo needs to start.
-data "aws_secretsmanager_secret_version" "github_app_private_key" {
-  secret_id = aws_secretsmanager_secret.runtime["github-app-private-key"].id
-}
+#
+# Supplied as a variable rather than read back from Secrets Manager, and the
+# reason is ordering. Terraform declares that secret's container and never its
+# value, so on a first apply the container exists and holds no version: a data
+# source reading it fails, and the single apply this is meant to be becomes two
+# with a manual step wedged between them. The operator already carries the
+# PlanetScale, Cloudflare and Stripe credentials this way.
 
 resource "kubernetes_secret" "argocd_repository_credentials" {
   metadata {
@@ -109,7 +113,7 @@ resource "kubernetes_secret" "argocd_repository_credentials" {
     url                     = "https://github.com/${var.github_organization}"
     githubAppID             = var.github_app_id
     githubAppInstallationID = var.github_app_installation_id
-    githubAppPrivateKey     = data.aws_secretsmanager_secret_version.github_app_private_key.secret_string
+    githubAppPrivateKey     = var.github_app_private_key
   }
 
 }
