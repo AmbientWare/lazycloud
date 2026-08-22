@@ -60,6 +60,11 @@ scheduler:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { memory: 1Gi }
 
+# The class every claim in this chart names, created here because Auto Mode
+# provides the driver and no class.
+storage:
+  className: lazycloud-ebs
+
 cacheServer:
   replicas: 1
   storage: 20Gi

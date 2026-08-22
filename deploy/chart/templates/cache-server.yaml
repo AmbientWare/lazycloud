@@ -12,6 +12,7 @@ metadata:
   name: cache-server
 spec:
   accessModes: ["ReadWriteOnce"]
+  storageClassName: {{ .Values.storage.className }}
   resources:
     requests:
       storage: {{ .Values.cacheServer.storage }}
