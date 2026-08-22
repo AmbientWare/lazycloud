@@ -1,10 +1,12 @@
 """Render the chart's values from what the infrastructure already knows.
 
 Nothing here is authored. Image references come from what the deploy pushed,
-runtime values and secret paths from the platform module's outputs, and the IRSA
-roles from the same. The chart then decides nothing about a value the
-infrastructure has already decided, which is what makes a variable impossible to
-supply in one place and forget in another.
+and runtime values and secret paths from the platform module's outputs. The chart
+then decides nothing about a value the infrastructure has already decided, which
+is what makes a variable impossible to supply in one place and forget in another.
+
+No role ARNs: which AWS identity a service account holds is a Pod Identity
+association declared beside the cluster, so it never travels through here.
 
 One image tag, naming the commit that produced the images, and it is safe to pin
 by tag for a reason worth stating: every repository is created
@@ -95,7 +97,6 @@ def render(args: argparse.Namespace) -> None:
         # that names no release.
         runtime["LAZYCLOUD_RELEASE_MANIFEST_URL"] = args.release_manifest_url
 
-    roles = _string_map(Path(args.roles), "roles")
     values: dict[str, object] = {
         "image": {
             "registry": args.registry,
@@ -104,10 +105,6 @@ def render(args: argparse.Namespace) -> None:
         },
         "runtime": runtime,
         "secrets": {"map": _string_map(Path(args.secret_map), "secret map")},
-        "roles": {
-            "controlPlane": roles["control_plane"],
-            "externalSecrets": roles["external_secrets"],
-        },
         "cloudflared": {
             # The zone the tunnel answers for, taken from the origin rather than
             # named twice: an ingress rule written against a different host than
@@ -136,7 +133,6 @@ def _parser() -> argparse.ArgumentParser:
         "produces a control plane that starts and is wrong.",
     )
     parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
-    parser.add_argument("--roles", required=True, help="JSON file of workload IRSA role ARNs.")
     parser.add_argument("--tunnel-id", default="", help="Cloudflare tunnel the ingress runs.")
     parser.add_argument("--release-manifest-url", default="", help="Release this deployment runs.")
     parser.add_argument("--output", required=True, help="Where to write the rendered values.")

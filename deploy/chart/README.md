@@ -26,10 +26,10 @@ Write it before the first install.
 
 ## Why the control plane is pinned to its own nodes
 
-It holds a tailnet device. Workers reach it inbound by tailnet name, which
-userspace networking cannot bind, and it dials each agent's route proxy outbound
-by name -- so it needs `NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`, and a
-namespace whose Pod Security Standard permits them.
+It holds a tailnet device, for outbound rather than inbound. Userspace
+networking would serve workers reaching it by tailnet name; what it cannot do is
+dial, and this process dials every agent's route proxy by name. So it needs
+`NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`.
 
 The platform module declares a node group for this and taints it. Exposing the
 control plane through the Tailscale operator instead would answer the inbound

@@ -16,12 +16,6 @@ terraform {
       source  = "planetscale/planetscale"
       version = "~> 1.8"
     }
-    # Reads the OIDC issuer's certificate, whose fingerprint is what makes the
-    # federation trustworthy rather than merely configured.
-    tls = {
-      source  = "hashicorp/tls"
-      version = "~> 4.0"
-    }
     helm = {
       source  = "hashicorp/helm"
       version = "~> 2.17"

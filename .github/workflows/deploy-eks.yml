@@ -116,7 +116,6 @@ jobs:
             -backend-config="region=$AWS_REGION"
           terraform -chdir=deploy/platform-eks output -json runtime_configuration >runtime.json
           terraform -chdir=deploy/platform-eks output -json secret_environment >secret-map.json
-          terraform -chdir=deploy/platform-eks output -json workload_role_arns >roles.json
 
           # Which release this deployment runs is a fact about the deployment,
           # not about its infrastructure, so it is not a Terraform output. It
@@ -139,7 +138,6 @@ jobs:
             --tag "$GITHUB_SHA" \
             --runtime runtime.json \
             --secret-map secret-map.json \
-            --roles roles.json \
             --release-manifest-url "${RELEASE_MANIFEST_URL}" \
             --output values-prod.yaml
 
