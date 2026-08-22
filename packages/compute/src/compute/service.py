@@ -106,6 +106,10 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 
 LOGGER = logging.getLogger(__name__)
 
+# Phases a unit does not come back from on its own. A request for capacity
+# against a unit in one of these is a new life for the row, not a continuation.
+_ENDED_UNIT_PHASES = frozenset({ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted})
+
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 _UNCONFIRMED_OPERATION_STATUSES = frozenset(
@@ -1632,9 +1636,21 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 observed_machines=current.observed_machines if current is not None else 0,
                 generation=current.generation if current is not None else 1,
-                phase=current.phase if current is not None else ComputeUnitPhase.Provisioning,
+                # A row left behind by a delete is a name and a shape, not a
+                # decision. Preparing capacity against it is asking for machines
+                # again, so it starts provisioning rather than inheriting the
+                # phase that ended it: carrying `deleted` forward produced a pool
+                # wanting one machine that the reconciler skips on every pass,
+                # because a deleted pool is exactly what it declines to build.
+                phase=(
+                    current.phase
+                    if current is not None and current.phase not in _ENDED_UNIT_PHASES
+                    else ComputeUnitPhase.Provisioning
+                ),
                 status=(
-                    current.status if current is not None else ComputeUnitPhase.Provisioning.value
+                    current.status
+                    if current is not None and current.phase not in _ENDED_UNIT_PHASES
+                    else ComputeUnitPhase.Provisioning.value
                 ),
                 provider_state=(
                     current.provider_state if current is not None else ComputeUnitProviderState()
