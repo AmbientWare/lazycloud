@@ -186,7 +186,9 @@ class AwsAccountConnectionService:
                 raise ConflictError("this account already has an AWS account connection")
 
         connection_id = str(uuid4())
-        external_id = self._external_id()
+        # Supplied when the role already exists and already enforces one, minted
+        # when this platform is the one creating the role.
+        external_id = request.external_id or self._external_id()
         plan = self._plan(
             user_id=user_id,
             connection_id=connection_id,

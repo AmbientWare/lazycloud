@@ -79,11 +79,13 @@ class ComputeClient:
         account_id: str,
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
+        external_id: str | None = None,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
             account_id=account_id,
             role_arn=role_arn,
             network=network,
+            external_id=external_id,
         )
         return AwsConnectionAuthorizationResponse.model_validate(
             self.channel.post(self._aws_path(""), request.model_dump(mode="json"))
