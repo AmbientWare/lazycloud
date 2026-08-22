@@ -91,17 +91,21 @@ the Job run without this and the credential exists only inside that pod, nothing
 afterwards has a bearer token, and supplying the value later is refused as an
 already completed bootstrap. The way back is resetting the schema.
 
-**The GitHub App private key**, which is how Argo reads the repository:
+**The GitHub App private key** goes to Terraform rather than here, because
+Terraform declares this deployment's secret containers and cannot read a value
+out of one it has only just created. Put it beside the other operator
+credentials:
 
 ```sh
-aws secretsmanager put-secret-value --secret-id "$DEPLOYMENT/github-app-private-key" \
-  --secret-string "$(cat ambientware.private-key.pem)"
+echo "export TF_VAR_github_app_private_key=\"$(cat ambientware.private-key.pem)\"" \
+  >> ~/.lazycloud/operator/deploy.env
 ```
 
 The App is installed on the organisation with `repository_selection: all`, so
-this one key reaches every repository. Its id and installation id are Terraform
-variables with defaults; the key itself is generated in the App's settings and
-cannot be read back from GitHub.
+this one key reaches every repository Argo is later pointed at. Its id and
+installation id are Terraform variables with defaults; the key is generated in
+the App's settings and cannot be read back from GitHub, so a lost one is replaced
+rather than recovered.
 
 A secret with no value is otherwise normal rather than fatal. An unchosen
 telemetry backend does not stop the control plane from serving.
@@ -125,7 +129,7 @@ same grant.
 
 ```sh
 gh workflow run release.yml -f deployment=lazycloud-prod
-gh workflow run deploy-eks.yml -f deployment=lazycloud-prod
+gh workflow run deploy.yml -f deployment=lazycloud-prod
 ```
 
 The release publishes the agent, the container-worker image and the node AMI. The
@@ -161,7 +165,8 @@ Three things survive it and have to be dealt with by hand:
   every table the schema created and cannot be dropped while it does; destroying
   the branch takes the role with it, so let the branch go first.
 - **Externally-sourced secrets.** A destroy removes the containers and their
-  values, so the eight written in step 3 have to be written again.
+  values, so the seven written in step 3 have to be written again, along with the
+  administrator credential.
 
 Never reset external, deployed, or production data. Predeployment, resetting and
 rebuilding is ordinary and is how the module is proven to reproduce.
