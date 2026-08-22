@@ -58,18 +58,13 @@ resource "aws_iam_role_policy_attachment" "node" {
   policy_arn = "${local.arn_prefix}:iam::aws:policy/${each.value}"
 }
 
-# The federation itself. Every workload identity below is a condition on this
-# provider's subject claim, which is what makes "this service account" a thing
-# AWS can be asked about.
-data "tls_certificate" "cluster" {
-  url = aws_eks_cluster.control_plane.identity[0].oidc[0].issuer
-}
-
-resource "aws_iam_openid_connect_provider" "cluster" {
-  url             = aws_eks_cluster.control_plane.identity[0].oidc[0].issuer
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.cluster.certificates[0].sha1_fingerprint]
-}
+# No OIDC provider, and no certificate thumbprint to keep current.
+#
+# Auto Mode nodes carry Pod Identity built in, which AWS documents as the
+# recommended way to give a pod an AWS identity. It replaces a federated trust
+# whose condition is a string built from the issuer URL with an association
+# naming a cluster, a namespace and a service account -- the same three facts,
+# stated where they can be checked rather than concatenated into a policy.
 
 # Reads the secret values the deployment's containers are given.
 #
@@ -84,14 +79,8 @@ resource "aws_iam_role" "external_secrets" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = aws_iam_openid_connect_provider.cluster.arn }
-      Action    = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "${local.oidc_subject_key}:aud" = "sts.amazonaws.com"
-          "${local.oidc_subject_key}:sub" = "system:serviceaccount:${var.kubernetes_namespace}:${var.external_secrets_service_account}"
-        }
-      }
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
     }]
   })
 }
@@ -132,4 +121,25 @@ resource "aws_eks_access_policy_association" "deploy" {
   access_scope {
     type = "cluster"
   }
+}
+
+# Which service account holds which role. Pod Identity resolves this at the
+# cluster rather than from a claim the pod presents, so a service account that
+# does not exist yet is an association waiting rather than a pod authenticating
+# as nobody, and the names are checked against the cluster instead of matching a
+# string by luck.
+resource "aws_eks_pod_identity_association" "control_plane" {
+  for_each = toset(var.control_plane_service_accounts)
+
+  cluster_name    = aws_eks_cluster.control_plane.name
+  namespace       = var.kubernetes_namespace
+  service_account = each.value
+  role_arn        = aws_iam_role.control_plane.arn
+}
+
+resource "aws_eks_pod_identity_association" "external_secrets" {
+  cluster_name    = aws_eks_cluster.control_plane.name
+  namespace       = var.kubernetes_namespace
+  service_account = var.external_secrets_service_account
+  role_arn        = aws_iam_role.external_secrets.arn
 }

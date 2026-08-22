@@ -22,15 +22,12 @@ secrets:
   map: {}
   refreshInterval: 1h
 
+# Named here and in the Pod Identity associations the platform module declares.
+# A rename needs both.
 serviceAccounts:
   controlPlane: control-plane
   scheduler: scheduler
   externalSecrets: external-secrets
-
-# IRSA role ARNs from the platform module's `workload_role_arns`.
-roles:
-  controlPlane: ""
-  externalSecrets: ""
 
 # Variables every workload reads from the Secret above. Named here rather than
 # discovered, because a workload that silently starts without one is the failure

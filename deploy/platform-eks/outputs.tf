@@ -13,14 +13,6 @@ output "kubernetes_namespace" {
   value       = var.kubernetes_namespace
 }
 
-output "workload_role_arns" {
-  description = "IRSA roles the chart annotates its service accounts with."
-  value = {
-    control_plane    = aws_iam_role.control_plane.arn
-    external_secrets = aws_iam_role.external_secrets.arn
-  }
-}
-
 output "control_plane_role_arn" {
   description = <<-EOT
     Belongs in the control stack's TrustedPrincipalArns.

@@ -464,9 +464,13 @@ services:
       tcp-certificate:
         condition: service_completed_successfully
     # The control plane runs its own tailscaled rather than borrowing a sidecar's
-    # network namespace. These are the same grants every agent already holds, and
-    # a real TUN device is required: workers reach this process inbound by its
-    # tailnet name, which userspace networking cannot bind.
+    # network namespace. These are the same grants every agent already holds.
+    #
+    # The TUN device is for outbound, not inbound. Userspace networking forwards
+    # incoming connections to localhost perfectly well, so a worker reaching this
+    # process by tailnet name needs no kernel device. What userspace cannot do is
+    # dial: outbound connectivity to the tailnet goes through a SOCKS5 or HTTP
+    # proxy instead, and this process dials every agent's route proxy by name.
     cap_add:
       - NET_ADMIN
       - NET_RAW

@@ -1,11 +1,13 @@
 {{/*
 The API, and the tailnet device it holds.
 
-It runs its own tailscaled rather than borrowing a proxy's: workers reach this
-process inbound by tailnet name, which userspace networking cannot bind, and the
-control plane dials each agent's route proxy outbound by name too. An operator
-that exposed this as a Service would answer the inbound half and leave the
-outbound half needing tailscaled anyway.
+It runs its own tailscaled rather than borrowing a proxy's, and the reason is
+outbound rather than inbound. Userspace networking forwards incoming connections
+to localhost, so a worker reaching this process by tailnet name would be served
+without a kernel device; what userspace cannot do is dial out, which needs a
+SOCKS5 or HTTP proxy. This process dials every agent's route proxy by name, so it
+holds a real device. An operator exposing it as a Service answers the half that
+was never the problem.
 
 That is what NET_ADMIN, NET_RAW and /dev/net/tun below are for. Where it runs is
 Auto Mode's decision: the device is a property of the node image rather than of
