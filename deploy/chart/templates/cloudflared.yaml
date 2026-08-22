@@ -25,6 +25,12 @@ data:
       # buffering the body would defeat it.
       disableChunkedEncoding: false
     ingress:
+      # Argo, ahead of everything else because the rules are ordered and the
+      # wildcard below would otherwise claim this name for the control plane.
+      # Reaching it still requires signing in to Argo; publishing the hostname
+      # publishes a login, not the cluster.
+      - hostname: argocd.{{ .Values.cloudflared.apex }}
+        service: http://argocd-server.argocd:80
       - hostname: {{ .Values.cloudflared.apex }}
         path: ^/metrics$
         service: http_status:404
