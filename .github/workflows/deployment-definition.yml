@@ -193,6 +193,20 @@ jobs:
                       )
 
           for document in documents:
+              # A Job's pod template is immutable, so a second sync patches it
+              # and fails. The image tag moves with the commit, which makes that
+              # every deploy after the first.
+              if document["kind"] == "Job":
+                  options = (document["metadata"].get("annotations") or {}).get(
+                      "argocd.argoproj.io/sync-options", ""
+                  )
+                  if "Replace=true" not in options:
+                      problems.append(
+                          f"Job/{document['metadata']['name']} is patched rather than replaced; "
+                          "its pod template is immutable and the next deploy will fail to apply it"
+                      )
+
+          for document in documents:
               pod = (document.get("spec", {}).get("template", {}) or {}).get("spec", {})
               mounted = {v["name"] for v in pod.get("volumes", [])}
               for container in pod.get("containers", []) + pod.get("initContainers", []):
