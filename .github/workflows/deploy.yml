@@ -120,6 +120,7 @@ jobs:
             -backend-config="region=$AWS_REGION"
           terraform -chdir=deploy/platform-eks output -json runtime_configuration >runtime.json
           terraform -chdir=deploy/platform-eks output -json secret_environment >secret-map.json
+          tunnel_id="$(terraform -chdir=deploy/platform-eks output -raw cloudflare_tunnel_id)"
 
           # Which release this deployment runs is a fact about the deployment,
           # not about its infrastructure, so it is not a Terraform output. It
@@ -140,6 +141,7 @@ jobs:
             --registry "${{ steps.ecr.outputs.registry }}" \
             --deployment "$DEPLOYMENT" \
             --tag "$GITHUB_SHA" \
+            --tunnel-id "${tunnel_id}" \
             --runtime runtime.json \
             --secret-map secret-map.json \
             --release-manifest-url "${RELEASE_MANIFEST_URL}" \

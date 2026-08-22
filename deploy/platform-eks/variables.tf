@@ -240,9 +240,15 @@ variable "argocd_chart_version" {
     A controller that reconciles everything else is the last thing that should
     move on its own: an unpinned upgrade changes how every other workload is
     applied, at whatever moment the next apply happens to run.
+
+    Pinned to a version that knows the cluster's Kubernetes. Argo builds a typed
+    diff from the live resource, so one older than the API server fails on fields
+    it has never heard of -- `.status.terminatingReplicas` here -- and reports it
+    as a comparison error rather than as its own age. Check
+    `helm search repo argo/argo-cd --versions` when moving Kubernetes.
   EOT
   type        = string
-  default     = "7.7.11"
+  default     = "10.4.0"
 }
 
 variable "github_organization" {

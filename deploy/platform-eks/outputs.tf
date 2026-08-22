@@ -148,3 +148,14 @@ output "secret_environment" {
   EOT
   value       = local.secret_environment
 }
+
+output "cloudflare_tunnel_id" {
+  description = <<-EOT
+    Tunnel the in-cluster connectors run.
+
+    Read from the module that owns it rather than pasted, for the same reason its
+    credentials are: a tunnel replaced in `deploy/cloudflare` would otherwise
+    leave this naming one that no longer exists.
+  EOT
+  value       = data.terraform_remote_state.cloudflare.outputs.tunnel_id
+}
