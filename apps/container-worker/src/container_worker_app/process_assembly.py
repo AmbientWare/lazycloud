@@ -74,8 +74,9 @@ from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
 from worker.runtime_config import (
     prepare_worker_cgroup,
+    read_cgroup_memory_current_bytes,
+    read_cgroup_memory_low_bytes,
     read_memory_pressure_percent,
-    read_process_memory_bytes,
     read_worker_cpu_millicores,
     read_worker_memory_mib,
     worker_cgroup_path,
@@ -427,7 +428,8 @@ def _memory_pressure_watcher(
         worker_cgroup_path=cgroup_path,
         residents=processor.resident_containers,
         read_pressure_percent=read_memory_pressure_percent,
-        read_memory_current=read_process_memory_bytes,
+        read_memory_current=read_cgroup_memory_current_bytes,
+        read_memory_low=read_cgroup_memory_low_bytes,
         # Forced, because a machine already out of memory is one where a graceful
         # stop may never complete.
         stop_container=lambda container_id, reason: stopper.stop_container(

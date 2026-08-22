@@ -41,6 +41,7 @@ from worker.image_build_execution import (
 from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
 from worker.memory_pressure import ResidentContainer
 from worker.monitoring import WorkerUsageWindowRecorder
+from worker.runtime_config import absolute_container_cgroup_path
 from worker.status import (
     WorkerDeliveredRequestPlan,
     WorkerSchedulerRequestAction,
@@ -485,19 +486,25 @@ class WorkerSchedulerRequestProcessor:
             active.pid = pid
 
     def resident_containers(self) -> list[ResidentContainer]:
-        """The containers this worker is holding, and what each was promised.
+        """The containers this worker is holding, and the cgroup accounting for each.
 
         Background executions only. A foreground container runs inside the call
         that started it, so the loop asking this question is not running while
         one exists.
+
+        The cgroup rather than the sandbox's pid: a pid is reused by Linux once
+        the process it named exits, so a container recorded as it went away could
+        hand the watcher a live pid belonging to something else entirely, whose
+        size would then be weighed against this container's reservation. A cgroup
+        path names the container and nothing else, and reads as gone rather than
+        as someone else.
         """
         return [
             ResidentContainer(
                 container_id=container_id,
-                pid=active.pid,
-                reserved_mib=active.request.memory_mib,
+                cgroup_path=absolute_container_cgroup_path(container_id),
             )
-            for container_id, active in self._background.items()
+            for container_id in self._background
         ]
 
     def _run_background(

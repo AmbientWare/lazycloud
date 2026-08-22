@@ -39,11 +39,10 @@ MEMORY_PRESSURE_COOLDOWN_SECONDS = 15.0
 
 @dataclass(frozen=True, slots=True)
 class ResidentContainer:
-    """A container this worker is running, and what it was promised."""
+    """A container this worker is running, and the cgroup that accounts for it."""
 
     container_id: str
-    pid: int
-    reserved_mib: int
+    cgroup_path: str
 
 
 class MemoryEvictionResult(ContractModel):
@@ -71,7 +70,8 @@ class WorkerMemoryPressureWatcher:
     worker_cgroup_path: str
     residents: Callable[[], Sequence[ResidentContainer]]
     read_pressure_percent: Callable[[str], float]
-    read_memory_current: Callable[[int], int]
+    read_memory_current: Callable[[str], int]
+    read_memory_low: Callable[[str], int]
     stop_container: Callable[[str, StopContainerReason], None]
     monotonic: Callable[[], float] = time.monotonic
     threshold_percent: float = DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT
@@ -92,19 +92,34 @@ class WorkerMemoryPressureWatcher:
                 reason="waiting to see whether the last eviction settled it",
             )
 
-        readings = [
-            ContainerMemoryReading(
-                container_id=resident.container_id,
-                current_bytes=self.read_memory_current(resident.pid),
-                reserved_bytes=resident.reserved_mib * MIB,
+        # Both numbers come from the container's own cgroup, which is the only
+        # place they mean the same thing. The sandbox process's RSS is a different
+        # accounting from what the cgroup is charged -- under gVisor the sentry
+        # and the gofer are charged here alongside guest memory -- so measuring
+        # one against a reservation expressed in the other made every container
+        # look larger than its promise by its own sandbox, and the smallest ones
+        # look furthest over. `memory.current` against `memory.low` is the pair
+        # the kernel itself weighs when it decides what to reclaim, and reading
+        # the protection rather than remembering it means this inherits whatever
+        # the planner wrote, including any sandbox allowance added later.
+        readings: list[ContainerMemoryReading] = []
+        for resident in self.residents():
+            if not resident.cgroup_path:
+                continue
+            reserved = self.read_memory_low(resident.cgroup_path)
+            # A container protected for nothing is not one that reserved zero:
+            # its whole footprint would count as excess and it would be chosen
+            # every pass, told it was furthest above a request it never made.
+            # `memory.low` reads `0` both when unset and when the cgroup is gone.
+            if reserved <= 0:
+                continue
+            readings.append(
+                ContainerMemoryReading(
+                    container_id=resident.container_id,
+                    current_bytes=self.read_memory_current(resident.cgroup_path),
+                    reserved_bytes=reserved,
+                )
             )
-            for resident in self.residents()
-            # A container that reserved nothing is not thereby a container that
-            # reserved zero: its whole footprint would count as excess and it
-            # would be chosen every pass, told it was furthest above a request it
-            # never made. The runtime treats the same value as "apply no limits".
-            if resident.pid > 0 and resident.reserved_mib > 0
-        ]
         candidate = select_memory_eviction_candidate(
             readings,
             pressure_percent=pressure,

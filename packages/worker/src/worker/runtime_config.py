@@ -400,6 +400,20 @@ def container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
     return posixpath.join("/", relative, container_id)
 
 
+def absolute_container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
+    """The same cgroup as a path on disk, for reading it back.
+
+    `container_cgroup_path` answers relative to the cgroup root because that is
+    what the OCI spec's `cgroupsPath` means. Anything that opens the directory
+    needs the mount point in front of it, and doing that join in one place keeps
+    the two from disagreeing about which form they hold.
+    """
+    relative = container_cgroup_path(container_id, root=root)
+    if not relative:
+        return ""
+    return str(Path(root, relative.lstrip("/")))
+
+
 def _memory_is_delegated(cgroup_path: str) -> bool:
     """Whether children of this cgroup are given the memory controller.
 
@@ -715,6 +729,46 @@ def read_memory_pressure_percent(cgroup_path: str) -> float:
             type(error).__name__,
         )
         return 0.0
+
+
+def read_cgroup_memory_current_bytes(cgroup_path: str) -> int:
+    """What this cgroup is charged, or zero when there is nothing to read.
+
+    Zero when the cgroup has gone, which is the same answer as a container using
+    nothing and is the right one either way: a departed container is not a
+    candidate for being asked to depart.
+    """
+    return _read_cgroup_memory_value(cgroup_path, "memory.current")
+
+
+def read_cgroup_memory_low_bytes(cgroup_path: str) -> int:
+    """What reclaim protects for this cgroup, read rather than remembered.
+
+    The worker holds its own copy of what a container asked for, but the cgroup
+    holds what it was actually given, and only the second is what the kernel
+    weighs. Reading it here means an allowance the planner adds later -- the
+    sandbox overhead that has no measured constant yet -- reaches eviction with
+    nothing else to update.
+
+    `max` means unprotected and reads as zero, which excludes the container from
+    candidacy rather than making its whole footprint look like excess.
+    """
+    return _read_cgroup_memory_value(cgroup_path, "memory.low")
+
+
+def _read_cgroup_memory_value(cgroup_path: str, name: str) -> int:
+    if not cgroup_path:
+        return 0
+    try:
+        raw = Path(cgroup_path, name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return 0
+    if raw == "max":
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
 
 
 def read_process_memory_bytes(pid: int, *, proc_root: str = "/proc") -> int:

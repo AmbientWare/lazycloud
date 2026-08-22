@@ -10,7 +10,8 @@ def _watcher(
     *,
     pressure: float,
     residents: list[ResidentContainer],
-    current_mib: dict[int, int],
+    charged_mib: dict[str, int],
+    protected_mib: dict[str, int],
     stopped: list[tuple[str, StopContainerReason]],
     clock: list[float] | None = None,
 ) -> WorkerMemoryPressureWatcher:
@@ -19,60 +20,71 @@ def _watcher(
         worker_cgroup_path="/sys/fs/cgroup/worker",
         residents=lambda: residents,
         read_pressure_percent=lambda _path: pressure,
-        read_memory_current=lambda pid: current_mib[pid] * MIB,
+        read_memory_current=lambda path: charged_mib.get(path, 0) * MIB,
+        read_memory_low=lambda path: protected_mib.get(path, 0) * MIB,
         stop_container=lambda container_id, reason: stopped.append((container_id, reason)),
         monotonic=lambda: ticks[0],
     )
 
 
-def test_a_container_is_invisible_until_it_reports_a_sandbox() -> None:
-    """A pid arrives after registration, and nothing works until it does.
+def test_a_container_protected_for_nothing_is_not_the_victim() -> None:
+    """Protected for nothing is not the same as reserving zero.
 
-    A long-running container has no sandbox when it is registered and reports
-    none again until it exits. Left at zero it is filtered out of every pass, so
-    the machine fills with containers the watcher cannot see and the kernel makes
-    the decision after all.
-    """
-    stopped: list[tuple[str, StopContainerReason]] = []
-    without_pid = _watcher(
-        pressure=90.0,
-        residents=[ResidentContainer("leaker", 0, reserved_mib=1024)],
-        current_mib={102: 8192},
-        stopped=stopped,
-    )
-    assert not without_pid.run_once().evicted
-    assert stopped == []
-
-    with_pid = _watcher(
-        pressure=90.0,
-        residents=[ResidentContainer("leaker", 102, reserved_mib=1024)],
-        current_mib={102: 8192},
-        stopped=stopped,
-    )
-    assert with_pid.run_once().evicted
-
-
-def test_a_container_that_reserved_nothing_is_not_the_victim() -> None:
-    """Reserving nothing is not reserving zero.
-
-    Its whole footprint would count as excess, so it would outrank every
-    genuinely over-committed tenant and be stopped every pass, told it was
-    furthest above a request it never made. The runtime reads the same value as
-    "apply no limits at all".
+    Its whole footprint would count as excess, so it would outrank every genuinely
+    over-committed tenant and be stopped every pass, told it was furthest above a
+    request it never made. `memory.low` reads zero both when it was never written
+    and when the cgroup has gone.
     """
     stopped: list[tuple[str, StopContainerReason]] = []
     result = _watcher(
         pressure=90.0,
         residents=[
-            ResidentContainer("unreserved", 101, reserved_mib=0),
-            ResidentContainer("over", 102, reserved_mib=1024),
+            ResidentContainer("unprotected", "/cg/unprotected"),
+            ResidentContainer("over", "/cg/over"),
         ],
-        current_mib={101: 16384, 102: 2048},
+        charged_mib={"/cg/unprotected": 16384, "/cg/over": 2048},
+        protected_mib={"/cg/unprotected": 0, "/cg/over": 1024},
         stopped=stopped,
     ).run_once()
 
     assert result.evicted_container_id == "over"
     assert stopped == [("over", StopContainerReason.MemoryEvicted)]
+
+
+def test_the_largest_container_is_spared_for_the_one_that_outgrew_its_promise() -> None:
+    """The whole reason the choice is not left to the kernel.
+
+    `oom_badness` scores resident size, so it reaches an eight-gibibyte tenant
+    sitting inside what it reserved before a one-gibibyte tenant that tripled.
+    """
+    stopped: list[tuple[str, StopContainerReason]] = []
+    result = _watcher(
+        pressure=90.0,
+        residents=[
+            ResidentContainer("honest", "/cg/honest"),
+            ResidentContainer("leaker", "/cg/leaker"),
+        ],
+        charged_mib={"/cg/honest": 8192, "/cg/leaker": 3072},
+        protected_mib={"/cg/honest": 8192, "/cg/leaker": 1024},
+        stopped=stopped,
+    ).run_once()
+
+    assert result.evicted_container_id == "leaker"
+
+
+def test_a_container_without_a_cgroup_cannot_be_weighed() -> None:
+    """No cgroup means no accounting, and a guess here stops the wrong tenant."""
+    stopped: list[tuple[str, StopContainerReason]] = []
+    result = _watcher(
+        pressure=90.0,
+        residents=[ResidentContainer("unplaced", "")],
+        charged_mib={},
+        protected_mib={},
+        stopped=stopped,
+    ).run_once()
+
+    assert not result.evicted
+    assert stopped == []
 
 
 def test_the_next_pass_waits_to_see_whether_the_first_eviction_settled_it() -> None:
@@ -87,10 +99,11 @@ def test_the_next_pass_waits_to_see_whether_the_first_eviction_settled_it() -> N
     watcher = _watcher(
         pressure=90.0,
         residents=[
-            ResidentContainer("a", 201, reserved_mib=1024),
-            ResidentContainer("b", 202, reserved_mib=1024),
+            ResidentContainer("a", "/cg/a"),
+            ResidentContainer("b", "/cg/b"),
         ],
-        current_mib={201: 8192, 202: 4096},
+        charged_mib={"/cg/a": 8192, "/cg/b": 4096},
+        protected_mib={"/cg/a": 1024, "/cg/b": 1024},
         stopped=stopped,
         clock=clock,
     )
