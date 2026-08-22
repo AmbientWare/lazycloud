@@ -249,25 +249,25 @@ connectivity fault.
 
 ## The hosted deployment
 
-Creating or destroying a deployment is `deploy/platform-aws/LIFECYCLE.md`. This
+Creating or destroying a deployment is `deploy/platform-eks/LIFECYCLE.md`. This
 section is about running one that exists.
 
-The control plane runs on one EC2 instance declared by `deploy/platform-aws`.
-Nothing changes what that host runs except the bundle in the deploy bucket, and
-nothing writes that bundle except the `Deploy` workflow.
+The control plane runs in an EKS cluster declared by `deploy/platform-eks`.
+Nothing changes what it runs except a commit on the deployment branch, and
+nothing writes that branch except the `Deploy` workflow. Argo CD reconciles the
+cluster to the branch, so a deploy is a commit and a rollback is a revert.
 
 ```sh
-# Everything: publish a release, then put the host on it. A `v*` tag does the
-# same thing without the dispatch.
+# Everything: publish a release, then record a build against it. A `v*` tag does
+# the same thing without the dispatch.
 gh workflow run ship.yml -f deployment=lazycloud-prod
 
 # Code only, onto the release the deployment already runs.
 gh workflow run deploy.yml -f deployment=lazycloud-prod
 
-# Neither: converge the host onto the bundle already published.
-aws ssm send-command --document-name AWS-RunShellScript \
-  --instance-ids "$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)" \
-  --parameters 'commands=["/usr/local/bin/lazycloud-deploy"]'
+# Neither: make Argo reconcile now rather than on its next poll.
+kubectl -n argocd patch application lazycloud --type merge \
+  -p '{"operation":{"sync":{"revision":"prod"}}}'
 ```
 
 `Deploy` on its own publishes no release. It reads the one the deployment already
@@ -276,20 +276,29 @@ forward, so shipping a code change does not take the fleet's managed capacity
 away. That file is written only by a run that published a release, and the deploy
 warns rather than proceeding quietly when there is none to read.
 
+Nothing here runs `helm`. A workflow that installs and a controller that
+reconciles are two opinions about what should be running, and they disagree where
+nobody is looking.
+
 Expect a ship to replace every managed node. A new release moves each pool's
 launch template, and the scheduler drains the superseded machines onto it one at
 a time, surging a replacement before it cordons anything. Nothing is lost, but
 the fleet is briefly one node larger per pool.
 
-There is no SSH key and no inbound rule. Operator shell is
-`aws ssm start-session --target <instance-id>`.
+Watching a deploy:
+
+```sh
+aws eks update-kubeconfig --name lazycloud-prod --region us-east-1
+kubectl -n argocd get applications
+kubectl -n lazycloud get pods
+```
 
 ### What a deployment runs, and what it does not
 
-`deploy/compose.deploy.yaml` is an overlay on the same `compose.yaml` the local
-stack uses. It pins images to digests, drops the published host ports, and
-replaces the `depends_on` edges that point at services a deployment does not
-start. `deploy/bundle.py` carries the service list.
+`deploy/chart` is what a deployment runs, and it is not the local `compose.yaml`
+with pieces removed -- it is the same processes declared for a cluster. Images
+carry the tag of the commit that built them, which is safe because every ECR
+repository is created with immutable tags.
 
 | Not started | Served instead by |
 | --- | --- |
@@ -315,15 +324,23 @@ administrator credential while replicas are still serving.
 
 ### Secrets
 
-The host renders them from Secrets Manager on every deploy, into a mode-0600
-file that only the compose invocation reads. They are never in the bundle: the
-bundle is a build artifact in a versioned bucket, and a credential in there
-outlives every rotation.
+The External Secrets Operator reads them from Secrets Manager as itself, through
+a Pod Identity association, and materialises one Kubernetes Secret the workloads
+read by variable name. No credential is ever in the chart or on the deployment
+branch: both are git, and a value committed there outlives every rotation.
 
-To rotate one, write the new value and converge the host:
+To rotate one, write the new value. Nothing else is needed -- the operator
+refreshes on its interval and the pods pick it up:
 
 ```sh
 aws secretsmanager put-secret-value --secret-id lazycloud-prod/<name> --secret-string '<value>'
+```
+
+A workload that caches a credential at startup needs a restart to notice, which
+is a property of that process rather than of the rotation:
+
+```sh
+kubectl -n lazycloud rollout restart deployment/control-plane
 ```
 
 ### Connecting the platform account to its own fleet
@@ -334,7 +351,7 @@ when it says a customer account can be this account. The connection stack create
 the fleet VPC, its two subnets, the security group and the node instance profile,
 and the control plane reads them back from the stack outputs.
 
-`deploy/platform-aws` therefore declares no fleet network. Adding one there would
+`deploy/platform-eks` therefore declares no fleet network. Adding one there would
 mean declaring the connection role beside it, and that role's policy is generated
 in `provider_aws/account_connection.py`.
 

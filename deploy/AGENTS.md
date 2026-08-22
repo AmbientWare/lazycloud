@@ -36,11 +36,16 @@ substitutes, and gives every service an explicit owner and health check.
   people's infrastructure already points at. Sequencing them is the part that
   cannot be left to chance. Both once triggered on `v*` independently, so a
   tagged deploy raced the release it was meant to run.
-- Which release a deployment runs lives beside its bundle, not in Terraform. It
-  is a fact about the deployment rather than its infrastructure, it changes on a
-  different schedule from anything Terraform declares, and keeping it in the
-  bucket Terraform does own means it is destroyed with the stack instead of
-  outliving it. A deploy that names no release carries forward the one already
-  recorded; blanking it would silently take away every managed pool.
+- Which release a deployment runs is a fact about the deployment rather than its
+  infrastructure. It changes on a different schedule from anything Terraform
+  declares, so it lives in the bucket Terraform does own and is destroyed with
+  the stack instead of outliving it. A deploy that names no release carries
+  forward the one already recorded; blanking it would silently take away every
+  managed pool.
+- CI builds and records; Argo installs. The deploy workflow pushes images and
+  commits the values naming them to the deployment branch, and stops. Nothing in
+  CI runs `helm install`, because a workflow that installs and a controller that
+  reconciles are two opinions about what should be running, and they disagree
+  where nobody is looking.
 - Operator documentation is part of the change: when deployment behavior
   changes, the runbook that describes it changes with it.
