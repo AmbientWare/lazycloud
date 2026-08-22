@@ -34,7 +34,6 @@ from database.repositories.compute import (
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
-from scheduler.state import SchedulerWorkerRecord
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -202,26 +201,6 @@ class _Resolver(ComputeProviderResolver):
             connection_id=_CONNECTION_ID,
             pooled=self.provider,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class _Workers:
-    def list_workers(self) -> list[SchedulerWorkerRecord]:
-        return []
-
-    def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
-        del worker_id
-        return None
-
-    def disable_worker(
-        self,
-        worker_id: str,
-        *,
-        ttl_seconds: int = 0,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
-        del worker_id, ttl_seconds, now
-        raise AssertionError("no worker should be disabled during enrollment")
 
 
 def _workspace_owner_id(services: ApiServices) -> str:

@@ -11,7 +11,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from compute.telemetry import redact_telemetry_line
-from networking.routing import BackendDialPlan, TailnetPeer, build_backend_dial_plan
 from pydantic import Field, JsonValue, field_validator
 from shared.app_identity import (
     ADMIN_CLI_NAME,
@@ -71,9 +70,6 @@ from agent.service_manager import (
     DEFAULT_AGENT_STATE_DIR,
     AgentServiceRuntimeStatus,
     PreflightCheckName,
-    ServicePlatform,
-    ServiceUnit,
-    build_service_install_plan,
 )
 
 AGENT_WORKER_CONTAINER_SERVICE_BASE_PORT = 19000
@@ -82,12 +78,6 @@ AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
 AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
 DOCKER_NETWORK_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
-
-
-class AgentInstallTarget(StrEnum):
-    Shell = "shell"
-    Systemd = "systemd"
-    Launchd = "launchd"
 
 
 class AgentInstallOS(StrEnum):
@@ -121,13 +111,6 @@ class AgentJoinRequest(ContractModel):
     labels: dict[str, str] = Field(default_factory=dict)
 
 
-class AgentInstallPlan(ContractModel):
-    request: AgentJoinRequest
-    target: AgentInstallTarget
-    command: list[str]
-    service_commands: list[list[str]] = Field(default_factory=list)
-
-
 class AgentStatusSummary(ContractModel):
     agents: int
     active_leases: int
@@ -143,27 +126,6 @@ class AgentHostStatus(ContractModel):
     machine_id: str = ""
     gateway_url: str = ""
     service: AgentServiceRuntimeStatus
-
-
-class AgentRouteProxy(ContractModel):
-    agent_id: str
-    target_host: str
-    target_port: int
-    public_path: str
-    service_name: str = "agent"
-    tailnet_hostname: str | None = None
-
-
-class AgentTransportEnvelope(ContractModel):
-    agent_id: str
-    action: str
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class AgentRouteProxyPlan(ContractModel):
-    proxy: AgentRouteProxy
-    dial_plan: BackendDialPlan
-    tailnet_peer: TailnetPeer | None = None
 
 
 def build_join_command(request: AgentJoinRequest) -> list[str]:
@@ -185,26 +147,6 @@ def build_join_command(request: AgentJoinRequest) -> list[str]:
     for key, value in request.labels.items():
         command.extend(["--label", f"{key}={value}"])
     return command
-
-
-def build_agent_install_plan(
-    request: AgentJoinRequest,
-    *,
-    target: AgentInstallTarget = AgentInstallTarget.Shell,
-) -> AgentInstallPlan:
-    command = build_join_command(request)
-    service_commands: list[list[str]] = []
-    if target != AgentInstallTarget.Shell:
-        platform = (
-            ServicePlatform.Systemd
-            if target == AgentInstallTarget.Systemd
-            else ServicePlatform.Launchd
-        )
-        unit = ServiceUnit(name=f"{AGENT_NAME}-{request.name}", command=command)
-        service_commands = build_service_install_plan(unit, platform=platform).commands
-    return AgentInstallPlan(
-        request=request, target=target, command=command, service_commands=service_commands
-    )
 
 
 def agent_binary_filename(
@@ -875,27 +817,6 @@ def summarize_agent_status(agent_pools: list[str], active_leases: int) -> AgentS
     for pool in agent_pools:
         pools[pool] = pools.get(pool, 0) + 1
     return AgentStatusSummary(agents=len(agent_pools), active_leases=active_leases, pools=pools)
-
-
-def plan_agent_route_proxy(proxy: AgentRouteProxy) -> AgentRouteProxyPlan:
-    tailnet_peer = (
-        TailnetPeer(name=proxy.agent_id, hostname=proxy.tailnet_hostname)
-        if proxy.tailnet_hostname
-        else None
-    )
-    dial_host = proxy.tailnet_hostname or proxy.target_host
-    dial_plan = build_backend_dial_plan(
-        f"http://{dial_host}:{proxy.target_port}",
-        path=proxy.public_path,
-        tailnet_peer=tailnet_peer,
-        metadata={
-            "agent_id": proxy.agent_id,
-            "service_name": proxy.service_name,
-            "target_host": proxy.target_host,
-            "target_port": proxy.target_port,
-        },
-    )
-    return AgentRouteProxyPlan(proxy=proxy, dial_plan=dial_plan, tailnet_peer=tailnet_peer)
 
 
 class AgentCapacityCheckName(StrEnum):

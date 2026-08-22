@@ -34,7 +34,6 @@ from worker.runtime_config import (
     DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
     OciRuntimeName,
     OomWatcherKind,
-    RuntimeCapabilities,
 )
 
 CGROUP_V2_OOM_GROUP_PARAMETER = "memory.oom.group"
@@ -112,9 +111,6 @@ class ContainerNetworkSelectionReason(StrEnum):
 class ContainerRuntimeOperation(StrEnum):
     Kill = "kill"
     Exec = "exec"
-    Status = "status"
-    Checkpoint = "checkpoint"
-    Archive = "archive"
     WorkspaceSync = "workspace-sync"
     SandboxExec = "sandbox-exec"
 
@@ -123,14 +119,6 @@ class WorkspaceSyncOperation(StrEnum):
     Delete = "delete"
     Write = "write"
     Move = "move"
-
-
-class ContainerMountKind(StrEnum):
-    Local = "local"
-    WorkspaceStorage = "workspace-storage"
-    ObjectMount = "object-mount"
-    UserCode = "user-code"
-    UserOutput = "user-output"
 
 
 class OciMountType(StrEnum):
@@ -402,8 +390,6 @@ class RuntimeServerOperationPlan(ContractModel):
     signal: int | None = None
     force_delete: bool = False
     requires_running: bool = False
-    checkpoint_id: str | None = None
-    progress_keepalive_seconds: int | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
@@ -415,19 +401,6 @@ class WorkspaceSyncPlan(ContractModel):
     new_path: str | None = None
     is_dir: bool = False
     data_size_bytes: int = 0
-
-
-class ContainerMount(ContractModel):
-    mount_path: str
-    local_path: str = ""
-    kind: ContainerMountKind = ContainerMountKind.Local
-
-
-class WorkspaceStorageMountDecision(ContractModel):
-    required: bool
-    reason: str
-    code_cache_key: str | None = None
-    adjusted_mounts: list[ContainerMount] = Field(default_factory=list)
 
 
 class CheckpointCacheMetadata(ContractModel):
@@ -444,17 +417,6 @@ class CheckpointCacheMetadata(ContractModel):
             msg = "checkpoint cache size must be positive"
             raise ValueError(msg)
         return value
-
-
-class CheckpointMaterializationPlan(ContractModel):
-    checkpoint_id: str
-    checkpoint_path: str
-    archive_path: str
-    origin_key: str
-    cache_hash: str
-    expected_size_bytes: int
-    filesystem_payload_path: str
-    temporary_extract_root: str
 
 
 class WorkerOomWatcherPlan(ContractModel):
@@ -995,63 +957,6 @@ def plan_sandbox_exec(
     )
 
 
-def plan_container_status(
-    container_id: str,
-    *,
-    runtime_status: str | None,
-) -> RuntimeServerOperationPlan:
-    running = runtime_status == "running"
-    return RuntimeServerOperationPlan(
-        operation=ContainerRuntimeOperation.Status,
-        container_id=container_id,
-        ok=running,
-        metadata={"running": running, "runtime_status": runtime_status or "unknown"},
-    )
-
-
-def plan_container_checkpoint(
-    container_id: str,
-    capabilities: RuntimeCapabilities,
-    *,
-    checkpoint_id: str,
-) -> RuntimeServerOperationPlan:
-    if not capabilities.checkpoint_restore:
-        return RuntimeServerOperationPlan(
-            operation=ContainerRuntimeOperation.Checkpoint,
-            container_id=container_id,
-            ok=False,
-            error_message="runtime does not support checkpoint/restore",
-        )
-    return RuntimeServerOperationPlan(
-        operation=ContainerRuntimeOperation.Checkpoint,
-        container_id=container_id,
-        checkpoint_id=checkpoint_id,
-    )
-
-
-def plan_archive_progress(
-    container_id: str,
-    *,
-    progress: int = 0,
-    done: bool = False,
-    success: bool = False,
-    keepalive_seconds: int = 10,
-    error_message: str = "",
-) -> RuntimeServerOperationPlan:
-    if not 0 <= progress <= 100:
-        msg = "archive progress must be between 0 and 100"
-        raise ValueError(msg)
-    return RuntimeServerOperationPlan(
-        operation=ContainerRuntimeOperation.Archive,
-        container_id=container_id,
-        ok=success if done else True,
-        error_message=error_message,
-        requires_running=True,
-        progress_keepalive_seconds=keepalive_seconds,
-        metadata={"progress": progress, "done": done, "success": success},
-    )
-
-
 def plan_workspace_sync(
     container_id: str,
     *,
@@ -1086,65 +991,9 @@ def stub_code_cache_key(workspace_id: str, object_id: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def requires_workspace_storage_mount(
-    *,
-    storage_available: bool,
-    is_build_request: bool,
-    direct_code_download_available: bool,
-    workspace_id: str,
-    object_id: str,
-    mounts: list[ContainerMount],
-) -> WorkspaceStorageMountDecision:
-    if not storage_available:
-        return WorkspaceStorageMountDecision(required=False, reason="workspace storage unavailable")
-    if is_build_request:
-        return WorkspaceStorageMountDecision(
-            required=True,
-            reason="build request requires workspace storage",
-            code_cache_key=stub_code_cache_key(workspace_id, object_id),
-            adjusted_mounts=mounts,
-        )
-    for mount in mounts:
-        if mount.kind is ContainerMountKind.UserCode and not direct_code_download_available:
-            return WorkspaceStorageMountDecision(
-                required=True,
-                reason="user code mount requires workspace storage",
-                code_cache_key=stub_code_cache_key(workspace_id, object_id),
-                adjusted_mounts=mounts,
-            )
-        if mount.kind in {ContainerMountKind.WorkspaceStorage, ContainerMountKind.UserOutput}:
-            return WorkspaceStorageMountDecision(
-                required=True,
-                reason=f"{mount.kind.value} mount requires workspace storage",
-                adjusted_mounts=mounts,
-            )
-    return WorkspaceStorageMountDecision(required=False, reason="no workspace storage mount needed")
-
-
-def checkpoint_origin_key(checkpoint_id: str) -> str:
-    return posixpath.join(CHECKPOINT_ORIGIN_PREFIX, checkpoint_id + CHECKPOINT_ARCHIVE_EXTENSION)
-
-
 def checkpoint_accelerator(gpu: str | None) -> str:
     value = (gpu or "").strip()
     return value.upper() if value else "CPU"
-
-
-def build_checkpoint_cache_metadata(
-    *,
-    checkpoint_id: str,
-    cache_hash: str,
-    size_bytes: int,
-    locality: str = "",
-    gpu: str | None = None,
-) -> CheckpointCacheMetadata:
-    return CheckpointCacheMetadata(
-        cache_hash=cache_hash,
-        size_bytes=size_bytes,
-        origin_key=checkpoint_origin_key(checkpoint_id),
-        locality=locality,
-        accelerator=checkpoint_accelerator(gpu),
-    )
 
 
 def checkpoint_path(checkpoint_root: str, checkpoint_id: str) -> str:
@@ -1155,28 +1004,6 @@ def checkpoint_archive_path(checkpoint_root: str, checkpoint_id: str) -> str:
     return posixpath.join(
         checkpoint_root.rstrip("/"),
         checkpoint_id + CHECKPOINT_ARCHIVE_EXTENSION,
-    )
-
-
-def build_checkpoint_materialization_plan(
-    *,
-    checkpoint_root: str,
-    checkpoint_id: str,
-    metadata: CheckpointCacheMetadata,
-) -> CheckpointMaterializationPlan:
-    target_path = checkpoint_path(checkpoint_root, checkpoint_id)
-    return CheckpointMaterializationPlan(
-        checkpoint_id=checkpoint_id,
-        checkpoint_path=target_path,
-        archive_path=checkpoint_archive_path(checkpoint_root, checkpoint_id),
-        origin_key=metadata.origin_key,
-        cache_hash=metadata.cache_hash,
-        expected_size_bytes=metadata.size_bytes,
-        filesystem_payload_path=posixpath.join(target_path, CHECKPOINT_FILESYSTEM_DIR),
-        temporary_extract_root=posixpath.join(
-            posixpath.dirname(target_path),
-            f".{checkpoint_id}.extract",
-        ),
     )
 
 

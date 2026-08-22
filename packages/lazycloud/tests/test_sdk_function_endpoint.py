@@ -18,7 +18,7 @@ from lazycloud.client_contracts import ClientContractError
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.schema import Integer, Schema
 from lazycloud.values import cloudpickle_bytes
-from pydantic import BaseModel, JsonValue
+from pydantic import JsonValue
 from shared.containers import ContainerStatus
 from shared.deployments import DeploymentKind
 from shared.env import (
@@ -38,7 +38,6 @@ from shared.http.compute import (
     ContainerWithAppPageResponse,
     ContainerWithAppResponse,
 )
-from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
@@ -60,15 +59,6 @@ from lazycloud import App
 T = TypeVar("T")
 
 
-class HealthInput(BaseModel):
-    query: str
-    limit: int = 10
-
-
-class HealthOutput(BaseModel):
-    status: str
-
-
 class BrokenClientContractAnnotation:
     pass
 
@@ -77,12 +67,7 @@ def lifecycle_hook_one(context: object) -> None:
     _ = context
 
 
-def lifecycle_hook_two(context: object) -> None:
-    _ = context
-
-
 LIFECYCLE_HOOK_ONE_REF = f"{lifecycle_hook_one.__module__}:lifecycle_hook_one"
-LIFECYCLE_HOOK_TWO_REF = f"{lifecycle_hook_two.__module__}:lifecycle_hook_two"
 
 
 @dataclass
@@ -143,15 +128,6 @@ class RecordingTerminal:
 
     def error(self, message: str) -> None:
         self.errors.append(message)
-
-
-@dataclass
-class FakeEndpointServeClient:
-    served: list[tuple[str, int]] = field(default_factory=list)
-
-    def start_serve(self, stub_id: str, *, timeout: int = 0) -> StartEndpointServeResponse:
-        self.served.append((stub_id, timeout))
-        return StartEndpointServeResponse(container_id="ctr-endpoint")
 
 
 @dataclass
@@ -280,13 +256,6 @@ def _json_object(value: Any, name: str) -> dict[str, JsonValue]:
         return validate_json_object(value)
     except ValueError as error:
         raise AssertionError(f"expected {name} to be an object") from error
-
-
-def _request_data(request: urllib.request.Request) -> bytes:
-    data = request.data
-    if not isinstance(data, bytes):
-        raise AssertionError("expected request body bytes")
-    return data
 
 
 def test_function_remote_stops_reading_after_terminal_stream_response(

@@ -3,26 +3,18 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Callable
 from pathlib import Path
 
-from lazycloud.clients.artifact.control import ArtifactControlClient
-from lazycloud.control import resolve_control_client_config
-from lazycloud.http_transport import request_raw
-from lazycloud.json_contracts import parse_json_value
 from pydantic import BaseModel, JsonValue
 from shared.http.compute import MachineJoinCommandRequest
-from shared.http.gateway import DeployStubResponse
 
 from lazycloud import (
     App,
     Artifact,
     Client,
-    FunctionCall,
     Image,
     Map,
     Queue,
-    Secret,
     Volume,
     current_task_id,
     experimental,
@@ -38,15 +30,6 @@ demo_image = Image(
     python_packages=["pydantic"],
     env_vars={EXAMPLE_ENV: "demo"},
 )
-
-
-def dockerfile_image(dockerfile: Path, context_dir: Path) -> Image:
-    return (
-        Image.from_dockerfile(dockerfile, context_dir=context_dir)
-        .add_local_path("src")
-        .add_python_packages(["httpx"])
-        .with_envs({EXAMPLE_ENV: "dockerfile"})
-    )
 
 
 def machine_join_command(ttl: str = "30m", gpu: list[str] | None = None) -> str:
@@ -204,10 +187,6 @@ def summarize(values: list[int]) -> SummarizeResult:
     return SummarizeResult(count=len(values), total=sum(values))
 
 
-def _summary_payload(result: SummarizeResult) -> dict[str, int]:
-    return result.model_dump()
-
-
 @demo.endpoint(name="health", route="/health", methods=["GET"], image=demo_image)
 def health(print_str: str | None = None) -> dict[str, JsonValue]:
     print(print_str, flush=True) if print_str else None
@@ -229,186 +208,6 @@ def run_remote_square(value: int = 8) -> int:
 
 def run_remote_stream_count(count: int = 10, delay_seconds: float = 1.0) -> int:
     return int(stream_count.remote(count, delay_seconds))
-
-
-def run_remote_background_summary(values: list[int] | None = None) -> dict[str, JsonValue]:
-    selected_values = values or [1, 4, 9, 16]
-    deployment = summarize.deploy(name=f"demo-summaries-{int(time.time())}")
-    if not isinstance(deployment, DeployStubResponse) or not deployment.deployment_id:
-        msg = "background function deploy failed"
-        raise RuntimeError(msg)
-    try:
-        handle = summarize.spawn(selected_values)
-        result = handle.result(wait=True, timeout_seconds=60, poll_interval_seconds=0.5)
-        return {
-            "deployment_id": deployment.deployment_id,
-            "task_id": handle.task_id,
-            "status": result.status.value,
-            "result": result.task.result,
-        }
-    finally:
-        Client().deployment.delete(deployment.deployment_id)
-
-
-def run_remote_background_autoscale_stress(
-    batch_count: int = 6,
-    batch_size: int = 3,
-) -> dict[str, JsonValue]:
-    if batch_count <= 0:
-        msg = "batch_count must be positive"
-        raise ValueError(msg)
-    if batch_size <= 0:
-        msg = "batch_size must be positive"
-        raise ValueError(msg)
-    deployment_name = f"autoscale-summaries-{int(time.time())}"
-    deployment = summarize.deploy(name=deployment_name)
-    if not isinstance(deployment, DeployStubResponse) or not deployment.deployment_id:
-        msg = "background function deploy failed"
-        raise RuntimeError(msg)
-    handles: list[FunctionCall[SummarizeResult]] = []
-    try:
-        for batch_index in range(batch_count):
-            start = batch_index * batch_size
-            values = list(range(start, start + batch_size))
-            handle = summarize.spawn(values)
-            handles.append(handle)
-        results = [
-            handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
-            for handle in handles
-        ]
-        payload: dict[str, JsonValue] = {
-            "deployment_id": deployment.deployment_id,
-            "stub_id": deployment.stub_id,
-            "deployment_name": deployment_name,
-            "task_count": len(results),
-            "tasks": [
-                {
-                    "task_id": handle.task_id,
-                    "status": result.status.value,
-                    "ok": result.ok,
-                    "result": result.task.result,
-                }
-                for handle, result in zip(handles, results, strict=True)
-            ],
-            "all_complete": all(result.ok for result in results),
-        }
-    except Exception as workflow_error:
-        try:
-            Client().deployment.stop(deployment.deployment_id)
-        except Exception as cleanup_error:
-            raise ExceptionGroup(
-                "background autoscale stress and deployment cleanup failed",
-                [workflow_error, cleanup_error],
-            ) from workflow_error
-        raise
-    return {**payload, "stopped": False}
-
-
-def run_remote_nested_square(value: int = 8) -> int:
-    return int(nested_square.remote(value))
-
-
-def run_remote_io_smoke(rounds: int = 10, payload_kib: int = 256) -> dict[str, int]:
-    return io_smoke.remote(rounds, payload_kib)
-
-
-def _invoke_remote_resource_smoke(value: int) -> dict[str, JsonValue]:
-    Secret("DEMO_RESOURCE_TOKEN").set("demo-token")
-    resource_smoke_volume.create()
-    Queue("demo-resource-smoke-queue").put({"value": value})
-    Map("demo-resource-smoke-map").set("preflight", {"ready": True})
-    Signal("demo-resource-smoke-signal").clear()
-    return resource_smoke.remote(value)
-
-
-def _cleanup_remote_resource_smoke() -> None:
-    cleanups: tuple[Callable[[], bool | None], ...] = (
-        Signal("demo-resource-smoke-signal").clear,
-        Map("demo-resource-smoke-map").delete,
-        Queue("demo-resource-smoke-queue").delete,
-        resource_smoke_volume.delete,
-        Secret("DEMO_RESOURCE_TOKEN").delete,
-    )
-    failures: list[Exception] = []
-    for cleanup in cleanups:
-        try:
-            cleanup()
-        except Exception as exc:
-            failures.append(exc)
-    if failures:
-        raise ExceptionGroup("resource smoke cleanup failed", failures)
-
-
-def run_remote_resource_smoke(value: int = 8) -> dict[str, JsonValue]:
-    try:
-        return _invoke_remote_resource_smoke(value)
-    finally:
-        _cleanup_remote_resource_smoke()
-
-
-def run_remote_resource_smoke_verified(value: int = 8) -> dict[str, JsonValue]:
-    try:
-        result = _invoke_remote_resource_smoke(value)
-        task_id = str(result.get("task_id") or "")
-        artifact_id = str(result.get("artifact_id") or "")
-        artifact_filename = str(result.get("artifact_filename") or "resource-smoke-artifact.json")
-        artifact_client = _artifact_control_client()
-        artifact_stat = artifact_client.stat(artifact_id, task_id, artifact_filename)
-        artifact_url = artifact_client.public_url(
-            artifact_id,
-            task_id,
-            artifact_filename,
-        )
-        response = request_raw(
-            artifact_url.public_url,
-            method="GET",
-            timeout_seconds=resolve_control_client_config().timeout_seconds,
-        )
-        if not 200 <= response.status_code < 300:
-            raise RuntimeError(f"artifact download failed with HTTP {response.status_code}")
-        volume_stat = resource_smoke_volume.stat("result.json")
-        artifact_stat_payload: dict[str, JsonValue] = {"ok": False}
-        if artifact_stat.stat is not None:
-            artifact_stat_payload = {
-                "ok": True,
-                "mode": artifact_stat.stat.mode,
-                "size": artifact_stat.stat.size,
-            }
-        return {
-            **result,
-            "post_worker_volume_stat": {
-                "path": volume_stat.path,
-                "size": volume_stat.size,
-                "is_dir": volume_stat.is_dir,
-            },
-            "post_worker_artifact_stat": artifact_stat_payload,
-            "post_worker_artifact_url_ok": bool(artifact_url.public_url),
-            "post_worker_artifact_payload": _json_or_text(response.content.decode("utf-8")),
-        }
-    finally:
-        _cleanup_remote_resource_smoke()
-
-
-def run_remote_signal_handler_smoke() -> dict[str, JsonValue]:
-    Signal("demo-signal-handler-smoke").clear()
-    return signal_handler_smoke.remote()
-
-
-def _artifact_control_client() -> ArtifactControlClient:
-    config = resolve_control_client_config()
-    return ArtifactControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
-def _json_or_text(value: str) -> JsonValue:
-    try:
-        return parse_json_value(value)
-    except ValueError:
-        return value
 
 
 def run_remote_function_smoke(value: int = 8) -> dict[str, JsonValue]:

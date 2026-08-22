@@ -10,7 +10,6 @@ from worker.events import (
     WorkerStreamEvent,
     WorkerStreamEventKind,
 )
-from worker.source_cache_cleanup import WorkerSourceCacheReconcileResult
 
 
 def test_worker_stream_event_handler_stops_containers_and_cancels_builds() -> None:
@@ -97,15 +96,6 @@ class _FailingStopper:
     ) -> None:
         _ = (container_id, force, reason)
         raise RuntimeError("stop failed")
-
-
-class _SourceCacheReconciler:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def reconcile_source_cache(self) -> WorkerSourceCacheReconcileResult:
-        self.calls += 1
-        return WorkerSourceCacheReconcileResult()
 
 
 class _Acknowledger:

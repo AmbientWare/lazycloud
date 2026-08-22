@@ -9,14 +9,12 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.billing_rates import ComputeRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
-from observability.stream_state import RedisEventStreamRepository
 from shared.billing_quotes import ContainerShape
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
@@ -28,11 +26,6 @@ from shared.http.observability import (
     ContainerMetricsTimeseriesResponse,
 )
 from shared.identity import TokenKind, WorkspaceRole
-from shared.realtime.contracts import (
-    ContainerMetricsData,
-    ContainerMetricsPayload,
-    EventRecordType,
-)
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -69,54 +62,6 @@ def _seed_container(services: ApiServices) -> ContainerRecord:
     )
     with services.context.database.session() as session:
         return ContainerRepository(session).upsert(container)
-
-
-def _publish_sample(
-    services: ApiServices,
-    container: ContainerRecord,
-    *,
-    cpu_used: int,
-    rss: int,
-) -> None:
-    payload = ContainerMetricsPayload(
-        worker_id="worker-1",
-        container_id=container.id,
-        workspace_id=container.workspace_id or "",
-        stub_id=container.stub_id or "",
-        cpu=1000,
-        metrics=ContainerMetricsData(
-            sample_interval_ms=3000,
-            cpu_used=cpu_used,
-            cpu_total=1000,
-            cpu_pct=cpu_used / 10,
-            memory_rss_bytes=rss,
-            memory_total_bytes=512 * 1024 * 1024,
-            disk_read_bytes=4096,
-            disk_write_bytes=8192,
-            network_recv_bytes=150_000,
-            network_sent_bytes=25_000,
-        ),
-    )
-    RedisEventStreamRepository(services.redis()).append_event(
-        EventRecordType.ContainerMetrics,
-        payload.model_dump(mode="python"),
-    )
-
-
-def _services_with_redis(
-    isolated_services: ApiServices,
-    redis: RedisClient,
-) -> ApiServices:
-    return ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=redis,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
 
 
 def test_container_metrics_timeseries_empty_and_missing(

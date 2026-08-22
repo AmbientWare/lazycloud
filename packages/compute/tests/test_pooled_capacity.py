@@ -14,7 +14,6 @@ from compute.policy import (
     AwsDefaultCapacityBaseline,
     WorkspaceComputePolicyService,
 )
-from compute.projection import PrivateUnitState
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -261,12 +260,6 @@ class _SchedulerHooks:
     retired: list[tuple[str, str, str]] = field(default_factory=list)
     available_machines: set[str] = field(default_factory=set)
     revoked_join_tokens: list[str] = field(default_factory=list)
-
-    def register_pool(self, state: PrivateUnitState) -> None:
-        del state
-
-    def register_machine(self, machine: Machine) -> None:
-        del machine
 
     def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None:
         del unit, offer

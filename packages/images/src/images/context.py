@@ -23,16 +23,6 @@ class ImageContext(Protocol):
     def default_workspace_id(self, session: DatabaseSession) -> str: ...
 
 
-class ImageSecretStore(Protocol):
-    def set(
-        self,
-        name: str,
-        value: str,
-        *,
-        workspace: str = "default",
-    ) -> ImageSecretValue: ...
-
-
 class ImageSecretValue(Protocol):
     value: str
     updated_at: datetime

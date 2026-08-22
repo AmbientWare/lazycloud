@@ -27,11 +27,9 @@ type JsonObject = dict[str, JsonValue]
 type JsonArray = list[JsonValue]
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
-_JSON_ARRAY_ADAPTER: TypeAdapter[JsonArray] = TypeAdapter(JsonArray)
 
 
 class RuntimeEngine(StrEnum):
-    LocalProcess = "local-process"
     Oci = "oci"
     SandboxedOci = "sandboxed-oci"
 
@@ -47,12 +45,6 @@ class RuntimeOperation(StrEnum):
     Restore = "restore"
 
 
-class RuntimeEventType(StrEnum):
-    Oom = "oom"
-    Exit = "exit"
-    Error = "error"
-
-
 class RuntimeAvailabilityStatus(StrEnum):
     Available = "available"
     Missing = "missing"
@@ -62,16 +54,6 @@ class RuntimeAvailabilityStatus(StrEnum):
 class OomWatcherKind(StrEnum):
     Cgroup = "cgroup"
     ProcessMemory = "process-memory"
-
-
-class RuntimeConfig(ContractModel):
-    engine: RuntimeEngine = RuntimeEngine.LocalProcess
-    rootfs: str | None = None
-    working_directory: str = "/workspace"
-    env: dict[str, str] = Field(default_factory=dict)
-    mounts: dict[str, str] = Field(default_factory=dict)
-    network_enabled: bool = True
-    readonly_rootfs: bool = False
 
 
 class RuntimeCapabilities(ContractModel):
@@ -138,11 +120,6 @@ class RuntimeState(ContractModel):
         return value
 
 
-class RuntimeEvent(ContractModel):
-    event_type: RuntimeEventType
-    error: str | None = None
-
-
 class RuntimeCommandRequest(ContractModel):
     operation: RuntimeOperation
     container_id: str | None = None
@@ -187,24 +164,8 @@ class OciSpecPreparation(ContractModel):
     added_capabilities: list[str] = Field(default_factory=list)
 
 
-class OomCounterSnapshot(ContractModel):
-    oom_kill: int = 0
-    under_oom: int = 0
-
-
-class OomDecision(ContractModel):
-    watcher: OomWatcherKind
-    triggered: bool
-    reason: str
-    usage_percent: float = 0.0
-
-
 type WhichResolver = Callable[[str], str | None]
 type RuntimeBinaryVerifier = Callable[[str], str | None]
-
-
-def base_runtime_config(engine: RuntimeEngine = RuntimeEngine.LocalProcess) -> RuntimeConfig:
-    return RuntimeConfig(engine=engine)
 
 
 def normalize_oci_runtime(value: OciRuntimeName | RuntimeEngine | str) -> OciRuntimeName:
@@ -541,40 +502,6 @@ def parse_runtime_state(payload: str | bytes | JsonObject) -> RuntimeState:
     )
 
 
-def parse_runtime_list(payload: str | bytes | JsonArray) -> list[RuntimeState]:
-    raw = (
-        _JSON_ARRAY_ADAPTER.validate_json(payload)
-        if isinstance(payload, str | bytes)
-        else _JSON_ARRAY_ADAPTER.validate_python(payload)
-    )
-    return [parse_runtime_state(item) for item in raw if isinstance(item, dict)]
-
-
-def parse_oom_counter_snapshot(text: str) -> OomCounterSnapshot:
-    counts = {"oom_kill": 0, "under_oom": 0}
-    for line in text.splitlines():
-        parts = line.strip().split()
-        if len(parts) < 2:
-            continue
-        key = parts[0]
-        if key in counts:
-            try:
-                counts[key] = int(parts[1])
-            except ValueError as exc:
-                msg = f"invalid OOM counter value for {key}: {parts[1]}"
-                raise ValueError(msg) from exc
-    return OomCounterSnapshot(**counts)
-
-
-def cgroup_oom_decision(previous: OomCounterSnapshot, current: OomCounterSnapshot) -> OomDecision:
-    triggered = current.oom_kill > previous.oom_kill or current.under_oom > previous.under_oom
-    return OomDecision(
-        watcher=OomWatcherKind.Cgroup,
-        triggered=triggered,
-        reason="oom counter increased" if triggered else "oom counters unchanged",
-    )
-
-
 LOGGER = logging.getLogger(__name__)
 
 MEMINFO_PATH = "/proc/meminfo"
@@ -834,29 +761,6 @@ def parse_proc_cgroup_path(text: str) -> str:
             return posixpath.join("memory", clean_path)
     msg = "cgroup path not found"
     raise ValueError(msg)
-
-
-def process_memory_oom_decision(
-    *,
-    memory_usage_bytes: int,
-    memory_limit_bytes: int,
-    threshold_percent: float = DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
-    already_triggered: bool = False,
-) -> OomDecision:
-    if memory_limit_bytes <= 0:
-        return OomDecision(
-            watcher=OomWatcherKind.ProcessMemory,
-            triggered=False,
-            reason="memory limit is not set",
-        )
-    usage_percent = memory_usage_bytes * 100.0 / memory_limit_bytes
-    triggered = usage_percent >= threshold_percent and not already_triggered
-    return OomDecision(
-        watcher=OomWatcherKind.ProcessMemory,
-        triggered=triggered,
-        usage_percent=usage_percent,
-        reason="memory usage exceeded threshold" if triggered else "memory usage below threshold",
-    )
 
 
 def _plan_runsc_command(

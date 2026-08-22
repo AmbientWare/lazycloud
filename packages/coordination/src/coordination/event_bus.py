@@ -66,12 +66,6 @@ class EventBusEvent(ContractModel):
     retries: int = Field(default=0, ge=0)
 
 
-class StopBuildEventPlan(ContractModel):
-    container_id: str
-    events: list[EventBusEvent] = Field(default_factory=list)
-    reason: str = ""
-
-
 class EventBusSendResult(ContractModel):
     status: EventBusSendStatus
     event_id: str
@@ -116,33 +110,6 @@ class EventBusHandleResult(ContractModel):
     resend: EventBusResendResult | None = None
     lock_released: bool = False
     reason: str = ""
-
-
-def plan_stop_build_events(
-    container_id: str,
-    *,
-    lock_and_delete: bool = False,
-    retries: int = 0,
-) -> StopBuildEventPlan:
-    normalized = container_id.strip()
-    if not normalized:
-        return StopBuildEventPlan(
-            container_id=container_id,
-            reason="container id is required",
-        )
-    args: dict[str, JsonValue] = {"container_id": normalized}
-    return StopBuildEventPlan(
-        container_id=normalized,
-        events=[
-            EventBusEvent(
-                type=EventBusEventType.StopBuild,
-                args=args,
-                lock_and_delete=lock_and_delete,
-                retries=retries,
-            )
-        ],
-        reason="send stop-build event",
-    )
 
 
 def event_channel_key(event_type: str) -> str:

@@ -702,18 +702,6 @@ def _private_class_name(symbol: str, kind: DeploymentKind) -> str:
     return f"_{_python_class_name(symbol)}{_python_class_name(kind.value)}"
 
 
-def _private_task_name(symbol: str) -> str:
-    return f"_{_python_class_name(symbol)}Task"
-
-
-def _private_task_batch_name(symbol: str) -> str:
-    return f"_{_python_class_name(symbol)}TaskBatch"
-
-
-def _private_task_result_name(symbol: str) -> str:
-    return f"_{_python_class_name(symbol)}TaskResult"
-
-
 def _python_class_name(value: str) -> str:
     words = re.split(r"[^0-9A-Za-z]+|_", value)
     name = "".join(word[:1].upper() + word[1:] for word in words if word)

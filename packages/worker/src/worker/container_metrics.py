@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from subprocess import CompletedProcess
 from typing import Protocol
 
 from pydantic import Field
@@ -42,10 +39,6 @@ class ContainerMetricsSource(Protocol):
 
 class ContainerMetricsSourceFactory(Protocol):
     def metrics_source_for_pid(self, pid: int) -> ContainerMetricsSource: ...
-
-
-class GpuMemorySampler(Protocol):
-    def sample_gpu_memory(self, request: ContainerRequestContext) -> GpuMemoryCounters: ...
 
 
 class ContainerMetricsCounterState(ContractModel):
@@ -92,12 +85,6 @@ class WorkerContainerMetricsService:
     # Reports the bytes a container's own layer occupies, so ephemeral disk is
     # billed on what was actually used rather than on an oversubscribed cap.
     disk_usage: ContainerDiskUsageSource | None = None
-
-    def prime(
-        self,
-        sample: ContainerMetricsRawSample,
-    ) -> ContainerMetricsCounterState:
-        return sample.counter_state()
 
     def sample_and_publish(
         self,
@@ -163,7 +150,6 @@ class WorkerContainerMetricsService:
 class ProcessTreeContainerMetricsSource:
     root_pid: int
     proc_root: Path = Path("/proc")
-    gpu_sampler: GpuMemorySampler | None = None
     _previous_process_jiffies: int | None = None
     _previous_system_jiffies: int | None = None
 
@@ -189,11 +175,6 @@ class ProcessTreeContainerMetricsSource:
             memory_swap_bytes=memory_swap_bytes,
             process_io=process_io,
             network_interfaces=self._network_interfaces(),
-            gpu_memory=(
-                self.gpu_sampler.sample_gpu_memory(request)
-                if self.gpu_sampler is not None
-                else GpuMemoryCounters()
-            ),
         )
 
     def _process_tree_pids(self) -> list[int]:
@@ -339,48 +320,11 @@ class ProcessTreeContainerMetricsSource:
 @dataclass(slots=True)
 class ProcessTreeContainerMetricsSourceFactory:
     proc_root: Path = Path("/proc")
-    gpu_sampler: GpuMemorySampler | None = None
 
     def metrics_source_for_pid(self, pid: int) -> ProcessTreeContainerMetricsSource:
         return ProcessTreeContainerMetricsSource(
             root_pid=pid,
             proc_root=self.proc_root,
-            gpu_sampler=self.gpu_sampler,
-        )
-
-
-@dataclass(slots=True)
-class NvidiaSmiGpuMemorySampler:
-    device_indices: tuple[int, ...] = ()
-    command_runner: Callable[..., CompletedProcess[str]] = subprocess.run
-
-    def sample_gpu_memory(self, request: ContainerRequestContext) -> GpuMemoryCounters:
-        if request.gpu_count <= 0 or not self.device_indices:
-            return GpuMemoryCounters()
-        used = 0
-        total = 0
-        for device_index in self.device_indices[: request.gpu_count]:
-            stats = self._sample_device(device_index)
-            used += stats.used_bytes
-            total += stats.total_bytes
-        return GpuMemoryCounters(used_bytes=used, total_bytes=total)
-
-    def _sample_device(self, device_index: int) -> GpuMemoryCounters:
-        command = [
-            "nvidia-smi",
-            "--query-gpu=memory.total,memory.used",
-            "--format=csv,noheader,nounits",
-            f"--id={device_index}",
-        ]
-        result = self.command_runner(command, capture_output=True, text=True, check=False)
-        if not isinstance(result, CompletedProcess) or result.returncode != 0:
-            return GpuMemoryCounters()
-        fields = [field.strip() for field in result.stdout.split(",", maxsplit=1)]
-        if len(fields) != 2 or not all(field.isdigit() for field in fields):
-            return GpuMemoryCounters()
-        return GpuMemoryCounters(
-            total_bytes=int(fields[0]) * 1024 * 1024,
-            used_bytes=int(fields[1]) * 1024 * 1024,
         )
 
 

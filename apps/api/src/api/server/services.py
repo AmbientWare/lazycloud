@@ -188,7 +188,6 @@ from shared.http.functions import (
 )
 from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
 from shared.payments import PaymentProvider
-from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.image_archive import (
     IMAGE_ARCHIVE_EXTENSION,
     ImageArchiveSettings,
@@ -957,11 +956,6 @@ class ApiServices(ApiServiceCore):
         worker_events = WorkerEventService(context)
         checkpoints = CheckpointService(
             context,
-            retention=DurableCheckpointRetentionService(
-                context=context,
-                object_storage=object_storage_service,
-                checkpoint_bucket=object_storage_service.default_bucket,
-            ),
             retention_seconds=retention_config.checkpoint_seconds,
         )
         autoscaler_states = AutoscalerStateService(context)

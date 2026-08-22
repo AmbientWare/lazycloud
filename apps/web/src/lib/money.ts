@@ -5,7 +5,7 @@
  * an exact price rather than a rounded one. Rendering is where rounding is
  * allowed to happen, and only there.
  */
-export const NANOS_PER_DOLLAR = 1_000_000_000;
+const NANOS_PER_DOLLAR = 1_000_000_000;
 
 /**
  * A charge, in the reader's own locale.

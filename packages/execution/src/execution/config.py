@@ -22,6 +22,10 @@ from shared.deployment_records import (
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
 from shared.mounts import MountAuthMode, validate_mount_auth
+from shared.workload_config import (
+    cpu_limit_at_or_above_request,
+    memory_limit_at_or_above_request,
+)
 
 type ManagedPythonExecutable = Literal[
     "python3.10",
@@ -193,35 +197,14 @@ class ContainerResourceConfig(BaseModel):
     def a_cpu_limit_cannot_sit_below_its_request(
         cls, value: CpuRequest | None
     ) -> CpuRequest | None:
-        # Compared as cores, not through the memory parser: that parser returns
-        # whole mebibytes, so every CPU figure below one core collapsed to zero
-        # and an inverted fractional pair compared equal.
-        request, limit = request_and_limit(value)
-        for part in (request, limit):
-            if part is not None and float(part) < 0:
-                raise ValueError("cpu must be non-negative")
-        if request is not None and limit is not None and float(limit) < float(request):
-            # A ceiling under the reservation is a container guaranteed more than
-            # it may use, which the kernel resolves by killing it.
-            raise ValueError("a cpu limit cannot sit below its request")
-        return value
+        return cpu_limit_at_or_above_request(value)
 
     @field_validator("memory")
     @classmethod
     def a_memory_limit_cannot_sit_below_its_request(
         cls, value: MemoryRequest | None
     ) -> MemoryRequest | None:
-        request, limit = request_and_limit(value)
-        for part in (request, limit):
-            if part is not None and (parse_memory_mib(part) or 0) < 0:
-                raise ValueError("memory must be non-negative")
-        if (
-            request is not None
-            and limit is not None
-            and (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0)
-        ):
-            raise ValueError("a memory limit cannot sit below its request")
-        return value
+        return memory_limit_at_or_above_request(value)
 
     @property
     def requested_cpu_millicores(self) -> int:

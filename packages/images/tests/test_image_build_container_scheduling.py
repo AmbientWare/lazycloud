@@ -19,9 +19,6 @@ from images.scheduling import (
     plan_image_build_container_request,
 )
 from pydantic import JsonValue
-from scheduler.fleet import SchedulerWorkerStatus
-from scheduler.state import SchedulerWorkerRecord, SchedulerWorkerRequest
-from shared.compute_policy import MachinePool
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.credentials import ImageCredentialEnvVar
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
@@ -133,24 +130,3 @@ def _request(
 def _json_object(value: JsonValue, *, name: str) -> dict[str, JsonValue]:
     assert isinstance(value, dict), f"{name} must be a JSON object"
     return value
-
-
-class _FakeWorkerRequestRepository:
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.calls: list[tuple[str, SchedulerWorkerRequest]] = []
-
-    def schedule_container_request(
-        self,
-        worker_id: str,
-        request: SchedulerWorkerRequest,
-    ) -> SchedulerWorkerRecord:
-        self.calls.append((worker_id, request))
-        if self.error is not None:
-            raise self.error
-        return SchedulerWorkerRecord(
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            worker_id=worker_id,
-            pool=MachinePool("default"),
-            status=SchedulerWorkerStatus.Available,
-        )

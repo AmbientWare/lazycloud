@@ -1547,7 +1547,6 @@ dependencies = [
     { name = "botocore" },
     { name = "compute" },
     { name = "lazycloud-shared" },
-    { name = "storage" },
 ]
 
 [package.metadata]
@@ -1556,7 +1555,6 @@ requires-dist = [
     { name = "botocore", specifier = ">=1.35,<2" },
     { name = "compute", editable = "packages/compute" },
     { name = "lazycloud-shared", editable = "packages/shared" },
-    { name = "storage", editable = "packages/storage" },
 ]
 
 [[package]]

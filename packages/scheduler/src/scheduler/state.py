@@ -672,12 +672,6 @@ class SchedulerStateKeys:
     def worker_pool_lock(self, pool: str) -> str:
         return self.redis.key(self.namespace, "worker-pools", pool, "state-lock")
 
-    def worker_pool_sizer_lock(self, pool: str) -> str:
-        return self.redis.key(self.namespace, "worker-pools", pool, "sizer-lock")
-
-    def worker_pool_cleaner_lock(self, pool: str) -> str:
-        return self.redis.key(self.namespace, "worker-pools", pool, "cleaner-lock")
-
     def capacity_owner_mutation_lock(self, capacity_owner_id: str) -> str:
         return self.redis.key(
             self.namespace,

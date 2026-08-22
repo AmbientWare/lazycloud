@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -391,18 +390,6 @@ class LifecycleEvents:
     def publish_container_lifecycle(self, payload: ContainerLifecyclePayload) -> None:
         if self.fail:
             raise RuntimeError("lifecycle sink unavailable")
-        self.payloads.append(payload)
-
-
-@dataclass(slots=True)
-class BlockingLifecycleEvents:
-    payloads: list[ContainerLifecyclePayload] = field(default_factory=list)
-    started: threading.Event = field(default_factory=threading.Event)
-    release: threading.Event = field(default_factory=threading.Event)
-
-    def publish_container_lifecycle(self, payload: ContainerLifecyclePayload) -> None:
-        self.started.set()
-        self.release.wait(timeout=1)
         self.payloads.append(payload)
 
 

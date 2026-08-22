@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from shared.image_building.records import ImageBuildRecord, ImageRecord
+from shared.image_building.records import ImageBuildRecord
 
 CURRENT_IMAGE_CLIP_VERSION = 2
 
@@ -40,11 +40,3 @@ def merge_image_metadata_aliases(existing: list[str], additions: list[str]) -> l
         if normalized:
             merged[normalized] = None
     return sorted(merged)
-
-
-def image_metadata_is_current(
-    metadata: ImageRecord | None,
-    *,
-    clip_version: int = CURRENT_IMAGE_CLIP_VERSION,
-) -> bool:
-    return metadata is not None and metadata.clip_version == clip_version

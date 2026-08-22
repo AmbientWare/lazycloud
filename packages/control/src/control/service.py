@@ -1202,47 +1202,6 @@ class ControlPlaneService:
         )
         return record
 
-    def create_concurrency_limit(
-        self,
-        name: str,
-        *,
-        limit: int,
-        workspace: str = "default",
-        resource_type: str = DEFAULT_RESOURCE_TYPE,
-        resource_id: str | None = None,
-        metadata: Mapping[str, JsonValue] | None = None,
-    ) -> ConcurrencyLimitRecord:
-        workspace_record = self.get_workspace(workspace)
-        now = utc_now()
-        metadata_payload = dict(metadata) if metadata is not None else {}
-        with self.context.database.session() as session:
-            repository = _limit_records(session)
-            record = repository.create(
-                {
-                    "workspace_id": workspace_record.id,
-                    "name": name,
-                    "limit": limit,
-                    "in_flight": 0,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "metadata": metadata_payload,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                workspace_id=workspace_record.id,
-                name=name,
-                status=resource_type,
-            )
-            workspace_record.concurrency_limit_id = record.id
-            workspace_record.updated_at = now
-            _workspace_records(session).upsert(
-                workspace_record,
-                name=workspace_record.name,
-                status=workspace_record.status.value,
-            )
-        self._publish_concurrency_change(record, WorkspaceChangeType.Created)
-        return record
-
     def list_concurrency_limits(
         self,
         *,

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 import hmac
-import json
 import re
 import secrets
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from time import monotonic
 from typing import Protocol
 from uuid import UUID
@@ -28,8 +25,6 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from database.types import DatabaseSession
-from pydantic import ValidationError
-from shared.contracts import ContractModel
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
@@ -55,6 +50,7 @@ from identity.authz import (
     decide_authorization,
     token_has_scope,
 )
+from identity.cursors import decode_created_at_cursor, encode_created_at_cursor
 from identity.secret_hashing import pbkdf2_encode, pbkdf2_matches
 from identity.token_invalidation import (
     AuthTokenInvalidation,
@@ -426,11 +422,6 @@ class AuthorizedPrincipal:
 class AccountTokenResult:
     page: AccountTokenPage
     next: str = ""
-
-
-class _AccountTokenCursorPayload(ContractModel):
-    created_at: datetime
-    id: UUID
 
 
 _TOKEN_ITERATIONS = 200_000
@@ -916,7 +907,9 @@ class AuthService:
     ) -> AccountTokenResult:
         if limit < 1 or limit > 100:
             raise InvalidInputError("account token limit must be between 1 and 100")
-        decoded = _decode_account_token_cursor(cursor)
+        decoded = decode_created_at_cursor(
+            cursor, build=AccountTokenCursor, subject="account token"
+        )
         with self.context.database.session() as session:
             page = TokenRepository(session).list_manageable_for_user(
                 user_id,
@@ -925,7 +918,11 @@ class AuthService:
             )
         return AccountTokenResult(
             page=page,
-            next=_encode_account_token_cursor(page.next) if page.next is not None else "",
+            next=(
+                encode_created_at_cursor(page.next.created_at, page.next.id)
+                if page.next is not None
+                else ""
+            ),
         )
 
     def revoke_account_token(self, user_id: str, token_id: str) -> AuthTokenRecord:
@@ -1281,32 +1278,6 @@ def _validate_configured_admin_token(token: str) -> str:
     if re.fullmatch(r"rt_[A-Za-z0-9_-]{43}", token) is None:
         raise AuthError("configured administrator credential is invalid")
     return token
-
-
-def _encode_account_token_cursor(cursor: AccountTokenCursor) -> str:
-    payload = {
-        "created_at": cursor.created_at.isoformat(),
-        "id": cursor.id,
-    }
-    return base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).decode()
-
-
-def _decode_account_token_cursor(value: str | None) -> AccountTokenCursor | None:
-    if not value:
-        return None
-    try:
-        payload = _AccountTokenCursorPayload.model_validate_json(
-            base64.urlsafe_b64decode(value.encode()),
-            strict=True,
-        )
-    except (binascii.Error, ValidationError) as exc:
-        raise InvalidInputError("invalid account token cursor") from exc
-    created_at = payload.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=UTC)
-    return AccountTokenCursor(created_at=created_at, id=str(payload.id))
 
 
 def try_uuid(value: str) -> str | None:

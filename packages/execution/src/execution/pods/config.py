@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from shared.workload_config import absolute_health_check_path
 
 from execution.config import (
     ContainerResourceConfig,
@@ -39,10 +40,7 @@ class PodRuntimeConfig(ContainerResourceConfig):
         can only report having nothing to route to.
         """
 
-        if value and not value.startswith("/"):
-            msg = "health_check_path must be absolute"
-            raise ValueError(msg)
-        return value
+        return absolute_health_check_path(value)
 
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)

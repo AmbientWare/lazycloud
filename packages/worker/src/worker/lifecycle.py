@@ -5,7 +5,7 @@ import posixpath
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import Field, field_validator
 from shared.container_requests import (
     DEFAULT_ARTIFACTS_PATH,
     DEFAULT_ARTIFACTS_PREFIX,
@@ -22,8 +22,6 @@ from shared.contracts import ContractModel
 
 from worker.execution import (
     CONTAINER_INNER_PORT,
-    OciLinuxCpu,
-    OciLinuxMemory,
     OciMount,
     OciMountType,
     PortBinding,
@@ -33,42 +31,6 @@ WORKER_SHELL_PORT = 2222
 WORKER_SANDBOX_PROCESS_MANAGER_PORT = 7111
 HOST_RESOLV_CONF_PATH = "/etc/resolv.conf"
 WORKER_RESOLV_CONF_PATH = "/etc/lazycloud/worker-resolv.conf"
-DEFAULT_WORKER_PYTHON_EXECUTABLE = "python3.12"
-ENDPOINT_RUNNER_MODULE = "runner.serve"
-FUNCTION_RUNNER_MODULE = "runner.function"
-
-type JsonObject = dict[str, JsonValue]
-
-_JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
-HANDLER_ENV_PREFIX = "HANDLER="
-
-
-class RuntimeStartedWaitAction(StrEnum):
-    Await = "await"
-    HandlePid = "handle-pid"
-    Return = "return"
-
-
-class RuntimeStartedWaitReason(StrEnum):
-    RuntimeStarted = "runtime-started"
-    RuntimeDoneDrainedPid = "runtime-done-drained-pid"
-    RuntimeDoneNoPid = "runtime-done-no-pid"
-    ContextDone = "context-done"
-    Waiting = "waiting"
-
-
-class DeferredCpuApplyAction(StrEnum):
-    Noop = "noop"
-    Apply = "apply"
-    Reject = "reject"
-
-
-class FallbackEntrypointReason(StrEnum):
-    ExplicitConfig = "explicit-config"
-    Runner = "runner"
-    MissingHandler = "missing-handler"
-    UnsupportedKind = "unsupported-kind"
-    InvalidConfig = "invalid-config"
 
 
 class RequestMountPrepareAction(StrEnum):
@@ -125,59 +87,6 @@ class ResolvConfDecision(ContractModel):
     source: str
     using_host: bool
     reason: str
-
-
-class RuntimeStartedWaitPlan(ContractModel):
-    action: RuntimeStartedWaitAction
-    reason: RuntimeStartedWaitReason
-    pid: int | None = None
-
-    @property
-    def should_handle_pid(self) -> bool:
-        return self.action is RuntimeStartedWaitAction.HandlePid and self.pid is not None
-
-
-class AppliedContainerResources(ContractModel):
-    cpu: OciLinuxCpu | None = None
-    memory: OciLinuxMemory | None = None
-    deferred: dict[str, str] = Field(default_factory=dict)
-    """Settings the runtime will not install, for the worker to write itself."""
-
-    @property
-    def has_cpu(self) -> bool:
-        return self.cpu is not None
-
-    @property
-    def has_memory(self) -> bool:
-        return self.memory is not None
-
-
-class DeferredCpuApplyPlan(ContractModel):
-    action: DeferredCpuApplyAction
-    resources: AppliedContainerResources | None = None
-    clear_deferred_cpu: bool = False
-    error_message: str = ""
-
-
-class StubEntrypointConfig(ContractModel):
-    python_executable: str = DEFAULT_WORKER_PYTHON_EXECUTABLE
-    entrypoint: list[str] = Field(default_factory=list)
-    valid: bool = True
-
-
-class FallbackEntrypointRequest(ContractModel):
-    kind: WorkerStartupKind
-    env: list[str] = Field(default_factory=list)
-    stub_config: StubEntrypointConfig | None = None
-    config: JsonObject = Field(default_factory=dict)
-
-
-class FallbackEntrypointPlan(ContractModel):
-    entrypoint: list[str] = Field(default_factory=list)
-    reason: FallbackEntrypointReason
-    python_executable: str = DEFAULT_WORKER_PYTHON_EXECUTABLE
-    runner_module: str = ""
-    ok: bool = False
 
 
 class RequestMountLinkPlan(ContractModel):
@@ -327,151 +236,6 @@ def plan_startup_port_bindings(
         bind_ports=list(bind_ports),
         bindings=bindings,
         exposed_ports=sorted(exposed),
-    )
-
-
-def plan_runtime_started_wait(
-    *,
-    runtime_started_pid: int | None = None,
-    runtime_done: bool = False,
-    runtime_done_pid: int | None = None,
-    context_done: bool = False,
-) -> RuntimeStartedWaitPlan:
-    if runtime_started_pid is not None:
-        return RuntimeStartedWaitPlan(
-            action=RuntimeStartedWaitAction.HandlePid,
-            reason=RuntimeStartedWaitReason.RuntimeStarted,
-            pid=runtime_started_pid,
-        )
-    if context_done:
-        return RuntimeStartedWaitPlan(
-            action=RuntimeStartedWaitAction.Return,
-            reason=RuntimeStartedWaitReason.ContextDone,
-        )
-    if runtime_done:
-        if runtime_done_pid is not None:
-            return RuntimeStartedWaitPlan(
-                action=RuntimeStartedWaitAction.HandlePid,
-                reason=RuntimeStartedWaitReason.RuntimeDoneDrainedPid,
-                pid=runtime_done_pid,
-            )
-        return RuntimeStartedWaitPlan(
-            action=RuntimeStartedWaitAction.Return,
-            reason=RuntimeStartedWaitReason.RuntimeDoneNoPid,
-        )
-    return RuntimeStartedWaitPlan(
-        action=RuntimeStartedWaitAction.Await,
-        reason=RuntimeStartedWaitReason.Waiting,
-    )
-
-
-def plan_deferred_sandbox_cpu_apply(
-    deferred_cpu: OciLinuxCpu | None,
-    *,
-    runtime_name: str = "",
-    runtime_can_update_resources: bool,
-    update_error: str = "",
-) -> DeferredCpuApplyPlan:
-    if deferred_cpu is None:
-        return DeferredCpuApplyPlan(action=DeferredCpuApplyAction.Noop)
-    if not runtime_can_update_resources:
-        error = (
-            "runtime is nil"
-            if not runtime_name
-            else f"runtime {runtime_name} does not support resource updates"
-        )
-        return DeferredCpuApplyPlan(
-            action=DeferredCpuApplyAction.Reject,
-            error_message=error,
-        )
-    resources = AppliedContainerResources(cpu=deferred_cpu)
-    if update_error:
-        return DeferredCpuApplyPlan(
-            action=DeferredCpuApplyAction.Apply,
-            resources=resources,
-            clear_deferred_cpu=False,
-            error_message=update_error,
-        )
-    return DeferredCpuApplyPlan(
-        action=DeferredCpuApplyAction.Apply,
-        resources=resources,
-        clear_deferred_cpu=True,
-    )
-
-
-def env_has_prefix(env: list[str], prefix: str) -> bool:
-    return any(item.startswith(prefix) for item in env)
-
-
-def parse_stub_entrypoint_config(raw: str) -> StubEntrypointConfig | None:
-    if not raw.strip():
-        return None
-    try:
-        payload = _JSON_OBJECT.validate_json(raw)
-    except ValidationError:
-        return StubEntrypointConfig(valid=False)
-    raw_entrypoint = payload.get("entry_point") or payload.get("entrypoint") or []
-    entrypoint = (
-        [item for item in raw_entrypoint if isinstance(item, str)]
-        if isinstance(raw_entrypoint, list)
-        else []
-    )
-    python_executable = payload.get("python_version") or payload.get("python_executable")
-    if not isinstance(python_executable, str) or not python_executable:
-        python_executable = DEFAULT_WORKER_PYTHON_EXECUTABLE
-    return StubEntrypointConfig(
-        python_executable=python_executable,
-        entrypoint=entrypoint,
-        valid=True,
-    )
-
-
-def fallback_runner_module(kind: WorkerStartupKind) -> str:
-    if kind in {WorkerStartupKind.Endpoint, WorkerStartupKind.Asgi}:
-        return ENDPOINT_RUNNER_MODULE
-    if kind is WorkerStartupKind.Function:
-        return FUNCTION_RUNNER_MODULE
-    return ""
-
-
-def plan_fallback_entrypoint(request: FallbackEntrypointRequest) -> FallbackEntrypointPlan:
-    config = request.stub_config
-    if config is None and request.config:
-        config = StubEntrypointConfig.model_validate(request.config)
-    if config is not None and not config.valid:
-        return FallbackEntrypointPlan(
-            reason=FallbackEntrypointReason.InvalidConfig,
-            python_executable=DEFAULT_WORKER_PYTHON_EXECUTABLE,
-        )
-    if config is not None and config.entrypoint:
-        return FallbackEntrypointPlan(
-            entrypoint=list(config.entrypoint),
-            reason=FallbackEntrypointReason.ExplicitConfig,
-            python_executable=config.python_executable,
-            ok=True,
-        )
-
-    runner_module = fallback_runner_module(request.kind)
-    python_executable = (
-        config.python_executable if config is not None else DEFAULT_WORKER_PYTHON_EXECUTABLE
-    )
-    if not runner_module:
-        return FallbackEntrypointPlan(
-            reason=FallbackEntrypointReason.UnsupportedKind,
-            python_executable=python_executable,
-        )
-    if not env_has_prefix(request.env, HANDLER_ENV_PREFIX):
-        return FallbackEntrypointPlan(
-            reason=FallbackEntrypointReason.MissingHandler,
-            python_executable=python_executable,
-            runner_module=runner_module,
-        )
-    return FallbackEntrypointPlan(
-        entrypoint=[python_executable, "-m", runner_module],
-        reason=FallbackEntrypointReason.Runner,
-        python_executable=python_executable,
-        runner_module=runner_module,
-        ok=True,
     )
 
 

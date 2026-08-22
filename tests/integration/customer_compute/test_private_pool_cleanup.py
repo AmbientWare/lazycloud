@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 from api.server.services import ApiServices
-from compute.offers import ComputeOffer
 from compute.state import ComputeUnitState, RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from scheduler.capacity_reservations import (
@@ -18,29 +17,9 @@ from scheduler.state import (
     SchedulerWorkerRecord,
 )
 from shared.compute_policy import MachinePool, UnitName
-from tests.provider_fixtures import RecordingDirectMachineProvider, configure_test_provider
 from tests.real_redis import RealRedisActors
 
 _FOREIGN_CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
-
-
-def _test_provider(isolated_services: ApiServices) -> RecordingDirectMachineProvider:
-    return configure_test_provider(
-        isolated_services,
-        "generic",
-        [
-            ComputeOffer(
-                id="cpu-small",
-                provider="generic",
-                instance_type="cpu-small",
-                region="local",
-                cpu_millicores=1000,
-                memory_mb=1024,
-                hourly_cost_micros=1_000_000,
-                available=1,
-            )
-        ],
-    )
 
 
 def _capacity_reservations(redis: RedisClient) -> CapacityReservationService:

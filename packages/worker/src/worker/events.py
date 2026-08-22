@@ -19,13 +19,6 @@ from shared.usage import UsageBillingOwner
 from worker.tools import NetworkIoCounters, ProcessIoCounters, WorkspaceStorageCredentials
 
 WORKER_EVENT_HEARTBEAT_ID = "__heartbeat__"
-WORKER_EVENT_RECONNECT_MIN_SECONDS = 1
-WORKER_EVENT_RECONNECT_MAX_SECONDS = 5
-WORKER_GRPC_MAX_RETRIES = 3
-WORKER_GRPC_RETRY_DELAY_SECONDS = 1
-WORKER_GRPC_KEEPALIVE_TIME_SECONDS = 20
-WORKER_GRPC_KEEPALIVE_TIMEOUT_SECONDS = 10
-CONTAINER_DURATION_EMISSION_INTERVAL_SECONDS = 5
 
 
 class WorkerStreamEventKind(StrEnum):
@@ -117,12 +110,6 @@ class WorkerUsageMetricName(StrEnum):
     DiskWrite = "disk_write_bytes"
 
 
-class WorkerRepositoryClientKind(StrEnum):
-    Worker = "worker"
-    Container = "container"
-    Backend = "backend"
-
-
 class WorkerStreamEvent(ContractModel):
     event_id: str = ""
     kind: WorkerStreamEventKind = WorkerStreamEventKind.Unknown
@@ -155,12 +142,6 @@ class WorkerBuildCancelResult(ContractModel):
     invoked: bool = False
     registered_count: int = 0
     reason: str = ""
-
-
-class WorkerReconnectPlan(ContractModel):
-    current_delay_seconds: int
-    next_delay_seconds: int
-    should_sleep: bool = True
 
 
 class ContainerRequestContext(ContractModel):
@@ -286,19 +267,6 @@ class WorkerUsageEvidence(ContractModel):
         return WorkerUsageEvidence(**totals)
 
 
-class WorkerGrpcConnectionPlan(ContractModel):
-    client: WorkerRepositoryClientKind
-    host: str
-    tls: bool
-    token_provided: bool
-    unary_interceptors: tuple[str, ...]
-    stream_interceptors: tuple[str, ...]
-    max_retries: int = WORKER_GRPC_MAX_RETRIES
-    retry_delay_seconds: int = WORKER_GRPC_RETRY_DELAY_SECONDS
-    keepalive_time_seconds: int = WORKER_GRPC_KEEPALIVE_TIME_SECONDS
-    keepalive_timeout_seconds: int = WORKER_GRPC_KEEPALIVE_TIMEOUT_SECONDS
-
-
 @dataclass(slots=True)
 class WorkerBuildCancelRegistry:
     _callbacks: dict[str, Callable[[], None]] = field(default_factory=dict)
@@ -350,27 +318,6 @@ class WorkerBuildCancelRegistry:
             registered_count=len(self._callbacks),
             reason="build cancel invoked",
         )
-
-
-def next_worker_event_reconnect_delay(
-    delay_seconds: int,
-    *,
-    max_seconds: int = WORKER_EVENT_RECONNECT_MAX_SECONDS,
-) -> int:
-    return min(max(delay_seconds, WORKER_EVENT_RECONNECT_MIN_SECONDS) * 2, max_seconds)
-
-
-def plan_worker_event_reconnect(
-    delay_seconds: int,
-    *,
-    context_cancelled: bool = False,
-) -> WorkerReconnectPlan:
-    current = max(delay_seconds, WORKER_EVENT_RECONNECT_MIN_SECONDS)
-    return WorkerReconnectPlan(
-        current_delay_seconds=current,
-        next_delay_seconds=next_worker_event_reconnect_delay(current),
-        should_sleep=not context_cancelled,
-    )
 
 
 def decide_worker_stream_event(event: WorkerStreamEvent | None) -> WorkerStreamEventDecision:
@@ -676,27 +623,3 @@ def plan_worker_usage_metrics(
         if value > 0
     )
     return tuple(plan for plan in plans if plan.value > 0)
-
-
-def plan_worker_grpc_connection(
-    client: WorkerRepositoryClientKind,
-    *,
-    host: str,
-    port: int,
-    token: str = "",
-) -> WorkerGrpcConnectionPlan:
-    target = f"{host}:{port}"
-    tls = port == 443 or target.endswith(":443")
-    unary_interceptors = ["retry"]
-    stream_interceptors: list[str] = []
-    if token:
-        unary_interceptors.append("auth")
-        stream_interceptors.append("auth-stream")
-    return WorkerGrpcConnectionPlan(
-        client=client,
-        host=target,
-        tls=tls,
-        token_provided=bool(token),
-        unary_interceptors=tuple(unary_interceptors),
-        stream_interceptors=tuple(stream_interceptors),
-    )

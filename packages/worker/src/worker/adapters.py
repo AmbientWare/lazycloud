@@ -643,7 +643,3 @@ def _runtime_status_is_live(status: str) -> bool:
         RuntimeContainerStatus.Running.value,
         RuntimeContainerStatus.Paused.value,
     }
-
-
-def _enum_value(value: str) -> str:
-    return str(value)

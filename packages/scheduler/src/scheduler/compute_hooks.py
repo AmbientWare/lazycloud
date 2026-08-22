@@ -6,13 +6,9 @@ from typing import Protocol
 
 from compute.agent_control import agent_machine_worker_id
 from compute.offers import ComputeOffer
-from compute.projection import PrivateUnitState
 from compute.state import ComputeUnitState, ComputeUnitStatus
-from shared.compute_fleet import Machine
 from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
-
-OPEN_RESERVATION_STATUSES = {"", "active", "pending"}
 
 
 class ComputeUnitStateRepository(Protocol):
@@ -48,16 +44,8 @@ class SchedulerComputeHooks:
     compute_states: ComputeUnitStateRepository
     workers: SchedulerHookWorkerRepository
 
-    def register_pool(self, state: PrivateUnitState) -> None:
-        self.compute_states.save_unit_state(_compute_pool_state(state))
-
     def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None:
         self.compute_states.save_unit_state(_internal_compute_unit_state(unit, offer))
-
-    def register_machine(self, machine: Machine) -> None:
-        _ = machine
-        # Machines become schedulable only after their agent heartbeat creates
-        # an agent machine state. Provider launch alone is not ready capacity.
 
     def disable_machine(self, machine_id: str, reason: str) -> None:
         for worker in self._workers_for_machine(machine_id):
@@ -96,38 +84,6 @@ class SchedulerComputeHooks:
         if worker is None or worker.status is SchedulerWorkerStatus.Unavailable:
             return []
         return [worker]
-
-
-def _compute_pool_state(state: PrivateUnitState) -> ComputeUnitState:
-    active_machines = sum(
-        max(reservation.node_count, 1)
-        for reservation in state.reservations
-        if _reservation_open(reservation.status)
-    )
-    desired_machines = max(state.reserved_nodes, active_machines)
-    return ComputeUnitState(
-        workspace_id=state.workspace_id,
-        name=state.name,
-        pool=state.pool,
-        capacity_owner_id=state.capacity_owner_id,
-        provider=_pool_provider(state),
-        status=_pool_status(state.status),
-        min_machines=0,
-        max_machines=max(desired_machines, 1),
-        desired_machines=desired_machines,
-        active_machines=active_machines,
-        metadata={
-            "capacity_owner_kind": state.capacity_owner_kind.value,
-            "capacity_owner_source": state.capacity_owner_source.value,
-            "source": str(state.source),
-            "selector": state.selector,
-            "config": (
-                state.config.model_dump(mode="json")
-                if state.config is not None
-                else {"name": state.name}
-            ),
-        },
-    )
 
 
 def _internal_compute_unit_state(
@@ -188,27 +144,3 @@ def _internal_pool_status(phase: ComputeUnitPhase) -> ComputeUnitStatus:
     if phase in {ComputeUnitPhase.Provisioning, ComputeUnitPhase.Degraded}:
         return ComputeUnitStatus.Pending
     return ComputeUnitStatus.Active
-
-
-def _pool_provider(state: PrivateUnitState) -> str:
-    if state.config is not None and state.config.providers:
-        return state.config.providers[0]
-    for reservation in state.reservations:
-        if reservation.provider:
-            return reservation.provider
-    return "agent"
-
-
-def _pool_status(status: str) -> ComputeUnitStatus:
-    normalized = status.strip().lower()
-    if normalized == ComputeUnitStatus.Deleted.value:
-        return ComputeUnitStatus.Deleted
-    if normalized == ComputeUnitStatus.Draining.value:
-        return ComputeUnitStatus.Draining
-    if normalized == ComputeUnitStatus.Pending.value:
-        return ComputeUnitStatus.Pending
-    return ComputeUnitStatus.Active
-
-
-def _reservation_open(status: str) -> bool:
-    return status.strip().lower() in OPEN_RESERVATION_STATUSES

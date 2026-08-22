@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -10,11 +9,6 @@ from provider_clients.settings import (
     AwsCapacitySettings,
 )
 from pydantic import ValidationError
-from shared.aws_connections import AwsAccountConnection
-
-
-def _no_connections(_workspace_id: str) -> Iterable[AwsAccountConnection]:
-    return ()
 
 
 def test_aws_connection_settings_reject_invalid_control_authority() -> None:

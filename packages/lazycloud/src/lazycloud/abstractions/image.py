@@ -36,6 +36,7 @@ from shared.image_building.credentials import (
     ImageCredentialEnvVar,
     ImageCredentialInput,
     credential_key_names,
+    dedupe_names,
     resolve_registry_credentials,
 )
 from typing_extensions import Self
@@ -337,7 +338,7 @@ class Image:
 
     def get_credentials_from_env(self, env: Mapping[str, str] | None = None) -> dict[str, str]:
         resolved = {key: value for key, value in self.credential_values if key and value}
-        unresolved_keys = [key for key in _dedupe(self.credential_keys) if key not in resolved]
+        unresolved_keys = [key for key in dedupe_names(self.credential_keys) if key not in resolved]
         if unresolved_keys:
             resolved.update(resolve_registry_credentials(unresolved_keys, env=env))
         return _registry_credentials_for_transport(resolved)
@@ -506,8 +507,8 @@ class Image:
             context_digest=self.context_digest,
             context_object_id=self.context_object_id,
             include_files_patterns=list(self.include_files_patterns),
-            credential_keys=_dedupe(self.credential_keys),
-            secrets=_dedupe(self.secrets),
+            credential_keys=dedupe_names(self.credential_keys),
+            secrets=dedupe_names(self.secrets),
             gpu=self.gpu_hint,
             image_id=self.explicit_image_id,
             ignore_python=self.ignore_python,
@@ -580,17 +581,6 @@ def _write_reused_image_response(terminal: Terminal | None) -> None:
         return
     terminal.write("Image already exists\n")
     terminal.success("Build complete")
-
-
-def _dedupe(values: tuple[str, ...]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        item = value.strip()
-        if item and item not in seen:
-            result.append(item)
-            seen.add(item)
-    return result
 
 
 def _credential_values(

@@ -49,40 +49,6 @@ class _FailingTailnetRuntime:
         return ""
 
 
-class _RecordingTelemetry:
-    def __init__(self, *, fail_shutdown: bool = False) -> None:
-        self.closed = False
-        self.fail_shutdown = fail_shutdown
-
-    def shutdown(self) -> None:
-        self.closed = True
-        if self.fail_shutdown:
-            raise RuntimeError("telemetry close failed")
-
-
-class _RecordingTcpIngress:
-    def __init__(
-        self,
-        *,
-        fail_start: bool = False,
-        fail_close: bool = False,
-    ) -> None:
-        self.started = False
-        self.closed = False
-        self.fail_start = fail_start
-        self.fail_close = fail_close
-
-    async def start(self) -> None:
-        self.started = True
-        if self.fail_start:
-            raise RuntimeError("TCP ingress start failed")
-
-    async def close(self) -> None:
-        self.closed = True
-        if self.fail_close:
-            raise RuntimeError("TCP ingress close failed")
-
-
 def test_control_plane_runtime_start_is_one_shot_under_concurrency(
     isolated_services: ApiServices,
 ) -> None:

@@ -24,7 +24,6 @@ BUILD_CONTAINER_KEEPALIVE_INTERVAL_SECONDS = 10
 IMAGE_BUILD_CONTAINER_TTL_SECONDS = 60
 DEFAULT_BUILD_CONTAINER_SPINUP_TIMEOUT_SECONDS = 600
 DOCKERFILE_BUILD_CONTAINER_SPINUP_TIMEOUT_SECONDS = 60 * 60
-IMAGE_BUILD_CONTAINER_TTL_KEY_PREFIX = "image:build_container_ttl:"
 
 
 def plan_image_build_session(
@@ -253,10 +252,6 @@ def image_build_log_phase(message: str) -> ImageBuildPhase:
     if normalized == "manifest written":
         return ImageBuildPhase.Manifest
     return ImageBuildPhase.Submitted
-
-
-def image_build_container_ttl_key(container_id: str) -> str:
-    return f"{IMAGE_BUILD_CONTAINER_TTL_KEY_PREFIX}{container_id}"
 
 
 def plan_image_build_cancellation(

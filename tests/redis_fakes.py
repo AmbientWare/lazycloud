@@ -298,9 +298,6 @@ class FakeRedis:
         stop = None if end == -1 else end + 1
         return [member for member, _score in values[start:stop]]
 
-    def zscore(self, name: str, value: RedisWireScalar) -> float | None:
-        return self.zsets.get(name, {}).get(str(value))
-
     def zcard(self, name: str) -> int:
         return len(self.zsets.get(name, {}))
 
@@ -325,30 +322,6 @@ class FakeRedis:
         for member in remove:
             bucket.pop(member, None)
         return len(remove)
-
-    def zrevrangebyscore(
-        self,
-        key: str,
-        max_score: float | str,
-        min_score: float | str,
-        *,
-        withscores: bool = False,
-        start: int | None = None,
-        num: int | None = None,
-    ) -> list[str] | list[tuple[str, float]]:
-        minimum = _score_bound(min_score, negative=True)
-        maximum = _score_bound(max_score, negative=False)
-        rows = [
-            (member, score)
-            for member, score in self.zsets.get(key, {}).items()
-            if minimum <= score <= maximum
-        ]
-        rows.sort(key=lambda item: (item[1], item[0]), reverse=True)
-        if start is not None and num is not None:
-            rows = rows[start : start + num]
-        if withscores:
-            return rows
-        return [member for member, _score in rows]
 
     def publish(self, channel: str, message: RedisWireScalar) -> int:
         self.published.append((channel, str(message)))
