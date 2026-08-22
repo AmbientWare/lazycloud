@@ -18,8 +18,13 @@ secrets:
   # mappings.
   name: lazycloud-secrets
   # Which Secrets Manager entry each variable is read from, rendered from the
-  # platform module's `secret_environment`.
+  # platform module's `secret_environment`. Every workload gets all of these as
+  # environment.
   map: {}
+  # Entries materialised into the same Secret but mounted as files by the one
+  # workload that reads them, from `secret_files`. Kept apart from `map` so a
+  # credential one pod needs is not in the environment of every pod.
+  files: {}
   refreshInterval: 1h
 
 # Named here and in the Pod Identity associations the platform module declares.

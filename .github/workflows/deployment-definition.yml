@@ -69,6 +69,7 @@ jobs:
             --set cloudflared.apex=example.invalid \
             --set secrets.map.LAZYCLOUD_DATABASE_URL=deployment/database-url \
             --set secrets.map.LAZYCLOUD_TOKEN=deployment/administrator-token \
+            --set secrets.files.LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS=deployment/tunnel \
             >rendered.yaml
           test -s rendered.yaml
 
@@ -81,9 +82,12 @@ jobs:
       # and every source resolves. All three have shipped absent. An empty image
       # renders a Deployment that fails at the pod with InvalidImageName. An
       # environment entry with neither value nor valueFrom is accepted by
-      # Kubernetes and read by the process as unset. And a secretKeyRef naming a
-      # key the Secret does not hold has a source, passes both earlier checks,
-      # and stops every pod in the release at CreateContainerConfigError.
+      # Kubernetes and read by the process as unset. And a key the Secret does
+      # not hold has a source, passes both earlier checks, and stops the pod:
+      # at CreateContainerConfigError when an env var names it, and at
+      # ContainerCreating with `references non-existent secret key` when a
+      # volume does. Volumes are checked because only env was, and the tunnel
+      # credential went missing through the half that was not looked at.
       #
       # The map above is why this renders with one at all: an empty
       # `secrets.map` produces an ExternalSecret with no entries and containers
@@ -120,6 +124,13 @@ jobs:
                           problems.append(
                               f"{name}: env {entry['name']} reads secret key "
                               f"{reference['key']}, which no ExternalSecret provides"
+                          )
+              for volume in pod.get("volumes", []):
+                  for item in (volume.get("secret") or {}).get("items", []):
+                      if item["key"] not in provided:
+                          problems.append(
+                              f"{name}: volume {volume['name']} mounts secret key "
+                              f"{item['key']}, which no ExternalSecret provides"
                           )
           if problems:
               print("\n".join(problems), file=sys.stderr)

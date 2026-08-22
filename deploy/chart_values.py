@@ -104,7 +104,10 @@ def render(args: argparse.Namespace) -> None:
             "tag": args.tag,
         },
         "runtime": runtime,
-        "secrets": {"map": _string_map(Path(args.secret_map), "secret map")},
+        "secrets": {
+            "map": _string_map(Path(args.secret_map), "secret map"),
+            "files": _string_map(Path(args.secret_files), "secret files"),
+        },
         "cloudflared": {
             # The zone the tunnel answers for, taken from the origin rather than
             # named twice: an ingress rule written against a different host than
@@ -133,6 +136,11 @@ def _parser() -> argparse.ArgumentParser:
         "produces a control plane that starts and is wrong.",
     )
     parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
+    parser.add_argument(
+        "--secret-files",
+        required=True,
+        help="JSON file of variable to secret name, for entries mounted rather than exported.",
+    )
     parser.add_argument("--tunnel-id", default="", help="Cloudflare tunnel the ingress runs.")
     parser.add_argument("--release-manifest-url", default="", help="Release this deployment runs.")
     parser.add_argument("--output", required=True, help="Where to write the rendered values.")
