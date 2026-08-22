@@ -126,25 +126,28 @@ output "control_principal_arn" {
   value       = aws_iam_role.control_principal.arn
 }
 
-output "fleet_network" {
+output "fleet_connection" {
   description = <<-EOT
-    The network the platform's own pools launch into.
+    Registering the platform's own account as capacity, whole.
 
-    Supplied to the connection as `network` when registering this account in
-    existing-role mode. Exactly two subnets, in two zones, because that is what
-    `AwsAccountNetwork` accepts.
+    One output rather than a network and a role beside it, because the five
+    values are the arguments of a single call and a deploy makes it on every
+    release. Split across outputs they were something a person read out of a
+    runbook and retyped.
+
+    Exactly two subnets, in two zones, because that is what `AwsAccountNetwork`
+    accepts and an Auto Scaling group spanning one zone cannot replace a node
+    when that zone is what failed.
   EOT
   value = {
+    account_id        = data.aws_caller_identity.current.account_id
+    role_arn          = aws_iam_role.fleet_connection.arn
     vpc_id            = aws_vpc.fleet.id
     subnet_ids        = aws_subnet.fleet[*].id
     security_group_id = aws_security_group.fleet_node.id
   }
 }
 
-output "fleet_connection_role_arn" {
-  description = "Role the control plane assumes to manage the platform's own capacity."
-  value       = aws_iam_role.fleet_connection.arn
-}
 
 output "acceptance_role_arns" {
   description = "Acceptance roles, when this account creates them."

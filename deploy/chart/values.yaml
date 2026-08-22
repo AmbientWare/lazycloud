@@ -71,3 +71,7 @@ cloudflared:
 tunnel:
   # The tunnel credentials arrive in the same Secret as everything else.
   credentialsKey: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS
+
+# The platform's own AWS account as capacity, from the module's
+# `fleet_connection` output. Registering it is one call with these five values.
+fleet: {}

@@ -80,6 +80,13 @@ def _string_map(source: Path, label: str) -> dict[str, str]:
         raise ValuesError(f"{label} file must be a JSON object of strings: {error}") from error
 
 
+def _json_value(source: Path, label: str) -> dict[str, object]:
+    try:
+        return json.loads(source.read_bytes())
+    except (OSError, ValueError) as error:
+        raise ValuesError(f"{label} file could not be read: {error}") from error
+
+
 def _checked_runtime(runtime: dict[str, str]) -> dict[str, str]:
     missing = sorted(
         variable for variable in REQUIRED_RUNTIME_VARIABLES if not runtime.get(variable, "").strip()
@@ -109,6 +116,7 @@ def render(args: argparse.Namespace) -> None:
             "tag": args.tag,
         },
         "runtime": runtime,
+        "fleet": _json_value(Path(args.fleet), "fleet connection"),
         "secrets": {
             "map": _string_map(Path(args.secret_map), "secret map"),
             "files": _string_map(Path(args.secret_files), "secret files"),
@@ -141,6 +149,11 @@ def _parser() -> argparse.ArgumentParser:
         "produces a control plane that starts and is wrong.",
     )
     parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
+    parser.add_argument(
+        "--fleet",
+        required=True,
+        help="JSON file of the platform's own account, network and connection role.",
+    )
     parser.add_argument(
         "--secret-files",
         required=True,

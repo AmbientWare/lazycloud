@@ -70,6 +70,11 @@ jobs:
             --set secrets.map.LAZYCLOUD_DATABASE_URL=deployment/database-url \
             --set secrets.map.LAZYCLOUD_TOKEN=deployment/administrator-token \
             --set secrets.files.LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS=deployment/tunnel \
+            --set fleet.account_id=000000000000 \
+            --set fleet.role_arn=arn:aws:iam::000000000000:role/connection \
+            --set fleet.vpc_id=vpc-0 \
+            --set "fleet.subnet_ids={subnet-a,subnet-b}" \
+            --set fleet.security_group_id=sg-0 \
             >rendered.yaml
           test -s rendered.yaml
 
@@ -143,7 +148,10 @@ jobs:
       # Argo holds a sync wave until it is healthy, so anything the workloads
       # depend on has to be in an earlier one. A Job behind them waits on a
       # control plane that is itself waiting on the schema that Job creates, and
-      # the only way out of that is a person terminating the sync.
+      # the only way out of that is a person terminating the sync. A Job that
+      # depends on the control plane instead belongs after it, and says so with
+      # `lazycloud.dev/needs-control-plane`, because the two are the same shape
+      # and only the direction of the dependency separates them.
       #
       # And a container that reads agent binaries out of a directory nothing
       # mounted finds an empty one: the release resolves, the install route
@@ -159,9 +167,15 @@ jobs:
               annotations = document["metadata"].get("annotations") or {}
               return int(annotations.get("argocd.argoproj.io/sync-wave", "0"))
 
+          def needs_control_plane(document):
+              annotations = document["metadata"].get("annotations") or {}
+              return annotations.get("lazycloud.dev/needs-control-plane") == "true"
+
           problems = []
           workloads = [d for d in documents if d["kind"] == "Deployment"]
-          earlier = [d for d in documents if d["kind"] in ("Job", "ExternalSecret", "StorageClass")]
+          candidates = [d for d in documents if d["kind"] in ("Job", "ExternalSecret", "StorageClass")]
+          earlier = [d for d in candidates if not needs_control_plane(d)]
+          later = [d for d in candidates if needs_control_plane(d)]
           for workload in workloads:
               for prerequisite in earlier:
                   if wave(prerequisite) >= wave(workload):
@@ -169,6 +183,13 @@ jobs:
                           f"{prerequisite['kind']}/{prerequisite['metadata']['name']} is in wave "
                           f"{wave(prerequisite)} and Deployment/{workload['metadata']['name']} is in "
                           f"wave {wave(workload)}; the workload must come after what it depends on"
+                      )
+              for dependent in later:
+                  if wave(dependent) <= wave(workload):
+                      problems.append(
+                          f"{dependent['kind']}/{dependent['metadata']['name']} reaches the control "
+                          f"plane, so it belongs after Deployment/{workload['metadata']['name']} "
+                          f"rather than in wave {wave(dependent)}"
                       )
 
           for document in documents:
@@ -193,7 +214,10 @@ jobs:
           if problems:
               print("\n".join(problems), file=sys.stderr)
               raise SystemExit(1)
-          print(f"{len(workloads)} workloads ordered after {len(earlier)} prerequisites")
+          print(
+              f"{len(workloads)} workloads after {len(earlier)} prerequisites "
+              f"and before {len(later)} that reach the control plane"
+          )
           PY
 
       - name: Argo applications parse
