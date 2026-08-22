@@ -1,0 +1,118 @@
+name: Deployment definition
+
+# What the cluster is told to be, checked before it is told.
+#
+# The infrastructure module and the chart decide what production runs, and until
+# now nothing looked at either until a deploy did. A chart that does not render
+# or a module that does not validate then merged cleanly and failed against real
+# AWS, several minutes and one apply later, with the error naming a Kubernetes
+# kind rather than the commit that broke it.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/platform-eks/**"
+      - "deploy/chart/**"
+      - "deploy/argocd/**"
+      - ".github/workflows/deployment-definition.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/platform-eks/**"
+      - "deploy/chart/**"
+      - "deploy/argocd/**"
+
+permissions:
+  contents: read
+
+jobs:
+  definition:
+    name: Terraform and chart render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
+
+      # No backend: this proves the configuration is coherent, not that it
+      # matches a deployment. Reaching the real state would need credentials a
+      # pull request from a fork must not have.
+      - name: Terraform is formatted and valid
+        run: |
+          set -euo pipefail
+          terraform -chdir=deploy/platform-eks fmt -check -recursive
+          terraform -chdir=deploy/platform-eks init -backend=false -input=false
+          terraform -chdir=deploy/platform-eks validate
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      # Rendered, not just linted. `helm lint` accepts a chart whose templates
+      # produce nothing valid; rendering is what catches a missing value, a
+      # helper that fails, or an object with no image.
+      - name: Chart renders
+        run: |
+          set -euo pipefail
+          helm template lazycloud deploy/chart \
+            --set image.registry=registry.invalid \
+            --set image.repositoryPrefix=lazycloud-prod \
+            --set image.tag=0000000000000000000000000000000000000000 \
+            --set runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME=us-east-1 \
+            --set cloudflared.tunnelId=00000000-0000-0000-0000-000000000000 \
+            --set cloudflared.apex=example.invalid \
+            >rendered.yaml
+          test -s rendered.yaml
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # Every object carries an image and every environment variable has a
+      # source. Both have shipped absent: an empty image renders a Deployment
+      # that fails at the pod with InvalidImageName, and an environment entry
+      # with neither value nor valueFrom is accepted by Kubernetes and read by
+      # the process as unset.
+      - name: Nothing rendered is empty
+        run: |
+          python - <<'PY'
+          import sys, yaml
+
+          problems = []
+          documents = [d for d in yaml.safe_load_all(open("rendered.yaml")) if d]
+          for document in documents:
+              name = f"{document['kind']}/{document['metadata']['name']}"
+              pod = (document.get("spec", {}).get("template", {}) or {}).get("spec", {})
+              for container in pod.get("containers", []):
+                  image = container.get("image", "")
+                  if not image or image.endswith(":"):
+                      problems.append(f"{name}/{container['name']}: image {image!r}")
+                  for entry in container.get("env", []):
+                      if "value" not in entry and "valueFrom" not in entry:
+                          problems.append(f"{name}: env {entry.get('name')} has no source")
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              raise SystemExit(1)
+          print(f"{len(documents)} objects, all complete")
+          PY
+
+      - name: Argo applications parse
+        run: |
+          python - <<'PY'
+          import pathlib, yaml
+
+          for path in sorted(pathlib.Path("deploy/argocd/apps").glob("*.yaml")):
+              document = yaml.safe_load(path.read_text())
+              assert document["kind"] == "Application", path
+              # An Application with no wave syncs whenever the controller reaches
+              # it, which is the ordering bug this repository already paid for.
+              wave = document["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]
+              print(f"{path.name}: wave {wave}")
+          PY

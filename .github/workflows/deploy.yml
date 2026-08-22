@@ -1,6 +1,11 @@
-name: Deploy
+name: Deploy EKS
 
-# Publishes the deployment bundle and converges the control plane host onto it.
+# Builds the control-plane images and records them on the deployment branch.
+#
+# Nothing here installs anything. Argo CD watches that branch and reconciles the
+# cluster to it, so a deploy is a commit rather than a command, and what the
+# cluster runs is a fact recorded in git rather than the outcome of whichever
+# workflow ran last.
 #
 # One bake, pushing every control-plane image to ECR in a single invocation. A
 # subset rebuild produces a package-digest mismatch the managed runtime rejects
@@ -8,8 +13,8 @@ name: Deploy
 # which is why `deploy/release.py` refuses one and why this does not build images
 # job by job.
 #
-# Nothing here holds a long-lived AWS key or an SSH key. The job assumes a role
-# through OIDC, and the host is reached with SSM Run Command.
+# Nothing here holds a long-lived AWS key. The job assumes a role through OIDC,
+# and reaches GitHub as the organisation App rather than as a user.
 
 on:
   workflow_dispatch:
@@ -37,20 +42,21 @@ permissions:
   id-token: write
 
 concurrency:
-  # A second deploy overtaking the first would leave the host on whichever bundle
-  # landed last rather than whichever release is newer.
-  group: deploy-${{ inputs.deployment || 'lazycloud-prod' }}
+  # A second deploy overtaking the first would leave the cluster on whichever
+  # release landed last rather than on whichever is newer.
+  group: deploy-eks-${{ inputs.deployment || 'lazycloud-prod' }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Publish bundle and converge the host
+    name: Build images and record them
     runs-on: ubuntu-latest
     environment: production
     env:
       DEPLOYMENT: ${{ inputs.deployment || 'lazycloud-prod' }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
+      DEPLOYMENT_BRANCH: ${{ vars.DEPLOYMENT_BRANCH || 'prod' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -85,25 +91,6 @@ jobs:
             cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cli:${{ github.sha }}
             database-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/database-bootstrap:${{ github.sha }}
 
-      - name: Resolve pushed digests
-        id: digests
-        run: |
-          set -euo pipefail
-          # Read back what the registry holds rather than trusting the build's
-          # own report: the bundle pins what a host will actually pull.
-          printf '{' >digests.json
-          separator=""
-          for image in api scheduler cache-server worker-bootstrap database-bootstrap cli; do
-            digest="$(aws ecr describe-images \
-              --repository-name "$DEPLOYMENT/$image" \
-              --image-ids imageTag="$GITHUB_SHA" \
-              --query 'imageDetails[0].imageDigest' --output text)"
-            printf '%s"%s":"%s"' "$separator" "$image" "$digest" >>digests.json
-            separator=","
-          done
-          printf '}' >>digests.json
-          cat digests.json
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -120,21 +107,21 @@ jobs:
           terraform_version: "1.10.5"
           terraform_wrapper: false
 
-      - name: Publish the bundle
+      - name: Render the values the branch will carry
         run: |
           set -euo pipefail
-          terraform -chdir=deploy/platform-aws init -input=false \
+          terraform -chdir=deploy/platform-eks init -input=false \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=platform-aws/$DEPLOYMENT.tfstate" \
+            -backend-config="key=platform-eks/$DEPLOYMENT.tfstate" \
             -backend-config="region=$AWS_REGION"
-          terraform -chdir=deploy/platform-aws output -json runtime_configuration >runtime.json
-          terraform -chdir=deploy/platform-aws output -json secret_environment >secret-map.json
-          bucket="$(terraform -chdir=deploy/platform-aws output -raw deploy_bucket)"
+          terraform -chdir=deploy/platform-eks output -json runtime_configuration >runtime.json
+          terraform -chdir=deploy/platform-eks output -json secret_environment >secret-map.json
 
           # Which release this deployment runs is a fact about the deployment,
           # not about its infrastructure, so it is not a Terraform output. It
           # lives beside the bundle, in the bucket Terraform does own, and is
           # therefore destroyed with the stack rather than outliving it.
+          bucket="$(terraform -chdir=deploy/platform-eks output -raw deploy_bucket)"
           pointer="s3://${bucket}/current/release-manifest-url"
           if [ -z "${RELEASE_MANIFEST_URL}" ]; then
             RELEASE_MANIFEST_URL="$(aws s3 cp "${pointer}" - 2>/dev/null || true)"
@@ -143,89 +130,39 @@ jobs:
           fi
           if [ -z "${RELEASE_MANIFEST_URL}" ]; then
             echo "::warning::No release named; this control plane will run without managed capacity."
-          else
-            echo "Release: ${RELEASE_MANIFEST_URL}"
           fi
-          # Added only when there is one. Writing the variable empty is not the
-          # same as leaving it out: the host environment would then carry a blank
-          # URL, and a release that cannot be fetched is a different failure from
-          # a deployment that names no release.
-          if [ -n "${RELEASE_MANIFEST_URL}" ]; then
-            jq --arg url "${RELEASE_MANIFEST_URL}" \
-              '. + {LAZYCLOUD_RELEASE_MANIFEST_URL: $url}' runtime.json >runtime.merged.json
-            mv runtime.merged.json runtime.json
-          fi
-          uv run --group workspace python deploy/bundle.py \
-            --bucket "${bucket}" \
+
+          uv run --group workspace python deploy/chart_values.py \
             --registry "${{ steps.ecr.outputs.registry }}" \
             --deployment "$DEPLOYMENT" \
-            --digests digests.json \
+            --tag "$GITHUB_SHA" \
             --runtime runtime.json \
             --secret-map secret-map.json \
-            --stage-dir bundle
+            --release-manifest-url "${RELEASE_MANIFEST_URL}" \
+            --output values-prod.yaml
 
-      - name: Converge the control plane host
+      - name: Record it on the deployment branch
         run: |
           set -euo pipefail
-          instance="$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)"
-          command_id="$(aws ssm send-command \
-            --document-name AWS-RunShellScript \
-            --instance-ids "$instance" \
-            --parameters 'commands=["/usr/local/bin/lazycloud-deploy"]' \
-            --query 'Command.CommandId' --output text)"
-          # Poll and print, rather than waiting on a terminal status: a command
-          # that never starts produces no status to wait for, and the timeout
-          # would report nothing about why.
-          for _ in $(seq 1 60); do
-            status="$(aws ssm get-command-invocation \
-              --command-id "$command_id" --instance-id "$instance" \
-              --query 'Status' --output text 2>/dev/null || echo Pending)"
-            echo "ssm status: $status"
-            case "$status" in
-              Success) exit 0 ;;
-              Failed|Cancelled|TimedOut)
-                aws ssm get-command-invocation --command-id "$command_id" \
-                  --instance-id "$instance" --query 'StandardErrorContent' --output text
-                exit 1 ;;
-            esac
-            sleep 10
-          done
-          echo "deploy command did not finish within ten minutes" >&2
-          exit 1
+          # The App rather than the workflow's own token: the same credential
+          # Argo reads with, installed on the organisation, so a second
+          # repository needs no second secret.
+          token="$(uv run --group workspace python deploy/github_app_token.py \
+            --app-id "${{ vars.GITHUB_APP_ID }}" \
+            --installation-id "${{ vars.GITHUB_APP_INSTALLATION_ID }}" \
+            --private-key-secret "$DEPLOYMENT/github-app-private-key")"
 
-      - name: Register the platform's own capacity
-        run: |
-          set -euo pipefail
-          # Idempotent: an existing connection is reported and left alone. Run on
-          # every release so the fleet is registered by the thing that ships the
-          # release rather than by whoever remembers.
-          instance="$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)"
-          network="$(terraform -chdir=deploy/platform-aws output -json fleet_network)"
-          role="$(terraform -chdir=deploy/platform-aws output -raw fleet_connection_role_arn)"
-          vpc="$(echo "$network" | jq -r .vpc_id)"
-          sg="$(echo "$network" | jq -r .security_group_id)"
-          subnets="$(echo "$network" | jq -r '.subnet_ids[]' | sed 's/^/--subnet-id /' | tr '\n' ' ')"
-          account="$(aws sts get-caller-identity --query Account --output text)"
-          command_id="$(aws ssm send-command \
-            --document-name AWS-RunShellScript \
-            --instance-ids "$instance" \
-            --parameters "commands=[\"cd /opt/lazycloud && docker compose -f compose.yaml -f compose.deploy.yaml --env-file images.env --env-file runtime.env --env-file secrets.env run --rm cli lazycloud-admin fleet ensure --account-id $account --role-arn $role --vpc-id $vpc $subnets --security-group-id $sg\"]" \
-            --query 'Command.CommandId' --output text)"
-          for _ in $(seq 1 30); do
-            status="$(aws ssm get-command-invocation --command-id "$command_id" \
-              --instance-id "$instance" --query 'Status' --output text 2>/dev/null || echo Pending)"
-            echo "fleet registration: $status"
-            case "$status" in
-              Success)
-                aws ssm get-command-invocation --command-id "$command_id" \
-                  --instance-id "$instance" --query 'StandardOutputContent' --output text
-                exit 0 ;;
-              Failed|Cancelled|TimedOut)
-                aws ssm get-command-invocation --command-id "$command_id" \
-                  --instance-id "$instance" --query 'StandardErrorContent' --output text
-                exit 1 ;;
-            esac
-            sleep 10
-          done
-          echo "fleet registration did not finish" >&2
-          exit 1
+          git config user.name "lazycloud-deploy"
+          git config user.email "deploy@lazycloud.dev"
+          git remote set-url origin \
+            "https://x-access-token:${token}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Branched from this commit rather than merged into: the deployment
+          # branch is the source that produced the images plus the file naming
+          # them, so it can never describe a tree the tag was not built from.
+          git fetch origin "${DEPLOYMENT_BRANCH}" || true
+          git checkout -B "${DEPLOYMENT_BRANCH}" "$GITHUB_SHA"
+          mv values-prod.yaml deploy/chart/values-prod.yaml
+          git add deploy/chart/values-prod.yaml
+          git commit -m "Run ${GITHUB_SHA}"
+          git push --force-with-lease origin "${DEPLOYMENT_BRANCH}"
