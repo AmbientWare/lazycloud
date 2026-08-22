@@ -24,7 +24,7 @@ spec:
       serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
       containers:
         - name: scheduler
-          image: {{ include "lazycloud.image" .Values.images.scheduler }}
+          image: {{ include "lazycloud.image" (list . "scheduler") }}
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
           resources:

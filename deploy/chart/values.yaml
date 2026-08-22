@@ -1,13 +1,11 @@
-# Every image is pinned by digest, never by tag. A tag is a name that can be
-# moved, and two replicas that pulled it an hour apart have no way to notice they
-# differ. The deploy renders these from what it pushed.
-images:
-  api: ""
-  scheduler: ""
-  cacheServer: ""
-  workerBootstrap: ""
-  databaseBootstrap: ""
-  cli: ""
+# One tag, naming the commit that produced these images, and it is safe to pin by
+# tag here for a reason worth stating: every repository is created
+# `image_tag_mutability = "IMMUTABLE"`, so a tag cannot be repointed once pushed.
+# The rule against tags is about names that can move; this one cannot.
+image:
+  registry: ""
+  repositoryPrefix: ""
+  tag: ""
 
 # Non-secret deployment values, rendered from the platform module's
 # `runtime_configuration`. The list is not decoration: a control plane missing

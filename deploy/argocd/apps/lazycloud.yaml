@@ -1,0 +1,41 @@
+# Wave 0: after the operator whose kinds it declares.
+#
+# The values file is written by CI rather than authored here. It carries the
+# image tag of the commit that produced it, so what the cluster runs is a fact
+# recorded in the branch rather than an argument between a workflow and a
+# controller.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lazycloud
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AmbientWare/lazycloud
+    targetRevision: prod
+    path: deploy/chart
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lazycloud
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      # The bootstrap Jobs depend on a database that may still be accepting its
+      # first connection, and on secrets the operator above may not have
+      # materialised yet. Retrying is cheaper than a human noticing.
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

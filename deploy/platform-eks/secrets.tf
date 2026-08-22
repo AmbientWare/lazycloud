@@ -24,6 +24,7 @@ locals {
     telemetry-backend-password    = "Telemetry backend basic-auth password."
     object-store-access-key       = "Empty when the platform role vends S3 access through the SDK chain."
     object-store-secret-key       = "Empty when the platform role vends S3 access through the SDK chain."
+    github-app-private-key        = "PEM for the AmbientWare GitHub App, which is how Argo reads every repository in the organisation."
   }
 }
 

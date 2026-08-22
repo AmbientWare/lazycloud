@@ -6,8 +6,11 @@ roles from the same. The chart then decides nothing about a value the
 infrastructure has already decided, which is what makes a variable impossible to
 supply in one place and forget in another.
 
-Images are pinned by digest, never by tag. A tag is a name that can be moved, and
-two replicas that pulled it an hour apart have no way to notice they differ.
+One image tag, naming the commit that produced the images, and it is safe to pin
+by tag for a reason worth stating: every repository is created
+`image_tag_mutability = "IMMUTABLE"`, so a tag cannot be repointed once pushed.
+The rule against tags is about names that can move; this one cannot, and it says
+which commit is running in a way a digest does not.
 """
 
 from __future__ import annotations
@@ -21,16 +24,6 @@ import yaml
 from pydantic import TypeAdapter, ValidationError
 
 _STRING_MAP = TypeAdapter(dict[str, str])
-
-# Chart key per image, matching `deploy/chart/values.yaml`.
-IMAGE_VALUES = {
-    "api": "api",
-    "scheduler": "scheduler",
-    "cache-server": "cacheServer",
-    "worker-bootstrap": "workerBootstrap",
-    "database-bootstrap": "databaseBootstrap",
-    "cli": "cli",
-}
 
 # Runtime values whose absence produces a control plane that starts, reports
 # healthy, and is wrong. Each of these has done exactly that: the deployment
@@ -80,22 +73,6 @@ def _string_map(source: Path, label: str) -> dict[str, str]:
         raise ValuesError(f"{label} file must be a JSON object of strings: {error}") from error
 
 
-def _image_reference(registry: str, deployment: str, image: str, digest: str) -> str:
-    if not digest.startswith("sha256:"):
-        raise ValuesError(f"{image} digest must be sha256-addressed, got {digest!r}")
-    return f"{registry}/{deployment}/{image}@{digest}"
-
-
-def _images(registry: str, deployment: str, digests: dict[str, str]) -> dict[str, str]:
-    missing = sorted(set(IMAGE_VALUES) - set(digests))
-    if missing:
-        raise ValuesError(f"no digest published for: {', '.join(missing)}")
-    return {
-        key: _image_reference(registry, deployment, image, digests[image])
-        for image, key in IMAGE_VALUES.items()
-    }
-
-
 def _checked_runtime(runtime: dict[str, str]) -> dict[str, str]:
     missing = sorted(
         variable for variable in REQUIRED_RUNTIME_VARIABLES if not runtime.get(variable, "").strip()
@@ -119,9 +96,12 @@ def render(args: argparse.Namespace) -> None:
         runtime["LAZYCLOUD_RELEASE_MANIFEST_URL"] = args.release_manifest_url
 
     roles = _string_map(Path(args.roles), "roles")
-    images = _images(args.registry, args.deployment, _string_map(Path(args.digests), "digests"))
     values: dict[str, object] = {
-        "images": images,
+        "image": {
+            "registry": args.registry,
+            "repositoryPrefix": args.deployment,
+            "tag": args.tag,
+        },
         "runtime": runtime,
         "secrets": {"map": _string_map(Path(args.secret_map), "secret map")},
         "roles": {
@@ -137,7 +117,7 @@ def render(args: argparse.Namespace) -> None:
         },
     }
     Path(args.output).write_text(yaml.safe_dump(values, sort_keys=True))
-    print(json.dumps({"output": args.output, "images": sorted(images)}, indent=2))
+    print(json.dumps({"output": args.output, "tag": args.tag}, indent=2))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -145,7 +125,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--registry", required=True, help="ECR registry host.")
     parser.add_argument("--deployment", required=True, help="Deployment prefix repositories carry.")
     parser.add_argument(
-        "--digests", required=True, help="JSON file of image name to sha256 digest."
+        "--tag",
+        required=True,
+        help="Tag every image carries, which is the commit that produced them.",
     )
     parser.add_argument(
         "--runtime",

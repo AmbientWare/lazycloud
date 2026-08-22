@@ -1,6 +1,11 @@
 name: Deploy EKS
 
-# Builds the control-plane images and installs the chart onto the cluster.
+# Builds the control-plane images and records them on the deployment branch.
+#
+# Nothing here installs anything. Argo CD watches that branch and reconciles the
+# cluster to it, so a deploy is a commit rather than a command, and what the
+# cluster runs is a fact recorded in git rather than the outcome of whichever
+# workflow ran last.
 #
 # One bake, pushing every control-plane image to ECR in a single invocation. A
 # subset rebuild produces a package-digest mismatch the managed runtime rejects
@@ -9,7 +14,7 @@ name: Deploy EKS
 # job by job.
 #
 # Nothing here holds a long-lived AWS key. The job assumes a role through OIDC,
-# and reaches the cluster as the principal an EKS access entry names.
+# and reaches GitHub as the organisation App rather than as a user.
 
 on:
   workflow_dispatch:
@@ -44,13 +49,14 @@ concurrency:
 
 jobs:
   deploy:
-    name: Build images and install the chart
+    name: Build images and record them
     runs-on: ubuntu-latest
     environment: production
     env:
       DEPLOYMENT: ${{ inputs.deployment || 'lazycloud-prod' }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
+      DEPLOYMENT_BRANCH: ${{ vars.DEPLOYMENT_BRANCH || 'prod' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -85,24 +91,6 @@ jobs:
             cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cli:${{ github.sha }}
             database-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/database-bootstrap:${{ github.sha }}
 
-      - name: Resolve pushed digests
-        run: |
-          set -euo pipefail
-          # Read back what the registry holds rather than trusting the build's
-          # own report: the chart pins what a node will actually pull.
-          printf '{' >digests.json
-          separator=""
-          for image in api scheduler cache-server worker-bootstrap database-bootstrap cli; do
-            digest="$(aws ecr describe-images \
-              --repository-name "$DEPLOYMENT/$image" \
-              --image-ids imageTag="$GITHUB_SHA" \
-              --query 'imageDetails[0].imageDigest' --output text)"
-            printf '%s"%s":"%s"' "$separator" "$image" "$digest" >>digests.json
-            separator=","
-          done
-          printf '}' >>digests.json
-          cat digests.json
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -119,7 +107,7 @@ jobs:
           terraform_version: "1.10.5"
           terraform_wrapper: false
 
-      - name: Render the chart values
+      - name: Render the values the branch will carry
         run: |
           set -euo pipefail
           terraform -chdir=deploy/platform-eks init -input=false \
@@ -148,27 +136,35 @@ jobs:
           uv run --group workspace python deploy/chart_values.py \
             --registry "${{ steps.ecr.outputs.registry }}" \
             --deployment "$DEPLOYMENT" \
-            --digests digests.json \
+            --tag "$GITHUB_SHA" \
             --runtime runtime.json \
             --secret-map secret-map.json \
             --roles roles.json \
             --release-manifest-url "${RELEASE_MANIFEST_URL}" \
-            --output values.generated.yaml
+            --output values-prod.yaml
 
-      - name: Install the chart
+      - name: Record it on the deployment branch
         run: |
           set -euo pipefail
-          cluster="$(terraform -chdir=deploy/platform-eks output -raw cluster_name)"
-          namespace="$(terraform -chdir=deploy/platform-eks output -raw kubernetes_namespace)"
-          aws eks update-kubeconfig --name "$cluster" --region "$AWS_REGION"
+          # The App rather than the workflow's own token: the same credential
+          # Argo reads with, installed on the organisation, so a second
+          # repository needs no second secret.
+          token="$(uv run --group workspace python deploy/github_app_token.py \
+            --app-id "${{ vars.GITHUB_APP_ID }}" \
+            --installation-id "${{ vars.GITHUB_APP_INSTALLATION_ID }}" \
+            --private-key-secret "$DEPLOYMENT/github-app-private-key")"
 
-          # `--atomic` so a failed install rolls back rather than leaving half a
-          # release running, and `--wait` so the job's success means the pods are
-          # actually up rather than that the manifests were accepted.
-          helm upgrade --install lazycloud deploy/chart \
-            --namespace "$namespace" \
-            --create-namespace \
-            --values values.generated.yaml \
-            --atomic \
-            --wait \
-            --timeout 15m
+          git config user.name "lazycloud-deploy"
+          git config user.email "deploy@lazycloud.dev"
+          git remote set-url origin \
+            "https://x-access-token:${token}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Branched from this commit rather than merged into: the deployment
+          # branch is the source that produced the images plus the file naming
+          # them, so it can never describe a tree the tag was not built from.
+          git fetch origin "${DEPLOYMENT_BRANCH}" || true
+          git checkout -B "${DEPLOYMENT_BRANCH}" "$GITHUB_SHA"
+          mv values-prod.yaml deploy/chart/values-prod.yaml
+          git add deploy/chart/values-prod.yaml
+          git commit -m "Run ${GITHUB_SHA}"
+          git push --force-with-lease origin "${DEPLOYMENT_BRANCH}"

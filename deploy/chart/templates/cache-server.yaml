@@ -41,7 +41,7 @@ spec:
             claimName: cache-server
       containers:
         - name: cache-server
-          image: {{ include "lazycloud.image" .Values.images.cacheServer }}
+          image: {{ include "lazycloud.image" (list . "cache-server") }}
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
           volumeMounts:

@@ -1,10 +1,14 @@
 {{/*
 Bootstrap, in the order the schema and the credential require.
 
-Helm hook weights rather than `depends_on`: the database schema must exist before
+Argo sync waves rather than `depends_on`: the database schema must exist before
 an administrator can be created against it, and the administrator must exist
 before anything authenticates. Running them together produces a bootstrap that
 fails on a table it cannot see, which reads as a database problem.
+
+Waves rather than Helm hooks, because this chart is synced rather than installed.
+Argo does honour hooks, but a hook is deleted and recreated on every sync while a
+waved Job is a resource the sync ordering already understands.
 
 The administrator credential is the one with a trap in it. `auth bootstrap`
 adopts a configured credential when it finds one and mints its own when it does
@@ -19,9 +23,7 @@ kind: Job
 metadata:
   name: database-bootstrap
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   backoffLimit: 3
   template:
@@ -32,7 +34,7 @@ spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       containers:
         - name: database-bootstrap
-          image: {{ include "lazycloud.image" .Values.images.databaseBootstrap }}
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
           command: ["lazycloud-admin", "database", "initialize"]
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
@@ -42,9 +44,7 @@ kind: Job
 metadata:
   name: administrator-bootstrap
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   backoffLimit: 3
   template:
@@ -55,7 +55,7 @@ spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       containers:
         - name: administrator-bootstrap
-          image: {{ include "lazycloud.image" .Values.images.databaseBootstrap }}
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
           command: ["/bin/sh", "-ec"]
           args:
             - |
@@ -78,9 +78,7 @@ kind: Job
 metadata:
   name: cache-token
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "2"
-    "helm.sh/hook-delete-policy": before-hook-creation
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   backoffLimit: 3
   template:
@@ -91,6 +89,6 @@ spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       containers:
         - name: cache-token
-          image: {{ include "lazycloud.image" .Values.images.workerBootstrap }}
+          image: {{ include "lazycloud.image" (list . "worker-bootstrap") }}
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
