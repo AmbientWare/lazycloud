@@ -39,8 +39,16 @@ output "ecr_repositories" {
 }
 
 output "secret_arns" {
-  description = "Secrets the host is permitted to read. Values are written outside Terraform."
-  value       = { for name, secret in aws_secretsmanager_secret.runtime : name => secret.arn }
+  description = "The two documents this deployment's credentials live in."
+  value = {
+    platform = aws_secretsmanager_secret.platform.arn
+    operator = aws_secretsmanager_secret.operator.arn
+  }
+}
+
+output "operator_secret" {
+  description = "Entry an operator writes the externally-obtained credentials into."
+  value       = aws_secretsmanager_secret.operator.name
 }
 
 output "runtime_configuration" {

@@ -11,8 +11,19 @@ runbook and states the two deployment models.
 - This is greenfield and stays greenfield. An apply produces the deployment; it
   does not adopt one. Do not add import blocks or reconciliation against
   hand-built resources.
-- Never declare a secret's value. Declare the container and the access to it. The
-  fleet external ID is the one exception and carries its reason in `fleet.tf`.
+- A deployment's credentials are two JSON documents, split by who can produce
+  the value. `<deployment>/platform` is written here and rewritten on every
+  apply; `<deployment>/operator` is declared here and written by a person.
+  Secrets Manager bills per entry, and one entry cannot hold both: a document is
+  written atomically, so a single one would have this configuration dropping
+  every field an operator added. `ignore_changes` does not rescue it, because
+  the database URL carries a password that rotates.
+- Never put a value only a person can obtain into the platform document. That is
+  the line the split exists to hold, and it is what keeps operator credentials
+  out of the state file.
+- Name every variable in the chart rather than extracting a document wholesale.
+  `dataFrom` copies whatever the document happens to contain, so a variable
+  nobody wrote is first reported by a pod that will not start.
 - Never hand-write the connection role's permissions. They are generated from
   `provider_aws.connection_policy` into `connection-role-policy.json`, and CI
   fails on a stale file. A second copy of a permission set drifts into a launch
