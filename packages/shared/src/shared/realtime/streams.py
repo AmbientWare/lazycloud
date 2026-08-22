@@ -189,21 +189,11 @@ class LogPagePlan(ContractModel):
     next_cursor: str | None = None
 
 
-class TailReadWindow(ContractModel):
-    tail_offset: int
-    count: int
-
-
 class EventSequencedRecord(ContractModel):
     seq_num: int = 0
     timestamp_ms: int | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     body: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class ScopedEventTarget(ContractModel):
-    name: str
-    prefix: str
 
 
 @dataclass(frozen=True)
@@ -473,17 +463,6 @@ class EventStreamPlanner:
             next_cursor=next_cursor,
         )
 
-    def target_for_stream(
-        self,
-        stream_name: str,
-        targets: Iterable[ScopedEventTarget],
-    ) -> ScopedEventTarget | None:
-        for target in targets:
-            prefix = target.prefix.rstrip("/")
-            if stream_name == prefix or stream_name.startswith(f"{prefix}/"):
-                return target
-        return None
-
     def container_stream_name(self, workspace_id: str, stub_id: str, container_id: str) -> str:
         return (
             f"{self.stream_prefix}/workspaces/{event_stream_part(workspace_id)}"
@@ -724,17 +703,6 @@ def event_history_query_reads_from_tail(query: EventHistoryQuery) -> bool:
         and query.end_time is None
         and query.until_ms is None
     )
-
-
-def next_tail_read_window(
-    scanned_from_tail: int,
-    tail_seq_num: int,
-    chunk_size: int,
-) -> TailReadWindow:
-    tail_offset = tail_seq_num
-    if chunk_size and scanned_from_tail + chunk_size < tail_seq_num:
-        tail_offset = scanned_from_tail + chunk_size
-    return TailReadWindow(tail_offset=tail_offset, count=tail_offset - scanned_from_tail)
 
 
 def all_compute_event_types(event_types: Iterable[str]) -> bool:

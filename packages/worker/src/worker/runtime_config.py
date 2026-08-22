@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+import os
 import posixpath
 import shutil
 from collections.abc import Callable
 from copy import deepcopy
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import Field, JsonValue, TypeAdapter, field_validator
 from shared.app_identity import CLI_NAME
@@ -24,11 +27,9 @@ type JsonObject = dict[str, JsonValue]
 type JsonArray = list[JsonValue]
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
-_JSON_ARRAY_ADAPTER: TypeAdapter[JsonArray] = TypeAdapter(JsonArray)
 
 
 class RuntimeEngine(StrEnum):
-    LocalProcess = "local-process"
     Oci = "oci"
     SandboxedOci = "sandboxed-oci"
 
@@ -44,12 +45,6 @@ class RuntimeOperation(StrEnum):
     Restore = "restore"
 
 
-class RuntimeEventType(StrEnum):
-    Oom = "oom"
-    Exit = "exit"
-    Error = "error"
-
-
 class RuntimeAvailabilityStatus(StrEnum):
     Available = "available"
     Missing = "missing"
@@ -59,16 +54,6 @@ class RuntimeAvailabilityStatus(StrEnum):
 class OomWatcherKind(StrEnum):
     Cgroup = "cgroup"
     ProcessMemory = "process-memory"
-
-
-class RuntimeConfig(ContractModel):
-    engine: RuntimeEngine = RuntimeEngine.LocalProcess
-    rootfs: str | None = None
-    working_directory: str = "/workspace"
-    env: dict[str, str] = Field(default_factory=dict)
-    mounts: dict[str, str] = Field(default_factory=dict)
-    network_enabled: bool = True
-    readonly_rootfs: bool = False
 
 
 class RuntimeCapabilities(ContractModel):
@@ -135,11 +120,6 @@ class RuntimeState(ContractModel):
         return value
 
 
-class RuntimeEvent(ContractModel):
-    event_type: RuntimeEventType
-    error: str | None = None
-
-
 class RuntimeCommandRequest(ContractModel):
     operation: RuntimeOperation
     container_id: str | None = None
@@ -184,24 +164,8 @@ class OciSpecPreparation(ContractModel):
     added_capabilities: list[str] = Field(default_factory=list)
 
 
-class OomCounterSnapshot(ContractModel):
-    oom_kill: int = 0
-    under_oom: int = 0
-
-
-class OomDecision(ContractModel):
-    watcher: OomWatcherKind
-    triggered: bool
-    reason: str
-    usage_percent: float = 0.0
-
-
 type WhichResolver = Callable[[str], str | None]
 type RuntimeBinaryVerifier = Callable[[str], str | None]
-
-
-def base_runtime_config(engine: RuntimeEngine = RuntimeEngine.LocalProcess) -> RuntimeConfig:
-    return RuntimeConfig(engine=engine)
 
 
 def normalize_oci_runtime(value: OciRuntimeName | RuntimeEngine | str) -> OciRuntimeName:
@@ -284,6 +248,7 @@ def build_base_oci_config(
     container_cli_source: str | None = None,
     container_cli_path: str = DEFAULT_CONTAINER_CLI_PATH,
     tmpfs_size_mib: int = DEFAULT_CONTAINER_TMPFS_SIZE_MIB,
+    container_id: str = "",
 ) -> JsonObject:
     selected = normalize_oci_runtime(runtime)
     capabilities = _base_capabilities()
@@ -361,6 +326,16 @@ def build_base_oci_config(
         "devices": devices,
         "namespaces": namespaces,
     }
+    cgroup_path = container_cgroup_path(container_id) if container_id else ""
+    if cgroup_path:
+        # runsc creates a cgroup named after the container when this is absent.
+        # Naming it means the worker knows where to write the settings runsc
+        # drops, instead of depending on how the runtime happens to derive one.
+        #
+        # Only when there is a real path to name. An empty string here is not
+        # "no preference" -- it points the runtime at the cgroup root, where a
+        # container is bounded by nothing.
+        linux["cgroupsPath"] = cgroup_path
     annotations: JsonObject = {}
     config: JsonObject = {
         "ociVersion": "1.1.0",
@@ -379,6 +354,109 @@ def plan_runtime_command(
     request: RuntimeCommandRequest,
 ) -> RuntimeCommandPlan:
     return _plan_runsc_command(config, request)
+
+
+CGROUP_ROOT = "/sys/fs/cgroup"
+# The leaf the worker's own processes are moved into so its cgroup can become a
+# parent. cgroup v2 refuses to enable a controller on a cgroup holding
+# processes, so a worker sitting directly in its own cgroup can never give its
+# containers limits there.
+WORKER_SUPERVISOR_CGROUP = "supervisor"
+
+
+def container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
+    """Where this container's cgroup goes: inside the worker's own.
+
+    Nested rather than beside it, and that is the whole point. A cgroup at the
+    root is outside the worker's `--memory` bound, so its containers escape the
+    slot the agent gave them; and their growth never reaches the
+    `memory.pressure` the eviction watcher reads, so the trigger never fires.
+    Both things this subsystem rests on are properties of being underneath.
+
+    Naming it at all is what lets the worker find the cgroup afterwards to write
+    the settings runsc will not apply itself. Empty when the worker's own cgroup
+    cannot be found, which leaves the runtime to choose: worse, but not wrong in
+    a way that silently escapes a bound.
+
+    Empty too when the parent has not delegated the memory controller, which is
+    the case this cannot afford to guess at. A child of an undelegated parent is
+    created with no `memory.max` and no `memory.low` at all, so naming it would
+    hand the runtime a path that looks like enforcement and holds none, and the
+    deferred writes would then miss files that were never there. Delegation is
+    read here rather than remembered from `prepare_worker_cgroup`, because what
+    matters is whether it holds now.
+    """
+    worker = worker_cgroup_path(root=root)
+    if not worker or not container_id:
+        return ""
+    if not _memory_is_delegated(worker):
+        LOGGER.error(
+            "cgroup %s has not delegated the memory controller, so containers under it "
+            "would carry no memory limits; leaving the runtime to place them",
+            worker,
+        )
+        return ""
+    relative = posixpath.relpath(worker, root)
+    return posixpath.join("/", relative, container_id)
+
+
+def absolute_container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
+    """The same cgroup as a path on disk, for reading it back.
+
+    `container_cgroup_path` answers relative to the cgroup root because that is
+    what the OCI spec's `cgroupsPath` means. Anything that opens the directory
+    needs the mount point in front of it, and doing that join in one place keeps
+    the two from disagreeing about which form they hold.
+    """
+    relative = container_cgroup_path(container_id, root=root)
+    if not relative:
+        return ""
+    return str(Path(root, relative.lstrip("/")))
+
+
+def _memory_is_delegated(cgroup_path: str) -> bool:
+    """Whether children of this cgroup are given the memory controller.
+
+    `cgroup.subtree_control` is the kernel's own answer, and the only one worth
+    asking: a parent that holds `memory.pressure` still creates children without
+    a single memory file until `+memory` is written here.
+    """
+    try:
+        controllers = Path(cgroup_path, "cgroup.subtree_control").read_text()
+    except OSError:
+        return False
+    return "memory" in controllers.split()
+
+
+def apply_unsupported_cgroup_parameters(
+    container_id: str,
+    parameters: dict[str, str],
+    *,
+    root: str = CGROUP_ROOT,
+) -> dict[str, str]:
+    """Write the cgroup v2 settings the runtime silently drops, after it starts.
+
+    runsc ignores `linux.resources.unified` outright: a spec asking for
+    `memory.high` and `memory.oom.group` produces a cgroup holding `max` and `0`.
+    That is measured, not assumed. Everything under `resources.memory` it does
+    apply, so only these two need writing, and only once the cgroup exists --
+    which is after the container has started.
+
+    Returns what was written, so a caller can report the ones that failed rather
+    than leaving a container running under settings nobody installed.
+    """
+    written: dict[str, str] = {}
+    relative = container_cgroup_path(container_id, root=root)
+    if not relative:
+        return written
+    directory = Path(root, relative.lstrip("/"))
+    for name, value in parameters.items():
+        try:
+            (directory / name).write_text(value, encoding="utf-8")
+        except OSError:
+            continue
+        written[name] = value
+    return written
 
 
 def prepare_oci_spec_for_runtime(
@@ -467,38 +545,290 @@ def parse_runtime_state(payload: str | bytes | JsonObject) -> RuntimeState:
     )
 
 
-def parse_runtime_list(payload: str | bytes | JsonArray) -> list[RuntimeState]:
-    raw = (
-        _JSON_ARRAY_ADAPTER.validate_json(payload)
-        if isinstance(payload, str | bytes)
-        else _JSON_ARRAY_ADAPTER.validate_python(payload)
-    )
-    return [parse_runtime_state(item) for item in raw if isinstance(item, dict)]
+LOGGER = logging.getLogger(__name__)
+
+MEMINFO_PATH = "/proc/meminfo"
+MIB = 1024 * 1024
 
 
-def parse_oom_counter_snapshot(text: str) -> OomCounterSnapshot:
-    counts = {"oom_kill": 0, "under_oom": 0}
-    for line in text.splitlines():
-        parts = line.strip().split()
-        if len(parts) < 2:
+def read_worker_memory_mib(*, path: str = MEMINFO_PATH) -> int:
+    """What this worker may use, or zero when it cannot be read.
+
+    Its own cgroup first, and the machine only when that cgroup is unlimited.
+    Several workers share a host -- the agent starts each one with `--memory` for
+    its slot -- and neither `/proc/meminfo` nor `os.cpu_count()` is namespaced by
+    Docker, so reading the machine tells a worker holding a 16 GiB slot on a
+    64 GiB host that it has 64 GiB. Every ceiling computed from that is one the
+    worker cannot honour, and the container reaching it takes the whole worker
+    down with it.
+
+    Zero when neither can be read, which the ceilings treat as "do not clamp":
+    a ceiling that may be too generous beats one invented from a number nobody
+    measured.
+    """
+    limit = _read_cgroup_limit("memory.max")
+    if limit is not None:
+        return limit // MIB
+    try:
+        total = parse_meminfo_total_mib(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        LOGGER.warning("worker cannot read its memory from %s; ceilings will not be clamped", path)
+        return 0
+    # Minus compressed swap, whose backing store is this same memory. A device
+    # holding incompressible pages costs its full size in real RAM, so counting
+    # it as available is how a ceiling ends up above what the machine can honour.
+    return max(total - _zram_reserved_mib(), 0)
+
+
+def _zram_reserved_mib(*, root: str = "/sys/block") -> int:
+    """What active zram devices could take, at their configured size."""
+    reserved = 0
+    for device in Path(root).glob("zram*"):
+        try:
+            reserved += int((device / "disksize").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
             continue
-        key = parts[0]
-        if key in counts:
+    return reserved // MIB
+
+
+def read_worker_cpu_millicores() -> int:
+    """What this worker may use, from its own cgroup quota or the machine."""
+    quota = _read_cgroup_cpu_quota_millicores()
+    if quota is not None:
+        return quota
+    return (os.cpu_count() or 0) * 1000
+
+
+def worker_memory_limit_mib() -> int | None:
+    """The worker's own cgroup memory bound, or None when it has none.
+
+    Distinct from `read_worker_memory_mib`, which falls back to the machine so a
+    ceiling always has something to clamp against. Anything asking "does this
+    worker own its memory" has to ask this one: the fallback answers with the
+    host, and gating on it enables the watcher on exactly the unbounded workers
+    it is meant to skip.
+    """
+    limit = _read_cgroup_limit("memory.max")
+    return None if limit is None else limit // MIB
+
+
+def _read_cgroup_limit(name: str) -> int | None:
+    """A byte limit from this process's own cgroup, or None when unlimited."""
+    path = worker_cgroup_path()
+    if not path:
+        return None
+    try:
+        raw = Path(path, name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if raw == "max":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _read_cgroup_cpu_quota_millicores() -> int | None:
+    """The quota from `cpu.max`, in millicores, or None when unlimited."""
+    path = worker_cgroup_path()
+    if not path:
+        return None
+    try:
+        fields = Path(path, "cpu.max").read_text(encoding="utf-8").split()
+    except OSError:
+        return None
+    if len(fields) != 2 or fields[0] == "max":
+        return None
+    try:
+        return int(fields[0]) * 1000 // int(fields[1])
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def prepare_worker_cgroup(*, root: str = CGROUP_ROOT) -> bool:
+    """Make the worker's cgroup able to hold its containers, and say if it can.
+
+    Two steps, and neither is optional. The worker's own processes move into a
+    leaf, because cgroup v2 refuses to enable a controller on a cgroup that
+    holds any; then the memory and cpu controllers are delegated to the now-empty
+    parent so its children can carry limits at all.
+
+    What that buys is the whole basis of the design: container cgroups nest
+    inside the worker's, so they are bounded by the slot the agent gave it, and
+    its `memory.current` and `memory.pressure` aggregate them -- which is what
+    makes the pressure reading a fact about this worker rather than the machine.
+
+    Returns whether it worked, because everything downstream depends on it and a
+    worker that could not do this must not pretend to enforce anything.
+    """
+    parent = worker_cgroup_path(root=root)
+    if not parent:
+        return False
+    supervisor = Path(parent, WORKER_SUPERVISOR_CGROUP)
+    try:
+        supervisor.mkdir(parents=True, exist_ok=True)
+        for pid in Path(parent, "cgroup.procs").read_text(encoding="utf-8").split():
             try:
-                counts[key] = int(parts[1])
-            except ValueError as exc:
-                msg = f"invalid OOM counter value for {key}: {parts[1]}"
-                raise ValueError(msg) from exc
-    return OomCounterSnapshot(**counts)
+                (supervisor / "cgroup.procs").write_text(pid, encoding="utf-8")
+            except OSError:
+                # A process that will not move leaves the parent non-empty, which
+                # the delegation below then fails on and reports.
+                continue
+        Path(parent, "cgroup.subtree_control").write_text("+memory +cpu", encoding="utf-8")
+    except OSError as error:
+        LOGGER.warning(
+            "cannot prepare %s to hold container cgroups (%s); containers will not be "
+            "bounded by this worker and memory eviction is off",
+            parent,
+            type(error).__name__,
+        )
+        return False
+    return True
 
 
-def cgroup_oom_decision(previous: OomCounterSnapshot, current: OomCounterSnapshot) -> OomDecision:
-    triggered = current.oom_kill > previous.oom_kill or current.under_oom > previous.under_oom
-    return OomDecision(
-        watcher=OomWatcherKind.Cgroup,
-        triggered=triggered,
-        reason="oom counter increased" if triggered else "oom counters unchanged",
-    )
+def worker_cgroup_path(*, root: str = CGROUP_ROOT, proc_self: str = "/proc/self/cgroup") -> str:
+    """This process's own cgroup, or empty at the root.
+
+    Both deployments give a worker a cgroup of its own, so this is almost never
+    empty; what distinguishes a worker that owns its memory from one that does
+    not is whether that cgroup carries a limit, which `read_worker_memory_mib`
+    answers.
+    """
+    try:
+        relative = parse_proc_cgroup_path(Path(proc_self).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not relative:
+        return ""
+    candidate = Path(root, relative)
+    if candidate.name == WORKER_SUPERVISOR_CGROUP:
+        # `prepare_worker_cgroup` has run and this process now lives in the leaf.
+        # The cgroup that owns this worker's slot is its parent -- returning the
+        # leaf would nest containers under a cgroup holding processes, which is
+        # the arrangement the leaf exists to escape.
+        candidate = candidate.parent
+    return str(candidate) if (candidate / "memory.pressure").exists() else ""
+
+
+def read_memory_pressure_percent(cgroup_path: str) -> float:
+    """Full memory stall over the last ten seconds, or zero when unreadable.
+
+    Zero reads as "coping", so an unreadable file leaves the machine unguarded
+    while every other signal says the loop is healthy -- the first symptom would
+    be the kernel killing by size, which is the outcome this watcher exists to
+    prevent. It is therefore reported every time rather than swallowed.
+    """
+    path = Path(cgroup_path, "memory.pressure")
+    try:
+        return parse_memory_pressure_percent(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        LOGGER.warning(
+            "cannot read memory pressure from %s (%s); no container will be evicted",
+            path,
+            type(error).__name__,
+        )
+        return 0.0
+
+
+def read_cgroup_memory_current_bytes(cgroup_path: str) -> int:
+    """What this cgroup is charged, or zero when there is nothing to read.
+
+    Zero when the cgroup has gone, which is the same answer as a container using
+    nothing and is the right one either way: a departed container is not a
+    candidate for being asked to depart.
+    """
+    return _read_cgroup_memory_value(cgroup_path, "memory.current")
+
+
+def read_cgroup_memory_low_bytes(cgroup_path: str) -> int:
+    """What reclaim protects for this cgroup, read rather than remembered.
+
+    The worker holds its own copy of what a container asked for, but the cgroup
+    holds what it was actually given, and only the second is what the kernel
+    weighs. Reading it here means an allowance the planner adds later -- the
+    sandbox overhead that has no measured constant yet -- reaches eviction with
+    nothing else to update.
+
+    `max` means unprotected and reads as zero, which excludes the container from
+    candidacy rather than making its whole footprint look like excess.
+    """
+    return _read_cgroup_memory_value(cgroup_path, "memory.low")
+
+
+def _read_cgroup_memory_value(cgroup_path: str, name: str) -> int:
+    if not cgroup_path:
+        return 0
+    try:
+        raw = Path(cgroup_path, name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return 0
+    if raw == "max":
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
+def read_process_memory_bytes(pid: int, *, proc_root: str = "/proc") -> int:
+    """Resident bytes held by a sandbox, or zero when it cannot be read.
+
+    The sandbox process, not a cgroup. Every container here runs under gVisor,
+    where the sentry holds the guest's memory in its own address space, and the
+    cgroup branch beside this one belongs to a runtime this worker no longer has.
+    It is the same source the OOM watcher already reads for the same reason.
+    """
+    if pid <= 0:
+        return 0
+    try:
+        fields = Path(proc_root, str(pid), "statm").read_text(encoding="utf-8").split()
+    except OSError:
+        return 0
+    if len(fields) < 2:
+        return 0
+    try:
+        return int(fields[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError):
+        return 0
+
+
+def parse_meminfo_total_mib(text: str) -> int:
+    """What the machine holds, from `/proc/meminfo`.
+
+    Read rather than configured because it is a fact about the host the worker is
+    already running on, and a configured figure is one that can be wrong on a
+    machine nobody re-configured after resizing it.
+    """
+    for line in text.splitlines():
+        name, _, rest = line.partition(":")
+        if name.strip() != "MemTotal":
+            continue
+        fields = rest.split()
+        if not fields:
+            break
+        return int(fields[0]) // 1024
+    msg = "MemTotal not found in meminfo"
+    raise ValueError(msg)
+
+
+def parse_memory_pressure_percent(text: str) -> float:
+    """How much of the last ten seconds every task spent stalled on memory.
+
+    The `full` line, not `some`: `some` counts a window where any task waited,
+    which a healthy machine does constantly. `full` counts windows where nothing
+    could run at all, which is the machine having stopped rather than slowed.
+    """
+    for line in text.splitlines():
+        fields = line.split()
+        if not fields or fields[0] != "full":
+            continue
+        for field in fields[1:]:
+            key, _, value = field.partition("=")
+            if key == "avg10":
+                return float(value)
+    msg = "no full avg10 in pressure file"
+    raise ValueError(msg)
 
 
 def parse_proc_cgroup_path(text: str) -> str:
@@ -514,29 +844,6 @@ def parse_proc_cgroup_path(text: str) -> str:
             return posixpath.join("memory", clean_path)
     msg = "cgroup path not found"
     raise ValueError(msg)
-
-
-def process_memory_oom_decision(
-    *,
-    memory_usage_bytes: int,
-    memory_limit_bytes: int,
-    threshold_percent: float = DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
-    already_triggered: bool = False,
-) -> OomDecision:
-    if memory_limit_bytes <= 0:
-        return OomDecision(
-            watcher=OomWatcherKind.ProcessMemory,
-            triggered=False,
-            reason="memory limit is not set",
-        )
-    usage_percent = memory_usage_bytes * 100.0 / memory_limit_bytes
-    triggered = usage_percent >= threshold_percent and not already_triggered
-    return OomDecision(
-        watcher=OomWatcherKind.ProcessMemory,
-        triggered=triggered,
-        usage_percent=usage_percent,
-        reason="memory usage exceeded threshold" if triggered else "memory usage below threshold",
-    )
 
 
 def _plan_runsc_command(

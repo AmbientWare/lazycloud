@@ -185,20 +185,6 @@ class AgentServiceOperationResult(ContractModel):
     binary_removed: bool = False
 
 
-class ServiceUnit(ContractModel):
-    name: str
-    command: list[str]
-    env: dict[str, str] = Field(default_factory=dict)
-    working_directory: str | None = None
-    restart: bool = True
-
-
-class ServiceInstallPlan(ContractModel):
-    platform: ServicePlatform
-    unit: ServiceUnit
-    commands: list[list[str]]
-
-
 def detect_platform() -> ServicePlatform:
     if sys.platform == "darwin":
         return ServicePlatform.Launchd
@@ -227,21 +213,6 @@ def resolve_service_platform(
         return ServicePlatform.Launchd
     msg = f"unsupported service manager: {requested}"
     raise ValueError(msg)
-
-
-def build_service_install_plan(
-    unit: ServiceUnit,
-    *,
-    platform: ServicePlatform | None = None,
-) -> ServiceInstallPlan:
-    selected = platform or detect_platform()
-    if selected == ServicePlatform.Systemd:
-        commands = [["systemctl", "enable", unit.name], ["systemctl", "restart", unit.name]]
-    elif selected == ServicePlatform.Launchd:
-        commands = [["launchctl", "bootstrap", "gui/$UID", f"{unit.name}.plist"]]
-    else:
-        commands = [unit.command]
-    return ServiceInstallPlan(platform=selected, unit=unit, commands=commands)
 
 
 def normalize_service_name(name: str) -> str:

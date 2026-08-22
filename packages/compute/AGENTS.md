@@ -1,12 +1,12 @@
-# Compute Package
+# Compute package
 
 Provider-neutral capacity: offers, units, machines, private-agent state, managed
 capacity lifecycle, billing hooks, and the protocols providers implement.
 
 Provider adapters, scheduler and worker loops, the gateway, apps, and the SDK
 stay outside; notify them through narrow hooks rather than importing them.
-Durable access goes through services and repositories, hot state through
-coordination primitives.
+Durable access goes through services and repositories, hot state through the
+coordination package.
 
 - Capacity authority belongs here. A caller asks for capacity; it does not decide
   what exists.
@@ -23,8 +23,8 @@ coordination primitives.
   authenticates goes through the workspace secret cipher. Know what that cipher
   actually protects against before relying on it, and say so where it is used.
 
-Provider breadth, a fleet operator CLI, and packaged workload types — LLM
-serving, databases, MCP hosting — are deliberately not planned. Machine join
+Provider breadth, a fleet operator CLI, and packaged workload types such as LLM
+serving, databases, and MCP hosting are deliberately not planned. Machine join
 plus the AWS connection covers the compute story this product sells, and each of
 those three answers a problem a self-hosted engine has and a hosted platform
 does not. Absence here is the shape of the product, not a backlog.
@@ -32,13 +32,13 @@ does not. Absence here is the shape of the product, not a backlog.
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
 `workspace -> owner -> connection` through `get_for_workspace_owner`, and anything
-that acts on the whole connection—draining its pools, reconciling its bucket
-grants—gathers every workspace the owner holds first. Snapshotting one workspace
-and applying it as the connection's whole state would revoke what the others rely
-on.
+that acts on the whole connection, such as draining its pools or reconciling its
+bucket grants, gathers every workspace the owner holds first. Snapshotting one
+workspace and applying it as the connection's whole state would revoke what the
+others rely on.
 
 A joined machine belongs to a user the same way. The join credential carries the
-account—resolved at mint time from the owner of the minting workspace—and the
+account, resolved at mint time from the owner of the minting workspace, and the
 enrollment is stamped from that credential, never from anything the joining host
 says about itself. From there the account travels outward: enrollment to hot agent
 state to the scheduler's worker record, which is what placement compares. The
@@ -49,7 +49,7 @@ The machine's workspace is provenance, not tenancy. A unit has to live in a
 workspace and so does the durable machine row, so the account's first workspace
 anchors both; which one it is has no effect on who the machine serves. Transferring
 that workspace to someone else therefore does not transfer the hardware, which is
-the intended answer—the machine stays with the person who connected it.
+the intended answer. The machine stays with the person who connected it.
 
 Tenancy is stamped once, at the authority that decides it, and reconciled
 afterwards rather than re-derived. `AgentWorkerPoolController` compares each live
@@ -63,5 +63,6 @@ serves every workspace that customer owns; accept the consequence deliberately,
 that private capacity is no longer a hard isolation boundary between an owner's
 own environments. It stops at the account. Platform-managed capacity is shared and
 governed by a separate rule that no owner comparison may widen. Every gate on the
-worker boundary—admission, credential vending, network mutation—compares the same
-pair, because a placement rule enforced in one of four places is enforced nowhere.
+worker boundary, whether admission, credential vending, or network mutation,
+compares the same pair, because a placement rule enforced in one of four places is
+enforced nowhere.

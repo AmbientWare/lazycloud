@@ -12,13 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from lazycloud.client_handles import (
-    ResourceManifest,
-)
 from lazycloud.http_transport import request_raw
 from lazycloud.session.uploads import stream_object_bytes, stream_object_file
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
-from shared.deployments import DeploymentKind
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
 
 
@@ -123,19 +119,6 @@ def _http_server() -> Iterator[str]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=1)
-
-
-def _manifest(kind: DeploymentKind, invoke_url: str) -> ResourceManifest:
-    return ResourceManifest(
-        app="transport",
-        name="resource",
-        kind=kind,
-        stub_id="stub-transport",
-        deployment_id="dep-transport",
-        deployment_version=1,
-        invoke_url=invoke_url,
-        methods=("POST",),
-    )
 
 
 def test_raw_transport_sends_a_bounded_readable_body_without_json_encoding() -> None:

@@ -34,7 +34,6 @@ from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.execution import EventTable
 from database.tables.identity import (
     ConcurrencyLimitTable,
-    CredentialTable,
     DeviceAuthorizationTable,
     IdentityAdminRecoveryRequestTable,
     IdentityBootstrapClaimTable,
@@ -60,7 +59,6 @@ from shared.errors import ConflictError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     AuthTokenRecord,
-    ConcurrencyLimitRecord,
     DeviceAuthorizationStatus,
     IdentityProvider,
     PlatformRole,
@@ -86,15 +84,6 @@ _STRINGS_ADAPTER = TypeAdapter(list[str])
 
 def new_signing_key(prefix: str | None = None) -> str:
     return f"{prefix or 'sign_'}{secrets.token_urlsafe(32)}"
-
-
-class WorkspaceStorageRecord(ContractModel):
-    id: str
-    workspace_id: str
-    bucket_name: str = ""
-    endpoint_url: str = ""
-    region: str = ""
-    config: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 _INITIAL_ADMIN_CLAIM_KEY = "initial-admin"
@@ -234,14 +223,6 @@ class IdentityAdminRecoveryRequestRepository:
         row.published_at = published_at
         row.updated_at = published_at
         self.session.flush()
-
-
-class CredentialRecord(ContractModel):
-    name: str
-    token_prefix: str
-    labels_key: str = ""
-    labels: dict[str, str] = Field(default_factory=dict)
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class WorkspaceAuditRecord(ContractModel):
@@ -850,27 +831,6 @@ def _mapped_table_name(model: type[DatabaseBase]) -> str:
 
 
 @dataclass(slots=True)
-class WorkspaceStorageRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[WorkspaceStorageRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(WorkspaceStorageTable, WorkspaceStorageRecord),
-        )
-
-    def upsert(self, record: WorkspaceStorageRecord) -> WorkspaceStorageRecord:
-        return self.records.upsert(record, workspace_id=record.workspace_id)
-
-    def get(self, storage_id: str, *, workspace_id: str) -> WorkspaceStorageRecord | None:
-        return self.records.get(storage_id, workspace_id=workspace_id)
-
-    def list(self, *, workspace_id: str) -> list[WorkspaceStorageRecord]:
-        return self.records.list(workspace_id=workspace_id)
-
-
-@dataclass(slots=True)
 class WorkspaceAuditRepository:
     session: Session
 
@@ -988,55 +948,6 @@ class WorkspaceAuditRepository:
             last = page_rows[-1]
             next_cursor = WorkspaceAuditCursor(created_at=last.created_at, id=str(last.id))
         return WorkspaceAuditPage(records=records, next=next_cursor)
-
-
-@dataclass(slots=True)
-class ConcurrencyLimitRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ConcurrencyLimitRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ConcurrencyLimitTable, ConcurrencyLimitRecord),
-        )
-
-    def upsert(self, record: ConcurrencyLimitRecord) -> ConcurrencyLimitRecord:
-        return self.records.upsert(
-            record,
-            workspace_id=record.workspace_id,
-            name=record.name,
-            status=record.resource_type,
-        )
-
-    def get(self, limit_id: str, *, workspace_id: str) -> ConcurrencyLimitRecord | None:
-        return self.records.get(limit_id, workspace_id=workspace_id)
-
-    def list(self, *, workspace_id: str) -> list[ConcurrencyLimitRecord]:
-        return self.records.list(workspace_id=workspace_id)
-
-
-@dataclass(slots=True)
-class CredentialRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[CredentialRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(CredentialTable, CredentialRecord, key_field="name"),
-        )
-
-    def upsert(self, record: CredentialRecord, *, workspace_id: str) -> CredentialRecord:
-        return self.records.upsert(
-            record,
-            key=record.name,
-            workspace_id=workspace_id,
-            name=record.name,
-        )
-
-    def list(self, *, workspace_id: str) -> list[CredentialRecord]:
-        return self.records.list(workspace_id=workspace_id)
 
 
 @dataclass(frozen=True, slots=True)

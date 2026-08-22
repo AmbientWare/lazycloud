@@ -1,12 +1,12 @@
-# Repository Guidance
+# Repository guidance
 
 Every `AGENTS.md` has a `CLAUDE.md` symlinked to it. Edit the `AGENTS.md`; never
 write through the symlink or replace it with a regular file. A new `AGENTS.md`
 gets its `CLAUDE.md` symlink in the same change.
 
-## Core Rules
+## Core rules
 
-- Fix the architecture, model, boundary, ownership, or signature—not the
+- Fix the architecture, model, boundary, ownership, or signature, not the
   checker. Do not hide problems with `type: ignore`, broad `Any`/`object` or
   casts, checker-only branches, exclusions, shims, fallback imports, fake
   adapters, or compatibility wrappers.
@@ -23,18 +23,18 @@ gets its `CLAUDE.md` symlink in the same change.
 - Protect secrets and user work. Never expose secrets in output, URLs, logs,
   tests, comments, docs, or durable records. Inspect the dirty tree, preserve
   unrelated changes, and stage only intentional files.
-- Read other codebases freely and learn from them—how a problem was solved, what
-  a design costs, what it missed. What ships here is written from that
-  understanding, not transcribed: no copying code, structure, or names verbatim
+- Read other codebases freely and learn from them: how a problem was solved,
+  what a design costs, what it missed. What ships here is written from that
+  understanding, not transcribed. No copying code, structure, or names verbatim
   or near-verbatim, and no result that is another project's work wearing renamed
   variables. Match the capability, security, durability, operability, cost,
   performance, and public contracts production requires rather than another
   project's internals. Under a copyleft licence (AGPL, GPL) this is a legal line
   and not only an authorship one, and derivative-work scope there reaches further
-  than verbatim copying—so name the source and its licence when a reading
+  than verbatim copying, so name the source and its licence when a reading
   informs a design.
 
-## Reporting and Responding to the User
+## Reporting and responding to the user
 
 Answer condensed. This is a must-follow rule, not a preference.
 
@@ -48,10 +48,10 @@ Answer condensed. This is a must-follow rule, not a preference.
 - Expand only when asked, or when a correctness, security, cost, or data-loss
   risk needs the detail to be actionable.
 
-## Ownership And Architecture
+## Ownership and architecture
 
 - `packages/shared` owns backend-free boundary contracts and protocol-neutral
-  primitives. JSON contracts live under `shared.http.*`.
+  types and helpers. JSON contracts live under `shared.http.*`.
 - `packages/lazycloud` owns the backend-free public SDK and `lazycloud` CLI.
 - `packages/runner` owns code executed inside user containers and may depend
   only on shared contracts and user code.
@@ -68,7 +68,7 @@ Answer condensed. This is a must-follow rule, not a preference.
   mounted filesystems own object/file data. Do not add duplicate stores or
   backend switches.
 
-## Style And Tooling
+## Style and tooling
 
 Keep dependencies explicit and owner-directed. Use Python 3.12 types, Pydantic
 v2 at runtime boundaries, precise domain enums/dataclasses/protocols, and
@@ -82,13 +82,19 @@ Comment sparingly, and only about the code as it now stands. A comment earns its
 place by explaining what the code cannot say itself: a non-obvious constraint, an
 ordering that must hold, a rejected alternative that looks correct. Do not narrate
 what the next line does, restate a name, or describe a change relative to what was
-there before — the reader has the current code, not the diff, and a comment about
+there before. The reader has the current code, not the diff, and a comment about
 "used to" or "now" is stale the moment it is written. Rationale that belongs to a
 change belongs in the commit message; rationale that belongs to a decision belongs
 in the owning `AGENTS.md`. Delete comments that no longer describe the code when
 you touch the surrounding lines.
 
-## Public Boundaries
+Writing for people follows the `unslop` skill. Load it before writing or editing
+an `AGENTS.md`, documentation, a commit message, a pull request body, or a reply.
+If it is not installed, install it first from
+https://github.com/cursor/plugins/blob/main/pstack/skills/unslop/SKILL.md
+(for Claude Code, as `~/.claude/skills/unslop/SKILL.md`), then load it.
+
+## Public boundaries
 
 - Resources use `/api/v1/<resource>`; `/gateway/*` is reserved for RPC-style
   control. A bearer token names an account or one workspace; a request names the
@@ -106,7 +112,7 @@ you touch the surrounding lines.
 - CLI commands remain thin, preserve clean machine-readable output, show real
   progress, and never present polling or fabricated output as logs.
 
-## Acceptance And Tests
+## Acceptance and tests
 
 Define the user-visible outcome and cheapest authoritative evidence before
 implementation. Complete the coherent owner or cross-owner slice before
@@ -114,26 +120,26 @@ validating it. Match the check to the change: iteration checks while editing,
 the narrowest changed-file/owner checks once per slice, a real local service,
 public workflow, container image, deployment, or provider only when that
 boundary changed, and the broad repository/release gate only for a release or
-an explicit broad quality claim—never as routine feature acceptance. A green
+an explicit broad quality claim, never as routine feature acceptance. A green
 narrow run is evidence for the owner it covered and nothing more. Reuse healthy
 infrastructure and clean up every process, port, and resource created for
 acceptance.
 
 Run tests directly and let them finish. Keep the output observable rather than
 piping a long run to `tail`, and prefer fail-fast (`pytest -x`) with narrow owner
-scopes so the first real failure surfaces immediately.
+scopes so the first real failure shows up immediately.
 
-### Never Wait On A State, Always Poll
+### Never wait on a state, always poll
 
-Waiting for a state to be reached is not allowed. A wait keyed on the outcome—a
-phase becoming `ready`, a row appearing, a worker registering—is keyed on
-exactly the thing that does not happen when something is wrong, so it consumes
-its whole timeout and then reports nothing about why.
+Waiting for a state to be reached is not allowed. A wait keyed on the outcome
+is keyed on exactly the thing that does not happen when something is wrong: a
+phase becoming `ready`, a row appearing, a worker registering. It consumes its
+whole timeout and then reports nothing about why.
 
 Poll instead, fast, and read several independent signals every cycle: the
 durable record, the logs at both ends, the external system's own view, and
 whether the request arrived at all. Print them whether or not they changed.
-Fast cycles are the point—they are how a wrong turn surfaces in seconds rather
+Fast cycles are the point. They are how a wrong turn shows up in seconds rather
 than at a deadline. No progress after a cycle or two is a finding to
 investigate immediately, not a reason to keep waiting; reach into the running
 thing (`docker compose exec`, SSM, `journalctl`) rather than waiting for it to
@@ -151,7 +157,7 @@ invariant, or cleanup obligation. Existing authoritative coverage or a
 production-representative execution can be sufficient. Preserve focused
 matrices only when rows protect distinct high-risk transitions.
 
-### Test Decision Gate
+### Test decision gate
 
 Do not add a test merely because code changed, a bug was fixed, or a test could
 be written. Before adding or retaining an automated test, all of these must be
@@ -214,24 +220,24 @@ and report unrelated failures separately.
 
 A target the owner explicitly selects or supplies for a run is approved; do not
 refuse it because its account or network name looks personal or shared. Treat
-every external system a live run touches—provider account, cluster, tailnet, DNS
-zone, registry—as shared state you do not own. Read its current configuration
-before mutating it, scope every change to resources the run created and can name
-exactly, preserve every unrelated user and resource, and prove cleanup is
-equally scoped. Never replace a whole policy or configuration document, and
-never delete or rotate a resource that is not proven to belong to the current
-run.
+every external system a live run touches, whether a provider account, cluster,
+tailnet, DNS zone, or registry, as shared state you do not own. Read its current
+configuration before mutating it, scope every change to resources the run created
+and can name exactly, preserve every unrelated user and resource, and prove
+cleanup is equally scoped. Never replace a whole policy or configuration
+document, and never delete or rotate a resource that is not proven to belong to
+the current run.
 
-## Product Phase And Destructive Work
+## Product phase and destructive work
 
 The repository is predeployment until the owner declares the first persistent
 production installation. SQLAlchemy metadata plus one reviewed Alembic baseline
 define the schema. Update that baseline and use fresh PostgreSQL bootstrap; do
 not build historical revisions, upgrade/downgrade paths, previous-binary
-compatibility, or transition smokes. Resetting, recreating, and re-bootstrapping
-local development state—Compose databases, volumes, and stacks—is ordinary
-development work; do it whenever a schema or baseline change calls for it. Never
-reset external, deployed, or production data.
+compatibility, or transition smokes. Local development state is the Compose
+databases, volumes, and stacks. Resetting, recreating, and re-bootstrapping it
+is ordinary development work; do it whenever a schema or baseline change calls
+for it. Never reset external, deployed, or production data.
 
 Resolve destructive targets exactly before acting. List what a delete would
 remove and confirm every item belongs to the current task; a stack, a bucket,
@@ -242,7 +248,7 @@ irreversible, say so plainly before taking it rather than after. Stop for user
 direction when an irreversible action, public contract, security/cost posture,
 provider strategy, or top-level architecture choice is genuinely unresolved.
 
-## Work And Collaboration
+## Work and collaboration
 
 GitHub Issues track work; the `ticket` label marks a tracked ticket. Open one
 only for substantial big-ticket work that genuinely needs tracked design,
@@ -252,9 +258,9 @@ follow-ups proceed directly without a ticket.
 
 Work continues under the ticket that owns it until that ticket is complete. Do
 not open a new ticket for follow-up, remaining scope, a blocker, or a defect
-discovered inside tracked work—fix what belongs to the same change and record
+discovered inside tracked work. Fix what belongs to the same change and record
 the outcome as a comment on the owning ticket. Comments record outcome,
-decisions, blockers, and concise evidence—not command diaries. The issue body
+decisions, blockers, and concise evidence, not command diaries. The issue body
 stays the current description of the ticket; edit it when scope changes rather
 than appending corrections.
 
@@ -273,23 +279,23 @@ body says so, so reference the ticket with a closing keyword when the merge
 completes it.
 
 `Backlog` holds work that is recorded but not needed yet. Deferring a ticket
-there is a scope decision and is stated as one—it is not the same as moving a
+there is a scope decision and is stated as one. It is not the same as moving a
 ticket backwards to make the board agree with a mistake, which is never the fix.
 Do not start `Backlog` work without the owner asking for it.
 
-## Working Rules
+## Working rules
 
 Default to one task at a time. Parallel work is the exception you justify, not
 the mode you assume: it requires genuinely disjoint owners and files, and the
 manager still reviews returned work and runs integrated acceptance. Delegating
 does not reduce the number of things you are responsible for finishing. Agents
-stay within assigned files, preserve concurrent changes, surface real blockers,
+stay within assigned files, preserve concurrent changes, raise real blockers,
 and report changed paths, evidence, gaps, and conflicts.
 
 Finish the current task before starting the next. A defect the task reveals is
-usually cheapest to fix in the same change—take it there rather than deferring
-it to a later pass. Leaving a tree that does not build or a change half-migrated
-across owners costs more than the work saved.
+usually cheapest to fix in the same change, so take it there rather than
+deferring it to a later pass. Leaving a tree that does not build or a change
+half-migrated across owners costs more than the work saved.
 
 A returned result from a subagent, a tool, or a prior run is a claim with
 evidence attached, not an established fact. Verify anything that would change
@@ -297,18 +303,18 @@ what you build, delete, or tell the owner. Report what you actually observed and
 name what you did not.
 
 A value that leaves this process has consumers who decide what it means, and
-they are the ones who define it. Before changing one—an enum member, a status,
-a sentinel, a default—read what reads it on the far side. A change that looks
-like relabelling here is a behaviour change there, and the reasoning that makes
-it look safe is written in the module you are editing, not in the one that acts
-on it. The trap is the value that reads as a null: a placeholder locally is a
-fact somewhere else, and the code that treats it as one is exactly the code you
-have not opened. Grep for the consumers first; it is cheaper than any of the
-ways of finding out afterwards.
+they are the ones who define it. Before changing one, whether an enum member, a
+status, a sentinel, or a default, read what reads it on the far side. A change
+that looks like relabelling here is a behaviour change there, and the reasoning
+that makes it look safe is written in the module you are editing, not in the one
+that acts on it. The trap is the value that reads as a null: a placeholder
+locally is a fact somewhere else, and the code that treats it as one is exactly
+the code you have not opened. Grep for the consumers first; it is cheaper than
+any of the ways of finding out afterwards.
 
 A blocked tool call is a stop, not an obstacle to route around. When a permission
 layer refuses an action, say what was refused and what it was for, and wait. Do
-not re-issue it reshaped—split, re-encoded, moved into a script or a test, or
+not re-issue it reshaped: split, re-encoded, moved into a script or a test, or
 narrowed until it passes. Reshaping until something succeeds defeats the only
 control the owner has over what runs, and it converts a decision that was theirs
 into one already made. Continue with whatever genuinely does not depend on the

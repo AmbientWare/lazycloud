@@ -1,16 +1,16 @@
-# Web Control Plane
+# Web control plane
 
-`apps/web` is the browser control plane for the platform—an operational surface,
-not a marketing site. Its product model is
+`apps/web` is the browser control plane for the platform, a console for
+operating it rather than a marketing site. Its product model is
 `Workspace -> App -> Workload -> Task -> Container`, where function, endpoint,
 ASGI, pod, and sandbox are kinds of workload; a schedule is a property one carries.
 
-Customer surfaces speak in human names, kind, status, version, and time. IDs stay
-available for URLs, queries, actions, and operator records. Relationships and
-capabilities are resolved by the server, never assembled in the browser by
+Customer-facing views speak in human names, kind, status, version, and time. IDs
+stay available for URLs, queries, actions, and operator records. The server
+resolves relationships and capabilities; the browser never assembles them by
 joining unrelated lists.
 
-## Structure And Ownership
+## Structure and ownership
 
 Product routes are workspace-scoped, and the workspace layout is what resolves
 authentication and provides workspace context to everything beneath it. One
@@ -21,7 +21,7 @@ The signed-in person and the workspaces they reach come from one request, so the
 two cannot disagree. Switching workspace never means switching credentials: a
 session reaches every workspace its account belongs to.
 
-Give each resource one owning surface. A detail view for a child does not
+Give each resource one owning view. A detail view for a child does not
 duplicate the logs, lifecycle, telemetry, or actions its parent already owns, and
 an internal implementation step never becomes a customer-visible phase. Internal
 platform concepts stay out of the customer model entirely.
@@ -35,7 +35,7 @@ Keep a component beside its feature until a second independent consumer proves
 shared ownership. When it moves, move it to a focused shared folder rather than a
 broad barrel, and delete the old re-export path.
 
-## Data And Security
+## Data and security
 
 - Requests are same-origin and carry the auth-store bearer token. Sign-in leaves
   for GitHub and returns to `/callback` with a single-use code the browser trades
@@ -43,13 +43,13 @@ broad barrel, and delete the old re-export path.
   because two ways in means two ways to keep working.
 - The sign-in control is a real anchor, not a scripted click: leaving for GitHub
   is a document navigation. `/callback` sits outside the auth gate, since it runs
-  before there is a session, and it redeems its code exactly once — the code is
-  spent on first use and StrictMode mounts twice.
+  before there is a session, and it redeems its code exactly once, because the
+  code is spent on first use and StrictMode mounts twice.
 - That credential names a person rather than a workspace, so a workspace-scoped
   request names its workspace in the `workspace` query parameter. Resources the
-  account owns—access tokens, the connected cloud account, domains, joined
-  machines—are addressed without one and keyed off the account, so switching
-  workspace does not invalidate them.
+  account owns, such as access tokens, the connected cloud account, domains, and
+  joined machines, are addressed without one and keyed off the account, so
+  switching workspace does not invalidate them.
 - Validate every JSON response against the hand-maintained Zod schemas that
   mirror the server contracts. A contract change updates both halves together.
 - The published rate card is the exception, and is generated into
@@ -71,7 +71,7 @@ broad barrel, and delete the old re-export path.
   Never evaluate or deserialize it. Read environment variables only through the
   typed env modules.
 
-## UI System
+## UI system
 
 Quiet graphite surfaces, crisp sans typography, monospace for data, restrained
 accent color for actions. Product routes fill the viewport below the shell, and
@@ -81,8 +81,8 @@ mobile falls back to one predictable content scroller.
 - Prefer a few framed operational regions over nested decorative cards, badge
   mosaics, or dense grids of tiny metrics. A repeated resource becomes a card
   only when the whole card navigates.
-- Use the shared status, icon, and radius primitives, and apply semantic color
-  consistently rather than decoratively.
+- Use the shared status and icon components and the radius tokens, and apply
+  semantic color consistently rather than decoratively.
 - Loading skeletons match the layout they replace; spinners are for inline
   waits. Route and panel error boundaries keep one failure from blanking the
   shell. Relative timestamps keep their exact machine-readable values.
@@ -93,7 +93,7 @@ mobile falls back to one predictable content scroller.
 ## Tooling
 
 Bun is the only package manager; keep the lockfile synchronized. Reuse the
-existing shadcn primitives and add new generated ones through its CLI. Lint and
+existing shadcn components and add new generated ones through its CLI. Lint and
 typecheck changed web code, and prove behavior with the cheapest rendered
-evidence—Vitest for material pure boundaries, Playwright only for browser
+evidence: Vitest for material pure boundaries, Playwright only for browser
 behavior nothing cheaper can prove.

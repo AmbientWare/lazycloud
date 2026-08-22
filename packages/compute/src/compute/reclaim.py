@@ -1,18 +1,10 @@
 """Typed reclaim windows for managed provider machine reconciliation.
 
-The compute reconciler makes three time-based reclaim decisions:
-
-- Stale termination: a machine the provider reports for a managed pool but that
-  durable state does not expect is an orphan. It is terminated only after it has
-  been continuously observed as stale for the provider's grace window.
-- Launch-intent settlement: durable intent is committed before provider creation.
-  If the provider id is not bound shortly afterward, reconciliation waits for
-  provider identity visibility, then discovers and reclaims the abandoned launch.
-- Bootstrap-phase reclaim: a launched machine must progress through its
-  bootstrap phases. Each pre-ready phase carries its own deadline measured from
-  the last observed phase transition; a machine stuck past its phase deadline is
-  terminated at its owning provider instead of leaking and accruing hourly
-  renewals until credits are exhausted.
+Bootstrap-phase reclaim: a launched machine must progress through its
+bootstrap phases. Each pre-ready phase carries its own deadline measured from
+the last observed phase transition; a machine stuck past its phase deadline is
+terminated at its owning provider instead of leaking and accruing hourly
+renewals until credits are exhausted.
 
 Repeated bootstrap failures are additionally bounded per pool: once a machine
 record exhausts ``max_launch_attempts`` consecutive launches, the owning pooled
@@ -32,13 +24,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.compute_enrollment import MachineBootstrapPhase
 from shared.contracts import ContractModel
-
-DEFAULT_STALE_GRACE_SECONDS = 900
-"""Orphaned provider machines are reclaimed after 15 minutes of staleness.
-
-Long enough to cover an open multi-node launch transaction and GPU cloud-init,
-short enough that leaked instances are terminated well within the hour.
-"""
 
 DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS: dict[str, int] = {
     MachineBootstrapPhase.Requested.value: 300,
@@ -68,14 +53,6 @@ otherwise terminate and relaunch billable machines forever; after the bound the
 pool is marked degraded until capacity is explicitly changed.
 """
 
-DEFAULT_LAUNCH_INTENT_SETTLE_SECONDS = 30
-"""Unbound provider launches are discovered and reclaimed after 30 seconds.
-
-This window covers normal provider inventory eventual consistency without
-conflating a failed bind transaction with the much longer per-phase machine
-bootstrap deadlines.
-"""
-
 _DEADLINE_PHASES = frozenset(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
 
 
@@ -85,26 +62,14 @@ class ComputeReclaimPolicy(ContractModel):
     ``provider_*`` maps override the default per configured provider name.
     """
 
-    stale_grace_seconds: int = Field(default=DEFAULT_STALE_GRACE_SECONDS, gt=0)
-    launch_intent_settle_seconds: int = Field(
-        default=DEFAULT_LAUNCH_INTENT_SETTLE_SECONDS,
-        gt=0,
-    )
     bootstrap_phase_deadline_seconds: dict[str, int] = Field(
         default_factory=lambda: dict(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
     )
     max_launch_attempts: int = Field(default=DEFAULT_MAX_LAUNCH_ATTEMPTS, gt=0)
-    provider_stale_grace_seconds: dict[str, int] = Field(default_factory=dict)
-    provider_launch_intent_settle_seconds: dict[str, int] = Field(default_factory=dict)
     provider_bootstrap_phase_deadline_seconds: dict[str, dict[str, int]] = Field(
         default_factory=dict
     )
     provider_max_launch_attempts: dict[str, int] = Field(default_factory=dict)
-
-    def stale_grace_for(self, provider: str) -> timedelta:
-        return timedelta(
-            seconds=self.provider_stale_grace_seconds.get(provider, self.stale_grace_seconds)
-        )
 
     def phase_deadline_for(
         self,
@@ -121,14 +86,6 @@ class ComputeReclaimPolicy(ContractModel):
 
     def max_launch_attempts_for(self, provider: str) -> int:
         return self.provider_max_launch_attempts.get(provider, self.max_launch_attempts)
-
-    def launch_intent_settle_for(self, provider: str) -> timedelta:
-        return timedelta(
-            seconds=self.provider_launch_intent_settle_seconds.get(
-                provider,
-                self.launch_intent_settle_seconds,
-            )
-        )
 
 
 def _validated_phase_deadlines(value: dict[str, int]) -> dict[str, int]:
@@ -154,17 +111,10 @@ class ComputeReclaimSettings(BaseSettings):
     example the AWS capacity AMI catalogs).
     """
 
-    stale_grace_seconds: int = Field(default=DEFAULT_STALE_GRACE_SECONDS, gt=0)
-    launch_intent_settle_seconds: int = Field(
-        default=DEFAULT_LAUNCH_INTENT_SETTLE_SECONDS,
-        gt=0,
-    )
     bootstrap_phase_deadline_seconds: dict[str, int] = Field(
         default_factory=lambda: dict(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
     )
     max_launch_attempts: int = Field(default=DEFAULT_MAX_LAUNCH_ATTEMPTS, gt=0)
-    provider_stale_grace_seconds: dict[str, int] = Field(default_factory=dict)
-    provider_launch_intent_settle_seconds: dict[str, int] = Field(default_factory=dict)
     provider_bootstrap_phase_deadline_seconds: dict[str, dict[str, int]] = Field(
         default_factory=dict
     )
@@ -175,11 +125,7 @@ class ComputeReclaimSettings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator(
-        "provider_stale_grace_seconds",
-        "provider_launch_intent_settle_seconds",
-        "provider_max_launch_attempts",
-    )
+    @field_validator("provider_max_launch_attempts")
     @classmethod
     def normalize_provider_overrides(cls, value: dict[str, int]) -> dict[str, int]:
         normalized: dict[str, int] = {}
@@ -217,12 +163,8 @@ class ComputeReclaimSettings(BaseSettings):
 
     def to_policy(self) -> ComputeReclaimPolicy:
         return ComputeReclaimPolicy(
-            stale_grace_seconds=self.stale_grace_seconds,
-            launch_intent_settle_seconds=self.launch_intent_settle_seconds,
             bootstrap_phase_deadline_seconds=self.bootstrap_phase_deadline_seconds,
             max_launch_attempts=self.max_launch_attempts,
-            provider_stale_grace_seconds=self.provider_stale_grace_seconds,
-            provider_launch_intent_settle_seconds=(self.provider_launch_intent_settle_seconds),
             provider_bootstrap_phase_deadline_seconds=(
                 self.provider_bootstrap_phase_deadline_seconds
             ),
@@ -232,9 +174,7 @@ class ComputeReclaimSettings(BaseSettings):
 
 __all__ = [
     "DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS",
-    "DEFAULT_LAUNCH_INTENT_SETTLE_SECONDS",
     "DEFAULT_MAX_LAUNCH_ATTEMPTS",
-    "DEFAULT_STALE_GRACE_SECONDS",
     "ComputeReclaimPolicy",
     "ComputeReclaimSettings",
 ]

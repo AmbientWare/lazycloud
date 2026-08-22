@@ -117,6 +117,28 @@ services:
       cache-token:
         condition: service_completed_successfully
 
+  # Not a service this deployment runs, but one the deploy invokes once per
+  # release: `fleet ensure` reaches the control plane through it. Without the
+  # image pinned here the host keeps the base file's `cli:local`, tries to pull a
+  # repository that does not exist, and falls back to the build context -- which
+  # is the repository, and the repository is not on the host.
+  cli:
+    image: "${LAZYCLOUD_IMAGE_CLI:?set by images.env}"
+    build: !reset null
+    # `--env-file` on the compose command line feeds `${...}` interpolation, not
+    # any container's environment. Every other consumer of the administrator
+    # credential takes it as a mounted secret and reads the file; this is the one
+    # that needs it as a variable, so it is the one that has to be named here.
+    environment:
+      # Not `:?`. Compose interpolates the whole merged file before it selects a
+      # service, and `:?` errors on empty as well as unset, so an unwritten
+      # administrator credential would abort `pull` and `up` for every service on
+      # the host -- taking the control plane down to report a missing bearer
+      # token for a command nobody ran. `converge.sh` writes valueless secrets as
+      # empty on purpose and says a secret with no value is normal, not fatal.
+      # `fleet ensure` is where the absence has something to say.
+      LAZYCLOUD_TOKEN: "${LAZYCLOUD_TOKEN:-}"
+
   public-ingress:
     depends_on: !override
       control-plane:

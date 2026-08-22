@@ -1,26 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Protocol
 
 from api.server.services import ApiServices
-from compute.aws_connections import (
-    AwsAccountPoolDrain,
-    AwsAuthorizationCleanupResult,
-)
 from control.service import ControlPlaneService
 from pydantic import JsonValue, TypeAdapter
-from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.service import Scheduler
-from scheduler.state import SchedulerWorkerRequest
-from shared.aws_connections import (
-    AwsAccountAuthorizationGeneration,
-    AwsAccountAuthorizationMode,
-    AwsAccountAuthorizationPlan,
-    AwsAccountConnection,
-    AwsAccountValidationResult,
-)
 from shared.compute_fleet import ResourceStatus
 from shared.deployment_records import DeploymentSpec
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -33,99 +19,6 @@ _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 class _HttpResponse(Protocol):
     @property
     def content(self) -> bytes: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _WorkspaceEventAuthorizationPlanner:
-    def plan(
-        self,
-        *,
-        workspace_id: str,
-        connection_id: str,
-        generation: int,
-        account_id: str,
-        external_id: str,
-        role_arn: str | None,
-        active_authorization: AwsAccountAuthorizationGeneration | None,
-        node_role_arn: str | None,
-        node_instance_profile_arn: str | None,
-    ) -> AwsAccountAuthorizationPlan:
-        del workspace_id, connection_id, external_id, active_authorization
-        return AwsAccountAuthorizationPlan(
-            role_arn=role_arn or f"arn:aws:iam::{account_id}:role/control-g{generation}",
-            authorization_mode=AwsAccountAuthorizationMode.ExistingRole,
-            node_role_arn=node_role_arn or f"arn:aws:iam::{account_id}:role/node",
-            node_instance_profile_arn=node_instance_profile_arn
-            or f"arn:aws:iam::{account_id}:instance-profile/node",
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class _UnusedWorkspaceEventConnectionValidator:
-    def validate(
-        self,
-        connection: AwsAccountConnection,
-        authorization: AwsAccountAuthorizationGeneration,
-    ) -> AwsAccountValidationResult:
-        del connection, authorization
-        raise AssertionError("connection validation is outside this event publication test")
-
-
-@dataclass(frozen=True, slots=True)
-class _UnusedWorkspaceEventAuthorizationLifecycle:
-    def reconcile_authorization_cleanup(
-        self,
-        *,
-        account_id: str,
-        external_id: str,
-        authorization: AwsAccountAuthorizationGeneration,
-        operation_id: str,
-        node_role_arn: str | None,
-        node_instance_profile_arn: str | None,
-        remove_node_identity: bool,
-    ) -> AwsAuthorizationCleanupResult:
-        del (
-            account_id,
-            external_id,
-            authorization,
-            operation_id,
-            node_role_arn,
-            node_instance_profile_arn,
-            remove_node_identity,
-        )
-        raise AssertionError("authorization cleanup is outside this event publication test")
-
-
-@dataclass(frozen=True, slots=True)
-class _UnusedWorkspaceEventPoolDrainer:
-    def request_connection_drain(
-        self,
-        connection_id: str,
-        *,
-        workspace: str,
-    ) -> AwsAccountPoolDrain:
-        del connection_id, workspace
-        raise AssertionError("pool draining is outside this event publication test")
-
-
-class _LifecycleScheduler:
-    def __init__(self, status: SchedulerContainerSubmitStatus) -> None:
-        self.status = status
-
-    def submit(
-        self,
-        request: SchedulerWorkerRequest,
-        *,
-        ready_at: datetime | None = None,
-    ) -> SchedulerContainerSubmitResult:
-        _ = ready_at
-        return SchedulerContainerSubmitResult(
-            status=self.status,
-            container_id=request.container_id,
-            reason="capacity unavailable"
-            if self.status is SchedulerContainerSubmitStatus.Error
-            else "",
-        )
 
 
 def test_hot_updates_do_not_publish_workspace_change_noise(

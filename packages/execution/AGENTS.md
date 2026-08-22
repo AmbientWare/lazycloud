@@ -1,10 +1,10 @@
-# Execution Package
+# Execution package
 
 User execution resources: task, artifact, volume, and secret workflows, the
 deterministic planners behind them, and the collections and signals they
 coordinate through.
 
-Planners stay pure—same inputs, same plan, no I/O—so what they decide can be
+Planners stay pure: same inputs, same plan, no I/O. What they decide can then be
 reasoned about without running it. Services take explicit protocols and explicit
 arguments and raise typed domain errors.
 
@@ -41,22 +41,22 @@ decision rather than an oversight:
 
 The claim is the fence. A container takes work by setting `container_id` on the
 `tasks` row under `FOR UPDATE SKIP LOCKED`, and that durable row is the only
-record of who owns an invocation — there is no lock beside it. Anything that
+record of who owns an invocation. There is no lock beside it. Anything that
 stops a container has to release the claim, and a reaper sweeps the ones that
 did not.
 
 A claim is only ever written by a container that is still live. One written
 afterwards names a container every settlement path has already run past, so
 nothing gives it back and its caller waits forever; a start that arrives from a
-terminal container is refused instead. That makes the order of a stop
-load-bearing: the container's terminal status is written before its claims are
-settled, or the container being stopped takes back what it just gave up and then
-goes away holding it. Where a settlement path can write both in one transaction
-it does; the stop cannot, so it orders them.
+terminal container is refused instead. So the order of a stop matters: the
+container's terminal status is written before its claims are settled, or the
+container being stopped takes back what it just gave up and then goes away
+holding it. Where a settlement path can write both in one transaction it does;
+the stop cannot, so it orders them.
 
 Who ended the container decides whether its work is charged for the attempt. The
-platform stopping one — scaling down, draining, cancelling a neighbour — costs
-the invocation nothing: it is claimed again with its budget intact, and the
+platform stopping one, whether scaling down, draining, or cancelling a neighbour,
+costs the invocation nothing: it is claimed again with its budget intact, and the
 caller sees only that it ran somewhere else. A container that died on its own
 having failed is the one exit the work itself may have caused, and there the
 invocation is charged an attempt and retried on its own terms. Handing it back
@@ -70,7 +70,7 @@ whether a claim is cancelled or released. The worker reads it to normalize an
 exit, where `Unknown` on a SIGTERM means the container died on its own and
 scores the run a success. And the customer reads a phrase derived from it. A
 reason picked for how it reads therefore moves money, and `Unknown` in
-particular is not a way of saying nobody stated one — an unstated stop travels
+particular is not a way of saying nobody stated one. An unstated stop travels
 as `User` and declines to describe itself instead.
 
 That is also why a stop that a container is serving other callers through says
@@ -87,14 +87,14 @@ therefore stops the container it is running in, which is the only lever the
 platform has on a running handler.
 
 That container is usually also serving invocations nobody cancelled. They are
-released rather than cancelled — the reason is `Scheduler`, because the platform
+released rather than cancelled. The reason is `Scheduler`, because the platform
 stopped the container, not the caller who owns those calls. Each one is claimed
 again and runs elsewhere, so what is lost is partial execution, never the
 invocation: a non-idempotent handler among them re-executes from the start.
 Cancelling one call of a concurrent function is that expensive, and the
 alternative was a cancel that did not cancel.
 
-Per-invocation cancellation is what would make it cheap, and it is reachable —
+Per-invocation cancellation is what would make it cheap, and it is reachable:
 outside `in_process`, every invocation already has its own process. It needs a
 control-plane-to-container signal that does not exist yet.
 
@@ -109,13 +109,13 @@ Two consequences follow from that and nothing else does. Its containers keep no
 idle window by default, because the next run is usually further away than any
 window worth paying for. And a run that has already fired can outlive the
 deployment that scheduled it, so it is cancelled when that deployment has been
-stopped or deleted — every other invocation has a caller, and a caller cannot
+stopped or deleted. Every other invocation has a caller, and a caller cannot
 invoke something that is gone.
 
 There used to be a `CronJob` kind alongside `Function`. Fifteen places had to
 remember to name both, one of them an authorization set, and the autoscaler
-forgot — a schedule was the one function-shaped workload nothing would
-provision for.
+forgot. A schedule was the one function-shaped workload nothing would provision
+for.
 
 The kind was also what made a schedule impossible to attach to anything that
 could not run one, so the contracts now say it: only a function may carry
@@ -126,5 +126,5 @@ every minute for as long as the deployment lives.
 A schedule is one per resource, not one per version, and it is answered on every
 deploy rather than only on the deploys that declare one. The row is named for
 the subdomain that every version shares, so a spec with no `cron` is stating
-that this resource has no schedule — and left unsaid, the row a previous version
+that this resource has no schedule. Left unsaid, the row a previous version
 wrote outlives the source line that asked for it.

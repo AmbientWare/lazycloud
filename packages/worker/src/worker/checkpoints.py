@@ -8,7 +8,6 @@ from pathlib import Path
 
 from pydantic import Field, JsonValue
 from shared.app_identity import CHECKPOINT_SIGNAL_ROOT
-from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 
@@ -95,21 +94,6 @@ class CheckpointSignalWaitAction(StrEnum):
     Ready = "ready"
     Wait = "wait"
     Timeout = "timeout"
-
-
-class CheckpointAvailabilityRequest(ContractModel):
-    runtime_checkpoint_restore: bool = True
-    manager_initialized: bool = True
-    manager_available: bool = True
-    pool: MachinePool = MachinePool("")
-    pool_criu_enabled: bool = False
-
-
-class CheckpointAvailabilityDecision(ContractModel):
-    runtime_supported: bool
-    criu_available: bool
-    supports_checkpoint: bool
-    reason: str
 
 
 class CheckpointLifecycleDecision(ContractModel):
@@ -308,52 +292,6 @@ class RestorePlan(ContractModel):
     restore_options: CriuRestoreOptions = Field(default_factory=CriuRestoreOptions)
     options: dict[str, JsonValue] = Field(default_factory=dict)
     reason: str = ""
-
-
-def plan_checkpoint_availability(
-    request: CheckpointAvailabilityRequest,
-) -> CheckpointAvailabilityDecision:
-    if not request.runtime_checkpoint_restore:
-        return CheckpointAvailabilityDecision(
-            runtime_supported=False,
-            criu_available=False,
-            supports_checkpoint=False,
-            reason="runtime does not support checkpoint/restore",
-        )
-    if not request.manager_initialized:
-        return CheckpointAvailabilityDecision(
-            runtime_supported=True,
-            criu_available=False,
-            supports_checkpoint=False,
-            reason="CRIU manager is not initialized",
-        )
-    if not request.manager_available:
-        return CheckpointAvailabilityDecision(
-            runtime_supported=True,
-            criu_available=False,
-            supports_checkpoint=False,
-            reason="CRIU manager is not available",
-        )
-    if not request.pool:
-        return CheckpointAvailabilityDecision(
-            runtime_supported=True,
-            criu_available=False,
-            supports_checkpoint=False,
-            reason="worker pool name is not set",
-        )
-    if not request.pool_criu_enabled:
-        return CheckpointAvailabilityDecision(
-            runtime_supported=True,
-            criu_available=False,
-            supports_checkpoint=False,
-            reason=f"worker pool {request.pool!r} does not enable checkpointing",
-        )
-    return CheckpointAvailabilityDecision(
-        runtime_supported=True,
-        criu_available=True,
-        supports_checkpoint=True,
-        reason="runtime and worker pool support checkpoint/restore",
-    )
 
 
 def plan_auto_checkpoint(
@@ -633,10 +571,6 @@ def validate_checkpoint_archive(
     )
 
 
-def checkpoint_materialized_from_entries(entries: set[str], checkpoint_path: str) -> bool:
-    return posixpath.join(checkpoint_path.rstrip("/"), CHECKPOINT_FILESYSTEM_DIR) in entries
-
-
 def checkpoint_cache_metadata_from_record(
     *,
     checkpoint_id: str,
@@ -887,8 +821,3 @@ def build_restore_plan(request: CheckpointRequest) -> RestorePlan:
             request.nvidia_driver_major,
         ),
     )
-
-
-def is_criu_restore_error(stderr: str) -> bool:
-    normalized = stderr.lower()
-    return "criu failed" in normalized and "type restore" in normalized

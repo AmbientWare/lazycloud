@@ -60,6 +60,23 @@ output "runtime_configuration" {
     # strings. Empty advertises no instance types, which is a control plane with
     # no managed capacity rather than a failure.
     LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS = jsonencode(var.instance_hourly_micros)
+    # What a customer's account is told to trust. Published here rather than
+    # left to an operator, because a value carried by hand is a step that has to
+    # be remembered on every stand-up and reports its absence as a refused
+    # capability rather than as a missing setting.
+    LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN = aws_iam_role.control_principal.arn
+    # The origin customers and the SDK reach this deployment on, taken from the
+    # zone whose tunnel serves it rather than written twice. The default is
+    # localhost, which is correct for the local stack and silently wrong here:
+    # nothing fails, and the authorization templates and OAuth redirects a
+    # customer receives point at their own machine.
+    LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
+    # Where GitHub returns a person after they sign in. Configuration rather than
+    # something derived from the request: the Host header belongs to whoever sent
+    # it, so deriving the callback would let a caller choose a redirect target
+    # GitHub then honours. Absent, sign-in is refused as provider_unavailable and
+    # the dashboard reports that sign-ins are not supported.
+    LAZYCLOUD_GITHUB_REDIRECT_URI = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}/auth/github/callback"
   }
 }
 
@@ -69,7 +86,13 @@ output "deployment" {
 }
 
 output "control_principal_arn" {
-  description = "Set as LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN in the deployment."
+  description = <<-EOT
+    The principal a customer's account authorizes.
+
+    Carried to the deployment by `runtime_configuration`, not by hand. This
+    output remains for an operator reading who the trust names, and for the
+    connection template's own reference; it is not a step anyone performs.
+  EOT
   value       = aws_iam_role.control_principal.arn
 }
 

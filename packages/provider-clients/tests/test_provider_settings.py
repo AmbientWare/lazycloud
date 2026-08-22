@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -10,11 +9,6 @@ from provider_clients.settings import (
     AwsCapacitySettings,
 )
 from pydantic import ValidationError
-from shared.aws_connections import AwsAccountConnection
-
-
-def _no_connections(_workspace_id: str) -> Iterable[AwsAccountConnection]:
-    return ()
 
 
 def test_aws_connection_settings_reject_invalid_control_authority() -> None:
@@ -25,14 +19,25 @@ def test_aws_connection_settings_reject_invalid_control_authority() -> None:
         )
 
 
-def test_aws_connection_settings_reject_enabled_without_control_authority() -> None:
-    # Enabling with a template URL but no control principal would publish a customer
-    # authorization template that trusts nothing.
-    with pytest.raises(ValidationError, match="configuration is incomplete"):
-        AwsAccountConnectionSettings(
-            enabled=True,
-            template_url="https://assets.example.com/template.json",
-        )
+def test_a_control_principal_without_a_release_is_not_an_error() -> None:
+    """The first deploy of every deployment, and it must not stop the process.
+
+    Infrastructure always publishes the control principal; the template arrives
+    from a release the deployment may not name yet, and the deploy warns and
+    carries on when it does not. Raising on that pair took the control plane down
+    at boot rather than leaving one capability unavailable, which is the failure
+    a settings validator is least able to explain and most able to cause.
+    """
+    waiting = AwsAccountConnectionSettings(
+        control_principal_arn="arn:aws:iam::123456789012:role/control-plane",
+    )
+
+    assert not waiting.configured
+    assert not AwsAccountConnectionSettings().configured
+    assert AwsAccountConnectionSettings(
+        control_principal_arn="arn:aws:iam::123456789012:role/control-plane",
+        template_url="https://assets.example.com/template.json",
+    ).configured
 
 
 def test_aws_capacity_settings_reject_partial_and_mutable_artifacts() -> None:

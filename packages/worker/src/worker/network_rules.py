@@ -66,20 +66,6 @@ def iptables_rule_destination_ip(rule: str) -> str:
     return ""
 
 
-def iptables_rule_matches_ip(rule: str, ip: str) -> bool:
-    destination = iptables_rule_destination_ip(rule)
-    if destination and iptables_address_matches(destination, ip):
-        return True
-    fields = iptables_rule_fields(rule)
-    for index, field in enumerate(fields[:-1]):
-        if field in {"-s", "--source", "-d", "--destination"} and iptables_address_matches(
-            fields[index + 1],
-            ip,
-        ):
-            return True
-    return False
-
-
 def iptables_rule_matches_source_ip(rule: str, ip: str) -> bool:
     fields = iptables_rule_fields(rule)
     for index, field in enumerate(fields[:-1]):

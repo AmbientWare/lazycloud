@@ -15,12 +15,6 @@ class ThroughputResult:
     consumed: int
     duration_ms: float
 
-    @property
-    def messages_per_second(self) -> float:
-        if self.duration_ms <= 0:
-            return 0.0
-        return self.consumed / (self.duration_ms / 1000)
-
 
 def run_throughput(
     count: int = 100,

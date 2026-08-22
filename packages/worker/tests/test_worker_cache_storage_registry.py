@@ -109,45 +109,6 @@ class _FakeLifecycleRepo:
 
 
 @dataclass(slots=True)
-class _ShutdownAwareLifecycleRepo:
-    actions: list[str] = field(default_factory=list)
-
-    def prepare_shutdown(self, *, timeout_seconds: float) -> None:
-        self.actions.append(f"prepare:{timeout_seconds}")
-
-    def add_worker(
-        self,
-        worker: SchedulerWorkerRecord,
-        *,
-        ttl_seconds: int = 0,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
-        _ = ttl_seconds, now
-        return worker
-
-    def toggle_worker_available(self, worker_id: str, *, ttl_seconds: int) -> None:
-        _ = worker_id, ttl_seconds
-
-    def set_keep_alive(self, worker_id: str, *, ttl_seconds: int) -> None:
-        _ = worker_id, ttl_seconds
-
-    def disable_worker(
-        self,
-        worker_id: str,
-        *,
-        reason: WorkerUnavailableReason,
-        detail: str = "",
-        ttl_seconds: int,
-    ) -> None:
-        _ = worker_id, reason, detail, ttl_seconds
-        self.actions.append("disabled")
-
-    def remove_worker(self, worker_id: str) -> WorkerRemovalResult:
-        self.actions.append("removed")
-        return WorkerRemovalResult(worker_id=worker_id, removed=True)
-
-
-@dataclass(slots=True)
 class _FakeStopper:
     calls: list[tuple[str, bool]] = field(default_factory=list)
 

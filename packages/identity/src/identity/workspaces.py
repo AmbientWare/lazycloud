@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from uuid import UUID
 
 from database.repositories.identity import (
     TokenRepository,
@@ -15,8 +10,6 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from database.types import DatabaseSession
-from pydantic import ValidationError
-from shared.contracts import ContractModel
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import AuthTokenRecord, WorkspaceRecord, WorkspaceStatus
@@ -24,17 +17,13 @@ from shared.timestamps import utc_now
 from sqlalchemy.exc import IntegrityError
 
 from identity.auth import IdentityContext
+from identity.cursors import decode_created_at_cursor, encode_created_at_cursor
 
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceAuditResult:
     page: WorkspaceAuditPage
     next: str = ""
-
-
-class _WorkspaceAuditCursorPayload(ContractModel):
-    created_at: datetime
-    id: UUID
 
 
 class WorkspaceSettingsService:
@@ -85,7 +74,9 @@ class WorkspaceSettingsService:
     ) -> WorkspaceAuditResult:
         if limit < 1 or limit > 100:
             raise InvalidInputError("audit history limit must be between 1 and 100")
-        decoded = _decode_cursor(cursor)
+        decoded = decode_created_at_cursor(
+            cursor, build=WorkspaceAuditCursor, subject="workspace audit"
+        )
         with self.context.database.session() as session:
             workspace = self.context.workspace(session, workspace_id_or_name)
             page = WorkspaceAuditRepository(session).page(
@@ -95,7 +86,11 @@ class WorkspaceSettingsService:
             )
         return WorkspaceAuditResult(
             page=page,
-            next=_encode_cursor(page.next) if page.next is not None else "",
+            next=(
+                encode_created_at_cursor(page.next.created_at, page.next.id)
+                if page.next is not None
+                else ""
+            ),
         )
 
 
@@ -190,35 +185,6 @@ def _validate_deletion_protections(
     ]
     if workspace.status is WorkspaceStatus.Active and len(active_workspaces) <= 1:
         raise ConflictError("the last workspace cannot be deleted")
-
-
-def _encode_cursor(cursor: WorkspaceAuditCursor) -> str:
-    payload = {
-        "created_at": cursor.created_at.isoformat(),
-        "id": cursor.id,
-    }
-    return base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).decode()
-
-
-def _decode_cursor(value: str | None) -> WorkspaceAuditCursor | None:
-    if not value:
-        return None
-    try:
-        payload = _WorkspaceAuditCursorPayload.model_validate_json(
-            base64.urlsafe_b64decode(value.encode()),
-            strict=True,
-        )
-        created_at = payload.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=UTC)
-        return WorkspaceAuditCursor(
-            created_at=created_at,
-            id=str(payload.id),
-        )
-    except (binascii.Error, ValidationError) as exc:
-        raise InvalidInputError("invalid workspace audit cursor") from exc
 
 
 __all__ = [

@@ -7,7 +7,6 @@ from pydantic import Field, field_validator
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.routing import (
-    BACKEND_ROUTE_ADDRESS_SCHEME,
     AgentBackendRoute,
     BackendRouteKind,
     BackendRouteProtocol,
@@ -57,10 +56,6 @@ def backend_route_id(
     port: int,
 ) -> str:
     return ":".join([machine_id, worker_id, container_id, str(kind), str(port)])
-
-
-def backend_route_address(route_id: str) -> str:
-    return f"{BACKEND_ROUTE_ADDRESS_SCHEME}://{route_id}"
 
 
 def route_local_target(local_target: str, override_host: str = "") -> str:

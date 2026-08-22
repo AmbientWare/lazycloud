@@ -704,16 +704,6 @@ class GatewayControlService:
             max_attempts=task.max_attempts,
         )
 
-    def _release_function_dependents(self, task: Task) -> None:
-        stub = stub_for_task(self.control_plane, task)
-        if stub is None or stub.kind is not StubKind.Function:
-            return
-        with suppress(Exception):
-            FunctionControlService(
-                self.services,
-                gateway_http_url=self.runtime_origin,
-            ).release_dependents(task)
-
     def _record_task_lifecycle(
         self,
         task: Task,
@@ -1405,27 +1395,6 @@ class GatewayControlService:
                 self.services.compute.delete_machine(machine_id, workspace=workspace_id)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
-
-    def prepare_enrolled_machine_release(
-        self,
-        *,
-        workspace_id: str,
-        pool: MachinePool,
-        machine_id: str,
-    ) -> None:
-        with self.services.context.database.session() as session:
-            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-                workspace_id,
-                machine_id,
-                pool=pool,
-            )
-        if enrollment is None:
-            return
-        worker_id = agent_machine_worker_id(machine_id)
-        worker = self.scheduler_worker_lookup.get_worker(worker_id)
-        if worker is not None:
-            self._scheduler_worker_admin().drain_worker(worker_id)
-        self._revoke_enrollment_authority(enrollment)
 
     def _delete_enrolled_machine(self, enrollment: ComputeMachineEnrollmentRecord) -> None:
         worker_id = agent_machine_worker_id(enrollment.machine_id)

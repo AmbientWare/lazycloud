@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
@@ -11,7 +11,6 @@ import shared.tasks
 from pydantic import JsonValue
 from shared.function_payloads import FunctionResultPayload
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
-from shared.http.functions import FunctionCallGraphResponse
 from shared.http.observability import LogQueryRequest, LogQueryResponse, LogRecord
 from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
 from shared.http_transport import HttpChannel
@@ -217,8 +216,6 @@ class Task:
 class FunctionCallClient(Protocol):
     def handle(self, task_id: str) -> Task: ...
 
-    def call_graph(self, task_id: str) -> FunctionCallGraphResponse: ...
-
     def rerun(self, task_id: str) -> Task: ...
 
 
@@ -293,18 +290,6 @@ class FunctionCall(Generic[R]):
             raise TaskOperationError(msg)
         return cast(R, result.value)
 
-    async def async_get(
-        self,
-        *,
-        timeout_seconds: float | None = None,
-        poll_interval_seconds: float = 1.0,
-    ) -> R:
-        return await asyncio.to_thread(
-            self.get,
-            timeout_seconds=timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-
     def logs(self, *, limit: int = 100, page: int = 0) -> list[LogRecord]:
         return self.task.logs(limit=limit, page=page)
 
@@ -324,9 +309,6 @@ class FunctionCall(Generic[R]):
             client=self.client,
             workspace_id=self.workspace_id,
         )
-
-    def get_call_graph(self) -> FunctionCallGraphResponse:
-        return self.client.call_graph(self.task_id)
 
     @classmethod
     def gather(
@@ -379,18 +361,6 @@ class TaskBatch:
             results[index] = result
         return [result for result in results if result is not None]
 
-    async def async_wait(
-        self,
-        *,
-        timeout_seconds: float | None = None,
-        poll_interval_seconds: float = 1.0,
-    ) -> list[TaskResult]:
-        return await asyncio.to_thread(
-            self.wait,
-            timeout_seconds=timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-
     def as_completed(
         self,
         *,
@@ -402,39 +372,6 @@ class TaskBatch:
             poll_interval_seconds=poll_interval_seconds,
         ):
             yield result
-
-    async def async_as_completed(
-        self,
-        *,
-        timeout_seconds: float | None = None,
-        poll_interval_seconds: float = 1.0,
-    ) -> AsyncIterator[TaskResult]:
-        if not self.handles:
-            return
-        deadline = _batch_deadline(timeout_seconds)
-        tasks: list[asyncio.Task[TaskResult]] = []
-        try:
-            for handle in self.handles:
-                tasks.append(
-                    asyncio.create_task(
-                        handle.async_wait(
-                            timeout_seconds=_batch_remaining_seconds(
-                                deadline,
-                                timeout_seconds,
-                            ),
-                            poll_interval_seconds=poll_interval_seconds,
-                        )
-                    )
-                )
-            for task in asyncio.as_completed(tasks, timeout=timeout_seconds):
-                try:
-                    yield await task
-                except TimeoutError as exc:
-                    raise _batch_timeout_error(timeout_seconds) from exc
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
 
     def _as_completed_indexed(
         self,
@@ -561,10 +498,6 @@ class TaskClient(ControlClientConfigMixin):
             lambda: self._http_channel().get(f"/api/v1/tasks/{task_id}/subscribe")
         )
         return TaskSubscription(task_id=task_id, events=tuple(_parse_task_events(raw)))
-
-    def call_graph(self, task_id: str) -> FunctionCallGraphResponse:
-        raw = self._http_channel().get(f"/api/v1/tasks/{task_id}/call-graph")
-        return FunctionCallGraphResponse.model_validate(raw)
 
     def rerun(self, task_id: str) -> Task:
         raw = self._http_channel().post(f"/api/v1/tasks/{task_id}/rerun")

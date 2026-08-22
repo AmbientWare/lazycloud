@@ -251,10 +251,6 @@ class _AutoScaling:
         self.exists = False
         return {}
 
-    def set_desired_capacity(self, **kwargs: object) -> Mapping[str, object]:
-        self.desired = int(str(kwargs["DesiredCapacity"]))
-        return {}
-
     def terminate_instance_in_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
         self.terminate_count += 1
         return {}

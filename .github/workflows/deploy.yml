@@ -93,7 +93,7 @@ jobs:
           # own report: the bundle pins what a host will actually pull.
           printf '{' >digests.json
           separator=""
-          for image in api scheduler cache-server worker-bootstrap database-bootstrap; do
+          for image in api scheduler cache-server worker-bootstrap database-bootstrap cli; do
             digest="$(aws ecr describe-images \
               --repository-name "$DEPLOYMENT/$image" \
               --image-ids imageTag="$GITHUB_SHA" \

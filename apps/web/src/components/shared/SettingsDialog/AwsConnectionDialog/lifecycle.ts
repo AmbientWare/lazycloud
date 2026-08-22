@@ -66,10 +66,7 @@ export function awsConnectionDialogDescription(connection: AwsConnection): strin
   }
 }
 
-export function hasAwsConnectionAction(
-  connection: AwsConnection,
-  action: AwsConnectionAction,
-): boolean {
+function hasAwsConnectionAction(connection: AwsConnection, action: AwsConnectionAction): boolean {
   return connection.available_actions.includes(action);
 }
 

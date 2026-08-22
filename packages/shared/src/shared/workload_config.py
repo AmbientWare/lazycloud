@@ -19,6 +19,42 @@ from shared.tasks import RetryPolicy
 _JSON_MAPPING_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 
 
+def cpu_limit_at_or_above_request(value: CpuRequest | None) -> CpuRequest | None:
+    # Compared as cores, not through the memory parser: that parser returns
+    # whole mebibytes, so every CPU figure below one core would collapse to zero
+    # and an inverted fractional pair would compare equal.
+    request, limit = request_and_limit(value)
+    for part in (request, limit):
+        if part is not None and float(part) < 0:
+            raise ValueError("cpu must be non-negative")
+    if request is not None and limit is not None and float(limit) < float(request):
+        # A ceiling under the reservation is a container guaranteed more than
+        # it may use, which the kernel resolves by killing it.
+        raise ValueError("a cpu limit cannot sit below its request")
+    return value
+
+
+def memory_limit_at_or_above_request(value: MemoryRequest | None) -> MemoryRequest | None:
+    request, limit = request_and_limit(value)
+    for part in (request, limit):
+        if part is not None and (parse_memory_mib(part) or 0) < 0:
+            raise ValueError("memory must be non-negative")
+    if (
+        request is not None
+        and limit is not None
+        and (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0)
+    ):
+        raise ValueError("a memory limit cannot sit below its request")
+    return value
+
+
+def absolute_health_check_path(value: str) -> str:
+    if value and not value.startswith("/"):
+        msg = "health_check_path must be absolute"
+        raise ValueError(msg)
+    return value
+
+
 class StubImageConfig(ContractModel):
     image_id: str | None = None
     python_version: str = "3.12"
@@ -69,29 +105,17 @@ class StubRuntimeConfig(ContractModel):
     @field_validator("cpu")
     @classmethod
     def cpu_states_a_limit_above_its_request(cls, value: CpuRequest | None) -> CpuRequest | None:
-        # Replaces the `ge=0` the scalar field carried, and adds the ordering a
-        # pair makes possible to get wrong. Every writer of a stub config goes
-        # through this model, so refusing here is refusing at stub creation
-        # rather than at container start on a worker an hour later.
-        request, limit = request_and_limit(value)
-        for part in (request, limit):
-            if part is not None and float(part) < 0:
-                raise ValueError("cpu must be non-negative")
-        if request is not None and limit is not None and float(limit) < float(request):
-            raise ValueError("a cpu limit cannot sit below its request")
-        return value
+        # Every writer of a stub config goes through this model, so refusing here
+        # is refusing at stub creation rather than at container start on a worker
+        # an hour later.
+        return cpu_limit_at_or_above_request(value)
 
     @field_validator("memory")
     @classmethod
     def memory_states_a_limit_above_its_request(
         cls, value: MemoryRequest | None
     ) -> MemoryRequest | None:
-        request, limit = request_and_limit(value)
-        if request is None or limit is None:
-            return value
-        if (parse_memory_mib(limit) or 0) < (parse_memory_mib(request) or 0):
-            raise ValueError("a memory limit cannot sit below its request")
-        return value
+        return memory_limit_at_or_above_request(value)
 
     @field_validator("health_check_path")
     @classmethod
@@ -103,10 +127,7 @@ class StubRuntimeConfig(ContractModel):
         path nor that it was the reason.
         """
 
-        if value and not value.startswith("/"):
-            msg = "health_check_path must be absolute"
-            raise ValueError(msg)
-        return value
+        return absolute_health_check_path(value)
 
     pool_selector: str | None = None
     runtime: str = OciRuntimeName.Runsc.value

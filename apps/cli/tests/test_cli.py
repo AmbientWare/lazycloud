@@ -10,7 +10,7 @@ from cli.main import build_admin_cli, start
 from lazycloud.cli.components.errors import normalize_exception
 from lazycloud.cli.handler_workflows import HandlerLoadError, load_handler_object
 from lazycloud.cli.main import normalize_global_flags
-from lazycloud.json_contracts import JsonValue, parse_json_object, parse_json_value
+from lazycloud.json_contracts import JsonValue, parse_json_object
 from shared.app_identity import CLI_NAME
 
 cli = build_admin_cli()
@@ -89,18 +89,6 @@ def _json_object(raw: str, name: str) -> dict[str, JsonValue]:
         raise AssertionError(f"{name} must be a JSON object") from exc
 
 
-def _json_objects(raw: str, name: str) -> list[dict[str, JsonValue]]:
-    value = parse_json_value(raw)
-    if not isinstance(value, list):
-        raise AssertionError(f"{name} must be a JSON array")
-    items: list[dict[str, JsonValue]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise AssertionError(f"{name} items must be JSON objects")
-        items.append(item)
-    return items
-
-
 def _json_path(value: JsonValue, *path: str | int) -> JsonValue:
     current = value
     for segment in path:
@@ -120,10 +108,6 @@ def _json_string(value: JsonValue, *path: str | int) -> str:
     if not isinstance(selected, str):
         raise AssertionError(f"expected JSON string at {path!r}")
     return selected
-
-
-def _unwrapped_output(output: str) -> str:
-    return " ".join(output.replace("│", " ").split())
 
 
 def test_cli_path_handler_outside_current_directory_is_rejected(

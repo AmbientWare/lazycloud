@@ -12,7 +12,6 @@ from lazycloud.abstractions.volume import (
     Volume,
     volume_mounts,
 )
-from pydantic import JsonValue
 from shared.deployment_records import VolumeMount
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http import volumes
@@ -264,33 +263,6 @@ def test_cloud_bucket_config_rejects_partial_secret_references() -> None:
 def test_cloud_bucket_config_rejects_parent_prefix_segments() -> None:
     with pytest.raises(ValueError, match=r"cannot contain '\.\.'"):
         CloudBucketConfig(prefix="models/../private")
-
-
-@dataclass
-class _PathRecordingVolumeChannel:
-    paths: list[str] = field(default_factory=list)
-
-    def get(self, path: str):
-        self.paths.append(path)
-        return StatPathResponse(
-            path_info=PathInfo(
-                path="data/result.txt",
-                size=7,
-                mod_time=utc_now(),
-                is_dir=False,
-            ),
-        ).model_dump(mode="json")
-
-    def post(self, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue:
-        _ = payload
-        self.paths.append(path)
-        if path.startswith("/api/v1/volumes/copy-path"):
-            return CopyPathResponse().model_dump(mode="json")
-        return GetOrCreateVolumeResponse(volume=_volume("data")).model_dump(mode="json")
-
-    def delete(self, path: str) -> JsonValue:
-        self.paths.append(path)
-        return DeleteVolumeResponse().model_dump(mode="json")
 
 
 def _volume(name: str) -> VolumeInstance:

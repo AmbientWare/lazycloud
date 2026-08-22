@@ -370,21 +370,6 @@ class TaskRepository:
         """System listing for reconcilers and schedulers over every workspace."""
         return self.records.list_across_workspaces(status=status)
 
-    def list_inflight_for_stubs(
-        self,
-        *,
-        workspace_id: str,
-        stub_ids: set[str],
-    ) -> list[Task]:
-        if not stub_ids:
-            return []
-        statement = select(TaskTable).where(
-            TaskTable.workspace_id == workspace_id,
-            TaskTable.stub_id.in_(stub_ids),
-            TaskTable.status.in_(status.value for status in IN_FLIGHT_TASK_STATUSES),
-        )
-        return [Task.model_validate(row.payload) for row in self.session.scalars(statement)]
-
     def page_with_related(
         self,
         *,
@@ -1021,30 +1006,6 @@ class QueueRepository:
             TableRepositoryConfig(QueueMessageTable, QueueMessage),
         )
 
-    def upsert_message(
-        self,
-        message: QueueMessage,
-        *,
-        workspace_id: str,
-    ) -> QueueMessage:
-        return self.messages.upsert(message, workspace_id=workspace_id)
-
-    def delete_messages_for_queues(
-        self,
-        *,
-        workspace_id: str,
-        queues: set[str],
-    ) -> int:
-        if not queues:
-            return 0
-        result = self.session.execute(
-            delete(QueueMessageTable).where(
-                QueueMessageTable.workspace_id == workspace_id,
-                QueueMessageTable.queue.in_(queues),
-            )
-        )
-        return int(result.rowcount) if isinstance(result, CursorResult) else 0
-
     def claim_available_message(
         self,
         queue: str,
@@ -1065,32 +1026,6 @@ class QueueRepository:
                 ),
             )
             .order_by(QueueMessageTable.created_at, QueueMessageTable.id)
-            .with_for_update(skip_locked=True)
-            .limit(1)
-        )
-        row = self.session.scalars(statement).first()
-        if row is None:
-            return None
-        return self._lease_message(row, lease_until=lease_until)
-
-    def claim_expired_message(
-        self,
-        queue: str,
-        *,
-        workspace_id: str,
-        now: datetime,
-        lease_until: datetime,
-    ) -> QueueMessage | None:
-        statement = (
-            select(QueueMessageTable)
-            .where(
-                QueueMessageTable.workspace_id == workspace_id,
-                QueueMessageTable.queue == queue,
-                QueueMessageTable.expires_at.is_not(None),
-                QueueMessageTable.expires_at <= now,
-                QueueMessageTable.leased_until.is_(None),
-            )
-            .order_by(QueueMessageTable.expires_at, QueueMessageTable.created_at)
             .with_for_update(skip_locked=True)
             .limit(1)
         )
@@ -1136,32 +1071,6 @@ class QueueRepository:
         )
         oldest = self.session.scalar(statement)
         return _utc_datetime(oldest) if oldest is not None else None
-
-    def renew_message_lease(
-        self,
-        message_id: str,
-        *,
-        workspace_id: str,
-        lease_until: datetime,
-    ) -> bool:
-        statement = (
-            select(QueueMessageTable)
-            .where(
-                QueueMessageTable.id == message_id,
-                QueueMessageTable.workspace_id == workspace_id,
-            )
-            .with_for_update()
-        )
-        row = self.session.scalars(statement).first()
-        if row is None:
-            return False
-        message = QueueMessage.model_validate(row.payload)
-        message.leased_until = lease_until
-        row.leased_until = lease_until
-        row.payload = message.model_dump(mode="json")
-        flag_modified(row, "payload")
-        self.session.flush()
-        return True
 
     def _lease_message(
         self,
@@ -1232,18 +1141,6 @@ class PodUrlRepository:
             select(PodUrlTable)
             .where(PodUrlTable.container_id == container_id)
             .order_by(PodUrlTable.port, PodUrlTable.id)
-        )
-        return [pod_url_record_from_table(row) for row in self.session.scalars(statement)]
-
-    def list_for_stub(self, *, stub_id: str, workspace_id: str) -> list[PodUrlRecord]:
-        statement = (
-            select(PodUrlTable)
-            .join(ContainerTable, ContainerTable.id == PodUrlTable.container_id)
-            .where(
-                ContainerTable.stub_id == stub_id,
-                ContainerTable.workspace_id == workspace_id,
-            )
-            .order_by(PodUrlTable.container_id, PodUrlTable.port, PodUrlTable.id)
         )
         return [pod_url_record_from_table(row) for row in self.session.scalars(statement)]
 

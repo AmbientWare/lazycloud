@@ -1,26 +1,16 @@
 from __future__ import annotations
 
-import math
 from enum import StrEnum
 
-from pydantic import Field, JsonValue
+from pydantic import Field
 from shared.contracts import ContractModel
 
 from worker.image_lifecycle import (
     DEFAULT_IMAGE_ARCHIVE_EXTENSION,
-    ImageArchiveRegistryConfig,
-    ImageRegistryStore,
-    LazyImageArchivePlan,
     RestoredImageArchiveValidation,
-    clip_v1_archive_cache_path,
-    clip_v1_archive_data_cache_path,
-    clip_v1_archive_data_source_key,
     image_archive_cache_path,
 )
-from worker.origin_access import CacheOriginCredentials
 
-EMBEDDED_IMAGE_CACHE_LOCK_WAIT_TIMEOUT_SECONDS = 2.0
-EMBEDDED_IMAGE_CACHE_WAIT_INTERVAL_SECONDS = 0.25
 MAX_EMBEDDED_ARCHIVE_METADATA_SIZE_BYTES = (1 << 63) - 1
 IMAGE_ARCHIVE_CONTENT_CACHE_RESTORE_CHUNK_BYTES = 4 * 1024 * 1024
 
@@ -68,20 +58,6 @@ def classify_image_content_cache_error(
     )
 
 
-class BrokeredImageArchivePullSource(StrEnum):
-    None_ = "none"
-    PresignedUrl = "presigned-url"
-
-
-class V1ArchiveDataCacheSource(StrEnum):
-    NotApplicable = "not-applicable"
-    LocalReady = "local-ready"
-    ContentCacheCopy = "content-cache-copy"
-    SourceRegistry = "source-registry"
-    BrokeredUrl = "brokered-url"
-    Unavailable = "unavailable"
-
-
 class EmbeddedImageArchiveCacheCopyStatus(StrEnum):
     Hit = "hit"
     Miss = "miss"
@@ -96,63 +72,6 @@ class ImageArchiveContentCacheRestoreStatus(StrEnum):
 class ImageArchiveContentCacheRestoreFinishStatus(StrEnum):
     Complete = "complete"
     Error = "error"
-
-
-class LazyImageS3StorageInfo(ContractModel):
-    bucket: str
-    region: str = ""
-    endpoint_url: str = ""
-    key: str
-    force_path_style: bool = False
-    has_access_key: bool = False
-    has_secret_key: bool = False
-
-    @property
-    def credentials_available(self) -> bool:
-        return self.has_access_key and self.has_secret_key
-
-
-class LazyImageMountOptionsPlan(ContractModel):
-    archive_path: str
-    mount_point: str
-    cache_path: str = ""
-    content_cache_available: bool = False
-    use_checkpoints: bool = False
-    storage_info: LazyImageS3StorageInfo | None = None
-    reason: str = ""
-
-
-class BrokeredImageArchivePullPlan(ContractModel):
-    source: BrokeredImageArchivePullSource = BrokeredImageArchivePullSource.None_
-    archive_path: str
-    url: str = ""
-    reason: str = ""
-
-    @property
-    def should_pull(self) -> bool:
-        return self.source is not BrokeredImageArchivePullSource.None_
-
-
-class V1ArchiveDataCachePlan(ContractModel):
-    source: V1ArchiveDataCacheSource
-    image_id: str
-    target_path: str = ""
-    cache_path: str = ""
-    source_key: str = ""
-    routing_key: str = ""
-    source_registry: ImageArchiveRegistryConfig | None = None
-    brokered_data_url: str = ""
-    seed_embedded_cache: bool = False
-    reason: str = ""
-
-    @property
-    def available(self) -> bool:
-        return self.source in {
-            V1ArchiveDataCacheSource.LocalReady,
-            V1ArchiveDataCacheSource.ContentCacheCopy,
-            V1ArchiveDataCacheSource.SourceRegistry,
-            V1ArchiveDataCacheSource.BrokeredUrl,
-        }
 
 
 class EmbeddedImageArchiveCachePublishPlan(ContractModel):
@@ -178,13 +97,6 @@ class EmbeddedImageArchiveCacheCopyPlan(ContractModel):
     @property
     def hit(self) -> bool:
         return self.status is EmbeddedImageArchiveCacheCopyStatus.Hit
-
-
-class EmbeddedImageArchiveCacheWaitPlan(ContractModel):
-    timeout_seconds: float
-    interval_seconds: float
-    max_attempts: int
-    reason: str = ""
 
 
 class ImageArchiveContentCacheReadChunk(ContractModel):
@@ -223,36 +135,6 @@ class ImageArchiveContentCacheRestoreFinishPlan(ContractModel):
     @property
     def complete(self) -> bool:
         return self.status is ImageArchiveContentCacheRestoreFinishStatus.Complete
-
-
-def plan_lazy_image_mount_options(
-    *,
-    archive: LazyImageArchivePlan,
-    mount_point: str,
-    content_cache_available: bool = True,
-) -> LazyImageMountOptionsPlan:
-    cache_available = content_cache_available and archive.content_cache_path != ""
-    if archive.uses_oci_storage:
-        return LazyImageMountOptionsPlan(
-            archive_path=archive.path,
-            mount_point=mount_point,
-            cache_path=archive.content_cache_path,
-            content_cache_available=cache_available,
-            use_checkpoints=True,
-            reason="OCI archive uses materialized archive content",
-        )
-
-    storage_info = lazy_image_s3_storage_info(archive)
-    return LazyImageMountOptionsPlan(
-        archive_path=archive.path,
-        mount_point=mount_point,
-        cache_path=archive.content_cache_path,
-        content_cache_available=cache_available,
-        storage_info=storage_info,
-        reason="clip v1 lazy mount uses archive storage info"
-        if storage_info is not None
-        else "clip v1 lazy mount uses archive-local storage info",
-    )
 
 
 def plan_embedded_image_archive_cache_publish(
@@ -416,22 +298,6 @@ def plan_embedded_image_archive_cache_copy(
     )
 
 
-def plan_embedded_image_archive_cache_wait(
-    *,
-    timeout_seconds: float = EMBEDDED_IMAGE_CACHE_LOCK_WAIT_TIMEOUT_SECONDS,
-    interval_seconds: float = EMBEDDED_IMAGE_CACHE_WAIT_INTERVAL_SECONDS,
-) -> EmbeddedImageArchiveCacheWaitPlan:
-    max_attempts = 1
-    if timeout_seconds > 0 and interval_seconds > 0:
-        max_attempts += math.ceil(timeout_seconds / interval_seconds)
-    return EmbeddedImageArchiveCacheWaitPlan(
-        timeout_seconds=timeout_seconds,
-        interval_seconds=interval_seconds,
-        max_attempts=max_attempts,
-        reason="wait for contended embedded image archive cache store",
-    )
-
-
 def plan_image_archive_content_cache_restore(
     *,
     archive_path: str,
@@ -569,136 +435,4 @@ def finish_image_archive_content_cache_restore(
         cleanup_temp=True,
         validation=validation,
         reason="image archive restored from content cache",
-    )
-
-
-def lazy_image_s3_storage_info(
-    archive: LazyImageArchivePlan,
-) -> LazyImageS3StorageInfo | None:
-    registry = archive.source_registry
-    if registry is None or not registry.usable:
-        return None
-    return LazyImageS3StorageInfo(
-        bucket=registry.bucket_name,
-        region=registry.region,
-        endpoint_url=registry.endpoint_url,
-        key=clip_v1_archive_data_source_key(archive.image_id),
-        force_path_style=registry.force_path_style,
-        has_access_key=registry.has_access_key,
-        has_secret_key=registry.has_secret_key,
-    )
-
-
-def plan_brokered_image_archive_pull(
-    *,
-    archive_path: str,
-    credentials: CacheOriginCredentials | None,
-) -> BrokeredImageArchivePullPlan:
-    if credentials is None:
-        return BrokeredImageArchivePullPlan(
-            archive_path=archive_path,
-            reason="origin credentials are unavailable",
-        )
-    if credentials.image_archive_url:
-        return BrokeredImageArchivePullPlan(
-            source=BrokeredImageArchivePullSource.PresignedUrl,
-            archive_path=archive_path,
-            url=credentials.image_archive_url,
-            reason="brokered image archive url is available",
-        )
-    return BrokeredImageArchivePullPlan(
-        archive_path=archive_path,
-        reason="brokered image archive origin is unavailable",
-    )
-
-
-def mount_option_summary(plan: LazyImageMountOptionsPlan) -> dict[str, JsonValue]:
-    return {
-        "archive_path": plan.archive_path,
-        "mount_point": plan.mount_point,
-        "cache_path": plan.cache_path,
-        "content_cache_available": plan.content_cache_available,
-        "use_checkpoints": plan.use_checkpoints,
-        "storage_bucket": plan.storage_info.bucket if plan.storage_info else "",
-    }
-
-
-def plan_v1_archive_data_cache_restore(
-    *,
-    image_id: str,
-    image_registry_store: ImageRegistryStore,
-    local_archive_ready: bool = False,
-    cache_client_available: bool = True,
-    content_cache_copy_available: bool = False,
-    source_registry: ImageArchiveRegistryConfig | None = None,
-    private_worker: bool = False,
-    brokered_data_url: str = "",
-    image_cache_path: str = "/cache/images",
-    agent_images_path: str = "/images",
-) -> V1ArchiveDataCachePlan:
-    target_path = clip_v1_archive_data_cache_path(image_id, cache_path=image_cache_path)
-    cache_path = clip_v1_archive_cache_path(image_id, agent_images_path=agent_images_path)
-    if not image_id or image_registry_store is not ImageRegistryStore.S3:
-        return V1ArchiveDataCachePlan(
-            source=V1ArchiveDataCacheSource.NotApplicable,
-            image_id=image_id,
-            reason="v1 archive data cache is only used with s3 image registry storage",
-        )
-    if local_archive_ready:
-        return V1ArchiveDataCachePlan(
-            source=V1ArchiveDataCacheSource.LocalReady,
-            image_id=image_id,
-            target_path=target_path,
-            cache_path=cache_path,
-            reason="local v1 archive data is ready",
-        )
-    if not cache_client_available:
-        return V1ArchiveDataCachePlan(
-            source=V1ArchiveDataCacheSource.Unavailable,
-            image_id=image_id,
-            target_path=target_path,
-            cache_path=cache_path,
-            reason="cache client is unavailable",
-        )
-    if content_cache_copy_available:
-        return V1ArchiveDataCachePlan(
-            source=V1ArchiveDataCacheSource.ContentCacheCopy,
-            image_id=image_id,
-            target_path=target_path,
-            cache_path=cache_path,
-            routing_key=cache_path,
-            reason="v1 archive data can be copied from content cache",
-        )
-
-    if source_registry is not None and source_registry.usable:
-        source_key = clip_v1_archive_data_source_key(image_id)
-        return V1ArchiveDataCachePlan(
-            source=V1ArchiveDataCacheSource.SourceRegistry,
-            image_id=image_id,
-            target_path=target_path,
-            cache_path=cache_path,
-            source_key=source_key,
-            routing_key=cache_path,
-            source_registry=source_registry,
-            reason="v1 archive data can be restored from source registry storage",
-        )
-
-    if private_worker and brokered_data_url:
-        return V1ArchiveDataCachePlan(
-            source=V1ArchiveDataCacheSource.BrokeredUrl,
-            image_id=image_id,
-            target_path=target_path,
-            cache_path=cache_path,
-            routing_key=cache_path,
-            brokered_data_url=brokered_data_url,
-            seed_embedded_cache=True,
-            reason="v1 archive data can be restored from brokered url",
-        )
-
-    return V1ArchiveDataCachePlan(
-        source=V1ArchiveDataCacheSource.Unavailable,
-        image_id=image_id,
-        target_path=target_path,
-        cache_path=cache_path,
-        reason="v1 archive data origin is unavailable",
     )

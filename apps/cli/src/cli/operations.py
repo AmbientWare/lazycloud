@@ -13,7 +13,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.json_contracts import JsonValue, parse_json_value
+from lazycloud.json_contracts import JsonValue
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.operations import ImageBuildRequest
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
@@ -28,13 +28,6 @@ cron_app = typer.Typer(help="Manage cron jobs.")
 scheduler_app = typer.Typer(help="Run and inspect scheduler passes.")
 autoscaler_app = typer.Typer(help="Inspect and control scheduler autoscalers.")
 scheduler_app.add_typer(autoscaler_app, name="autoscaler")
-
-
-def _parse_json(raw: str) -> JsonValue:
-    try:
-        return parse_json_value(raw)
-    except ValueError:
-        return raw
 
 
 def _validate_uv_project(path: Path) -> None:

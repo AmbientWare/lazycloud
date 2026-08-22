@@ -11,14 +11,6 @@ from lazycloud.transport_retry import (
 from shared.http.errors import HttpApiError
 
 
-class RecordingSleep:
-    def __init__(self) -> None:
-        self.delays: list[float] = []
-
-    def __call__(self, seconds: float) -> None:
-        self.delays.append(seconds)
-
-
 def _http_error(status: int = 404) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
         "http://control-plane/api/v1/tasks/task-1",

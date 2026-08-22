@@ -54,10 +54,7 @@ from shared.http.endpoints import (
 )
 from shared.http.gateway_tasks import AppendTaskLogRequest, AppendTaskLogResponse
 from shared.http_transport import HttpChannel
-from shared.lifecycle import LifecycleStartupContext
 from shared.tasks import Task, TaskStatus
-from shared.usage import UsageMetric
-from shared.usage_query import UsageQuery
 from starlette.websockets import WebSocketDisconnect
 from tests.metric_helpers import metric_value
 from tests.real_redis import RealRedisActors
@@ -69,10 +66,6 @@ from websockets.asyncio.server import ServerConnection
 _STREAMING_ASGI_CONTAINER_ID = str(uuid5(NAMESPACE_URL, "lazycloud:test:running-streaming-asgi"))
 _HEARTBEAT_CONTAINER_ID = str(uuid5(NAMESPACE_URL, "lazycloud:test:running-heartbeat"))
 _WARM_CONTAINER_ID = str(uuid5(NAMESPACE_URL, "lazycloud:test:warm-container"))
-
-
-def endpoint_on_start(context: LifecycleStartupContext) -> None:
-    print(f"endpoint-start:{context.resource_kind}:{context.stub_id}")
 
 
 def test_endpoint_runner_records_handler_failure_on_request_task(
@@ -609,15 +602,6 @@ def _record_active_dispatch(services: ApiServices, stub: StubRecord) -> Task:
     return services.tasks.save(task)
 
 
-def _usage_quantity(
-    services: ApiServices,
-    workspace_id: str,
-    metric: UsageMetric,
-) -> float:
-    summary = services.usage.aggregate(query=UsageQuery(workspace_id=workspace_id))
-    return {row.metric: row.quantity for row in summary}.get(metric, 0)
-
-
 def _set_endpoint_dispatch_limits(
     services: ApiServices,
     stub: StubRecord,
@@ -909,10 +893,6 @@ class _RecordingScheduler:
             status=SchedulerContainerSubmitStatus.Queued,
             container_id=request.container_id,
         )
-
-
-def _reference(value: Callable[[LifecycleStartupContext], None]) -> str:
-    return f"{Path(__file__).resolve()}:{value.__qualname__}"
 
 
 def _available_loopback_port() -> int:

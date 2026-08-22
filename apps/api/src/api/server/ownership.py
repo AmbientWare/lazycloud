@@ -60,20 +60,6 @@ def require_endpoint_stub_workspace(
     )
 
 
-def require_pod_stub_workspace(
-    control_plane: ControlPlaneService,
-    stub_id: str,
-    workspace_id: str,
-) -> StubRecord:
-    return require_stub_workspace(
-        control_plane,
-        stub_id,
-        workspace_id,
-        resource_name="pod",
-        expected_kinds=POD_STUB_KINDS,
-    )
-
-
 def require_task_workspace(services: ApiServices, task_id: str, workspace_id: str) -> Task:
     try:
         task = services.tasks.get(task_id)

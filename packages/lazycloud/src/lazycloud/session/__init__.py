@@ -122,15 +122,6 @@ class Client:
             timeout_seconds=self.timeout_seconds,
         )
 
-    def get_deployment_by_id(self, deployment_id: str) -> DeploymentResponse:
-        return self.deployment.get(deployment_id)
-
-    def get_deployment_by_name(self, name: str) -> DeploymentResponse:
-        return self.deployment.get(name)
-
-    def deployment_handle(self, deployment_id_or_name: str) -> Deployment:
-        return self.deployment.handle(deployment_id_or_name)
-
     def submit_deployment(
         self,
         deployment_id_or_name: str,
@@ -142,14 +133,6 @@ class Client:
             *args,
             kwargs=kwargs,
         )
-
-    def subscribe_deployment(
-        self,
-        deployment_id_or_name: str,
-        *args: object,
-        kwargs: dict[str, object] | None = None,
-    ) -> TaskSubscription:
-        return self.deployment.subscribe(deployment_id_or_name, *args, kwargs=kwargs)
 
     def tasks(
         self,
@@ -172,9 +155,6 @@ class Client:
 
     def task(self, task_id: str) -> TaskResponse:
         return self.task_client.get(task_id)
-
-    def get_task_by_id(self, task_id: str) -> TaskResponse:
-        return self.task(task_id)
 
     def task_handle(self, task_id: str) -> Task:
         return self.task_client.handle(task_id)

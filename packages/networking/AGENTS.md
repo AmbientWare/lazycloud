@@ -1,4 +1,4 @@
-# Networking Package
+# Networking package
 
 Protocol-neutral route planning, backend dial targets, and tailnet helpers.
 Gateway composition stays outside.
@@ -15,5 +15,5 @@ are this package's invariants.
   body is read, so recovery never has to replay a stream it already consumed.
 - A dial that hangs against a correct address is usually not an addressing bug.
   Prove where the listener actually is before changing how a destination is
-  addressed—the symptom of a misplaced listener and of a stale name are
+  addressed. The symptoms of a misplaced listener and of a stale name are
   identical from here.

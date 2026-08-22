@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 from uuid import uuid4
 
 from database.repositories.common import (
@@ -10,6 +12,7 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.tables.base import IdPayloadTable
 from database.tables.compute import (
     AwsAccountConnectionTable,
     AwsAuthorizationCleanupTombstoneTable,
@@ -279,6 +282,34 @@ class ComputeMachineEnrollmentCreate(ContractModel):
                 "updated_at": updated_at,
             }
         )
+
+
+class _ClaimedRecord(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def revision(self) -> int: ...
+
+    @property
+    def claim_token(self) -> str | None: ...
+
+
+def _locked_claimed_row[RowT: IdPayloadTable, RecordT: _ClaimedRecord](
+    session: Session,
+    table: type[RowT],
+    validate: Callable[[object], RecordT],
+    claimed: RecordT,
+) -> RowT | None:
+    """Lock the row a claim names, or return None when the claim is no longer current."""
+
+    row = session.scalars(select(table).where(table.id == claimed.id).with_for_update()).first()
+    if row is None:
+        return None
+    current = validate(row.payload)
+    if current.revision != claimed.revision or current.claim_token != claimed.claim_token:
+        return None
+    return row
 
 
 @dataclass(slots=True)
@@ -899,10 +930,6 @@ class ComputeProviderInstanceRepository:
             ComputeProviderInstanceRecord.model_validate(row.payload) if row is not None else None
         )
 
-    def list_open(self) -> list[ComputeProviderInstanceRecord]:
-        closed = {"deleted", "failed"}
-        return [item for item in self.records.list() if item.status not in closed]
-
 
 @dataclass(slots=True)
 class ComputeJoinCredentialRepository:
@@ -1500,17 +1527,12 @@ class TailnetCleanupTombstoneRepository:
         self,
         tombstone: TailnetCleanupTombstone,
     ) -> TailnetCleanupTombstoneTable | None:
-        row = self.session.scalars(
-            select(TailnetCleanupTombstoneTable)
-            .where(TailnetCleanupTombstoneTable.id == tombstone.id)
-            .with_for_update()
-        ).first()
-        if row is None:
-            return None
-        current = TailnetCleanupTombstone.model_validate(row.payload)
-        if current.revision != tombstone.revision or current.claim_token != tombstone.claim_token:
-            return None
-        return row
+        return _locked_claimed_row(
+            self.session,
+            TailnetCleanupTombstoneTable,
+            TailnetCleanupTombstone.model_validate,
+            tombstone,
+        )
 
     def _write(
         self,
@@ -1559,22 +1581,6 @@ class AwsAccountConnectionRepository:
             raise LookupError(f"AWS account connection {connection.id} does not exist")
         self._write(row, connection)
         return connection
-
-    def get_for_account(
-        self,
-        user_id: str,
-        account_id: str,
-        *,
-        for_update: bool = False,
-    ) -> AwsAccountConnection | None:
-        statement = select(AwsAccountConnectionTable).where(
-            AwsAccountConnectionTable.user_id == user_id,
-            AwsAccountConnectionTable.account_id == account_id,
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).first()
-        return AwsAccountConnection.model_validate(row.payload) if row is not None else None
 
     def get_for_user(
         self,
@@ -1730,17 +1736,12 @@ class AwsAccountConnectionRepository:
         self,
         claimed: AwsAccountConnection,
     ) -> AwsAccountConnectionTable | None:
-        row = self.session.scalars(
-            select(AwsAccountConnectionTable)
-            .where(AwsAccountConnectionTable.id == claimed.id)
-            .with_for_update()
-        ).first()
-        if row is None:
-            return None
-        current = AwsAccountConnection.model_validate(row.payload)
-        if current.revision != claimed.revision or current.claim_token != claimed.claim_token:
-            return None
-        return row
+        return _locked_claimed_row(
+            self.session,
+            AwsAccountConnectionTable,
+            AwsAccountConnection.model_validate,
+            claimed,
+        )
 
     def _write(
         self,
@@ -1763,19 +1764,6 @@ class AwsAccountConnectionRepository:
         row.updated_at = connection.updated_at
         flag_modified(row, "payload")
         self.session.flush()
-
-    def dependent_pool_count(self, connection_id: str) -> int:
-        return int(
-            self.session.scalar(
-                select(func.count())
-                .select_from(ComputeUnitTable)
-                .where(
-                    ComputeUnitTable.provider_connection_id == connection_id,
-                    ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
-                )
-            )
-            or 0
-        )
 
 
 @dataclass(slots=True)
@@ -1882,17 +1870,12 @@ class AwsAuthorizationCleanupTombstoneRepository:
         self,
         claimed: AwsAuthorizationCleanupTombstone,
     ) -> AwsAuthorizationCleanupTombstoneTable | None:
-        row = self.session.scalars(
-            select(AwsAuthorizationCleanupTombstoneTable)
-            .where(AwsAuthorizationCleanupTombstoneTable.id == claimed.id)
-            .with_for_update()
-        ).first()
-        if row is None:
-            return None
-        current = AwsAuthorizationCleanupTombstone.model_validate(row.payload)
-        if current.revision != claimed.revision or current.claim_token != claimed.claim_token:
-            return None
-        return row
+        return _locked_claimed_row(
+            self.session,
+            AwsAuthorizationCleanupTombstoneTable,
+            AwsAuthorizationCleanupTombstone.model_validate,
+            claimed,
+        )
 
     def _write(
         self,

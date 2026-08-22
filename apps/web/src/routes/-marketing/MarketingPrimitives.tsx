@@ -121,47 +121,6 @@ export function GetStartedButton({
   );
 }
 
-export function PendingMarketingButton({
-  children,
-  className,
-  endGlyph = "↗",
-}: {
-  children: ReactNode;
-  className?: string;
-  endGlyph?: ReactNode | null;
-}) {
-  return (
-    <Button
-      className={cn(
-        "marketing-button-link cursor-not-allowed justify-between text-muted-foreground/55 [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
-        endGlyph === null && "justify-center",
-        className,
-      )}
-      disabled
-      size="lg"
-      title="Coming soon"
-      variant="outline"
-    >
-      <span>{children}</span>
-      {endGlyph === null ? null : <Glyph>{endGlyph}</Glyph>}
-    </Button>
-  );
-}
-
-export function PendingTextLink({ children }: { children: ReactNode }) {
-  return (
-    <button
-      className="inline-flex min-h-11 cursor-not-allowed items-center gap-2.5 text-[13px] font-semibold text-muted-foreground/55"
-      disabled
-      title="Coming soon"
-      type="button"
-    >
-      {children}
-      <Glyph>→</Glyph>
-    </button>
-  );
-}
-
 /* Destinations that are not built yet: visible, honest, and inert. */
 export function PendingLink({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -209,44 +168,6 @@ export function SectionHeading({
         </p>
       ) : null}
     </div>
-  );
-}
-
-export function Faq({ items }: { items: Array<{ question: string; answer: string }> }) {
-  return (
-    <section className="py-16 sm:py-20 lg:py-28">
-      <div
-        className={cn(
-          shell,
-          "grid grid-cols-[0.72fr_1.28fr] gap-22 max-lg:grid-cols-1 max-lg:gap-8 max-lg:[&>div:first-child]:mb-0 sm:max-lg:gap-10",
-        )}
-      >
-        <SectionHeading
-          label="FAQ"
-          title="Questions, answered."
-          body="The short version of how LazyCloud fits into your stack."
-        />
-        <div className="border-t border-border">
-          {items.map((item, index) => (
-            <details
-              className="group border-b border-border"
-              key={item.question}
-              open={index === 0}
-            >
-              <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 py-2 text-[15px] sm:min-h-[74px] [&::-webkit-details-marker]:hidden">
-                <span className="text-left">{item.question}</span>
-                <span className="shrink-0 text-brand transition-transform group-open:rotate-45 motion-reduce:transition-none">
-                  <Glyph>+</Glyph>
-                </span>
-              </summary>
-              <p className="mt-[-4px] mr-4 mb-6 max-w-[620px] text-[13px] leading-relaxed text-muted-foreground sm:mr-10">
-                {item.answer}
-              </p>
-            </details>
-          ))}
-        </div>
-      </div>
-    </section>
   );
 }
 

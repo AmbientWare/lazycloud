@@ -361,25 +361,6 @@ class RedisEventStreamRepository:
             skip=lambda record: not _log_record_matches_query(record, plan.query),
         )
 
-    def _read_stream_bodies(
-        self,
-        stream: str,
-        *,
-        limit: int,
-    ) -> tuple[Mapping[str, JsonValue], ...]:
-        read_limit = limit if limit > 0 else DEFAULT_REDIS_EVENT_STREAM_READ_LIMIT
-        entries = _redis_stream_entries(
-            self.redis.stream_reverse_range(self._stream_key(stream), count=read_limit)
-        )
-        bodies: list[Mapping[str, JsonValue]] = []
-        for entry in entries:
-            fields = _stream_entry_fields(entry)
-            body = _load_mapping(fields.get("body"))
-            if body:
-                bodies.append(body)
-        bodies.reverse()
-        return tuple(bodies)
-
     def _read_stream_records(
         self,
         streams: Iterable[str],

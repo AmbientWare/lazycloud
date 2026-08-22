@@ -1,6 +1,6 @@
 # Public SDK
 
-`lazycloud` is the backend-free user SDK and the public CLI—everything a user of
+`lazycloud` is the backend-free user SDK and the public CLI: everything a user of
 the platform imports or runs.
 
 It may depend on `shared` and on nothing else in this repository: never apps,
@@ -15,5 +15,5 @@ HTTP contracts; transport failures raise `HttpApiError`, and abstractions
 translate those once into typed operation errors.
 
 Use explicit client injection rather than ambient construction, and delete old
-import paths instead of aliasing them. A public surface is only cheap to keep
-honest while it is still small.
+import paths instead of aliasing them. A public API is only cheap to keep honest
+while it is still small.

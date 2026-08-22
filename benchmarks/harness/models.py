@@ -91,13 +91,6 @@ class BenchmarkThresholds(BenchmarkModel):
     remote_cache_socket_read_min_mbps: float | None = None
     min_mbps: float | None = None
 
-    def min_mbps_for(self, measurement: BenchmarkMeasurementName) -> float | None:
-        if measurement == BenchmarkMeasurementName.PythonFileRead:
-            return self.python_file_read_min_mbps or self.min_mbps
-        if measurement == BenchmarkMeasurementName.RemoteCacheSocketRead:
-            return self.remote_cache_socket_read_min_mbps or self.min_mbps
-        return self.min_mbps
-
 
 class BenchmarkValidationPolicy(BenchmarkModel):
     requires_sha: bool = False
@@ -117,23 +110,6 @@ class BenchmarkEvidence(BenchmarkModel):
     artifact_output: str | None = None
     network_ceiling_mbps: float | None = None
     extra: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class BenchmarkValidationFailureKind(StrEnum):
-    MeasurementError = "measurement_error"
-    MissingShaProof = "missing_sha_proof"
-    MissingCacheHitProof = "missing_cache_hit_proof"
-    MissingRemoteReadProof = "missing_remote_read_proof"
-    UnexpectedCloudRead = "unexpected_cloud_read"
-    ThroughputBelowThreshold = "throughput_below_threshold"
-
-
-class BenchmarkValidationFailure(BenchmarkModel):
-    kind: BenchmarkValidationFailureKind
-    suite: str
-    scenario: str
-    measurement: BenchmarkMeasurementName
-    message: str
 
 
 class BenchmarkCase(BenchmarkModel):
@@ -216,38 +192,6 @@ class ScenarioSpec(BenchmarkModel):
         if self.access is None or self.size_mib <= 0:
             return ""
         return f"{self.access.value}:{self.pattern.value}:{self.size_mib}"
-
-    @property
-    def metric_tags(self) -> dict[str, JsonValue]:
-        tags = dict(self.tags)
-        if self.access is not None:
-            tags["access"] = self.access.value
-        tags["operation"] = self.operation.value
-        tags["pattern"] = self.pattern.value
-        if self.size_mib:
-            tags["size_mib"] = self.size_mib
-        if self.cache_state is not None:
-            tags["cache_state"] = self.cache_state.value
-        if self.probes:
-            tags["probes"] = [probe.value for probe in self.probes]
-        return tags
-
-    def validation_policy_for(
-        self,
-        measurement: BenchmarkMeasurementName,
-        *,
-        require_remote_read: bool = False,
-        require_cache_hit: bool = False,
-        reject_cloud_read: bool = False,
-        require_sha: bool = True,
-    ) -> BenchmarkValidationPolicy:
-        return BenchmarkValidationPolicy(
-            requires_sha=require_sha,
-            requires_cache_hit=require_cache_hit,
-            requires_remote_read=require_remote_read,
-            reject_cloud_read=reject_cloud_read,
-            min_mbps=self.thresholds.min_mbps_for(measurement),
-        )
 
 
 class SuiteSpec(BenchmarkModel):

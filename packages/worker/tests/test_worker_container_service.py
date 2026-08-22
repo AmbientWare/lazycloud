@@ -8,7 +8,6 @@ from threading import Event
 import pytest
 from shared.compute_policy import MachinePool
 from worker.container_client.models import (
-    ContainerArchiveResponse,
     ContainerExecRequest,
     ContainerExecResponse,
     ContainerKillRequest,
@@ -182,23 +181,6 @@ class CheckpointCreator:
         self.instances.append(instance.container_id)
         self.requested_ids.append(checkpoint_id)
         return checkpoint_id or self.checkpoint_ids.pop(0)
-
-
-@dataclass(slots=True)
-class ArchiveCreator:
-    calls: list[tuple[str, str]] = field(default_factory=list)
-
-    def archive_container(
-        self,
-        instance: WorkerContainerServiceInstance,
-        *,
-        image_id: str,
-    ) -> list[ContainerArchiveResponse]:
-        self.calls.append((instance.container_id, image_id))
-        return [
-            ContainerArchiveResponse(progress=25),
-            ContainerArchiveResponse(done=True, success=True),
-        ]
 
 
 @dataclass(slots=True)

@@ -5,7 +5,6 @@ from enum import StrEnum
 from compute.resources import normalize_gpu_count
 from pydantic import Field, computed_field
 from shared.contracts import ContractModel
-from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
@@ -142,38 +141,6 @@ class FunctionMonitorPlan(ContractModel):
     poll_interval_seconds: int = DEFAULT_FUNCTION_MONITOR_POLL_INTERVAL_SECONDS
 
 
-class FunctionHeartbeatRequest(ContractModel):
-    workspace_id: str
-    task_id: str
-    current_status: TaskStatus
-    running_age_seconds: int = Field(default=0, ge=0)
-    heartbeat_present: bool = False
-
-
-class FunctionHeartbeatPlan(ContractModel):
-    alive: bool
-    heartbeat_key: str
-    heartbeat_ttl_seconds: int = DEFAULT_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS
-    checked_heartbeat_key: bool
-
-
-class FunctionStreamCancelRequest(ContractModel):
-    workspace_id: str
-    stub_id: str
-    task_id: str
-    headless: bool = False
-    completion_observed: bool = False
-    client_disconnected: bool = True
-
-
-class FunctionStreamCancelPlan(ContractModel):
-    should_cancel: bool
-    should_complete_dispatcher: bool
-    cancel_channel_key: str
-    publish_payload: str
-    next_status: TaskStatus | None = None
-
-
 class FunctionContainerStartAuthority(StrEnum):
     """How much capacity the caller asking for a container is entitled to.
 
@@ -226,20 +193,12 @@ class FunctionTaskCancellationDecision(ContractModel):
     terminal_before_cancel: bool = False
 
 
-def function_prefix_key() -> str:
-    return "function"
-
-
 def function_heartbeat_key(workspace_id: str, task_id: str) -> str:
     return f"function:{workspace_id}:{task_id}:heartbeat"
 
 
 def function_task_cancel_key(workspace_id: str, stub_id: str, task_id: str) -> str:
     return f"task:{workspace_id}:{stub_id}:{task_id}:cancel"
-
-
-def function_container_id(stub_kind: DeploymentKind, task_id: str, suffix: str) -> str:
-    return f"{stub_kind.value}-{task_id}-{suffix}"
 
 
 def plan_function_invoke(request: FunctionInvokeRequest) -> FunctionInvokePlan:
@@ -327,37 +286,6 @@ def plan_function_monitor(request: FunctionMonitorRequest) -> FunctionMonitorPla
         status=FunctionMonitorStatus.Active,
         heartbeat_key=heartbeat_key,
         cancel_channel_key=cancel_channel_key,
-    )
-
-
-def plan_function_heartbeat(request: FunctionHeartbeatRequest) -> FunctionHeartbeatPlan:
-    bypass = (
-        request.current_status is TaskStatus.Running
-        and request.running_age_seconds < DEFAULT_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS
-    )
-    return FunctionHeartbeatPlan(
-        alive=bypass or request.heartbeat_present,
-        heartbeat_key=function_heartbeat_key(request.workspace_id, request.task_id),
-        checked_heartbeat_key=not bypass,
-    )
-
-
-def plan_function_stream_cancel(
-    request: FunctionStreamCancelRequest,
-) -> FunctionStreamCancelPlan:
-    should_cancel = (
-        request.client_disconnected and not request.headless and not request.completion_observed
-    )
-    return FunctionStreamCancelPlan(
-        should_cancel=should_cancel,
-        should_complete_dispatcher=should_cancel,
-        cancel_channel_key=function_task_cancel_key(
-            request.workspace_id,
-            request.stub_id,
-            request.task_id,
-        ),
-        publish_payload=request.task_id,
-        next_status=TaskStatus.Cancelled if should_cancel else None,
     )
 
 

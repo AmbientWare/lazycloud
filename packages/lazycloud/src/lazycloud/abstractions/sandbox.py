@@ -551,13 +551,6 @@ class SandboxProcessManager:
             for item in response.processes
         }
 
-    def get_process(self, pid: int) -> SandboxProcess:
-        processes = self.list_processes()
-        if pid not in processes:
-            msg = f"process with pid {pid} not found"
-            raise SandboxProcessError(msg)
-        return processes[pid]
-
     def _exec_command(
         self,
         command: str | Iterable[str],

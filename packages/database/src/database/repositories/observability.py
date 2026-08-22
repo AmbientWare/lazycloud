@@ -193,33 +193,6 @@ class UsageRepository:
             workspace_id=workspace_id,
         )
 
-    def record_for_workspace_deletion(
-        self,
-        *,
-        id: str,
-        workspace_id: str,
-        resource_type: str,
-        resource_id: str,
-        metric: UsageMetric,
-        quantity: float,
-        unit: UsageUnit,
-        labels: dict[str, str] | None = None,
-        metadata: dict[str, JsonValue] | None = None,
-    ) -> UsageRecord:
-        return self.append_for_workspace_deletion(
-            UsageRecord(
-                id=id,
-                workspace_id=workspace_id,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                metric=metric,
-                quantity=quantity,
-                unit=unit,
-                labels=labels or {},
-                metadata=metadata or {},
-            )
-        )
-
     def list(
         self,
         query: UsageQuery | None = None,
@@ -314,39 +287,6 @@ class UsageRepository:
             data=tuple(UsageRecord.model_validate(row.payload) for row in page_rows),
             next=next_cursor,
         )
-
-    def node_usage_after(
-        self,
-        *,
-        workspace_id: str,
-        machine_id: str,
-        created_after: datetime | None,
-        record_id_after: str,
-        limit: int,
-    ) -> list[UsageRecord]:
-        statement = select(UsageRecordTable).where(
-            UsageRecordTable.workspace_id == workspace_id,
-            UsageRecordTable.resource_type == "node",
-            UsageRecordTable.resource_id == machine_id,
-            UsageRecordTable.metric == UsageMetric.NodeUsage.value,
-        )
-        if created_after is not None:
-            statement = statement.where(
-                or_(
-                    UsageRecordTable.created_at > created_after,
-                    and_(
-                        UsageRecordTable.created_at == created_after,
-                        UsageRecordTable.id > record_id_after,
-                    ),
-                )
-            )
-        rows = self.session.scalars(
-            statement.order_by(
-                UsageRecordTable.created_at.asc(),
-                UsageRecordTable.id.asc(),
-            ).limit(max(limit, 1))
-        )
-        return [UsageRecord.model_validate(row.payload) for row in rows]
 
     def aggregate(
         self,

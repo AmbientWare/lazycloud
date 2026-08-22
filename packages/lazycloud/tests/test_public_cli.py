@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -10,92 +9,11 @@ import typer
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
-from shared.containers import ContainerStatus
-from shared.http.compute import (
-    ContainerResponse,
-    ContainerWithAppPageResponse,
-    ContainerWithAppResponse,
-    MachineJoinCommandRequest,
-    MachineJoinCommandResponse,
-)
-from shared.http.gateway import AttachToContainerResponse
 from shared.http.secrets import GetSecretResponse, SecretWireRecord
 from shared.http.tasks import TaskPageResponse, TaskResponse
-from typer._click.core import Command
-from typer.core import TyperGroup
-from typer.main import get_command
 from typer.testing import CliRunner
 
 client_cli = build_public_cli()
-
-
-@dataclass
-class FakeMachineJoinComputeClient:
-    requests: list[MachineJoinCommandRequest] = field(default_factory=list)
-    removed_machine_ids: list[str] = field(default_factory=list)
-
-    def machine_join_command(
-        self,
-        request: MachineJoinCommandRequest,
-    ) -> MachineJoinCommandResponse:
-        self.requests.append(request)
-        return MachineJoinCommandResponse(
-            command=(
-                "curl -fsSL https://gateway.example/install/agent "
-                "| sh -s -- --gateway https://gateway.example --join-token join-token"
-            ),
-            expires_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-
-    def remove_machine(self, machine_id: str) -> None:
-        self.removed_machine_ids.append(machine_id)
-
-
-@dataclass
-class FakePublicContainerGateway:
-    requests: list[tuple[int, str | None]] = field(default_factory=list)
-
-    def list_containers(
-        self,
-        *,
-        limit: int = 100,
-        cursor: str | None = None,
-        app_id: str | None = None,
-        stub_ids: tuple[str, ...] = (),
-        status: ContainerStatus | None = None,
-    ) -> ContainerWithAppPageResponse:
-        del app_id, stub_ids, status
-        self.requests.append((limit, cursor))
-        start = int(cursor or "0")
-        stop = min(start + limit, 205)
-        return ContainerWithAppPageResponse(
-            data=[
-                ContainerWithAppResponse(
-                    container=ContainerResponse(
-                        id=f"container-{index:03d}",
-                        name=f"worker-{index:03d}",
-                        image="python:3.12",
-                        command=["python", "worker.py"],
-                        workspace_id="workspace-1",
-                        status=ContainerStatus.Running,
-                        created_at=datetime(2026, 7, 12, tzinfo=UTC),
-                    )
-                )
-                for index in range(start, stop)
-            ],
-            next=str(stop) if stop < 205 else "",
-        )
-
-    def attach_to_container_events(
-        self,
-        container_id: str,
-        *,
-        poll_interval_seconds: float = 0.25,
-    ) -> Iterator[AttachToContainerResponse]:
-        _ = container_id, poll_interval_seconds
-        yield AttachToContainerResponse(output="first\n")
-        yield AttachToContainerResponse(output="second\n")
-        yield AttachToContainerResponse(done=True, exit_code=7)
 
 
 @dataclass
@@ -306,19 +224,3 @@ def test_volume_delete_with_yes_flag_skips_confirmation(
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {"name": "vol-a"}
     assert volumes.deleted == ["vol-a"]
-
-
-def _command_paths(typer_app: typer.Typer) -> set[str]:
-    root = get_command(typer_app)
-    paths: set[str] = set()
-
-    def walk(command: Command, prefix: tuple[str, ...] = ()) -> None:
-        if not isinstance(command, TyperGroup):
-            return
-        for name, subcommand in sorted(command.commands.items()):
-            path = (*prefix, name)
-            paths.add(" ".join(path))
-            walk(subcommand, path)
-
-    walk(root)
-    return paths

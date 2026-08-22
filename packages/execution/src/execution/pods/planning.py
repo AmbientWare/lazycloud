@@ -19,7 +19,6 @@ POD_CONTAINER_DIAL_TIMEOUT_SECONDS = 30
 POD_CONNECTION_KEEPALIVE_SECONDS = 1
 POD_CONNECTION_READ_TIMEOUT_SECONDS = 300
 POD_CONTAINER_AVAILABLE_TIMEOUT_SECONDS = 2
-POD_TCP_HANDLER_KEY_TTL_SECONDS = 300
 
 
 class PodContainerEnvVar(StrEnum):
@@ -115,21 +114,8 @@ class PodProxyPlan(ContractModel):
         return self.failure_reason is None
 
 
-class PodTcpSniPlan(ContractModel):
-    sni: str
-    handler_cache_key: str
-    handler_cache_ttl_seconds: int = POD_TCP_HANDLER_KEY_TTL_SECONDS
-    handler_path: str = ""
-    cache_handler_path: bool = False
-    forward_to_pod: bool = False
-
-
 def pod_instance_lock_key(workspace_id: str, stub_id: str) -> str:
     return f"pod:{workspace_id}:{stub_id}:instance_lock"
-
-
-def pod_tcp_sni_handler_key(sni: str) -> str:
-    return f"middleware:tcp_sni:{sni}:handler"
 
 
 def pod_container_id(stub_type: PodStubType, stub_id: str, suffix: str) -> str:
@@ -224,22 +210,4 @@ def plan_pod_proxy(
             if request.protocol is not PodProxyProtocol.Tcp
             else None
         ),
-    )
-
-
-def plan_pod_tcp_sni(
-    *,
-    sni: str,
-    handler_path: str = "",
-    stub_type: PodStubType | None = None,
-    version: int = 0,
-    stub_id: str = "",
-) -> PodTcpSniPlan:
-    return PodTcpSniPlan(
-        sni=sni,
-        handler_cache_key=pod_tcp_sni_handler_key(sni),
-        handler_path=handler_path,
-        cache_handler_path=bool(handler_path and (version > 0 or stub_id)),
-        forward_to_pod=stub_type
-        in {PodStubType.Pod, PodStubType.PodDeployment, PodStubType.PodRun},
     )

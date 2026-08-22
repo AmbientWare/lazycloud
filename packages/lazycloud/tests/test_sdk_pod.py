@@ -10,34 +10,14 @@ from lazycloud.abstractions.pod import Container, Pod, PodOperationError
 from shared.deployments import DeploymentKind
 from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentListResponse, DeploymentResponse
-from shared.http.errors import HttpApiError
 from shared.http.gateway import (
     AttachToContainerResponse,
     SyncContainerWorkspaceBody,
     SyncContainerWorkspaceResponse,
 )
-from shared.http.pods import CreatePodRequest, CreatePodResponse
 from tests.fakes import FakeDeploymentClient
 
 T = TypeVar("T")
-
-
-@dataclass
-class FakePodClient:
-    requests: list[CreatePodRequest] = field(default_factory=list)
-    fail: bool = False
-
-    def create_pod(self, request: CreatePodRequest) -> CreatePodResponse:
-        self.requests.append(request)
-        if self.fail:
-            raise HttpApiError("pod failed", status_code=500)
-        return CreatePodResponse(
-            container_id=f"ctr-{request.stub_id}",
-            stub_id=request.stub_id,
-            url=(f"{request.external_url}/pod/id/{request.stub_id}/8080"),
-            timeout_seconds=request.timeout_seconds or 0,
-            expires_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
 
 
 @dataclass

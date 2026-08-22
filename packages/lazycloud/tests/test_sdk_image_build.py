@@ -18,16 +18,6 @@ from lazycloud import Image
 
 
 @dataclass
-class FakeImageControlClient:
-    responses: list[BuildImageResponse]
-    requests: list[BuildImageRequest] = field(default_factory=list)
-
-    def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]:
-        self.requests.append(request)
-        yield from self.responses
-
-
-@dataclass
 class FakeCachedImageControlClient:
     verify_responses: list[VerifyImageBuildResponse]
     build_responses: list[BuildImageResponse] = field(default_factory=list)
@@ -41,16 +31,6 @@ class FakeCachedImageControlClient:
     def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]:
         self.build_requests.append(request)
         yield from self.build_responses
-
-
-@dataclass
-class FakeImageVerifyClient:
-    responses: list[VerifyImageBuildResponse]
-    requests: list[VerifyImageBuildRequest] = field(default_factory=list)
-
-    def verify_image_build(self, request: VerifyImageBuildRequest) -> VerifyImageBuildResponse:
-        self.requests.append(request)
-        return self.responses.pop(0)
 
 
 def test_sdk_image_build_request_preserves_credentials_without_leaking_spec_values() -> None:

@@ -461,97 +461,6 @@ def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
     assert not redis.exists(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)))
 
 
-def _assert_pod_autoscaler_clamps_scale_up_to_workspace_cpu_quota(
-    isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
-) -> None:
-    scheduler = _Scheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=scheduler),
-    )
-    redis = real_redis_actors.client()
-    stub = _create_pod_stub(
-        isolated_services,
-        keep_warm_seconds=0,
-        autoscaler={"max_containers": 3},
-        resource_config={"cpu_millicores": 500, "workspace_cpu_quota_millicores": 1000},
-    )
-    redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
-
-    result = _pod_autoscaler(isolated_services, redis).reconcile()[0]
-
-    assert result.signal_value == 4
-    assert result.current_containers == 0
-    assert result.desired_containers == 2
-    assert result.reason == "workspace cpu quota reached"
-    assert [action.action for action in result.actions] == ["start", "start"]
-    assert result.guardrails["limited"] is True
-    assert result.guardrails["available_start_count"] == 2
-    with isolated_services.context.database.session() as session:
-        state = AutoscalerStateRepository(session).get(
-            workspace_id=stub.workspace_id,
-            target_kind=AutoscalerTargetKind.Pod,
-            target_id=stub.id,
-        )
-    assert state is not None
-    assert state.reason == "workspace cpu quota reached"
-    guardrails = _json_object(state.last_sample["guardrails"], "last_sample.guardrails")
-    assert guardrails["limited"] is True
-
-
-def _assert_pod_autoscaler_halts_scale_up_after_failed_container_threshold(
-    isolated_services: ApiServices,
-) -> None:
-    scheduler = _Scheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=scheduler),
-    )
-    redis = RedisClient(FakeRedis(), key_prefix="test")
-    stub = _create_pod_stub(
-        isolated_services,
-        keep_warm_seconds=0,
-        autoscaler={
-            "max_containers": 3,
-            "failed_container_threshold": 2,
-            "failure_window_seconds": 300,
-        },
-    )
-    current_time = utc_now()
-    newest_failed_id = "00000000-0000-4000-8000-000000000501"
-    older_failed_id = "00000000-0000-4000-8000-000000000502"
-    _record_failed_container(
-        isolated_services,
-        stub,
-        newest_failed_id,
-        finished_at=current_time - timedelta(seconds=5),
-    )
-    _record_failed_container(
-        isolated_services,
-        stub,
-        older_failed_id,
-        finished_at=current_time - timedelta(seconds=10),
-    )
-    _record_failed_container(
-        isolated_services,
-        stub,
-        "00000000-0000-4000-8000-000000000503",
-        finished_at=current_time - timedelta(seconds=600),
-    )
-    redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
-
-    result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
-
-    assert result.signal_value == 4
-    assert result.current_containers == 0
-    assert result.desired_containers == 0
-    assert result.reason == "failed container threshold reached"
-    assert result.failed_containers == [newest_failed_id, older_failed_id]
-    assert result.actions == []
-    assert scheduler.requests == []
-
-
 def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
     isolated_services: ApiServices,
 ) -> None:
@@ -634,11 +543,6 @@ def _pod_autoscaler(services: ApiServices, redis: RedisClient) -> AutoscalingDri
     )
 
 
-def _json_object(value: JsonValue, name: str) -> dict[str, JsonValue]:
-    assert isinstance(value, dict), f"{name} must be a JSON object"
-    return value
-
-
 def _record_container(
     services: ApiServices,
     stub: StubRecord,
@@ -678,31 +582,6 @@ def _record_container(
                 status=state_status,
             )
         )
-    with services.context.database.session() as session:
-        return ContainerRepository(session).upsert(container)
-
-
-def _record_failed_container(
-    services: ApiServices,
-    stub: StubRecord,
-    container_id: str,
-    *,
-    finished_at: datetime,
-) -> ContainerRecord:
-    container = ContainerRecord(
-        id=container_id,
-        name=f"pod-{container_id}",
-        image="img-pod",
-        command=["python", "-m", "http.server"],
-        workspace_id=stub.workspace_id,
-        stub_id=stub.id,
-        app_id=stub.app_id,
-        status=ContainerStatus.Failed,
-        exit_code=1,
-        created_at=finished_at - timedelta(seconds=1),
-        started_at=finished_at - timedelta(milliseconds=500),
-        finished_at=finished_at,
-    )
     with services.context.database.session() as session:
         return ContainerRepository(session).upsert(container)
 
