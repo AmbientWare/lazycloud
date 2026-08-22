@@ -1,7 +1,7 @@
-# Shared Package
+# Shared package
 
-Backend-free boundary models and protocol-neutral primitives—the vocabulary every
-other owner speaks.
+Backend-free boundary models and protocol-neutral types and helpers: the
+vocabulary every other owner speaks.
 
 No SQLAlchemy, Redis clients, FastAPI app state, process entrypoints, or SDK
 session behavior. Use Pydantic v2, precise enums and types, deterministic
@@ -18,10 +18,10 @@ answers `localhost` when the environment is silent points the process at whateve
 happens to be listening and reports success, and the wrong database is found by
 its consequences rather than by its error. Connection coordinates state their own
 absence instead: the field carries a marker no address can be confused with, and
-a validator raises with the variable named. The marker is not a fallback—nothing
-reaches it—it exists because a checker synthesizes the constructor from the
-fields and would otherwise demand the value at every call site that means to read
-it from the environment.
+a validator raises with the variable named. The marker is not a fallback, and
+nothing reaches it. It exists because a checker synthesizes the constructor from
+the fields and would otherwise demand the value at every call site that means to
+read it from the environment.
 
 Do not create request and body twins, duplicate a path field inside a body, add
 soft-error envelopes, or keep initializer compatibility facades. A contract
@@ -33,8 +33,8 @@ reach it as source. `shared.billing_rate_card_typescript` renders that source, a
 lives here rather than in `apps/web` or `apps/cli` because the alternative is a
 second copy of every price maintained by hand, and the drift a customer finds by
 being charged something the page did not say. It is a deterministic function of
-the card and nothing else—no clock, no locale, no environment—because the check
-that keeps the generated file current is a byte comparison against it.
+the card and nothing else, with no clock, no locale, and no environment, because
+the check that keeps the generated file current is a byte comparison against it.
 
 A workload's defaults are resolved by kind, and a schedule is not a kind. It is
 answered separately, in `resolve_keep_warm_seconds`, because it says something
@@ -58,14 +58,14 @@ alongside guest memory, so every value below is really "guest plus sandbox" and 
 small container is protected for less than it asked for. No constant covers it
 yet, deliberately: the footprint depends on file access and thread count, and two
 figures here that were chosen rather than measured both turned out wrong in a
-direction nobody noticed. Measure it on a live sandbox — RSS against guest usage,
-at rest and under load — before applying one, and apply it to all three values
-rather than the hard limit alone.
+direction nobody noticed. Measure it on a live sandbox before applying one: RSS
+against guest usage, at rest and under load. Apply it to all three values rather
+than the hard limit alone.
 
 Four cgroup values express it. `memory.low` is the request and is what reclaim
 protects. `memory.high` is the ceiling and throttles rather than kills.
 `memory.max` is the wall behind it, clamped to what the machine holds because a
-ceiling larger than the node is one the container never reaches — the host runs
+ceiling larger than the node is one the container never reaches. The host runs
 out first and its OOM killer picks by size. Swap is the fourth and the other
 three are decorative without it: a cgroup of anonymous pages with nowhere to
 reclaim to does not slow at `memory.high`, it stalls, measured at 21 seconds for

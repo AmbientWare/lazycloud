@@ -1,4 +1,4 @@
-# Billing Package
+# Billing package
 
 Who pays for a workspace, what standing they are in, the decisions that read
 them, and the delivery of what they owe.
@@ -20,7 +20,7 @@ admission decision, and the sweep.
   already run.
 - Registration is serialized on the account's own row, which is inserted before
   it is locked. A lock taken on a row that does not exist holds nothing, and a
-  first registration is exactly the case with no row — so two simultaneous first
+  first registration is exactly the case with no row, so two simultaneous first
   sign-ins would both register a customer and the unique constraint would refuse
   one of them, turning somebody away for double-clicking. The lock is held across
   the provider call deliberately, because waiting is what the second caller does
@@ -32,21 +32,21 @@ admission decision, and the sweep.
 - Every account holds a subscription, and the free plan is a $0 one. Provisioning
   is a customer, a subscription carrying the plan's price and the three metered
   prices, the allowance period the subscription's own cycle defines, and the
-  grant that funds it — one shape rather than two, so there is one billing flow,
+  grant that funds it. One shape rather than two, so there is one billing flow,
   a plan change is a price swapped on the subscription that already exists, and
-  free usage is metered into the provider like any other. The metered prices on
-  the free subscription are load-bearing: without them, usage past what the plan
-  includes reaches no invoice at all.
+  free usage is metered into the provider like any other. The free subscription
+  needs its metered prices: without them, usage past what the plan includes
+  reaches no invoice at all.
 - A plan change never creates a subscription, and moving down never ends one.
   The licensed item's price is swapped in place in both directions, so the
   subscription id, the billing anniversary and the three metered items survive
   and the usage already recorded this cycle is billed where it belongs. Ending
   the subscription instead would take the metered prices with it, so containers
   still running would meter onto meters no subscription item references and reach
-  no invoice at all — and the account row cleared for an ended subscription then
+  no invoice at all. The account row cleared for an ended subscription then
   refuses every new container, so a paying customer who pressed cancel would be
   locked out within seconds and put back on a fresh subscription by the next
-  billing surface they touched. "Cancel" is the free plan's price, and it is the
+  billing route they touched. "Cancel" is the free plan's price, and it is the
   same request as any other change.
 - Which direction a change goes in decides what happens to the part of the cycle
   already invoiced, and the caller states it rather than the adapter guessing.
@@ -55,12 +55,12 @@ admission decision, and the sweep.
   nothing: the month was invoiced when the cycle opened, and refunding part of it
   would hand back money for compute the account was free to spend and mostly has.
   So a move down is cancel-at-period-end in economic effect with no scheduling
-  machinery — the price swaps now, the next invoice is the smaller one.
+  machinery. The price swaps now, the next invoice is the smaller one.
 - An allowance is never reduced inside the period it was stamped on, whichever
   caller writes that period. What a customer was given when the cycle opened is
   what they spent against while it ran, and re-terming it downwards mid-cycle
   would leave the smaller figure standing in front of usage that was included
-  when it happened — the provider applies credit at finalization, so the invoice
+  when it happened. The provider applies credit at finalization, so the invoice
   would ask for the difference and bill somebody for compute their plan had
   already covered. The cycle keeps its terms and its spend, nothing is expired,
   nothing is bought, and the smaller plan applies from the next cycle. How much
@@ -71,7 +71,7 @@ admission decision, and the sweep.
   different amount or a different expiry.
 - The swap is this platform's own because the provider's hosted portal cannot do
   it. Their portal refuses to *update* a subscription that carries multiple
-  products or usage-based prices, and this one carries both by design — the plan
+  products or usage-based prices, and this one carries both by design; the plan
   price beside the three metered prices is what makes free usage meter like any
   other. A customer sent to the portal to change plan would find only the option
   to cancel, and cancelling takes the metered prices with it and leaves their
@@ -81,17 +81,18 @@ admission decision, and the sweep.
   provider hands back, and the reason to keep it is not visible from the code:
   read on its own, `BillingPlanChangeService` and its intent table look exactly
   like something a portal redirect would replace. The portal stays what it
-  already is here — replacing a card, reading past invoices — and a plan changed
+  already is here, replacing a card and reading past invoices, and a plan changed
   in the provider's own dashboard still arrives as a delivery and is settled the
   same way.
 - A plan change is recorded before it is attempted and settled after. The
   provider raises and collects the proration inside the call that swaps the
   price, and it cannot join a transaction here, so everything between that
   charge and the account row naming the new plan is a window where a customer
-  has paid for terms this platform is not giving them — judged by admission on
-  the allowance they left, and offered the button again. The intent row is what
-  makes that window recoverable: it is committed first, the provider is called,
-  and the outcome is written against the claim the intent was taken under.
+  has paid for terms this platform is not giving them. They are judged by
+  admission on the allowance they left, and offered the button again. The intent
+  row is what makes that window recoverable: it is committed first, the provider
+  is called, and the outcome is written against the claim the intent was taken
+  under.
 - Asking the provider settles it, and the answer is definitive rather than
   likely. The swap is sent refusing to complete without payment, so where it
   charges a difference the subscription carries the new plan's price only if the
@@ -99,9 +100,9 @@ admission decision, and the sweep.
   one fact, readable in one request, with no invoice search and no timing window.
   Downwards there is nothing to collect and so nothing that could have failed to,
   and the plan being there is the whole of what happened. Either way the sweep
-  can decide an intent nobody recorded an outcome for — the provider holds the
-  plan, so the cycle and the row are given those terms; it does not, so nothing
-  happened and nothing is written.
+  can decide an intent nobody recorded an outcome for. The provider holds the
+  plan, so the cycle and the row are given those terms; or it does not, so
+  nothing happened and nothing is written.
 - The plan is not the whole of the answer, because a subscription that has ended
   keeps the items it ended holding. A change is written back only onto the
   subscription it was made on and only while the provider still calls that
@@ -109,12 +110,12 @@ admission decision, and the sweep.
   written. The row and the plan together are what admission reads, so a settler
   that took the plan alone would put a live-looking subscription back on an
   account whose subscription is gone, buy the allowance that plan includes
-  against a cycle nothing will invoice, and admit every container that follows —
-  which is the state ending a subscription clears the row to prevent, recreated
+  against a cycle nothing will invoice, and admit every container that follows.
+  That is the state ending a subscription clears the row to prevent, recreated
   by the sweep that exists to protect the money.
 - A refusal is not an answer. `error_if_incomplete` can fail after the invoice
   was raised, and a read taken behind a call that timed out cannot tell a
-  provider that never moved from one still moving — so the request settles the
+  provider that never moved from one still moving. So the request settles the
   change only where the provider already holds the plan, and paces everything
   else for the sweep. Closing the intent on that early read is the one outcome
   nothing recovers from: a swap that lands afterwards is a charge with no record
@@ -133,7 +134,7 @@ admission decision, and the sweep.
   difference there may be a delivery that never arrived or a change somebody
   made in the provider's own dashboard, and making the two agree would be a
   money write on a guess. It writes to no billing table on any branch, and says
-  what disagrees instead — plan, standing, cycle, and the last closed invoice's
+  what disagrees instead: plan, standing, cycle, and the last closed invoice's
   metered totals against the ledger less whatever the outbox has not delivered.
   One durable event per account per divergence, re-emitted only when what it
   disagrees about changes, because an hourly pass that reported every account
@@ -142,8 +143,8 @@ admission decision, and the sweep.
   usage in. A plan change is prorated onto an invoice raised there and then,
   which carries no metered line and covers no span; taken as the newest closed
   period it would compare an empty window against an empty invoice, agree, and
-  leave the account with no usage reconciliation from its upgrade onwards — the
-  event whose lost delivery this pass exists to catch.
+  leave the account with no usage reconciliation from its upgrade onwards, and
+  an upgrade is exactly the event whose lost delivery this pass exists to catch.
 - Usage the outbox gave up on is subtracted like a backlog and reported unlike
   one. Both are money that did not reach the invoice, so both come off the
   ledger before the arithmetic, or every account holding either reads as a
@@ -158,10 +159,10 @@ admission decision, and the sweep.
   renewal, and its outgoing grant is left alone because that grant is what funds
   the invoice finalizing at that moment. Reading it off the period is what makes
   an upgrade landing in the renewal seam behave as a renewal, and a plan change
-  arriving as a delivery behave as a plan change — the two are indistinguishable
+  arriving as a delivery behave as a plan change. The two are indistinguishable
   from the call site and obvious from the row.
 - When a bought allowance becomes spendable is decided the same way, from the
-  cycle that came before this one — which the same write reports, because these
+  cycle that came before this one, which the same write reports, because these
   rows are the only record of it. The account row holds the newest grant and
   forgets the one before, and the outgoing grant a plan change expires says
   nothing about what came earlier. An account's first cycle follows nothing, and
@@ -174,16 +175,16 @@ admission decision, and the sweep.
   a grant which was expired, and both of those read as live to everything
   downstream.
 - A subscription the provider says has ended clears the plan as well as the
-  subscription. The two say one thing together — what this account is on — and a
+  subscription. The two say one thing together, what this account is on, and a
   row that kept its plan would show the customer terms nothing holds them to,
   hide the way back onto a subscription, and satisfy admission while its usage
   reached no invoice.
 - Absence of a row, and a row naming no plan, both mean an account on no
-  subscription — one that has never reached a billing surface, such as the
-  offline bootstrap administrator or one an administrator created through the
-  users route, or one whose subscription the provider says has ended. Such an
+  subscription: one that has never reached a route that provisions billing, such
+  as the offline bootstrap administrator or one an administrator created through
+  the users route, or one whose subscription the provider says has ended. Such an
   account is shown no plan and no allowance rather than terms nothing will hold
-  it to, is refused new work, and is provisioned by the first billing surface it
+  it to, is refused new work, and is provisioned by the first billing route it
   reaches.
 - Admission asks whether what this runs will reach an invoice somebody is paying.
   For an account somebody can bill, that is the whole question and the amount is
@@ -193,26 +194,26 @@ admission decision, and the sweep.
   answer no. The provider has reported a payment did not go through; or the
   account holds no subscription for its usage to land on, which covers an account
   never provisioned, one whose provisioning stopped part-way, and one whose
-  subscription has ended — all of which would otherwise meter usage into a ledger
+  subscription has ended. All of those would otherwise meter usage into a ledger
   and a meter that reach no invoice, which is unbounded compute nobody is charged
   for. Provisioning at sign-in is what makes that state unreachable; the refusal
   is what makes it a fact rather than an expectation.
 - An account with no card on file is the case that reasoning does not cover, and
   it is the one place an amount decides. There is no card to chase and no invoice
   that will ever be paid, so what such an account spends past its allowance is not
-  billed late — it is lost, against hardware already paid for. So a cardless
+  billed late. It is lost, against hardware already paid for. So a cardless
   account is refused once its allowance is gone, and only a cardless account is:
   attaching a card moves it onto the plan's terms and out of this check for good.
   What it may spend before that is deliberately small, because every figure in it
   is money the platform has decided to give away to find out whether it can bill
   anybody.
-- That question is asked by every billed thing, not only by a container, and the
-  method is named for the question rather than for what is asking. A volume asks
-  it before it exists; a third billable resource asks the same one and adds no
-  method. Only a container carries a count, so only a container has a second.
+- Every billed thing asks that question, not only a container, and the method is
+  named for the question rather than for what is asking. A volume asks it before
+  it exists; a third billable resource asks the same one and adds no method. Only
+  a container carries a count, so only a container has a second.
 - A volume is admitted on creation alone, and the remainder is deliberate rather
   than overlooked. Storage is the one billed dimension that keeps accruing with
-  nothing running, so the sweep that stops containers can do nothing about it —
+  nothing running, so the sweep that stops containers can do nothing about it,
   which is why the refusal has to happen before the volume exists. But resolving
   a volume that already exists is never refused: that is how a container mounts
   one and how its owner reads their own files back, and locking an account out of
@@ -230,26 +231,26 @@ admission decision, and the sweep.
   seen slightly late; the limit is what keeps the size of that blind spot
   proportional. Counted across every workspace the account owns, since the limit
   is a term of a plan and making another workspace is self-serve. Deliberately
-  approximate under concurrent starts — closing that gap would put a per-account
+  approximate under concurrent starts. Closing that gap would put a per-account
   exclusive lock in the path of every autoscaler ramp to protect a guardrail
   whose overshoot self-corrects and is invoiced like anything else.
 - All of it is read from local rows rather than the provider, because these
   questions are asked on every container start and a balance call there is a
   start that fails whenever the provider is slow. Whether a card exists is
   therefore a column, refreshed when one is attached and re-asked of the provider
-  at each cycle boundary — which is also what makes a card *removed* take effect
+  at each cycle boundary, which is also what makes a card *removed* take effect
   at the end of the period rather than under the work already running.
 - The allowance counter loses nothing to the renewal seam. A cost priced between
   a cycle ending at the provider and the delivery that opens the next one here has
   no period to be counted against at that moment, and is read back from the ledger
-  when that period opens rather than dropped — the ledger row was written in the
+  when that period opens rather than dropped. The ledger row was written in the
   same transaction, so the figure the customer is shown and the usage they are
   invoiced for stay the same number.
 - The outbox is claimed, never derived. The sweep sends rows the pricer wrote in
   the transaction that priced the usage; it never scans usage, never groups, and
   never computes a cost. A sweep that recomputed its work set every run would put
   a permanently failing account at the front of every batch and hold everything
-  behind it — the defect this shape exists to remove.
+  behind it, the defect this shape exists to remove.
 - Every row carries its own outcome, settled against the claim it was taken
   under. A refusal is paced into the future so the next claim passes over it, a
   row another drainer has reclaimed settles nothing, and neither says anything
@@ -263,8 +264,8 @@ admission decision, and the sweep.
   that outlived the window would turn a lost acknowledgement into a second
   charge. How long the window is belongs to the provider adapter, not here.
 - Terminal is stated, never inferred. An exhausted attempt count, or a payload
-  the provider will always reject — malformed, or timestamped outside the period
-  they still accept usage for — is abandoned with a durable
+  the provider will always reject because it is malformed or timestamped outside
+  the period they still accept usage for, is abandoned with a durable
   `billing.meter_event.abandoned` error event naming the identifier, workspace,
   dimension and value, and the row is kept as the evidence of money that never
   left. Nothing here restates a provider's limits as a number of its own to keep
@@ -272,7 +273,7 @@ admission decision, and the sweep.
 - The abandoned backlog is a counted figure and not only an event. A row is
   abandoned once, is never pruned, and its delta is gone after the tick that
   produced it, so the standing count and what those rows metered are asked of
-  the outbox — a number an operator watches, which only falls when somebody has
+  the outbox, a number an operator watches, which only falls when somebody has
   answered for the money and removed the evidence. Asked rather than returned by
   the drain, because the provider is what makes a drain fail and a figure
   carried out of one would read zero for the length of the outage that grows it.

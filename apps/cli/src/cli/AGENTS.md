@@ -1,4 +1,4 @@
-# Operator CLI Implementation
+# Operator CLI implementation
 
 Typer and Rich command implementations for the operator CLI.
 

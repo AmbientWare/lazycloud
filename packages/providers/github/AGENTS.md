@@ -1,4 +1,4 @@
-# GitHub Provider
+# GitHub provider
 
 The GitHub App a person signs in through. Authentication only: this adapter learns
 who someone is and nothing else.

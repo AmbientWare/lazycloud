@@ -1,4 +1,4 @@
-# Shared HTTP Contracts
+# Shared HTTP contracts
 
 Every public JSON payload consumed by the API, the SDK and CLI, the runner, or
 the web dashboard.

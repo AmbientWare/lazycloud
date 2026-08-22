@@ -1,4 +1,4 @@
-# Observability Package
+# Observability package
 
 Durable events, usage and accounting, metrics, log and event streams, telemetry
 setup, and the evidence billing is built on.
@@ -9,13 +9,13 @@ package applies one and holds none.
 
 A window is billed `max(reserved, measured)` per resource, reached without ever
 pairing two records. The reservation is the floor because capacity held is
-capacity nobody else can schedule onto, and it rides on the duration record —
-the one a metering window guarantees. The measured records add only what the
-same window used above the same floor, so the two sum to the greater of them
-whatever order they arrive in, and a missing measurement costs the burst rather
-than the charge. Nothing joins on time, looks a sibling window up, or derives a
-quantity from another record: a stale window can only ever be priced against the
-capacity that window held.
+capacity nobody else can schedule onto, and it rides on the duration record, the
+one a metering window guarantees. The measured records add only what the same
+window used above the same floor, so the two sum to the greater of them whatever
+order they arrive in, and a missing measurement costs the burst rather than the
+charge. Nothing joins on time, looks a sibling window up, or derives a quantity
+from another record: a stale window can only ever be priced against the capacity
+that window held.
 
 The sentry's and gofer's own resident memory is inside the measured memory
 figure, and the platform charges for it. It exists because the container runs,
@@ -29,7 +29,7 @@ container and per window, at the cost of one string.
 
 Pricing runs where metering commits. `MeteredUsagePricer` is built on the
 caller's session so a priced segment lands in the transaction that wrote the
-record it prices—a crash between the two loses money or bills it twice, and the
+record it prices. A crash between the two loses money or bills it twice, and the
 usage row alone cannot say which happened.
 
 Metering is never refused. A window no published rate covers still commits its
@@ -39,10 +39,10 @@ event is cluster-scoped: a missing rate is this platform's defect, not something
 to show the customer whose work it failed to price. An explicit rate of zero is
 the opposite case: it writes its segments and its allowance increment, so a free
 dimension reads as metered at $0.00 rather than as unmeasured. It owes the
-payment provider nothing—a zero moves no meter total, and the $0.00 line a
+payment provider nothing. A zero moves no meter total, and the $0.00 line a
 customer reads comes from the metered price their subscription carries rather
-than from the events against it—so turning a dimension on later is still one rate
-row and nothing else.
+than from the events against it, so turning a dimension on later is still one
+rate row and nothing else.
 
 A record the ledger has already priced keeps the cost it froze. Re-recording a
 quantity under an id that was already priced leaves the segments, the allowance
@@ -50,7 +50,7 @@ and the outbox where they are and raises a durable
 `billing.span.reprice_refused` error naming both figures; a correction is a new
 record, never an edit to a frozen one.
 
-SQL access stays repository-backed, hot streams use coordination primitives, and
+SQL access stays repository-backed, hot streams use the coordination package, and
 optional exporters initialize lazily so an unconfigured one costs nothing. Apps,
 SDK, worker and scheduler loops, and providers stay outside.
 
@@ -59,5 +59,5 @@ properties here rather than conveniences: a dropped or misattributed event is a
 billing defect.
 
 A broad exception handler on a capacity, enrollment, or billing path either
-records a durable error event or re-raises—it never swallows. Wrap the recording
+records a durable error event or re-raises. It never swallows. Wrap the recording
 itself, so that failing to record can never replace the failure being recorded.

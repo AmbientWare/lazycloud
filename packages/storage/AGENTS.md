@@ -1,4 +1,4 @@
-# Storage Package
+# Storage package
 
 Protocol-backed object and cache storage, S3-compatible clients, mounted storage,
 and the durable records that describe stored objects.
@@ -11,8 +11,8 @@ that records it rather than by a later pass. A record committed without its cost
 is money this platform measured and can no longer charge for, and the usage row
 alone cannot say whether the cost was skipped or never owed.
 
-A sized block device with its own filesystem and a restore point is a primitive
-this package does not have, and that is a decision rather than an oversight.
+A sized block device with its own filesystem and a restore point is something
+this package does not offer, and that is a decision rather than an oversight.
 It is what anything stateful actually wants, and a shared volume mount is not
 it. Under bring-your-own capacity the disk sits on the customer's own
 infrastructure and is usually already provisioned, so the gap costs them

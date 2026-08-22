@@ -1,4 +1,4 @@
-# Worker Repository Package
+# Worker repository package
 
 The trusted server-side bridge from authenticated worker HTTP contracts to
 control-plane state, credential authorities, checkpoints, and image builds.
@@ -10,6 +10,6 @@ here.
 
 This is where the trust boundary is actually enforced. Establish assignment,
 workspace, token, build, and capability authority before vending a credential or
-mutating state—a worker's claim about what it is working on is an input, not a
+mutating state. A worker's claim about what it is working on is an input, not a
 fact. Never add a persistence fallback that lets a worker write around this
 package.

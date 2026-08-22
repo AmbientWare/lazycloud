@@ -1,4 +1,4 @@
-# Cloudflare Provider
+# Cloudflare provider
 
 Custom hostnames for one Cloudflare zone: the edge that terminates TLS for domains
 a customer owns rather than ones this platform issued.

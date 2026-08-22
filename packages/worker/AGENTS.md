@@ -1,7 +1,7 @@
-# Worker Package
+# Worker package
 
 Container execution: sequencing, runtime configuration, networking, mounts,
-metrics and OOM handling, events, supervision, checkpoints, and finalization—all
+metrics and OOM handling, events, supervision, checkpoints, and finalization, all
 behind narrow protocols.
 
 Process entrypoints, API and SDK code, app state, and broad composition stay
@@ -40,40 +40,41 @@ releases it: image handling, credential scope, retries, event emission, terminal
 state, and cleanup.
 
 A metering window is claimed once and, if its write fails, offered again exactly
-as it was claimed — same bounds, same evidence. The platform derives a usage
-record's identity from those bounds and prices the window against the capacity it
-held, so re-sending an unchanged window is refused as a duplicate, while widening
-it to reach the present asks for ground that may already be priced under ids that
-cannot collide with the charge holding it. Ground metered after the failure
-belongs to the window that follows, not to the one being retried: evidence and
-window travel together, and a retry that carried current samples against an
-earlier window would bill a burst that window never saw.
+as it was claimed, with the same bounds and the same evidence. The platform
+derives a usage record's identity from those bounds and prices the window against
+the capacity it held, so re-sending an unchanged window is refused as a
+duplicate, while widening it to reach the present asks for ground that may
+already be priced under ids that cannot collide with the charge holding it.
+Ground metered after the failure belongs to the window that follows, not to the
+one being retried: evidence and window travel together, and a retry that carried
+current samples against an earlier window would bill a burst that window never
+saw.
 
 What a container reserved is not restated as a usage metric. The reservation
 prices from the placement the control plane recorded, so a worker's own copy of
-it is a label — and a second copy that decided nothing would still have to be
+it is a label, and a second copy that decided nothing would still have to be
 kept in step with the one that does.
 
 A container that outgrows its reservation is stopped here, not by the kernel.
-The worker holds the two readings the decision needs — its own memory pressure
-and what each container currently uses — and the kernel is seconds away once a
+The worker holds the two readings the decision needs, its own memory pressure
+and what each container currently uses, and the kernel is seconds away once a
 machine is in full stall, so the decision is made where the readings are rather
 than reported to something that would have to ask again. The scheduler learns
 about it the same way it learns about any other stop. Nothing is requeued, and
 nothing needs to be: a request stops being recoverable once a worker has taken
 it, so a container that is running has no queued work waiting behind it. What
-recovers is whatever recovers any container that died — the autoscaler for an
+recovers is whatever recovers any container that died: the autoscaler for an
 endpoint or a pod, the retry schedule for a function task.
 
 The rule is the reservation, and it is the whole of what a reservation buys: the
 container furthest above what it asked for goes, and one inside its request is
 never chosen however large it is. That inverts `oom_badness`, which scores
-resident size and reaches the biggest honest tenant first — the reason this
+resident size and reaches the biggest honest tenant first, which is why this
 cannot be delegated to the kernel and then explained to the customer afterwards.
 
 A worker whose cgroup carries no memory limit does not watch. Both deployments
-give a worker a cgroup — the agent passes `--cgroupns host`, Compose sets
-`cgroup: host` — so having one proves nothing; what matters is whether it is
+give a worker a cgroup, since the agent passes `--cgroupns host` and Compose sets
+`cgroup: host`, so having one proves nothing; what matters is whether it is
 bounded. Unbounded, the pressure reading describes the whole machine rather than
 this worker's share, and evicting on it stops this worker's containers because
 something else on the host grew.
@@ -81,23 +82,21 @@ something else on the host grew.
 A container's cgroup nests inside the worker's, and the worker moves its own
 processes into a leaf first. cgroup v2 refuses to enable a controller on a cgroup
 that holds processes, so a worker sitting directly in its own cgroup can never
-give its containers a limit there — the child is created and has no `memory.max`
+give its containers a limit there. The child is created and has no `memory.max`
 at all. Nesting is what makes the slot a bound and the worker's `memory.pressure`
-a signal about this worker rather than the machine, so both halves are load
-bearing.
+a signal about this worker rather than the machine, so neither half is optional.
 
 None of that is visible without a real runsc and a real cgroup filesystem, and
 all of it is visible immediately with one. The same is true of the eviction
 threshold: a worker pinned at its memory limit with more than its own size
-swapped out reads under 1.5% full stall, so the first threshold — twenty per
-cent, chosen rather than measured — described a machine already dead and would
-never have fired. When these values change, run the
-production path against the worker image rather than trusting the unit suite:
-build the spec with `build_base_oci_config` and `plan_oci_linux_resources`, run
-it under `runsc` in a privileged container with `--cgroupns=host`, and read the
-cgroup back. Four review rounds and a green suite each missed a different way
-this was inert; one such run found the controller-delegation problem in a single
-attempt.
+swapped out reads under 1.5% full stall, so the first threshold of twenty per
+cent, chosen rather than measured, described a machine already dead and would
+never have fired. When these values change, run the production path against the
+worker image rather than trusting the unit suite: build the spec with
+`build_base_oci_config` and `plan_oci_linux_resources`, run it under `runsc` in
+a privileged container with `--cgroupns=host`, and read the cgroup back. Four
+review rounds and a green suite each missed a different way this was inert; one
+such run found the controller-delegation problem in a single attempt.
 
 For the same reason every figure a ceiling is clamped against comes from that
 cgroup rather than from `/proc/meminfo` or `os.cpu_count()`, neither of which

@@ -1,7 +1,7 @@
-# Images Package
+# Images package
 
 Container image planning, durable records and events, lifecycle decisions, build
-execution and publication control, and cleanup—all behind scheduler, container,
+execution and publication control, and cleanup, all behind scheduler, container,
 storage, and secret protocols.
 
 Apps, SDK, provider adapters, and scheduler and worker loops stay outside.
