@@ -120,8 +120,3 @@ resource "aws_iam_role_policy" "fleet_connection" {
   # Generated, never hand-written. See connection-role-policy.json.
   policy = file("${path.module}/connection-role-policy.json")
 }
-
-resource "aws_secretsmanager_secret_version" "fleet_external_id" {
-  secret_id     = aws_secretsmanager_secret.runtime["fleet-external-id"].id
-  secret_string = random_password.fleet_external_id.result
-}

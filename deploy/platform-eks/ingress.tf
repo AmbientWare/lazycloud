@@ -17,11 +17,3 @@ data "terraform_remote_state" "cloudflare" {
     region = var.region
   }
 }
-
-resource "aws_secretsmanager_secret_version" "tunnel_credentials" {
-  secret_id = aws_secretsmanager_secret.runtime["cloudflare-tunnel-credentials"].id
-
-  # Written verbatim: this is the whole of the tunnel's identity, and cloudflared
-  # reads the file as-is.
-  secret_string = data.terraform_remote_state.cloudflare.outputs.tunnel_credentials
-}

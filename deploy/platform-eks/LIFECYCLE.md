@@ -65,38 +65,54 @@ check `aws eks list-clusters` before retrying.
 
 ### 3. Secret values
 
-Terraform declares every secret and fills only the ones it generates: the
-database URL, the fleet external ID, the backend route key, and the tunnel
-credentials it reads from `deploy/cloudflare`. The rest come from outside and are
-written once:
+A deployment's credentials live in two Secrets Manager entries, each a JSON
+document. Secrets Manager bills per entry, so a dozen containers was a dozen
+charges for what is one set of values.
+
+`<deployment>/platform` is Terraform's. It holds the database URL, the two
+generated shared keys, the tunnel credentials and the fleet external ID, and it
+is rewritten on every apply. Do not edit it by hand; the next apply will
+overwrite what you wrote.
+
+`<deployment>/operator` is yours, and Terraform only declares it. Write it once,
+before anything syncs:
 
 ```sh
-aws secretsmanager put-secret-value --secret-id "$DEPLOYMENT/github-client-id" --secret-string '...'
-# github-client-secret, tailnet-oauth-client-id, tailnet-oauth-client-secret,
-# cloudflare-api-token, stripe-api-key, stripe-webhook-secret
+umask 077
+cat > operator.json <<'JSON'
+{
+  "LAZYCLOUD_TOKEN": "rt_...",
+  "LAZYCLOUD_GITHUB_CLIENT_ID": "...",
+  "LAZYCLOUD_GITHUB_CLIENT_SECRET": "...",
+  "LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID": "...",
+  "LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET": "...",
+  "LAZYCLOUD_CLOUDFLARE_API_TOKEN": "...",
+  "LAZYCLOUD_STRIPE_API_KEY": "...",
+  "LAZYCLOUD_STRIPE_WEBHOOK_SECRET": "..."
+}
+JSON
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform -chdir=deploy/platform-eks output -raw operator_secret)" \
+  --secret-string "file://$PWD/operator.json"
+shred -u operator.json
 ```
 
-Two of them are not optional and are not obvious.
+Every key is named in the chart, so one you leave out is caught when the values
+render rather than by a pod that will not start.
 
-**The administrator credential, before the first sync.**
-
-```sh
-aws secretsmanager put-secret-value --secret-id "$DEPLOYMENT/administrator-token" \
-  --secret-string "rt_$(python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode())')"
-```
-
+**The administrator token is the one with a trap in it.** Generate it with
+`python3 -c 'import base64,os; print("rt_" + base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode())'`.
 `auth bootstrap` adopts a configured credential when it finds one and mints its
-own when it does not, recording a different bootstrap request id for each. Let
-the Job run without this and the credential exists only inside that pod, nothing
-afterwards has a bearer token, and supplying the value later is refused as an
-already completed bootstrap. The way back is resetting the schema.
+own when it does not, recording a different request id for each. Let the Job run
+without this and the credential exists only inside that pod, nothing afterwards
+has a bearer token, and supplying the value later is refused as an already
+completed bootstrap. The way back is resetting the schema.
 
-**The GitHub App private key** goes to Terraform rather than here. It is the one
-credential that never reaches Secrets Manager: Argo needs it to read this
+**The GitHub App private key** is in neither document. Argo needs it to read this
 repository, and reading this repository is how External Secrets gets installed,
 so a copy behind External Secrets would be behind itself. Terraform writes it
-straight into Argo's repository-credentials Secret. Put it beside the other
-operator credentials:
+straight into Argo's repository-credentials Secret, from the operator
+environment:
 
 ```sh
 echo "export TF_VAR_github_app_private_key=\"$(cat ambientware.private-key.pem)\"" \
@@ -108,13 +124,6 @@ this one key reaches every repository Argo is later pointed at. Its id and
 installation id are Terraform variables with defaults; the key is generated in
 the App's settings and cannot be read back from GitHub, so a lost one is replaced
 rather than recovered.
-
-A secret with no value is otherwise normal rather than fatal. An unchosen
-telemetry backend does not stop the control plane from serving. Terraform gives
-every container an empty first version so that absence answers as a blank
-instead of `ResourceNotFoundException`, which External Secrets treats as a
-failure of the whole set rather than of the one key. A value written afterwards
-replaces the blank and no later apply resets it.
 
 ### 4. Repository variables
 
@@ -181,9 +190,10 @@ Three things survive it and have to be dealt with by hand:
 - **The PlanetScale role**, if the branch is destroyed after it. The role owns
   every table the schema created and cannot be dropped while it does; destroying
   the branch takes the role with it, so let the branch go first.
-- **Externally-sourced secrets.** A destroy removes the containers and their
-  values, so the seven written in step 3 have to be written again, along with the
-  administrator credential.
+- **The operator document.** A destroy removes it and its values, so step 3 is
+  done again on the next deployment. Keep a copy: the Stripe webhook signing
+  secret is returned only when the endpoint is created, so it is the one value a
+  provider will not show you twice.
 
 Never reset external, deployed, or production data. Predeployment, resetting and
 rebuilding is ordinary and is how the module is proven to reproduce.

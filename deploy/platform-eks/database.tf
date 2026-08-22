@@ -49,13 +49,3 @@ resource "planetscale_postgres_branch_role" "control_plane" {
 # So the control plane connects direct, on `access_host_url`. Adding a bouncer
 # here and pointing the URL at it would look like a performance change and behave
 # like a correctness one.
-resource "aws_secretsmanager_secret_version" "database_url" {
-  secret_id = aws_secretsmanager_secret.runtime["database-url"].id
-  secret_string = format(
-    "postgresql+psycopg://%s:%s@%s:5432/%s",
-    planetscale_postgres_branch_role.control_plane.username,
-    planetscale_postgres_branch_role.control_plane.password,
-    planetscale_postgres_branch_role.control_plane.access_host_url,
-    planetscale_postgres_branch_role.control_plane.database_name,
-  )
-}

@@ -1,84 +1,106 @@
+# Two documents, and each has exactly one writer.
+#
+# Secrets Manager bills per entry per month and a deployment holds a dozen
+# credentials, so each entry is a JSON document rather than a container of its
+# own. The split is by author: Terraform writes what it generates or reads from
+# a module that owns it, an operator writes what only a person can obtain, and a
+# value belongs to whichever of them can produce it.
+#
+# One document would be cheaper again and cannot work. A document is written
+# atomically, so Terraform rendering it would drop every field an operator had
+# added. `ignore_changes` is the usual answer and is not available here: the
+# database URL carries the PlanetScale role's password and has to be rewritten
+# when that rotates, so this configuration cannot be a write-once author.
+#
+# Both are named for the deployment, so a second one is a second pair rather than
+# a shared entry two deployments write.
 locals {
-  # Every credential this deployment reads, and every one has a writer. Terraform
-  # writes the ones it generates or obtains from another module; an operator
-  # writes the rest before the first sync, because Secrets Manager has no such
-  # thing as a container that exists and answers blank. An empty SecretString
-  # is rejected, and a container with no version answers ResourceNotFoundException
-  # that fails the whole materialisation rather than the one key. A secret that
-  # would be declared here and filled by nobody is one the cluster waits on
-  # forever, so it is not declared.
-  runtime_secrets = {
-    database-url                  = "PostgreSQL URL, direct connection. PgBouncer breaks the session advisory locks."
-    administrator-token           = "Platform administrator bearer, minted by bootstrap."
-    cache-service-token           = "Cache server service token."
-    tailnet-oauth-client-id       = "Tailscale OAuth client id, from deploy/tailnet outputs."
-    tailnet-oauth-client-secret   = "Tailscale OAuth client secret, from deploy/tailnet outputs."
-    cloudflare-api-token          = "Cloudflare token for custom hostnames. Zone SSL and Certificates, edit."
-    cloudflare-tunnel-credentials = "Tunnel credentials file contents, from deploy/cloudflare."
-    stripe-api-key                = "Stripe restricted key."
-    stripe-webhook-secret         = "Stripe webhook signing secret. Returned only at endpoint creation."
-    github-client-id              = "GitHub App client id for dashboard sign-in."
-    github-client-secret          = "GitHub App client secret."
-    backend-route-auth-key        = "Shared key authenticating backend routes. At least 32 bytes."
-    fleet-external-id             = "External ID the platform's own connection role enforces."
+  platform_secret = "${var.deployment}/platform"
+  operator_secret = "${var.deployment}/operator"
+
+  platform_values = {
+    LAZYCLOUD_DATABASE_URL = format(
+      "postgresql+psycopg://%s:%s@%s:5432/%s",
+      planetscale_postgres_branch_role.control_plane.username,
+      planetscale_postgres_branch_role.control_plane.password,
+      planetscale_postgres_branch_role.control_plane.access_host_url,
+      planetscale_postgres_branch_role.control_plane.database_name,
+    )
+    LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY = random_password.backend_route_auth_key.result
+    LAZYCLOUD_CACHE_SERVICE_TOKEN    = random_password.cache_service_token.result
+    # Verbatim: the whole of the tunnel's identity, which cloudflared reads as-is.
+    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS = data.terraform_remote_state.cloudflare.outputs.tunnel_credentials
+    LAZYCLOUD_FLEET_EXTERNAL_ID             = random_password.fleet_external_id.result
+  }
+
+  # Named here so the runbook and the cluster agree on them. The document itself
+  # is written once by an operator; a value in this configuration is a value in
+  # the state file.
+  operator_variables = {
+    LAZYCLOUD_TOKEN                       = "Platform administrator bearer. Write it before the first sync: bootstrap adopts a configured credential and mints an unreachable one when it finds none."
+    LAZYCLOUD_GITHUB_CLIENT_ID            = "GitHub App client id for dashboard sign-in."
+    LAZYCLOUD_GITHUB_CLIENT_SECRET        = "GitHub App client secret."
+    LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID     = "Tailscale OAuth client id, from deploy/tailnet outputs."
+    LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET = "Tailscale OAuth client secret, from deploy/tailnet outputs."
+    LAZYCLOUD_CLOUDFLARE_API_TOKEN        = "Cloudflare token for custom hostnames. Zone SSL and Certificates, edit."
+    LAZYCLOUD_STRIPE_API_KEY              = "Stripe restricted key."
+    LAZYCLOUD_STRIPE_WEBHOOK_SECRET       = "Stripe webhook signing secret. Returned only at endpoint creation."
+  }
+
+  # Which document each variable is read out of. Every workload gets these as
+  # environment, which is why the tunnel credential is not among them.
+  secret_environment = merge(
+    { for name in keys(local.operator_variables) : name => local.operator_secret },
+    {
+      LAZYCLOUD_DATABASE_URL           = local.platform_secret
+      LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY = local.platform_secret
+      LAZYCLOUD_CACHE_SERVICE_TOKEN    = local.platform_secret
+    },
+  )
+
+  # Materialised into the same Kubernetes Secret and mounted as a file by the one
+  # workload that reads it. `cloudflared` wants a credentials file rather than a
+  # value, and it has no business in the environment of workloads that never open
+  # it.
+  secret_files = {
+    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS = local.platform_secret
   }
 }
 
-resource "aws_secretsmanager_secret" "runtime" {
-  for_each = local.runtime_secrets
-
-  name        = "${var.deployment}/${each.key}"
-  description = each.value
+resource "aws_secretsmanager_secret" "platform" {
+  name        = local.platform_secret
+  description = "Values this configuration generates or reads from another module."
 
   # Predeployment resets are ordinary, and a 30-day recovery window means a
   # destroyed deployment cannot reuse its own secret names for a month.
   recovery_window_in_days = 0
 }
 
-# Which environment variable each secret becomes in the cluster. These are the
-# names the processes read.
-#
-# Split from `secret_files` below because the chart gives every workload every
-# variable named here. A credential only one pod reads does not belong in the
-# environment of the four that do not, and a file is how that pod wants it
-# anyway.
-locals {
-  secret_environment = {
-    LAZYCLOUD_DATABASE_URL                = aws_secretsmanager_secret.runtime["database-url"].name
-    LAZYCLOUD_TOKEN                       = aws_secretsmanager_secret.runtime["administrator-token"].name
-    LAZYCLOUD_CACHE_SERVICE_TOKEN         = aws_secretsmanager_secret.runtime["cache-service-token"].name
-    LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID     = aws_secretsmanager_secret.runtime["tailnet-oauth-client-id"].name
-    LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET = aws_secretsmanager_secret.runtime["tailnet-oauth-client-secret"].name
-    LAZYCLOUD_CLOUDFLARE_API_TOKEN        = aws_secretsmanager_secret.runtime["cloudflare-api-token"].name
-    LAZYCLOUD_STRIPE_API_KEY              = aws_secretsmanager_secret.runtime["stripe-api-key"].name
-    LAZYCLOUD_STRIPE_WEBHOOK_SECRET       = aws_secretsmanager_secret.runtime["stripe-webhook-secret"].name
-    LAZYCLOUD_GITHUB_CLIENT_ID            = aws_secretsmanager_secret.runtime["github-client-id"].name
-    LAZYCLOUD_GITHUB_CLIENT_SECRET        = aws_secretsmanager_secret.runtime["github-client-secret"].name
-    LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY      = aws_secretsmanager_secret.runtime["backend-route-auth-key"].name
-  }
-
-  # Materialised into the same Secret and mounted as a file by the one workload
-  # that reads it. `cloudflared` wants a credentials file rather than a value,
-  # and it is the whole of the tunnel's identity.
-  secret_files = {
-    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS = aws_secretsmanager_secret.runtime["cloudflare-tunnel-credentials"].name
-  }
+resource "aws_secretsmanager_secret_version" "platform" {
+  secret_id     = aws_secretsmanager_secret.platform.id
+  secret_string = jsonencode(local.platform_values)
 }
 
-# Generated rather than configured, like the fleet external ID. Both authenticate
-# one part of this deployment to another and mean nothing outside it, so there is
-# nobody to obtain them from and no operator step that could go missing. The
-# backend route key is read at 32 bytes minimum and refuses to start below that.
-resource "random_password" "shared" {
-  for_each = toset(["backend-route-auth-key", "cache-service-token"])
+resource "aws_secretsmanager_secret" "operator" {
+  name = local.operator_secret
+  description = format(
+    "Credentials from outside this deployment, as one JSON document. Keys: %s.",
+    join(", ", sort(keys(local.operator_variables))),
+  )
 
+  recovery_window_in_days = 0
+}
+
+# Generated rather than obtained. Each authenticates one part of this deployment
+# to another and means nothing outside it, so there is nobody to get them from
+# and no operator step that could go missing. The backend route key is read at 32
+# bytes minimum and refuses to start below that.
+resource "random_password" "backend_route_auth_key" {
   length  = 64
   special = false
 }
 
-resource "aws_secretsmanager_secret_version" "shared" {
-  for_each = random_password.shared
-
-  secret_id     = aws_secretsmanager_secret.runtime[each.key].id
-  secret_string = each.value.result
+resource "random_password" "cache_service_token" {
+  length  = 64
+  special = false
 }

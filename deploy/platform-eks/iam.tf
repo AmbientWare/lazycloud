@@ -60,7 +60,7 @@ data "aws_iam_policy_document" "control_plane" {
   statement {
     sid       = "ReadOwnSecrets"
     actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-    resources = [for secret in aws_secretsmanager_secret.runtime : secret.arn]
+    resources = [aws_secretsmanager_secret.platform.arn, aws_secretsmanager_secret.operator.arn]
   }
 
   # A bucket per workspace, created on demand by `control.service.create_workspace_storage`.
