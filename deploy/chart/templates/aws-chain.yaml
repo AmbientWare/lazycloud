@@ -12,6 +12,11 @@ Pod Identity injects `AWS_CONTAINER_CREDENTIALS_FULL_URI`, which is the containe
 credentials provider, so the chain's base is the pod's own identity and no
 credential is written here.
 
+Same path and same profile name as Compose reads, so a process behaves the same
+in both and an operator moving between them is reading one arrangement. Only the
+base differs, and it has to: Compose starts from an operator's own credentials
+and this starts from the pod's.
+
 Without this the control plane calls as the workload role, and a connection is
 refused by a trust that was never asked about it. The refusal names the pod's
 role, which appears in no template and in no runbook.

@@ -80,7 +80,7 @@ spec:
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE
-              value: /etc/lazycloud/aws/config
+              value: /run/lazycloud/aws/config
             - name: AWS_PROFILE
               value: {{ .Values.aws.profile | quote }}
             - name: LAZYCLOUD_TAILNET_STATE_DIR
@@ -94,7 +94,7 @@ spec:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
-              mountPath: /etc/lazycloud/aws
+              mountPath: /run/lazycloud/aws
             - name: tun
               mountPath: /dev/net/tun
             - name: state

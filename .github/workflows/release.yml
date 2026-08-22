@@ -14,11 +14,6 @@ name: Release Artifacts
 # start against a release that exists and that it was never told about.
 on:
   workflow_call:
-    inputs:
-      bake_ami:
-        description: Bake the per-region connected AWS node AMI
-        type: boolean
-        default: true
     outputs:
       version:
         description: The immutable version the release was published under.
@@ -139,9 +134,13 @@ jobs:
           cache-from: type=gha,scope=connected-aws-container-worker
           cache-to: type=gha,mode=max,scope=connected-aws-container-worker
 
+      # Always. The image carries the agent binary and the worker image this
+      # release publishes, so one baked for an earlier release describes an
+      # earlier release. Skipping it published an empty catalog instead, and a
+      # control plane refuses a release that names no AMI to launch, which is a
+      # release that cost fifteen minutes less and can run nothing.
       - name: Bake connected AWS node image
         id: bake
-        if: ${{ inputs.bake_ami }}
         shell: bash
         run: |
           cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
@@ -165,7 +164,7 @@ jobs:
           "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}"
           --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
           --region "${AWS_RELEASE_REGION}"
-          --cpu-ami-ids '${{ steps.bake.outputs.cpu_ami_ids || '{}' }}'
+          --cpu-ami-ids '${{ steps.bake.outputs.cpu_ami_ids }}'
           --output dist/connected-aws
 
       - name: Publish and anonymously verify connected AWS release bundle

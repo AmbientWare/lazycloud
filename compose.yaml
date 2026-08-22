@@ -122,7 +122,7 @@ x-platform-aws-credentials: &platform-aws-credentials
   AWS_CONFIG_FILE: /run/lazycloud/aws/config
   AWS_SHARED_CREDENTIALS_FILE: /run/lazycloud/aws/credentials
   AWS_SDK_LOAD_CONFIG: "1"
-  AWS_PROFILE: "${LAZYCLOUD_COMPOSE_AWS_PROFILE:-compose-control}"
+  AWS_PROFILE: "${LAZYCLOUD_COMPOSE_AWS_PROFILE:-control}"
 
 x-platform-aws-config: &platform-aws-config
   "${LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR:-$HOME/.lazycloud/compose-aws}:/run/lazycloud/aws:ro"

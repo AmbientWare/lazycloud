@@ -21,10 +21,6 @@ on:
         description: Deployment prefix the ECR repositories and secrets carry
         type: string
         default: lazycloud-prod
-      bake_ami:
-        description: Bake the node AMI. Off reuses the previous release's image.
-        type: boolean
-        default: true
   push:
     tags:
       - "v*"
@@ -46,10 +42,6 @@ jobs:
     name: Publish the release
     uses: ./.github/workflows/release.yml
     secrets: inherit
-    with:
-      # A tag names no inputs, and a tagged ship is exactly the case that wants a
-      # freshly baked image.
-      bake_ami: ${{ github.event_name != 'workflow_dispatch' || inputs.bake_ami }}
 
   deploy:
     name: Deploy onto it

@@ -150,7 +150,10 @@ gh workflow run ship.yml -f deployment=lazycloud-prod
 
 `ship` publishes the release and then deploys onto it, handing the manifest URL
 from the first half to the second. Do that for a first bring-up, and for any
-change to the agent, the container-worker image, or the node AMI.
+change to the agent, the container-worker image, or the node AMI. It bakes the
+image every time and takes about fifteen minutes, because the image carries the
+agent and worker this release publishes and one baked earlier describes an
+earlier release.
 
 `deploy` on its own is the ordinary case afterwards, and runs many times against
 one release: it builds the control-plane images, tags them with the commit, and
