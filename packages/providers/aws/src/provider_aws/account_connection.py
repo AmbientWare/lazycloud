@@ -34,7 +34,7 @@ from .provider_control import (
     upstream_error,
 )
 
-AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-07-24.v11"
+AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-07-24.v12"
 
 _ACCOUNT_ID_PATTERN = re.compile(r"^[0-9]{12}$")
 _ARN_PATTERN = re.compile(
@@ -1504,7 +1504,23 @@ def _connection_template() -> dict[str, object]:
                                 "Condition": {
                                     "StringEquals": {"sts:ExternalId": {"Ref": "ExternalId"}}
                                 },
-                            }
+                            },
+                            {
+                                # Its own statement, and unconditioned. The
+                                # control plane holds a session that carries
+                                # tags, and propagating them is a second action
+                                # authorized separately. `sts:ExternalId` is a
+                                # parameter of AssumeRole and absent from the
+                                # request context of TagSession, so a condition
+                                # on it can never match and refuses the call.
+                                #
+                                # It confers nothing alone: tags attach only to
+                                # an assume-role the statement above already
+                                # allowed, external ID included.
+                                "Effect": "Allow",
+                                "Principal": {"AWS": {"Ref": "PlatformPrincipalArn"}},
+                                "Action": "sts:TagSession",
+                            },
                         ],
                     },
                     "Policies": [
