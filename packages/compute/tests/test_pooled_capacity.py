@@ -1810,3 +1810,56 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
         after = ComputeUnitRepository(session).get(pool.id)
     assert after is not None
     assert after.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
+
+
+def test_capacity_asked_for_again_revives_a_deleted_pool(
+    isolated_services: ApiServices,
+) -> None:
+    """A deleted row is a name and a shape, not a standing decision.
+
+    Disconnecting an account deletes its pools. Connecting again and asking for
+    the same warm floor rebuilds the record, and carrying the ended phase across
+    produced a pool that wanted a machine and was skipped on every reconcile
+    pass, because a deleted pool is exactly what the reconciler declines to
+    build. Nothing raised, so the account simply held no capacity.
+    """
+
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    floor = dict(
+        workspace="default",
+        region="us-east-1",
+        instance_type="m7i.xlarge",
+        initial_machines=1,
+        min_machines=1,
+        max_machines=10,
+        min_free_cpu_millicores=1_000,
+        min_free_memory_mib=1_024,
+        root_volume_gib=200,
+        idle_timeout_seconds=300,
+    )
+
+    unit = compute.reconcile_aws_default_capacity(**floor)
+    with isolated_services.context.database.session() as session:
+        repository = ComputeUnitRepository(session)
+        stored = repository.get(unit.id)
+        assert stored is not None
+        repository.upsert(
+            stored.model_copy(
+                update={
+                    "phase": ComputeUnitPhase.Deleted,
+                    "status": ComputeUnitPhase.Deleted.value,
+                }
+            )
+        )
+
+    revived = compute.reconcile_aws_default_capacity(**floor)
+
+    assert revived.phase is not ComputeUnitPhase.Deleted
+    assert revived.min_machines == 1
