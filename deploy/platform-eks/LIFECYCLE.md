@@ -111,12 +111,15 @@ telemetry backend does not stop the control plane from serving.
 ```sh
 gh secret set AWS_DEPLOY_ROLE_ARN --body "$(terraform -chdir=deploy/platform-eks output -raw deploy_role_arn)"
 gh secret set TF_STATE_BUCKET --body '<state-bucket>'
-gh variable set GITHUB_APP_ID --body '3246255'
-gh variable set GITHUB_APP_INSTALLATION_ID --body '124042395'
 ```
 
 The deploy role's trust names `repo:<owner>/<repo>:environment:production`, so
 the workflow must keep `environment: production` or it cannot assume the role.
+
+Nothing else. The workflow pushes to a branch in its own repository with the
+token GitHub gives it, and the App credential Argo reads with is supplied to
+Terraform rather than to CI -- the two go in opposite directions and are not the
+same grant.
 
 ### 5. The first deploy
 
