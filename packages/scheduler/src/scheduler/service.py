@@ -1334,7 +1334,13 @@ class Scheduler:
         *,
         now: datetime | None,
     ) -> list[PrivateUnitState]:
+        # Both skips below are silent by design and between them they decide
+        # whether a configured floor ever becomes a machine. Saying which one
+        # declined is the difference between reading a log and reading the
+        # source: the symptom of either is a pool that exists and an account
+        # with no capacity, and neither raises anything.
         if self.services is None:
+            LOGGER.info("managed compute reconciliation skipped: no scheduler services")
             return []
         current_time = now or utc_now()
         if (
