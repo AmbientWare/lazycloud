@@ -96,8 +96,8 @@ deployment needs — the GitHub App pair, Stripe, Cloudflare, Tailscale, telemet
    than the stale artifact.
 
 2. **Register the platform account's own capacity.** The fleet is a connection in
-   existing-role mode, using `fleet_connection_role_arn`, the `fleet-external-id`
-   secret, and the `fleet_network` output. That output is exactly two subnets in
+   existing-role mode, using the `fleet_connection` output and the
+   `fleet-external-id` secret. That output is exactly two subnets in
    two zones, which is what `AwsAccountNetwork` accepts.
 
 ## Redeploying

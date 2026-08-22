@@ -167,6 +167,13 @@ the secrets, then the schema and the billing catalog, then the administrator, an
 the workloads last. Nothing waits on a workload, so one that cannot start fails
 by itself instead of holding up the Job that would fix it.
 
+The fleet registers itself on the way past too, in the one wave after the
+workloads: it registers through the public API, so the control plane has to be
+serving before it can say anything. Without it the deployment accepts work and
+can place it nowhere, because a pool will not launch without an account to launch
+into. It is idempotent and leaves a connection already present alone, since
+reconnecting mints a new authorization generation.
+
 The billing catalog runs on every sync rather than once. Signing in provisions a
 subscription and fails closed without one, so a plan shipped without its price
 would otherwise be found by a person who could not sign in. It is additive: a
