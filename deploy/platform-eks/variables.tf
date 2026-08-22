@@ -297,3 +297,21 @@ variable "github_app_private_key" {
   type        = string
   sensitive   = true
 }
+
+variable "stripe_account_id" {
+  description = <<-EOT
+    The payment-provider account this deployment publishes its catalog into.
+
+    Named here rather than inferred from the key, because a key does not say
+    which account it belongs to and the catalog publisher checks the two against
+    each other before it writes. A key swapped for one from another account is
+    then a refusal instead of a set of plans and prices appearing somewhere
+    nobody meant.
+  EOT
+  type        = string
+
+  validation {
+    condition     = startswith(var.stripe_account_id, "acct_")
+    error_message = "The payment-provider account id starts with acct_."
+  }
+}

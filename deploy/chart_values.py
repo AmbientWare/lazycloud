@@ -57,6 +57,11 @@ REQUIRED_RUNTIME_VARIABLES = {
     "LAZYCLOUD_OBJECT_STORE_REGION_NAME": (
         "the region the secret store and the object store are read from"
     ),
+    "LAZYCLOUD_STRIPE_ACCOUNT_ID": (
+        "the payment-provider account the catalog is published into; the "
+        "publisher checks the credential against it, and without it no plan or "
+        "price exists for a sign-in to put anyone on"
+    ),
     "LAZYCLOUD_REDIS_URL": (
         "the coordination Redis; without it the scheduler holds no lease and the "
         "control plane publishes no origin for a worker to dial"

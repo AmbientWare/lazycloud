@@ -181,6 +181,10 @@ class CatalogEntry:
 
     summary: str
     provider_id: str = ""
+    published_summary: str = ""
+    """What the account holds instead, when that differs from `summary`. Empty
+    when the two agree, which is every object the account holds as this
+    repository describes it."""
     """Empty where the object does not exist yet."""
 
     @property
@@ -196,6 +200,12 @@ class PublishedCatalog:
     @property
     def missing(self) -> tuple[CatalogEntry, ...]:
         return tuple(entry for entry in self.entries if not entry.present)
+
+    @property
+    def stale(self) -> tuple[CatalogEntry, ...]:
+        """Objects the account holds at a figure this repository no longer publishes."""
+
+        return tuple(entry for entry in self.entries if entry.published_summary)
 
 
 class _Account(StripeObject):
@@ -299,6 +309,11 @@ class StripeCatalog:
                 name=line.price_lookup_key,
                 summary=f"{plan_price_cents[line.plan]} cents monthly, licensed",
                 provider_id=self._price_id(prices, line.price_lookup_key),
+                published_summary=self._plan_price_disagreement(
+                    prices,
+                    line.price_lookup_key,
+                    plan_price_cents[line.plan],
+                ),
             )
             for line in PLAN_LINES
             if line.plan in plan_price_cents
@@ -318,13 +333,19 @@ class StripeCatalog:
         return PublishedCatalog(account_id=self.account_id(), entries=tuple(entries))
 
     def publish(self, *, plan_prices: Mapping[BillingPlanId, int]) -> PublishedCatalog:
-        """Create whatever the account is missing, and change nothing else.
+        """Make the account agree with the rate card this repository publishes.
 
-        Idempotent by name and additive only. A price's amount cannot be edited
-        at the provider, so an existing object that disagrees with this
-        repository is refused by name and figure rather than worked around — the
-        fix is a new price and a moved lookup key, which is a decision with
-        customers on the other side of it.
+        Idempotent by name: a run against an account that already agrees writes
+        nothing. A plan whose amount has changed is republished, because a
+        price cannot be edited at the provider. A new one is created carrying the
+        same lookup key and the old one is retired, so whatever resolves a plan
+        by lookup key finds the current figure.
+
+        Subscriptions already open are left on the price they were opened
+        against. They hold a provider identifier rather than a lookup key, so
+        nothing here reaches them, and that is the intended limit: moving an
+        account onto a different figure changes what somebody is charged, and it
+        is not something a deploy should do on the way past.
 
         Every plan named in `plan_prices` is published. A plan absent from it is
         left alone rather than assumed free, because a plan price is the one
@@ -364,10 +385,7 @@ class StripeCatalog:
             if published is None:
                 self._create_plan_price(plan_product, plan_price_cents=amount_cents)
             elif published.unit_amount != amount_cents:
-                raise ConflictError(
-                    f"{plan_product.price_lookup_key} is published at "
-                    f"{published.unit_amount} cents, not {amount_cents}"
-                )
+                self._reprice_plan(plan_product, published, plan_price_cents=amount_cents)
         for line in USAGE_LINES:
             existing = prices.get(line.price_lookup_key)
             if existing is None:
@@ -427,6 +445,46 @@ class StripeCatalog:
                 ("recurring[usage_type]", "licensed"),
             ],
         ).id
+
+    def _reprice_plan(self, line: PlanLine, current: _Price, *, plan_price_cents: int) -> str:
+        """Publish the current figure under the key, and retire the old price.
+
+        The key moves first. Between the two calls the account holds a price
+        nothing resolves to rather than two that both answer to one name, which
+        is the ordering that fails safe if the second call does not happen.
+        """
+
+        created = read(
+            _Price,
+            self.client,
+            "POST",
+            "/prices",
+            data=[
+                ("currency", BILLING_CURRENCY.lower()),
+                ("product", line.product_id),
+                ("lookup_key", line.price_lookup_key),
+                ("transfer_lookup_key", "true"),
+                ("unit_amount", str(plan_price_cents)),
+                ("billing_scheme", "per_unit"),
+                ("recurring[interval]", "month"),
+                ("recurring[usage_type]", "licensed"),
+            ],
+        ).id
+        # Retired rather than deleted, which the provider does not offer. Open
+        # subscriptions name it directly and go on billing against it.
+        read(_Price, self.client, "POST", f"/prices/{current.id}", data=[("active", "false")])
+        return created
+
+    @staticmethod
+    def _plan_price_disagreement(
+        prices: dict[str, _Price],
+        lookup_key: str,
+        amount_cents: int,
+    ) -> str:
+        published = prices.get(lookup_key)
+        if published is None or published.unit_amount == amount_cents:
+            return ""
+        return f"{published.unit_amount} cents monthly, licensed"
 
     def _create_meter_price(self, line: UsageLine, *, meter_id: str) -> str:
         return read(

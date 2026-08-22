@@ -54,9 +54,11 @@ terraform -chdir=deploy/platform-eks apply \
   -var="state_bucket=<state-bucket>"
 ```
 
-`terraform.tfvars` carries the instance price map. Without it managed capacity
-stays off, and the symptom is pools that never launch rather than anything that
-fails.
+`terraform.tfvars` carries the instance price map and the payment-provider
+account id. Without the price map managed capacity stays off, and the symptom is
+pools that never launch rather than anything that fails. Without the account id
+the apply refuses, because the catalog publisher checks the credential against it
+and has nothing to check.
 
 **A failed apply is not proof that nothing was created.** EKS has returned a 400
 on `CreateCluster` and created the cluster anyway, leaving it ACTIVE and absent
@@ -160,8 +162,17 @@ that says managed capacity is wanted, finds no worker image, agent binary or AMI
 catalog to serve it with, and refuses. That is a half-configured deployment being
 rejected rather than a fault, and the way out is `ship`.
 
-Argo takes it from there: External Secrets first, then the chart, then the
-bootstrap Jobs in wave order.
+Argo takes it from there, in wave order: the storage class and service accounts,
+the secrets, then the schema and the billing catalog, then the administrator, and
+the workloads last. Nothing waits on a workload, so one that cannot start fails
+by itself instead of holding up the Job that would fix it.
+
+The billing catalog runs on every sync rather than once. Signing in provisions a
+subscription and fails closed without one, so a plan shipped without its price
+would otherwise be found by a person who could not sign in. It is additive: a
+published account gets nothing new, and a price whose amount disagrees with the
+repository fails the Job instead of being edited, because customers are already
+billed against the published one.
 
 Watch it rather than assume it:
 

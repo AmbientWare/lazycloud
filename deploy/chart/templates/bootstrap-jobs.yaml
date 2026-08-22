@@ -1,11 +1,11 @@
 {{/*
-Bootstrap: the schema, then the administrator created against it.
+Bootstrap: the catalog and the schema, then the administrator created against it.
 
 Argo sync waves rather than `depends_on`: the schema must exist before an
 administrator can be created against it. Running them together produces a
 bootstrap that fails on a table it cannot see, which reads as a database problem.
 
-Both run in negative waves, ahead of every workload. That is the order the
+All three run in negative waves, ahead of every workload. That is the order the
 control plane needs, and it is also what keeps the release able to recover.
 Argo holds a wave until it is healthy, so a Job behind the Deployments would
 wait on a control plane that is itself waiting on the schema that Job creates.
@@ -81,5 +81,55 @@ spec:
                 --token-file /tmp/administrator-token \
                 ${github_id:+--github-user-id "$github_id"}
               rm -f /tmp/administrator-token
+          env:
+            {{- include "lazycloud.env" . | nindent 12 }}
+---
+{{/*
+The catalog, every sync rather than once.
+
+Signing in provisions a subscription on the free plan and fails closed when it
+cannot, and a subscription resolves its prices by lookup key. So an account whose
+catalog is unpublished refuses every sign-in it receives, and a plan shipped
+without its price refuses everyone the code puts on it. Running this only at
+install would leave the second case to be discovered by a person who could not
+sign in.
+
+Additive and idempotent by name: a run against a published account creates
+nothing. What it will not do is edit. A price whose amount disagrees with this
+repository is a conflict and fails the Job, because a published price is what
+customers are already billed against and repointing one is a decision with an
+invoice attached, not a step of a deploy. The deploy stops there rather than
+serving a rate card the provider does not agree with.
+
+`--confirm-account` comes from the deployment rather than from the credential.
+A key does not say which account it belongs to, so one swapped for another
+account's is refused here instead of quietly publishing this catalog somewhere
+else.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: billing-catalog
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      name: billing-catalog
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      containers:
+        - name: billing-catalog
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
+          command:
+            - lazycloud-admin
+            - --json
+            - billing
+            - publish-catalog
+            - --confirm-account
+            - {{ required "runtime.LAZYCLOUD_STRIPE_ACCOUNT_ID is required" .Values.runtime.LAZYCLOUD_STRIPE_ACCOUNT_ID | quote }}
+            - --confirm
           env:
             {{- include "lazycloud.env" . | nindent 12 }}

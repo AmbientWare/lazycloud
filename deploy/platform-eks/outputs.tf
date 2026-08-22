@@ -103,6 +103,10 @@ output "runtime_configuration" {
     # right: the device name is a constant the enrolment origin is built from,
     # and the two tags match the policy `deploy/tailnet` grants.
     LAZYCLOUD_TAILNET_MODE = "managed"
+    # Read by the catalog publisher rather than the control plane: it is the
+    # account the credential is checked against before any plan or price is
+    # written.
+    LAZYCLOUD_STRIPE_ACCOUNT_ID = var.stripe_account_id
   }
 }
 

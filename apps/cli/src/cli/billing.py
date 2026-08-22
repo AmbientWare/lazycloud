@@ -154,11 +154,17 @@ def publish_catalog(
         ),
     ] = False,
 ) -> None:
-    """Publish the plans, the meters and the prices into the payment provider.
+    """Make the payment provider agree with the rate card this repository publishes.
 
-    Additive and idempotent by name: every object is addressed by a name this
-    repository chose, so a second run creates nothing and a published object that
-    disagrees with this repository is refused rather than edited.
+    Idempotent by name: every object is addressed by a name this repository
+    chose, so a run against an account that already agrees writes nothing. A plan
+    whose amount has changed is republished under the same lookup key, because a
+    price cannot be edited at the provider, and the old one is retired.
+
+    Usage rates are not published here at all and need no run to change. Every
+    metered price is a fixed conversion of nanodollars to money, and the rate
+    card is applied on this side before the usage is reported, so a rate that
+    moves reaches the next invoice without an object changing.
 
     `--confirm-account` has no default and is checked against the account the
     credential in hand belongs to before anything is written. A catalog published
@@ -197,16 +203,29 @@ def publish_catalog(
 
 
 def _catalog_payload(catalog: PublishedCatalog, *, written: bool) -> dict[str, object]:
-    """What the account holds, and what is still absent from it.
+    """What the account holds, what is absent from it, and what has moved.
 
-    Both lists, rather than only the missing one: an operator running this
-    against an account they have not seen before needs to know what is already
-    there as much as what is not.
+    All three, rather than only the missing one: an operator running this against
+    an account they have not seen before needs to know what is already there as
+    much as what is not, and a figure that changed is the one thing in the run
+    that somebody is charged differently for.
     """
 
     return {
         "account_id": catalog.account_id,
         "written": written,
+        # What the account holds at a figure this repository has moved off.
+        # Republished when written, and listed either way, because a price
+        # changing is worth reading in the output of the run that changed it.
+        "repriced": [
+            {
+                "kind": entry.kind.value,
+                "name": entry.name,
+                "was": entry.published_summary,
+                "now": entry.summary,
+            }
+            for entry in catalog.stale
+        ],
         "present": [
             {"kind": entry.kind.value, "name": entry.name, "summary": entry.summary}
             for entry in catalog.entries
