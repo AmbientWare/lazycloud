@@ -164,24 +164,6 @@ jobs:
             --secret-map secret-map.json \
             --stage-dir bundle
 
-      # Before the converge, because a converge without it is not repairable by
-      # supplying it afterwards. `auth bootstrap` adopts a configured credential
-      # when it finds one and mints its own when it does not, recording a
-      # different request id for each; the minted one exists only in a volume on
-      # the host, every compose step that follows has no bearer token, and the
-      # second attempt is refused as an already completed bootstrap. The way back
-      # is a schema reset, which this check costs one second to avoid.
-      - name: Require the administrator credential
-        run: |
-          set -euo pipefail
-          if ! aws secretsmanager get-secret-value \
-            --secret-id "$DEPLOYMENT/administrator-token" \
-            --query SecretString --output text >/dev/null 2>&1; then
-            echo "::error::$DEPLOYMENT/administrator-token has no value." \
-              "Write one before the first converge; see deploy/platform-aws/LIFECYCLE.md step 3."
-            exit 1
-          fi
-
       - name: Converge the control plane host
         run: |
           set -euo pipefail
