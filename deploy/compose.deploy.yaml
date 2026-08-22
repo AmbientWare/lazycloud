@@ -126,10 +126,9 @@ services:
     image: "${LAZYCLOUD_IMAGE_CLI:?set by images.env}"
     build: !reset null
     # `--env-file` on the compose command line feeds `${...}` interpolation, not
-    # the container. Every other consumer of the administrator credential takes
-    # it as a mounted secret and reads the file, so nothing noticed that the one
-    # service which needs it as a variable never received it: `fleet ensure`
-    # reported "missing bearer token" no matter what the secret held.
+    # any container's environment. Every other consumer of the administrator
+    # credential takes it as a mounted secret and reads the file; this is the one
+    # that needs it as a variable, so it is the one that has to be named here.
     environment:
       # Not `:?`. Compose interpolates the whole merged file before it selects a
       # service, and `:?` errors on empty as well as unset, so an unwritten

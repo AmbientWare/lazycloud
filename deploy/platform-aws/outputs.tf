@@ -60,10 +60,10 @@ output "runtime_configuration" {
     # strings. Empty advertises no instance types, which is a control plane with
     # no managed capacity rather than a failure.
     LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS = jsonencode(var.instance_hourly_micros)
-    # What a customer's account is told to trust. Published here rather than left
-    # to an operator: it was documented as a value to set by hand, nothing set
-    # it, and the deployment answered every connection request with a 503 that
-    # named a capability instead of this variable.
+    # What a customer's account is told to trust. Published here rather than
+    # left to an operator, because a value carried by hand is a step that has to
+    # be remembered on every stand-up and reports its absence as a refused
+    # capability rather than as a missing setting.
     LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN = aws_iam_role.control_principal.arn
     # The origin customers and the SDK reach this deployment on, taken from the
     # zone whose tunnel serves it rather than written twice. The default is

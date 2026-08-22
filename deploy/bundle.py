@@ -148,7 +148,7 @@ def _string_map(source: Path, label: str) -> dict[str, str]:
 
 def publish(args: argparse.Namespace) -> None:
     digests = _string_map(Path(args.digests), "digests")
-    runtime = _string_map(Path(args.runtime), "runtime") if args.runtime else {}
+    runtime = _string_map(Path(args.runtime), "runtime")
 
     staged = Path(args.stage_dir)
     staged.mkdir(parents=True, exist_ok=True)
@@ -177,7 +177,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--digests", required=True, help="JSON file of image name to sha256 digest."
     )
-    parser.add_argument("--runtime", default="", help="JSON file of non-secret runtime values.")
+    parser.add_argument(
+        "--runtime",
+        required=True,
+        help="JSON file of non-secret runtime values. Required: a bundle without them "
+        "produces a control plane that starts and is wrong.",
+    )
     parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
     parser.add_argument("--stage-dir", required=True, help="Directory to assemble the bundle in.")
     parser.add_argument("--aws-cli", default="aws")

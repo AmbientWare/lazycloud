@@ -57,10 +57,9 @@ def aws_account_connection_service(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> AwsAccountConnectionService:
     if services.aws_connections is None:
-        # Name the values, not the capability. "not enabled" described a switch
-        # that no longer exists and sent every reader looking for one, while the
-        # deployment was missing a control principal ARN it could have been told
-        # about in the same breath.
+        # The values rather than the capability. A deployment reaching this is
+        # missing something nameable, and naming it is the difference between an
+        # operator reading one line and an operator searching for a setting.
         raise UpstreamUnavailableError(
             "this deployment has no connected AWS: it needs "
             f"{AWS_CONNECTION_CONTROL_PRINCIPAL_ENV} and a release naming a connection "

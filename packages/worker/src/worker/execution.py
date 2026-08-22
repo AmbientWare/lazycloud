@@ -655,9 +655,9 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         memory = OciLinuxMemory(
             reservation_bytes=reservation,
             limit_bytes=limit,
-            # OCI states memory-plus-swap, so this is the hard ceiling plus an
-            # allowance the size of the request. Equal to the ceiling would be
-            # what it was before: no swap at all.
+            # OCI states memory-plus-swap, so a value equal to the ceiling
+            # grants no swap at all, and the throttle above stalls instead of
+            # slowing. The allowance is the size of the request.
             swap_bytes=limit + reservation,
         )
         deferred[CGROUP_V2_MEMORY_HIGH_PARAMETER] = str(high_mib * MIB)

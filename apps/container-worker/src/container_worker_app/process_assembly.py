@@ -398,8 +398,8 @@ def _memory_pressure_watcher(
 
     The condition is a memory limit on the worker's own cgroup, not the presence
     of a cgroup. Both deployments give a worker its own cgroup -- the agent
-    passes `--cgroupns host` and Compose sets `cgroup: host` -- so a worker
-    always has one, and an earlier version of this guard therefore never fired.
+    passes `--cgroupns host` and Compose sets `cgroup: host` -- so having one
+    distinguishes nothing and a guard testing for that is always satisfied.
 
     What actually disqualifies a worker is an unlimited cgroup: the pressure
     there describes the whole machine rather than this worker's share of it, and
