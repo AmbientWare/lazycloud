@@ -1,0 +1,80 @@
+{{/*
+More than one connector, which is the whole reason this moved.
+
+Cloudflare balances a tunnel's traffic across every connector attached to it, so
+one host running one connector was a single point of failure that also collided
+with any other process holding the same credentials. Several pods is how a tunnel
+is meant to be run.
+
+The ingress rules come from the repository rather than from Cloudflare, so a
+route is reviewed where it is written. Ordered, first match wins, and the two
+internal prefixes are refused here so the origin never sees them.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared
+data:
+  config.yaml: |
+    tunnel: {{ required "cloudflared.tunnelId is required" .Values.cloudflared.tunnelId }}
+    credentials-file: /etc/cloudflared/credentials.json
+    originRequest:
+      connectTimeout: 10s
+      noTLSVerify: false
+      # Log streaming holds a response open and writes heartbeat comments;
+      # buffering the body would defeat it.
+      disableChunkedEncoding: false
+    ingress:
+      - hostname: {{ .Values.cloudflared.apex }}
+        path: ^/metrics$
+        service: http_status:404
+      - hostname: {{ .Values.cloudflared.apex }}
+        path: ^/worker-repository(/|$)
+        service: http_status:404
+      - hostname: {{ .Values.cloudflared.apex }}
+        service: http://control-plane:9000
+      # Generated invoke hosts. Every path forwards: the control plane's
+      # host-routing middleware rewrites them to the stub's handler path, so a
+      # path filter here would break user applications.
+      - hostname: "*.{{ .Values.cloudflared.apex }}"
+        service: http://control-plane:9000
+      # Hostnames a customer owns, proxied here carrying their own Host header.
+      # The origin resolves it against the domains a workspace registered and
+      # refuses every name it does not know.
+      - service: http://control-plane:9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+spec:
+  replicas: {{ .Values.cloudflared.replicas }}
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      volumes:
+        - name: config
+          configMap:
+            name: cloudflared
+        - name: credentials
+          secret:
+            secretName: {{ .Values.secrets.name }}
+            items:
+              - key: {{ .Values.tunnel.credentialsKey }}
+                path: credentials.json
+      containers:
+        - name: cloudflared
+          image: {{ .Values.cloudflared.image }}
+          args: ["tunnel", "--config", "/etc/cloudflared/config.yaml", "run"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared/config.yaml
+              subPath: config.yaml
+            - name: credentials
+              mountPath: /etc/cloudflared/credentials.json
+              subPath: credentials.json

@@ -1,0 +1,96 @@
+# Every image is pinned by digest, never by tag. A tag is a name that can be
+# moved, and two replicas that pulled it an hour apart have no way to notice they
+# differ. The deploy renders these from what it pushed.
+images:
+  api: ""
+  scheduler: ""
+  cacheServer: ""
+  workerBootstrap: ""
+  databaseBootstrap: ""
+  cli: ""
+
+# Non-secret deployment values, rendered from the platform module's
+# `runtime_configuration`. The list is not decoration: a control plane missing
+# one of these starts, reports healthy, and is wrong.
+runtime: {}
+
+secrets:
+  # The Secret the External Secrets Operator materialises. One Secret, keyed by
+  # variable name, so a workload's env is a list of names rather than a list of
+  # mappings.
+  name: lazycloud-secrets
+  # Which Secrets Manager entry each variable is read from, rendered from the
+  # platform module's `secret_environment`.
+  map: {}
+  refreshInterval: 1h
+
+serviceAccounts:
+  controlPlane: control-plane
+  scheduler: scheduler
+  externalSecrets: external-secrets
+
+# IRSA role ARNs from the platform module's `workload_role_arns`.
+roles:
+  controlPlane: ""
+  externalSecrets: ""
+
+# Variables every workload reads from the Secret above. Named here rather than
+# discovered, because a workload that silently starts without one is the failure
+# this list exists to prevent.
+env:
+  - LAZYCLOUD_DATABASE_URL
+  - LAZYCLOUD_TOKEN
+  - LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY
+  - LAZYCLOUD_CACHE_SERVICE_TOKEN
+  - LAZYCLOUD_CLOUDFLARE_API_TOKEN
+  - LAZYCLOUD_GITHUB_CLIENT_ID
+  - LAZYCLOUD_GITHUB_CLIENT_SECRET
+  - LAZYCLOUD_STRIPE_API_KEY
+  - LAZYCLOUD_STRIPE_WEBHOOK_SECRET
+  - LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID
+  - LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET
+  - LAZYCLOUD_TELEMETRY_BACKEND_ENDPOINT
+  - LAZYCLOUD_TELEMETRY_BACKEND_USERNAME
+  - LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD
+
+controlPlane:
+  replicas: 1
+  # The node group the platform module declares for a tailnet device, and the
+  # taint that keeps everything else off it.
+  nodeSelector:
+    lazycloud.dev/tailnet: "true"
+  tolerations:
+    - key: lazycloud.dev/tailnet
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 2Gi }
+
+scheduler:
+  replicas: 1
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+cacheServer:
+  replicas: 1
+  storage: 20Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+cloudflared:
+  # More than one connector, which is how a tunnel is meant to be run and what a
+  # single host could not offer.
+  replicas: 2
+  image: cloudflare/cloudflared:2026.7.3
+  tunnelId: ""
+  # The zone this deployment answers for, which the ingress rules are written
+  # against and the public origin is built from.
+  apex: ""
+
+tunnel:
+  # The tunnel credentials arrive in the same Secret as everything else.
+  credentialsKey: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS
