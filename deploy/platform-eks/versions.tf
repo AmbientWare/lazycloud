@@ -48,6 +48,15 @@ provider "kubernetes" {
 }
 
 provider "helm" {
+  # Its own repository list and cache, not the one belonging to whoever is
+  # running the apply. The provider requires a cached index for every repository
+  # in the file it reads, so a developer with an unreachable repo configured for
+  # some other project fails this apply on a chart it never asked for -- which is
+  # what happened, on `sealed-secrets`. Kept inside the module so an apply from a
+  # laptop and an apply from CI resolve the same chart the same way.
+  repository_config_path = "${path.module}/.helm/repositories.yaml"
+  repository_cache       = "${path.module}/.helm/cache"
+
   kubernetes {
     host                   = aws_eks_cluster.control_plane.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.control_plane.certificate_authority[0].data)
