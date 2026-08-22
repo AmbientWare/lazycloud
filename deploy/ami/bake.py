@@ -114,6 +114,9 @@ _CLI_TIMEOUT_SECONDS = 300
 # path that is usually about to succeed, while a short one throws away a finished
 # bake for being slow to say so. Twelve minutes against a measured five.
 _CONSOLE_SETTLE_ATTEMPTS = 48
+# A denied read is a deployment fault and will not fix itself; everything else
+# this call can return is transient and the next cycle answers it.
+_CONSOLE_REFUSAL_CODES = ("AccessDenied", "UnauthorizedOperation", "AuthFailure")
 _CONSOLE_TAIL_LINES = 40
 _MANAGED_TAG_KEY = "cloud-pool:managed-by"
 _MANAGED_TAG_VALUE = "control-plane"
@@ -613,10 +616,20 @@ def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> st
         check=False,
     )
     if result.returncode != 0:
-        raise SystemExit(
-            f"{region}: cannot read the console of {instance_id}, which is the only "
-            f"channel a bake instance has: {result.stderr.strip()[:400]}"
-        )
+        # Only a refusal ends the bake. Every other failure here is the call, not
+        # the answer: EC2 reports `InvalidInstanceID.NotFound` for seconds after
+        # RunInstances returns, and throttles GetConsoleOutput hard enough that a
+        # poll every fifteen seconds meets `RequestLimitExceeded` on a busy
+        # account. Treating those as fatal destroys bakes that are succeeding,
+        # which is worse than the silence this channel was added to end -- the
+        # loop simply reads again on the next cycle.
+        if any(code in result.stderr for code in _CONSOLE_REFUSAL_CODES):
+            raise SystemExit(
+                f"{region}: not permitted to read the console of {instance_id}, which is "
+                f"the only channel a bake instance has: {result.stderr.strip()[:400]}"
+            )
+        _log(f"{region}: console unreadable this cycle: {result.stderr.strip()[:160]}")
+        return ""
     # `--output text` renders a null as the four characters "None", which would
     # otherwise be searched for sentinels as though it were console output.
     return "" if result.stdout.strip() == "None" else result.stdout

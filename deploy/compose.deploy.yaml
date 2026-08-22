@@ -131,7 +131,14 @@ services:
     # service which needs it as a variable never received it: `fleet ensure`
     # reported "missing bearer token" no matter what the secret held.
     environment:
-      LAZYCLOUD_TOKEN: "${LAZYCLOUD_TOKEN:?set by secrets.env}"
+      # Not `:?`. Compose interpolates the whole merged file before it selects a
+      # service, and `:?` errors on empty as well as unset, so an unwritten
+      # administrator credential would abort `pull` and `up` for every service on
+      # the host -- taking the control plane down to report a missing bearer
+      # token for a command nobody ran. `converge.sh` writes valueless secrets as
+      # empty on purpose and says a secret with no value is normal, not fatal.
+      # `fleet ensure` is where the absence has something to say.
+      LAZYCLOUD_TOKEN: "${LAZYCLOUD_TOKEN:-}"
 
   public-ingress:
     depends_on: !override

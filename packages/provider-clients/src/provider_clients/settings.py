@@ -99,33 +99,25 @@ class AwsAccountConnectionSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_configuration(self) -> AwsAccountConnectionSettings:
-        """The two values are one decision, so having one of them is an error.
+        """Only the shape of a value is checked here, never whether it is present.
 
-        Publishing a customer authorization template with no control principal
-        trusts nothing, and naming a control principal no template points at
-        leaves customers nothing to authorize. Neither is a deployment without
-        connected AWS — that is both of them absent — so a deployment holding one
-        is stopped here rather than left to degrade into a capability that is
-        present, reachable, and wrong.
+        Holding one half is an ordinary, reachable state rather than a mistake: a
+        deployment's infrastructure always publishes the control principal, while
+        the template arrives from a release the deployment may not name yet, and
+        the deploy warns and carries on when it does not. Raising on that
+        combination stopped the control plane from starting at all, on exactly the
+        first deploy of every new deployment.
+
+        Absence is answered where it can say something useful. `configured` is
+        false without both, and the route that needs connections refuses with the
+        names of what is missing, which is a 503 on one capability rather than a
+        process that will not boot.
         """
 
         if self.control_principal_arn and (
             _AWS_PRINCIPAL_PATTERN.fullmatch(self.control_principal_arn) is None
         ):
             raise ValueError("AWS account connection control principal ARN is invalid")
-        if not self.template_url and not self.control_principal_arn:
-            return self
-        if not self.template_url:
-            raise ValueError(
-                "connected AWS names a control principal but no connection template URL "
-                f"(published by the release at {RELEASE_MANIFEST_URL_ENV})"
-            )
-        if not self.control_principal_arn:
-            raise ValueError(
-                "connected AWS has a connection template but no control principal ARN "
-                f"({AWS_CONNECTION_CONTROL_PRINCIPAL_ENV}, the control_principal_arn output of "
-                "deploy/platform-aws)"
-            )
         return self
 
 

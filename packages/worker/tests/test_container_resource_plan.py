@@ -6,10 +6,10 @@ import pytest
 from pydantic import ValidationError
 from worker.execution import MIB, ContainerResourceRequest, plan_oci_linux_resources
 from worker.runtime_config import (
-    CGROUP_ROOT,
+    DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
     build_base_oci_config,
     container_cgroup_path,
-    worker_cgroup_path,
+    parse_proc_cgroup_path,
 )
 
 
@@ -57,19 +57,23 @@ def test_a_ceiling_below_the_request_is_refused() -> None:
         )
 
 
-def test_the_reservation_the_throttle_and_the_wall_stay_in_order() -> None:
-    """`low <= high <= max`, in every shape the clamp can produce.
+def test_a_container_is_never_killed_inside_its_reservation() -> None:
+    """The sandbox watcher kills at a percentage of the wall, so the wall matters.
 
-    A throttle above the wall is unreachable, so the container is killed having
-    never been slowed. A wall below the reservation kills it inside what it was
-    promised. Both were reachable while only half of this was asserted.
+    Ordering alone proves nothing here: the floors make `low <= high <= max` true
+    by construction. What was actually reachable is a wall so close to the
+    reservation that ninety-five per cent of it lands underneath, and on a node
+    only slightly larger than the request that was every placement — a tenant
+    promised 4096 MiB dying at 3979, never throttled, inside its own guarantee.
+
+    The rows below are the ratios that produced it.
     """
     for request_mib, node_mib in (
-        (4096, 8192),
-        (1024, 2048),
-        (512, 1024),
-        (128, 4096),
+        (4096, 4608),
         (14894, 15974),
+        (1024, 1126),
+        (4096, 8192),
+        (128, 4096),
         (1024, 0),
     ):
         resources = plan_oci_linux_resources(
@@ -83,7 +87,10 @@ def test_the_reservation_the_throttle_and_the_wall_stay_in_order() -> None:
         low = resources.memory.reservation_bytes
         high = int(resources.deferred["memory.high"])
         wall = resources.memory.limit_bytes
-        assert low <= high <= wall, f"request={request_mib} node={node_mib}"
+        where = f"request={request_mib} node={node_mib}"
+        assert low <= high <= wall, where
+        kills_at = wall * DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT / 100
+        assert kills_at > low, where
 
 
 def test_a_ceiling_never_exceeds_the_machine_it_runs_on() -> None:
@@ -124,28 +131,31 @@ def test_a_container_can_reclaim_rather_than_die_at_its_ceiling() -> None:
     assert resources.memory.swap_bytes > resources.memory.limit_bytes
 
 
-def test_the_spec_names_a_cgroup_inside_the_worker_own() -> None:
-    """The wiring, not the arithmetic — which is what kept breaking.
+def test_a_container_gets_no_cgroup_when_the_parent_cannot_bound_it(tmp_path: Path) -> None:
+    """An undelegated parent creates children with no memory files at all.
 
-    Every value in this module is correct only if the spec that carries them
-    names a cgroup, and that cgroup sits under the worker's. Named nowhere, runsc
-    picks a path of its own and the settings written afterwards land on a
-    directory that does not exist. Placed beside the worker rather than inside
-    it, containers escape the worker's memory bound and their growth never
-    reaches the pressure reading eviction depends on.
+    Naming one anyway hands the runtime a path that looks like enforcement and
+    holds none: `memory.max` and `memory.low` are absent, the deferred writes miss
+    files that were never there, and the container runs unbounded while the log
+    says only that eviction is off. Refusing the path leaves the runtime to place
+    it, which is worse but visibly so.
     """
-    worker = worker_cgroup_path()
-    assert worker, "this test needs a worker cgroup to nest under"
+    relative = parse_proc_cgroup_path(Path("/proc/self/cgroup").read_text(encoding="utf-8"))
+    worker = tmp_path / relative.lstrip("/")
+    worker.mkdir(parents=True)
+    # The parent is a real cgroup either way; what differs is what it hands down.
+    (worker / "memory.pressure").write_text("full avg10=0.00\n")
+    control = worker / "cgroup.subtree_control"
 
-    spec = build_base_oci_config(container_id="container-abc")
-    linux = spec["linux"]
-    assert isinstance(linux, dict)
-    path = linux["cgroupsPath"]
+    control.write_text("cpu pids\n")
+    assert container_cgroup_path("container-abc", root=str(tmp_path)) == ""
 
-    assert path == container_cgroup_path("container-abc")
-    assert str(path).endswith("/container-abc")
-    # Underneath the worker's own cgroup, not a sibling of it.
-    assert str(Path(CGROUP_ROOT, str(path).lstrip("/")).parent) == worker
+    control.write_text("cpu memory pids\n")
+    path = container_cgroup_path("container-abc", root=str(tmp_path))
+    assert path.endswith("/container-abc")
+    # Underneath the worker's own cgroup, so the slot the agent gave it bounds
+    # the container too, and the container's growth reaches the pressure reading.
+    assert Path(tmp_path, path.lstrip("/")).parent == worker
 
 
 def test_a_spec_built_without_a_container_names_no_cgroup() -> None:

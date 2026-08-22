@@ -377,12 +377,41 @@ def container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
     the settings runsc will not apply itself. Empty when the worker's own cgroup
     cannot be found, which leaves the runtime to choose: worse, but not wrong in
     a way that silently escapes a bound.
+
+    Empty too when the parent has not delegated the memory controller, which is
+    the case this cannot afford to guess at. A child of an undelegated parent is
+    created with no `memory.max` and no `memory.low` at all, so naming it would
+    hand the runtime a path that looks like enforcement and holds none, and the
+    deferred writes would then miss files that were never there. Delegation is
+    read here rather than remembered from `prepare_worker_cgroup`, because what
+    matters is whether it holds now.
     """
     worker = worker_cgroup_path(root=root)
     if not worker or not container_id:
         return ""
+    if not _memory_is_delegated(worker):
+        LOGGER.error(
+            "cgroup %s has not delegated the memory controller, so containers under it "
+            "would carry no memory limits; leaving the runtime to place them",
+            worker,
+        )
+        return ""
     relative = posixpath.relpath(worker, root)
     return posixpath.join("/", relative, container_id)
+
+
+def _memory_is_delegated(cgroup_path: str) -> bool:
+    """Whether children of this cgroup are given the memory controller.
+
+    `cgroup.subtree_control` is the kernel's own answer, and the only one worth
+    asking: a parent that holds `memory.pressure` still creates children without
+    a single memory file until `+memory` is written here.
+    """
+    try:
+        controllers = Path(cgroup_path, "cgroup.subtree_control").read_text()
+    except OSError:
+        return False
+    return "memory" in controllers.split()
 
 
 def apply_unsupported_cgroup_parameters(

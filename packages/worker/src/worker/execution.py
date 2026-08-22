@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import math
 import posixpath
 import shlex
 from collections.abc import Sequence
@@ -640,10 +641,16 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
             high_mib = min(high_mib, hard_mib - max((hard_mib - request.memory_mib) // 10, 1))
         high_mib = max(high_mib, request.memory_mib)
         limit = hard_mib * MIB
-        if not request.memory_mib <= high_mib <= hard_mib:
+        # The ordering alone is not the invariant worth checking -- the floors
+        # above make `low <= high <= max` true by construction, so asserting it
+        # reads as protection while proving nothing. What can still fail is the
+        # relationship those floors were introduced to preserve: the point the
+        # watcher kills at has to stay above what the tenant reserved.
+        if watcher_trips_at < request.memory_mib:
             raise ValueError(
-                "memory ordering must hold: "
-                f"low={request.memory_mib} high={high_mib} max={hard_mib} MiB"
+                "a container may not be killed inside its reservation: "
+                f"low={request.memory_mib} high={high_mib} max={hard_mib} "
+                f"watcher kills at {watcher_trips_at} MiB"
             )
         memory = OciLinuxMemory(
             reservation_bytes=reservation,
@@ -674,6 +681,22 @@ def _cpu_burst_ceiling_millicores(request_millicores: int, *, node_cpu_millicore
     return max(min(ceiling, schedulable_capacity(node_cpu_millicores)), request_millicores)
 
 
+def _lowest_survivable_wall_mib(request_mib: int) -> int:
+    """The smallest wall a container can reserve `request_mib` behind and live.
+
+    The sandbox OOM watcher trips at a percentage of whatever wall it is handed,
+    so a wall equal to the reservation is a kill *below* it: at ninety-five per
+    cent, a container promised 4096 MiB dies at 3979 having never been throttled,
+    inside the guarantee the reservation exists to sell. The wall therefore has to
+    clear the reservation by at least the watcher's own margin.
+
+    One mebibyte above the exact quotient, because the watcher truncates and the
+    two must not meet.
+    """
+    exact = math.ceil(request_mib * 100 / DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT)
+    return exact + 1
+
+
 def _hard_memory_ceiling_mib(high_mib: int, *, request_mib: int, node_memory_mib: int) -> int:
     """The wall behind the throttle, never larger than the machine holds.
 
@@ -682,16 +705,19 @@ def _hard_memory_ceiling_mib(high_mib: int, *, request_mib: int, node_memory_mib
     kernel's global OOM killer resolves the shortage instead -- by `oom_badness`,
     which scores resident size and knows nothing about what anyone reserved.
 
-    Floored at the request, because the clamp can otherwise land under it: the
-    machine is sized from advertised capacity while this reads `MemTotal`, which
-    is always smaller once the kernel has taken its share. A wall below the
-    reservation kills a container inside what it was promised.
+    Floored so the reservation stays survivable, which is a stronger floor than
+    the reservation itself and the reason this is not `max(..., request_mib)`.
+    Reaching that floor means spending headroom the overhead factor had set aside
+    for the machine, and that is the right trade: a node too small to hold a
+    request plus the watcher's margin was the wrong placement, and killing the
+    tenant inside its reservation is not a better way to say so.
     """
+    floor = _lowest_survivable_wall_mib(request_mib)
     if node_memory_mib <= 0:
         # The worker could not read its machine. Better a ceiling that may be too
         # generous than one invented from a number nobody measured.
-        return max(high_mib, request_mib)
-    return max(min(high_mib, schedulable_capacity(node_memory_mib)), request_mib)
+        return max(high_mib, floor)
+    return max(min(high_mib, schedulable_capacity(node_memory_mib)), floor)
 
 
 def container_id_hash_suffix(container_id: str, length: int) -> str:
