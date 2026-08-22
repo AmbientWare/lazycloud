@@ -30,11 +30,25 @@ against them, and the signature on what Stripe sends back.
   would then have to store, precisely the lookup table the naming above exists
   to avoid. `deploy/stripe` keeps only the webhook endpoint, the one object whose
   creation returns a secret that has to survive somewhere.
-- Publishing reads before it writes, creates only what is missing, and never
-  deletes or edits. A price's amount cannot be changed at Stripe, so an existing
-  object that disagrees with this repository is refused by name and figure rather
-  than worked around; the fix is a new price and a moved lookup key, which is a
-  decision with customers on the other side of it.
+- Publishing reads before it writes and creates only what is missing. It never
+  deletes, and it never edits, because a price's amount cannot be changed at
+  Stripe. A plan whose amount has moved is republished instead: a new price
+  carrying the same lookup key, and the old one retired. The key moves first, so
+  a failure between the two calls leaves the account holding a price nothing
+  resolves to rather than two answering to one name.
+- Publishing never reaches a subscription that is already open. Those hold a
+  price identifier rather than a lookup key, so a republished figure applies to
+  the next subscription and not to anyone already on the old one. That limit is
+  deliberate. Moving an account onto a different figure changes what a person is
+  charged, and it is a decision with customers on the other side of it rather
+  than a step a deploy takes on the way past.
+- The rate card is the only place a figure is written down, and almost none of it
+  reaches Stripe. Every metered price is a fixed conversion of one nanodollar to
+  money, and the rate card is applied here before usage is reported, so changing
+  what compute or egress or volume storage costs changes the next invoice with no
+  object at Stripe touched at all. A plan's monthly fee is the single exception,
+  because it is a real amount on a real price, and it is the only figure a
+  catalog run has anything to publish for.
 - A meter event carries the ledger segment's `cost_nanos` verbatim, and the
   metered prices are one nanodollar per unit. Nothing is rederived on the way
   out, so an invoice and the ledger behind it compare as exact integers and a

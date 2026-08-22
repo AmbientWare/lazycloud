@@ -8,6 +8,10 @@ control_plane_root_volume_gib = 100
 # Empty is the intended value. The tunnel, the tailnet and SSM are all outbound.
 operator_ingress_cidrs = []
 
+# The payment-provider account the catalog is published into, checked against the
+# credential before anything is written. `stripe accounts retrieve` prints it.
+stripe_account_id = "acct_replace_me"
+
 # Declares that this deployment runs managed AWS capacity, and ranks the
 # instances it may launch. Leaving this out keeps managed capacity off.
 # us-east-1 on-demand Linux, read from the AWS Pricing API on 2026-08-21.
