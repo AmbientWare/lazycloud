@@ -195,15 +195,20 @@ jobs:
           for document in documents:
               # A Job's pod template is immutable, so a second sync patches it
               # and fails. The image tag moves with the commit, which makes that
-              # every deploy after the first.
+              # every deploy after the first. Both options are needed: without
+              # `Force` the replace sends back a manifest missing the selector
+              # and pod labels Kubernetes generated, and is refused for those
+              # instead.
               if document["kind"] == "Job":
                   options = (document["metadata"].get("annotations") or {}).get(
                       "argocd.argoproj.io/sync-options", ""
                   )
-                  if "Replace=true" not in options:
+                  chosen = {option.strip() for option in options.split(",")}
+                  if not {"Force=true", "Replace=true"} <= chosen:
                       problems.append(
-                          f"Job/{document['metadata']['name']} is patched rather than replaced; "
-                          "its pod template is immutable and the next deploy will fail to apply it"
+                          f"Job/{document['metadata']['name']} carries sync options "
+                          f"{options or 'none'}; its pod template is immutable, so it needs "
+                          "Force=true,Replace=true or the next deploy fails to apply it"
                       )
 
           for document in documents:

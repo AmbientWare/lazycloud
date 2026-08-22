@@ -35,13 +35,21 @@ metadata:
   name: database-bootstrap
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
-    # Deleted and recreated rather than patched. A Job's pod template is
-    # immutable, so the image tag moving with the commit makes every later sync
-    # fail to apply this one, and the wave it is in never completes: the release
-    # stops at a Job that already ran and reports an immutable field rather than
-    # anything about the deploy. Re-running is safe because each of these is
-    # idempotent, and for two of them running every time is the point.
-    argocd.argoproj.io/sync-options: Replace=true
+    # Deleted and recreated rather than patched or replaced in place. A Job's
+    # pod template is immutable, so the image tag moving with the commit makes
+    # every later sync fail to apply this one, and the wave it is in never
+    # completes: the release stops at a Job that already ran and reports an
+    # immutable field rather than anything about the deploy.
+    #
+    # `Force` is what makes it a delete, and it is not optional here. `Replace`
+    # alone sends the rendered manifest as it stands, and Kubernetes generates a
+    # Job's selector and its pod labels at creation, so what is sent back is
+    # missing both and is refused for a selector that does not match a template
+    # it also does not have.
+    #
+    # Re-running is safe because each of these is idempotent, and for two of
+    # them running every time is the point.
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
   backoffLimit: 3
   template:
@@ -63,13 +71,21 @@ metadata:
   name: administrator-bootstrap
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
-    # Deleted and recreated rather than patched. A Job's pod template is
-    # immutable, so the image tag moving with the commit makes every later sync
-    # fail to apply this one, and the wave it is in never completes: the release
-    # stops at a Job that already ran and reports an immutable field rather than
-    # anything about the deploy. Re-running is safe because each of these is
-    # idempotent, and for two of them running every time is the point.
-    argocd.argoproj.io/sync-options: Replace=true
+    # Deleted and recreated rather than patched or replaced in place. A Job's
+    # pod template is immutable, so the image tag moving with the commit makes
+    # every later sync fail to apply this one, and the wave it is in never
+    # completes: the release stops at a Job that already ran and reports an
+    # immutable field rather than anything about the deploy.
+    #
+    # `Force` is what makes it a delete, and it is not optional here. `Replace`
+    # alone sends the rendered manifest as it stands, and Kubernetes generates a
+    # Job's selector and its pod labels at creation, so what is sent back is
+    # missing both and is refused for a selector that does not match a template
+    # it also does not have.
+    #
+    # Re-running is safe because each of these is idempotent, and for two of
+    # them running every time is the point.
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
   backoffLimit: 3
   template:
@@ -126,13 +142,21 @@ metadata:
   name: billing-catalog
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
-    # Deleted and recreated rather than patched. A Job's pod template is
-    # immutable, so the image tag moving with the commit makes every later sync
-    # fail to apply this one, and the wave it is in never completes: the release
-    # stops at a Job that already ran and reports an immutable field rather than
-    # anything about the deploy. Re-running is safe because each of these is
-    # idempotent, and for two of them running every time is the point.
-    argocd.argoproj.io/sync-options: Replace=true
+    # Deleted and recreated rather than patched or replaced in place. A Job's
+    # pod template is immutable, so the image tag moving with the commit makes
+    # every later sync fail to apply this one, and the wave it is in never
+    # completes: the release stops at a Job that already ran and reports an
+    # immutable field rather than anything about the deploy.
+    #
+    # `Force` is what makes it a delete, and it is not optional here. `Replace`
+    # alone sends the rendered manifest as it stands, and Kubernetes generates a
+    # Job's selector and its pod labels at creation, so what is sent back is
+    # missing both and is refused for a selector that does not match a template
+    # it also does not have.
+    #
+    # Re-running is safe because each of these is idempotent, and for two of
+    # them running every time is the point.
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
   backoffLimit: 3
   template:
