@@ -75,3 +75,8 @@ tunnel:
 # The platform's own AWS account as capacity, from the module's
 # `fleet_connection` output. Registering it is one call with these five values.
 fleet: {}
+
+# The SDK profile every workload runs under. It chains the pod's own identity to
+# the control principal a connected account's trust names.
+aws:
+  profile: control

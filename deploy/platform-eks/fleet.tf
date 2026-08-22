@@ -86,17 +86,33 @@ resource "aws_iam_role" "fleet_connection" {
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { AWS = aws_iam_role.control_plane.arn }
-      Action    = "sts:AssumeRole"
-      # Enforced rather than decorative: connection validation proves the far
-      # side rejects an assume-role without it, and a role that does not enforce
-      # it fails validation with ExternalIdNotEnforced.
-      Condition = {
-        StringEquals = { "sts:ExternalId" = random_password.fleet_external_id.result }
-      }
-    }]
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.control_principal.arn }
+        Action    = "sts:AssumeRole"
+        # Enforced rather than decorative: connection validation proves the far
+        # side rejects an assume-role without it, and a role that does not
+        # enforce it fails validation with ExternalIdNotEnforced.
+        Condition = {
+          StringEquals = { "sts:ExternalId" = random_password.fleet_external_id.result }
+        }
+      },
+      {
+        # Its own statement, and deliberately unconditioned. The session that
+        # reaches here carries tags, and propagating them is a second action AWS
+        # authorizes separately. `sts:ExternalId` is a parameter of AssumeRole
+        # and is absent from the request context of TagSession, so a
+        # `StringEquals` on it can never match and refuses the whole call.
+        #
+        # Granting it alone confers nothing: tags may only be attached to an
+        # assume-role the statement above has already allowed on its own terms,
+        # external ID included.
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.control_principal.arn }
+        Action    = "sts:TagSession"
+      },
+    ]
   })
 }
 

@@ -1,0 +1,29 @@
+{{/*
+The role chain that turns a pod into the control principal.
+
+A connected account's trust names the control principal, because that name is a
+durable external contract written into every customer's role. The pod holds a
+different identity: Pod Identity gives it the cluster's workload role, which no
+customer has ever heard of. Something has to get from one to the other, and the
+SDK's own role chaining is that something. Compose mounts exactly this file.
+
+`credential_source = EcsContainer` is how the chain starts from Pod Identity.
+Pod Identity injects `AWS_CONTAINER_CREDENTIALS_FULL_URI`, which is the container
+credentials provider, so the chain's base is the pod's own identity and no
+credential is written here.
+
+Without this the control plane calls as the workload role, and a connection is
+refused by a trust that was never asked about it. The refusal names the pod's
+role, which appears in no template and in no runbook.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-chain
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+data:
+  config: |
+    [profile {{ .Values.aws.profile }}]
+    role_arn = {{ required "runtime.LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN is required" .Values.runtime.LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN }}
+    credential_source = EcsContainer

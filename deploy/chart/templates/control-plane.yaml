@@ -40,6 +40,9 @@ spec:
         # would tie replicas to one zone to save a fetch that costs seconds.
         - name: agent-binarys
           emptyDir: {}
+        - name: aws-chain
+          configMap:
+            name: aws-chain
       initContainers:
         # The release publishes the agent binary; the deployment says where it
         # keeps one. Neither holds the whole path, so it is assembled here, and
@@ -76,6 +79,10 @@ spec:
             # in seconds, and a PVC would tie a replica to one zone.
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
+            - name: AWS_CONFIG_FILE
+              value: /etc/lazycloud/aws/config
+            - name: AWS_PROFILE
+              value: {{ .Values.aws.profile | quote }}
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
             # The device goes away with the pod. Callers reach the advertised
@@ -86,6 +93,8 @@ spec:
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
+            - name: aws-chain
+              mountPath: /etc/lazycloud/aws
             - name: tun
               mountPath: /dev/net/tun
             - name: state

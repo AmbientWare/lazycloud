@@ -17,7 +17,10 @@ resource "aws_iam_role" "control_principal" {
     Statement = [{
       Effect    = "Allow"
       Principal = { AWS = aws_iam_role.control_plane.arn }
-      Action    = "sts:AssumeRole"
+      # Both, because the workload reaches this through Pod Identity and such a
+      # session carries tags. Propagating them is `sts:TagSession`, and a trust
+      # granting only the assume refuses the call in terms of the tagging.
+      Action = ["sts:AssumeRole", "sts:TagSession"]
     }]
   })
 

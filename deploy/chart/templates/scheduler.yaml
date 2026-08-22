@@ -30,6 +30,9 @@ spec:
       volumes:
         - name: agent-binarys
           emptyDir: {}
+        - name: aws-chain
+          configMap:
+            name: aws-chain
       initContainers:
         - name: agent-artifact
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
@@ -52,8 +55,14 @@ spec:
             {{- include "lazycloud.env" . | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
+            - name: AWS_CONFIG_FILE
+              value: /etc/lazycloud/aws/config
+            - name: AWS_PROFILE
+              value: {{ .Values.aws.profile | quote }}
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
+            - name: aws-chain
+              mountPath: /etc/lazycloud/aws
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
