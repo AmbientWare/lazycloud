@@ -29,6 +29,6 @@ metadata:
     argocd.argoproj.io/sync-wave: "-4"
 data:
   config: |
-    [profile {{ .Values.aws.profile }}]
+    [profile {{ include "lazycloud.awsProfile" . }}]
     role_arn = {{ required "runtime.LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN is required" .Values.runtime.LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN }}
     credential_source = EcsContainer
