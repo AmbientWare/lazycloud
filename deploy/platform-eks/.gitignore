@@ -7,3 +7,6 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Chart indexes the helm provider fetches for itself.
+.helm/

@@ -48,6 +48,15 @@ resource "helm_release" "argocd" {
       metadata = {
         name      = "root"
         namespace = var.argocd_namespace
+        annotations = {
+          # After the release, not with it. Helm renders extra objects into the
+          # same pass that installs the chart's CRDs, so an Application applied
+          # there meets a cluster where `argoproj.io/v1alpha1` does not exist yet
+          # and fails with "no matches for kind". A hook runs once the release's
+          # own resources are in place.
+          "helm.sh/hook"               = "post-install,post-upgrade"
+          "helm.sh/hook-delete-policy" = "before-hook-creation"
+        }
       }
       spec = {
         project = "default"
