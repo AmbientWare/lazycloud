@@ -158,6 +158,11 @@ output "secret_environment" {
   value       = local.secret_environment
 }
 
+output "secret_files" {
+  description = "Secret entries the cluster mounts as files rather than exporting."
+  value       = local.secret_files
+}
+
 output "cloudflare_tunnel_id" {
   description = <<-EOT
     Tunnel the in-cluster connectors run.

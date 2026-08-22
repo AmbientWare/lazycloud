@@ -37,6 +37,11 @@ resource "aws_secretsmanager_secret" "runtime" {
 
 # Which environment variable each secret becomes in the cluster. These are the
 # names the processes read.
+#
+# Split from `secret_files` below because the chart gives every workload every
+# variable named here. A credential only one pod reads does not belong in the
+# environment of the four that do not, and a file is how that pod wants it
+# anyway.
 locals {
   secret_environment = {
     LAZYCLOUD_DATABASE_URL                = aws_secretsmanager_secret.runtime["database-url"].name
@@ -50,6 +55,13 @@ locals {
     LAZYCLOUD_GITHUB_CLIENT_ID            = aws_secretsmanager_secret.runtime["github-client-id"].name
     LAZYCLOUD_GITHUB_CLIENT_SECRET        = aws_secretsmanager_secret.runtime["github-client-secret"].name
     LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY      = aws_secretsmanager_secret.runtime["backend-route-auth-key"].name
+  }
+
+  # Materialised into the same Secret and mounted as a file by the one workload
+  # that reads it. `cloudflared` wants a credentials file rather than a value,
+  # and it is the whole of the tunnel's identity.
+  secret_files = {
+    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS = aws_secretsmanager_secret.runtime["cloudflare-tunnel-credentials"].name
   }
 }
 
