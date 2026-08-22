@@ -1,0 +1,62 @@
+{{/*
+One replica, and this one is a correctness decision.
+
+`FileCacheServer` serves a local directory, so a second replica is a second cache
+rather than a larger one: content written to one is a miss on the other. Making
+it shared means either routing by content key or backing it with object storage,
+and both trade away the local-disk latency the cache exists for.
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cache-server
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.cacheServer.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache-server
+spec:
+  replicas: {{ .Values.cacheServer.replicas }}
+  # The volume is ReadWriteOnce, so a rolling update whose new pod starts before
+  # the old one exits waits forever on a disk it cannot attach.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cache-server
+  template:
+    metadata:
+      labels:
+        app: cache-server
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: cache-server
+      containers:
+        - name: cache-server
+          image: {{ include "lazycloud.image" .Values.images.cacheServer }}
+          env:
+            {{- include "lazycloud.env" . | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /var/lib/lazycloud/cache
+          resources:
+            {{- toYaml .Values.cacheServer.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-server
+spec:
+  selector:
+    app: cache-server
+  ports:
+    - port: 8100
+      targetPort: 8100

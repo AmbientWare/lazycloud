@@ -1,0 +1,31 @@
+{{/*
+One replica, and that is a capacity decision rather than a correctness one.
+
+The scheduler serialises its work on Redis token locks and tolerates overlapping
+ticks by design -- `packages/scheduler/AGENTS.md`: "where two overlap anyway the
+second finds the row already terminal and settles nothing twice". What made more
+than one impossible before was a Redis per host, which is why that moved out of
+the cluster.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
+      containers:
+        - name: scheduler
+          image: {{ include "lazycloud.image" .Values.images.scheduler }}
+          env:
+            {{- include "lazycloud.env" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
