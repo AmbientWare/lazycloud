@@ -56,13 +56,13 @@ spec:
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE
-              value: /etc/lazycloud/aws/config
+              value: /run/lazycloud/aws/config
             - name: AWS_PROFILE
               value: {{ .Values.aws.profile | quote }}
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
-              mountPath: /etc/lazycloud/aws
+              mountPath: /run/lazycloud/aws
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
