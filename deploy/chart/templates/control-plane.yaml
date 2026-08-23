@@ -15,15 +15,10 @@ one instance type, and pinning a pool would be choosing hardware to obtain
 something every node already has.
 */}}
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: control-plane
 spec:
-  # A set rather than a deployment, because the tailnet name is the address
-  # workers dial and a name is an identity. Held in an emptyDir it was discarded
-  # on every restart, the tailnet granted the next request a suffixed name, and
-  # the address published to workers stopped matching anything.
-  serviceName: control-plane
   replicas: {{ .Values.controlPlane.replicas }}
   selector:
     matchLabels:
@@ -39,6 +34,8 @@ spec:
           hostPath:
             path: /dev/net/tun
             type: CharDevice
+        - name: state
+          emptyDir: {}
         # Per pod, because the artifact is immutable and 48MB: a shared volume
         # would tie replicas to one zone to save a fetch that costs seconds.
         - name: agent-binarys
@@ -77,6 +74,9 @@ spec:
               containerPort: 9000
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
+            # An emptyDir, because the identity here is worth less than the
+            # restart it would delay: the device is ephemeral and re-registers
+            # in seconds, and a PVC would tie a replica to one zone.
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE
@@ -85,6 +85,11 @@ spec:
               value: {{ include "lazycloud.awsProfile" . | quote }}
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
+            # The device goes away with the pod. Callers reach the advertised
+            # service rather than this device, so no address is lost with it,
+            # and a durable device would leave a dead peer behind per restart.
+            - name: LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE
+              value: "true"
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
@@ -111,18 +116,6 @@ spec:
               port: http
             initialDelaySeconds: 60
             periodSeconds: 30
-  # The tailnet identity, and the only thing here worth keeping across a restart.
-  # A few megabytes of node key and state: what it buys is coming back as the
-  # same device rather than as the next one along.
-  volumeClaimTemplates:
-    - metadata:
-        name: state
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: {{ .Values.storage.className }}
-        resources:
-          requests:
-            storage: {{ .Values.controlPlane.tailnetStateSize }}
 ---
 apiVersion: v1
 kind: Service
