@@ -114,6 +114,10 @@ class UserService:
         with self.context.database.session() as session:
             return WorkspaceMemberRepository(session).workspaces_for_user(user_id)
 
+    def owned_workspace(self, user_id: str) -> WorkspaceRecord | None:
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).owned_workspace(user_id)
+
     def membership(self, *, workspace_id: str, user_id: str) -> WorkspaceMemberRecord | None:
         with self.context.database.session() as session:
             return WorkspaceMemberRepository(session).membership(

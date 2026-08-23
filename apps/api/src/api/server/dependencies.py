@@ -82,6 +82,26 @@ def current_workspace_id(
     return canonical_workspace_id(services, workspace)
 
 
+def _unnamed_workspace(services: ApiServices, token: AuthTokenRecord) -> str:
+    """The workspace a request meant when it named none.
+
+    A person's credential carries no workspace, and resolving that to one called
+    "default" answers with a workspace nobody is necessarily in: every account
+    here gets its own, so the name belongs to whichever account claimed it first
+    and to no one else. Every unnamed request was then refused for lacking
+    membership of a workspace it had never asked for, which is why deploying
+    worked and invoking the same deployment did not.
+
+    The account's own workspace is the one it owns, not its only membership:
+    joining somebody else's must not change which workspace is theirs, and it
+    would if the answer were "whichever they have exactly one of".
+    """
+    if not token.names_user or not token.user_id:
+        return DEFAULT_WORKSPACE_NAME
+    owned = services.users.owned_workspace(token.user_id)
+    return DEFAULT_WORKSPACE_NAME if owned is None else owned.id
+
+
 def require_workspace_scope(
     scope: AuthScope,
     *,
@@ -94,14 +114,10 @@ def require_workspace_scope(
     ) -> str:
         principal = require_principal(services, credentials, scope)
         token = principal.token
-        # A workspace-scoped credential names its own; a person's does not, so an
-        # unnamed workspace resolves to "default" and is then checked against their
-        # membership. Guessing among the workspaces they hold would sometimes act on
-        # the wrong one silently, where this refuses with a reason.
         return authorize_token_workspace(
             services,
             token,
-            workspace or token.workspace_id or DEFAULT_WORKSPACE_NAME,
+            workspace or token.workspace_id or _unnamed_workspace(services, token),
             scope,
             platform_role=principal.platform_role,
             strict=strict,
