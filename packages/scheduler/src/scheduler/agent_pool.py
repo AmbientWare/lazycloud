@@ -41,6 +41,10 @@ class AgentPoolConfig(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
+    # Whether this pool answers a workload that named no pool. The unit already
+    # decides that for scaling; the worker has to agree, or the unit grows a
+    # machine for a request its own worker then refuses.
+    default_eligible: bool = False
 
 
 class AgentPoolWorkerResult(ContractModel):
@@ -288,6 +292,7 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
         worker_build_version=str(
             state.metadata.get("worker_build_version") or DEFAULT_AGENT_WORKER_BUILD_VERSION
         ),
+        default_eligible=bool(normalized and normalized.default_eligible),
     )
 
 
@@ -318,7 +323,7 @@ def agent_machine_worker_record(
         runtime_class=OciRuntimeName.Runsc.value,
         runtime_classes=[OciRuntimeName.Runsc.value],
         private_worker=True,
-        requires_pool_selector=True,
+        requires_pool_selector=not config.default_eligible,
         free_cpu_millicores=cpu_millicores,
         free_memory_mib=memory_mib,
         free_gpu_count=machine.gpu_count,

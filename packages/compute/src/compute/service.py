@@ -1619,7 +1619,12 @@ class ComputeService:
                 min_machines=minimum,
                 max_machines=maximum,
                 scaling_enabled=True,
-                default_eligible=False,
+                # This is the workspace's capacity, and in a hosted deployment it
+                # is the only capacity there is. Withholding it from a workload
+                # that named no pool left every such request unplaceable and
+                # unable to scale anything, which is every request the SDK sends
+                # by default.
+                default_eligible=True,
                 worker_cpu_millicores=offer.cpu_millicores,
                 worker_memory_mib=offer.memory_mb,
                 worker_gpu_type=offer.gpu or "",
