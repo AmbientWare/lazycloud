@@ -2066,8 +2066,12 @@ class ComputeService:
                         pool.id,
                         now=current_time,
                     )
-            except ConflictError:
-                LOGGER.info("pooled capacity for %s is held by another mutation", pool.name)
+            except ConflictError as conflict:
+                # Reported rather than characterised. Contention and a lease that
+                # could not be proven on the way out are both conflicts here, and
+                # naming the wrong one sends the next reader to look for a lock
+                # that was never taken.
+                LOGGER.info("pooled capacity for %s was not reconciled: %s", pool.name, conflict)
                 continue
             if current is not None:
                 reconciled.append(current)
