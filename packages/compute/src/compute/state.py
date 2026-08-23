@@ -49,6 +49,11 @@ class ComputeUnitState(ContractModel):
     """Pool the unit's machines serve. Carried so a consumer holding only this
     state never has to substitute the unit's name for the label."""
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    default_eligible: bool = False
+    """Whether this unit answers a workload that named no pool.
+
+    Carried so the scheduler can register a machine's worker with the unit's
+    policy instead of guessing one the unit alone knows."""
     provider: str = "agent"
     status: ComputeUnitStatus = ComputeUnitStatus.Active
     min_machines: int = 0
