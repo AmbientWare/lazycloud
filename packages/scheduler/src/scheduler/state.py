@@ -854,29 +854,36 @@ class RedisSchedulerWorkerRepository:
         *,
         workspace_id: str,
         owner_user_id: str,
+        requires_pool_selector: bool | None = None,
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
-        """Restate who a worker belongs to without touching what it is doing.
+        """Restate what the scheduler knows about a worker, not what it is doing.
 
-        Two fields only. Re-adding the worker would reset its resource version and
-        overwrite the capacity and status a running worker is concurrently
-        changing, which is how a reconcile pass would hand a busy machine back its
-        idle capacity.
+        Named fields only. Re-adding the worker would reset its resource version
+        and overwrite the capacity and status a running worker is concurrently
+        changing, which is how a reconcile pass would hand a busy machine back
+        its idle capacity.
+
+        Whether a worker needs an explicit pool selector is one of these. It is
+        the unit's policy rather than the machine's, and the agent asserts it at
+        registration from a config that cannot see the unit, so a pool that was
+        made default-eligible kept workers that refused every unselected request.
         """
 
         def write() -> SchedulerWorkerRecord:
             worker = self.get_worker(worker_id)
             if worker is None:
                 raise WorkerStateNotFoundError(worker_id)
-            updated = worker.model_copy(
-                update={
-                    "workspace_id": workspace_id,
-                    "owner_user_id": owner_user_id,
-                    "resource_version": worker.resource_version + 1,
-                    "updated_at": now or utc_now(),
-                }
-            )
+            fields: dict[str, object] = {
+                "workspace_id": workspace_id,
+                "owner_user_id": owner_user_id,
+                "resource_version": worker.resource_version + 1,
+                "updated_at": now or utc_now(),
+            }
+            if requires_pool_selector is not None:
+                fields["requires_pool_selector"] = requires_pool_selector
+            updated = worker.model_copy(update=fields)
             state_key = self.keys.worker_state(worker_id)
             self.redis.hash_set(state_key, mapping=redis_serialization.dump_model_hash(updated))
             self.redis.expire(state_key, ttl_seconds)
