@@ -102,6 +102,7 @@ class AgentWorkerRepository(Protocol):
         *,
         workspace_id: str,
         owner_user_id: str,
+        requires_pool_selector: bool | None = None,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
@@ -208,9 +209,11 @@ class AgentWorkerPoolController:
         this. A narrow field update rather than a rewrite: the record also carries
         capacity and status a running worker is still changing.
         """
+        selector_required = not self.config.default_eligible
         if (
             worker.owner_user_id == machine.owner_user_id
             and worker.workspace_id == machine.workspace_id
+            and worker.requires_pool_selector == selector_required
         ):
             return AgentPoolWorkerResult(
                 action=AgentPoolWorkerAction.Existing,
@@ -222,13 +225,14 @@ class AgentWorkerPoolController:
             worker.worker_id,
             workspace_id=machine.workspace_id,
             owner_user_id=machine.owner_user_id,
+            requires_pool_selector=selector_required,
             now=now,
         )
         return AgentPoolWorkerResult(
             action=AgentPoolWorkerAction.Ensured,
             machine_id=machine.machine_id,
             worker_id=updated.worker_id,
-            reason="agent machine worker tenancy reconciled",
+            reason="agent machine worker reconciled",
         )
 
     def machine_schedulable(
