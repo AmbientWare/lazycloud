@@ -29,7 +29,8 @@ from shared.aws_connections import (
     AwsAuthorizationCleanupStatus,
     AwsAuthorizationCleanupTombstone,
 )
-from shared.compute_policy import ComputeUnitPhase
+from shared.capacity import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -267,11 +268,17 @@ class AwsAccountConnectionService:
             current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
-            if current.platform_fleet:
+            fleet_pool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+            if current.platform_fleet and current.pool == fleet_pool:
                 return current
             updated = current.model_copy(
                 update={
                     "platform_fleet": True,
+                    # Not an override point on this connection the way it is on a
+                    # customer's. The fleet is the capacity a request that names
+                    # no pool is answered from, so its pool is the one constant
+                    # both ends of that match already default to.
+                    "pool": fleet_pool,
                     "revision": current.revision + 1,
                     "updated_at": now,
                 }
