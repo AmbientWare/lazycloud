@@ -10,12 +10,27 @@
 # is rendered from `provider_aws.connection_policy`, the same owner the customer
 # template renders, and CI fails when the committed file stops matching it.
 
+# The tag the connection policy launches by.
+#
+# `ec2:RunInstances` is granted on a subnet and a security group only where they
+# carry it, so a network without it is one no pool can launch into: Auto Scaling
+# checks the caller's authority over the launch template's resources and reports
+# the refusal against the template, naming nothing about a subnet.
+#
+# A customer's network gets this from the authorization stack, which creates the
+# VPC, both subnets and the security group and tags all three. Ours is built here
+# instead, so it is tagged here, and the two networks are the same shape to the
+# policy that reads them.
+locals {
+  fleet_launch_tag = { "cloud-pool:managed-by" = "control-plane" }
+}
+
 resource "aws_vpc" "fleet" {
   cidr_block           = var.fleet_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = { Name = "${var.deployment}-fleet" }
+  tags = merge(local.fleet_launch_tag, { Name = "${var.deployment}-fleet" })
 }
 
 resource "aws_internet_gateway" "fleet" {
@@ -35,7 +50,10 @@ resource "aws_subnet" "fleet" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
-  tags = { Name = "${var.deployment}-fleet-${data.aws_availability_zones.available.names[count.index]}" }
+  tags = merge(
+    local.fleet_launch_tag,
+    { Name = "${var.deployment}-fleet-${data.aws_availability_zones.available.names[count.index]}" },
+  )
 }
 
 resource "aws_route_table" "fleet" {
@@ -65,7 +83,7 @@ resource "aws_security_group" "fleet_node" {
   description = "Shared fleet nodes: egress only."
   vpc_id      = aws_vpc.fleet.id
 
-  tags = { Name = "${var.deployment}-fleet-node" }
+  tags = merge(local.fleet_launch_tag, { Name = "${var.deployment}-fleet-node" })
 }
 
 # No inbound rule, and none should be added. A worker is reached over the
