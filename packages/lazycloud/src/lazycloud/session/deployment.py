@@ -453,7 +453,15 @@ class DeploymentClient(ControlClientConfigMixin):
             invocation=FunctionCloudpickleInvocation.from_bytes(payload),
         )
         response = FunctionInvokeResponse.model_validate(
-            self._http_channel().post("/api/v1/functions/invoke", request.model_dump(mode="json"))
+            self._http_channel().post(
+                # Named, like every other call this method makes. Omitting it
+                # left the route to resolve the request's workspace itself, and
+                # what it resolves to is `default`, so an account whose
+                # workspace is its own was refused for lacking membership of a
+                # workspace it never asked for.
+                f"/api/v1/functions/invoke?{urlencode({'workspace': selected_workspace})}",
+                request.model_dump(mode="json"),
+            )
         )
         task = (
             TaskClient(
