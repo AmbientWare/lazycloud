@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 from shared.http.workspaces import (
     WorkspaceAuditListResponse,
@@ -10,6 +10,8 @@ from shared.http.workspaces import (
     WorkspaceUpdateRequest,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path, workspace_query
 
 
 class WorkspaceControlChannel(Protocol):
@@ -47,7 +49,7 @@ class WorkspaceControlClient:
         )
 
     def audit(self, *, limit: int = 50, cursor: str | None = None) -> WorkspaceAuditListResponse:
-        query: dict[str, str | int] = {"workspace": self.workspace, "limit": limit}
+        query: dict[str, str | int] = {**workspace_query(self.workspace), "limit": limit}
         if cursor:
             query["cursor"] = cursor
         return WorkspaceAuditListResponse.model_validate(
@@ -55,7 +57,7 @@ class WorkspaceControlClient:
         )
 
     def _path(self, suffix: str) -> str:
-        return f"/api/v1/workspaces{suffix}?workspace={quote(self.workspace, safe='')}"
+        return workspace_path(f"/api/v1/workspaces{suffix}", self.workspace)
 
 
 __all__ = ["WorkspaceControlChannel", "WorkspaceControlClient"]

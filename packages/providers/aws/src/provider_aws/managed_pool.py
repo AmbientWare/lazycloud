@@ -1412,11 +1412,8 @@ def _default_session(
     aws_secret_access_key: str | None = None,
     aws_session_token: str | None = None,
 ) -> AwsManagedPoolSession:
-    # The same profile the connection path uses, and for the same reason: the
-    # customer's role trusts the control principal and nobody else, so a session
-    # that skipped the profile assumed from the workload's own role and was
-    # refused on sts:TagSession. Capacity is reached through a connection like
-    # any other call into that account, so it resolves its identity the one way.
+    # Capacity is reached through a connection like any other call into that
+    # account, and the customer's role trusts the control principal alone.
     profile = connection_profile_name()
     return _Boto3ManagedPoolSession(
         Session(

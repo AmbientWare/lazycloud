@@ -36,8 +36,7 @@ def test_sdk_profile_lifecycle_uses_sdk_config_owner(
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("LAZYCLOUD_ENDPOINT", raising=False)
-    # Isolate from any `.env` in the working tree so the unconfigured path is
-    # deterministic; a customer in an empty directory has no endpoint set.
+    # A customer in an empty directory has no endpoint set.
     monkeypatch.chdir(tmp_path)
     reset_settings_cache()
 

@@ -17,6 +17,8 @@ from shared.http.collections import (
 )
 from shared.http_transport import HttpChannel
 
+from lazycloud.control import workspace_path, workspace_query
+
 
 class MapControlChannel(Protocol):
     def get(self, path: str) -> Any: ...
@@ -100,11 +102,12 @@ class MapControlClient:
         workspace: str,
         query: dict[str, str] | None = None,
     ) -> str:
-        params = {"workspace": workspace, **(query or {})}
-        return f"/api/v1/maps/{quote(name, safe='')}/{suffix}?{urlencode(params)}"
+        params = {**workspace_query(workspace), **(query or {})}
+        base = f"/api/v1/maps/{quote(name, safe='')}/{suffix}"
+        return f"{base}?{urlencode(params)}" if params else base
 
     def _collection_path(self, name: str, *, workspace: str) -> str:
-        return f"/api/v1/maps/{quote(name, safe='')}?{urlencode({'workspace': workspace})}"
+        return workspace_path(f"/api/v1/maps/{quote(name, safe='')}", workspace)
 
 
 __all__ = [

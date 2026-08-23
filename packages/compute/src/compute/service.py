@@ -1619,11 +1619,11 @@ class ComputeService:
                 min_machines=minimum,
                 max_machines=maximum,
                 scaling_enabled=True,
-                # This is the workspace's capacity, and in a hosted deployment it
-                # is the only capacity there is. Withholding it from a workload
-                # that named no pool left every such request unplaceable and
-                # unable to scale anything, which is every request the SDK sends
-                # by default.
+                # True by construction rather than by preference: this unit is
+                # built from workspace policy because the workspace needed general
+                # capacity, so the work it serves is whatever that workspace runs.
+                # A pool created by name through `create_unit` is the one that
+                # earns an opt-in, and keeps the flag for it.
                 default_eligible=True,
                 worker_cpu_millicores=offer.cpu_millicores,
                 worker_memory_mib=offer.memory_mb,

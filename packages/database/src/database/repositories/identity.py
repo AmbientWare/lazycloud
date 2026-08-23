@@ -566,9 +566,10 @@ class WorkspaceMemberRepository:
     def owned_workspace(self, user_id: str) -> WorkspaceRecord | None:
         """The workspace this account owns, which is the one it was given.
 
-        Signup creates exactly one, so this answers what a request meant when it
-        named no workspace. Ownership rather than "their only membership":
-        joining somebody else's workspace must not change which one is theirs.
+        Ownership rather than "their only membership": joining somebody else's
+        workspace must not change which one is theirs. Ordered by the membership
+        like `owned_workspace_ids` so the two cannot disagree about which comes
+        first, and narrowed to active because a caller acts on this one.
         """
         row = self.session.scalars(
             select(WorkspaceTable)
@@ -578,7 +579,7 @@ class WorkspaceMemberRepository:
                 WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
                 WorkspaceTable.status == WorkspaceStatus.Active.value,
             )
-            .order_by(WorkspaceTable.created_at.asc())
+            .order_by(WorkspaceMemberTable.created_at.asc())
         ).first()
         return None if row is None else WorkspaceRecord.model_validate(row.payload)
 

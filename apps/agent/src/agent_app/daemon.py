@@ -750,10 +750,9 @@ class DockerAgentWorkerController:
     def _collect_worker_exit(self, name: str, worker_id: str) -> None:
         """Take a stopped worker's account before its container is removed.
 
-        Only a container that stopped on its own is read. One this agent is
-        about to replace or shut down deliberately has nothing to explain, and
-        copying a healthy worker's whole log into telemetry on every reconcile
-        would bury the run that does.
+        A container still running is skipped: it is one this agent is stopping,
+        and copying a healthy worker's whole log into telemetry on every
+        reconcile would bury the run that has something to say.
         """
         inspected = self.runner.run(
             [

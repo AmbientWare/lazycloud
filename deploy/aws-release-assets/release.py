@@ -806,6 +806,8 @@ def _anonymous_image_manifest(
             )
         if result.returncode == 0 or not _is_rate_limited(result):
             return result
+        if attempt + 1 == _ANONYMOUS_READ_ATTEMPTS:
+            break
         delay = _ANONYMOUS_READ_BACKOFF_SECONDS * (2**attempt)
         print(
             f"anonymous registry read was rate limited; retrying in {delay:g}s",
@@ -819,7 +821,7 @@ def _anonymous_image_manifest(
 
 def _is_rate_limited(result: subprocess.CompletedProcess[str]) -> bool:
     detail = f"{result.stdout}\n{result.stderr}".casefold()
-    return "toomanyrequests" in detail or "rate exceeded" in detail or "429" in detail
+    return "toomanyrequests" in detail or "rate exceeded" in detail
 
 
 def _download_public(url: str) -> bytes:

@@ -22,6 +22,7 @@ from shared.signals import (
     signal_name,
 )
 
+from lazycloud.control import workspace_query
 from lazycloud.transport_retry import call_with_transient_retry
 
 
@@ -140,7 +141,7 @@ class SignalControlClient:
         )
 
     def _path(self, name: str, suffix: str, *, workspace: str) -> str:
-        query = urlencode({"workspace": workspace})
+        query = urlencode(workspace_query(workspace))
         return f"/api/v1/signals/{quote(name, safe='')}/{suffix}?{query}"
 
 

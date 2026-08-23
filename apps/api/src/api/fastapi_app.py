@@ -376,13 +376,9 @@ def _publish_service_origin(api_services: ApiServices) -> str:
         ttl_seconds=CONTROL_PLANE_ORIGIN_TTL_SECONDS,
     )
     # The ports are named because they are half of a comparison nothing here can
-    # make. A Tailscale service withholds its address from every consumer until
-    # a host serves every port the service declares, and the declaration lives
-    # in the tailnet rather than in this process. Serving 9000 against a service
-    # declaring 9000 and 1995 cost a day: advertised, granted, and resolvable,
-    # with no peer ever receiving the address and nothing anywhere reporting a
-    # fault. Printing what is served is what makes the mismatch a five-second
-    # read against the service in the admin console.
+    # make: a Tailscale service withholds its address from every consumer until a
+    # host serves every port it declares, and that declaration lives in the
+    # tailnet rather than in this process.
     logger.info(
         "published control-plane service origin: %s (serving %s)",
         origin,

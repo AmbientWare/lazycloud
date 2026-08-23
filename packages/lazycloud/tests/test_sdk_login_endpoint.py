@@ -25,8 +25,6 @@ def reset_config_settings_cache(
     monkeypatch.delenv("LAZYCLOUD_TOKEN", raising=False)
     monkeypatch.delenv("LAZYCLOUD_HOME", raising=False)
     monkeypatch.delenv("LAZYCLOUD_CONFIG", raising=False)
-    # Isolate from any `.env` in the working tree so env resolution is
-    # deterministic when no endpoint is configured.
     monkeypatch.chdir(tmp_path)
     reset_settings_cache()
     yield
