@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
-from urllib.parse import urlencode
 
 from pydantic import JsonValue
 from shared.aws_connections import AwsAccountNetwork
@@ -30,6 +29,8 @@ from shared.http.compute_policy import (
     WorkspaceComputeWorkloadListResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class ComputeControlChannel(Protocol):
@@ -217,7 +218,7 @@ class ComputeClient:
         return self._path(f"/api/v1/compute{suffix}")
 
     def _path(self, path: str) -> str:
-        return f"{path}?{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
 
 __all__ = ["ComputeClient", "ComputeControlChannel"]

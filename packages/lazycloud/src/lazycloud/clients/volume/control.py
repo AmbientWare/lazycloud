@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from shared.bytes_transport import encode_bytes
 from shared.http.volumes import (
@@ -37,6 +37,8 @@ from shared.http.volumes import (
     StatPathResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class VolumeControlChannel(Protocol):
@@ -213,7 +215,7 @@ class VolumeControlClient:
         )
 
     def _path(self, path: str) -> str:
-        return f"{path}?{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
     def _quoted_path(self, path: str) -> str:
         return quote(path, safe="")

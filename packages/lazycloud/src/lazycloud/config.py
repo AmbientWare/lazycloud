@@ -48,7 +48,12 @@ class ClientProfile(BaseModel):
 
     name: str = DEFAULT_PROFILE
     endpoint: str = ""
-    workspace: str = DEFAULT_WORKSPACE
+    # Blank, not `default`. A client that fills in a workspace name sends one
+    # on every request, so the control plane never sees an unnamed request and
+    # never gets to resolve the account's own. `default` is a workspace some
+    # one account owns and nobody else is in, so inventing it here refused
+    # everyone who had not pinned a workspace by hand.
+    workspace: str = ""
     # `repr=False` keeps the bearer token out of every rendering of a profile:
     # tracebacks, `--debug` output, assertion diffs, and anything that formats
     # the model or a container holding it. The stored value stays a plain string

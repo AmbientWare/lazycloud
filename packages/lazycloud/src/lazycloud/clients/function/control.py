@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
-from urllib.parse import urlencode
 
 from pydantic import BaseModel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
@@ -18,6 +17,8 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class FunctionControlChannel(Protocol):
@@ -56,8 +57,7 @@ class FunctionControlClient:
         )
 
     def _scoped(self, path: str) -> str:
-        separator = "&" if "?" in path else "?"
-        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
     def invoke(
         self,

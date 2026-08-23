@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import urlencode
 
 from shared.http.images import (
     BuildImageRequest,
@@ -12,6 +11,8 @@ from shared.http.images import (
     VerifyImageBuildResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class ImageControlChannel(Protocol):
@@ -47,8 +48,7 @@ class ImageControlClient:
         )
 
     def _scoped(self, path: str) -> str:
-        separator = "&" if "?" in path else "?"
-        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
     def verify_image_build(
         self,
