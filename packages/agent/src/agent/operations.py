@@ -1657,9 +1657,12 @@ def _worker_docker_args(
     host_aliases: list[str],
     network: AgentWorkerNetwork,
 ) -> list[str]:
+    # No `--rm`. A worker that cannot reach the control plane says so on stderr
+    # and exits, and self-removal deletes that account in the same instant,
+    # leaving a slot that restarts every minute and explains nothing. The agent
+    # reads the exit and the log off the stopped container and removes it then.
     args = [
         "run",
-        "--rm",
         "--name",
         name,
         "--privileged",
