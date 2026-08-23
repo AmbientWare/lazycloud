@@ -26,6 +26,7 @@ from execution.collections.redis import (
 )
 from identity.auth import TokenIssuer
 from identity.users import UserService
+from images.execution import ManifestImageBuildExecutor
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
@@ -152,6 +153,11 @@ def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServi
         # endpoint, so a unit test that touches object storage reaches out over
         # the network instead of failing on its own terms.
         object_store_client=FakeObjectClient(),
+        # Named rather than defaulted. Production builds in a scheduled
+        # container, and composing that here would make every service fixture
+        # wait on capacity no unit test has; a test that wants a real build
+        # executor asks for one.
+        image_build_executor=ManifestImageBuildExecutor(),
         workspace_storage_client=_InMemoryWorkspaceBuckets(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,

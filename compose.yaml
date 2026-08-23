@@ -79,7 +79,6 @@ x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: "${LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE:-true}"
 
 x-image-build-env: &image-build-env
-  LAZYCLOUD_IMAGE_BUILD_EXECUTOR: "build-container"
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_TIMEOUT_SECONDS: "120"
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_INTERVAL_SECONDS: "0.5"
   # Empty means the workspace compute policy chooses where builds run. Pinning a
