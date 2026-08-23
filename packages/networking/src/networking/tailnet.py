@@ -332,11 +332,30 @@ class TailnetRuntime:
             return status
 
     def close(self) -> None:
+        """Stop the daemon, and give the device back on the way out.
+
+        A replica is disposable: callers reach the service, never this node, so
+        the device it registered has no reason to outlive the process. Logging
+        out returns it immediately instead of leaving a peer the tailnet has to
+        decide about later, which is how a deployment that restarts often ends up
+        with a list of machines that no longer exist.
+
+        Best effort, and deliberately so. This runs while something is already
+        shutting down, and a device left behind is untidy where a shutdown that
+        refuses to finish is an outage. A hard kill skips it entirely; that one
+        is for a reaper to find, not for this to guarantee.
+        """
+
         process = self._process
         self._process = None
         self._started = False
         if process is None:
             return
+        with suppress(Exception):
+            self.runner.run(
+                self._tailscale_args("logout"),
+                timeout_seconds=self.options.status_timeout_seconds,
+            )
         process.terminate()
         with suppress(subprocess.TimeoutExpired):
             process.wait(timeout=5)
