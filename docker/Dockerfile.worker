@@ -353,7 +353,13 @@ COPY --from=managed-package-source /packages /app/packages
 RUN criu --version | grep -Fx 'Version: 4.2'
 
 VOLUME ["/var/lib/lazycloud"]
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD python -c "import shutil; from pathlib import Path; import container_worker_app.main; required=('tini','runsc','buildah','skopeo','docker','ip','iptables','geesefs','mount-s3','lazycloud-sandbox-supervisor'); missing=[name for name in required if shutil.which(name) is None]; missing.extend(path for path in ('/usr/lib/podman/netavark','/usr/lib/podman/aardvark-dns') if not Path(path).exists()); raise SystemExit(1 if missing else 0)"
+# Liveness, not inventory. The previous check listed the binaries the image
+# ships and could only fail if the image were built wrong, so a worker that
+# registered with nothing and sat unreachable for its whole life reported
+# healthy the entire time. The heartbeat is written once per keepalive, which
+# is a claim the control plane has answered. The start period covers the first
+# registration, including its dial timeouts.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD python -c "import sys; from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME; from shared.process_liveness import HeartbeatFile, heartbeat_path; sys.exit(0 if HeartbeatFile(heartbeat_path(CONTAINER_WORKER_PROCESS_NAME)).is_fresh(90.0) else 1)"
 ENTRYPOINT ["tini", "--"]
 CMD ["lazycloud-container-worker"]

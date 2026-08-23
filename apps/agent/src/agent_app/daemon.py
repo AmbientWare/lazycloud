@@ -128,7 +128,12 @@ from agent_app.route_proxy import (
     AgentRouteProxyService,
     local_target_ready,
 )
-from agent_app.telemetry import AgentTelemetryBuffer, AgentTelemetryEventType
+from agent_app.telemetry import (
+    AgentTelemetryBuffer,
+    AgentTelemetryEventType,
+    AgentTelemetrySource,
+    AgentTelemetryStream,
+)
 from gateway import http
 
 LOGGER = logging.getLogger(__name__)
@@ -142,6 +147,7 @@ JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
+WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 # The control plane rejects a device registration with this when its enrollment
 # carries no issued identity yet. It means the agent's local session and the
@@ -589,6 +595,7 @@ class DockerAgentWorkerController:
     platform: str = ""
     peer_resolver_address: str = ""
     tailnet_dns_suffix: str = ""
+    telemetry: AgentTelemetryBuffer | None = None
 
     @property
     def active_slots_path(self) -> Path:
@@ -687,6 +694,8 @@ class DockerAgentWorkerController:
             plan.config,
             permissions=0o600,
         )
+        self._collect_worker_exit(plan.name, slot.worker_id)
+        self.runner.run([self.docker_binary, "rm", "-f", plan.name])
         args = [self.docker_binary, plan.docker_args[0], "--detach", *plan.docker_args[1:]]
         result = self.runner.run(args)
         if result.returncode != 0:
@@ -695,10 +704,56 @@ class DockerAgentWorkerController:
 
     def _stop(self, slot: AgentWorkerSlot) -> None:
         name = f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}"
+        self._collect_worker_exit(name, slot.worker_id)
         result = self.runner.run([self.docker_binary, "rm", "-f", name])
         if result.returncode != 0 and not _slot_removal_is_settled(result.stderr or result.stdout):
             msg = f"stop worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
             raise RuntimeError(msg)
+
+    def _collect_worker_exit(self, name: str, worker_id: str) -> None:
+        """Take a stopped worker's account before its container is removed.
+
+        Only a container that stopped on its own is read. One this agent is
+        about to replace or shut down deliberately has nothing to explain, and
+        copying a healthy worker's whole log into telemetry on every reconcile
+        would bury the run that does.
+        """
+        inspected = self.runner.run(
+            [
+                self.docker_binary,
+                "inspect",
+                "-f",
+                "{{.State.Running}} {{.State.ExitCode}} {{.State.OOMKilled}}",
+                name,
+            ]
+        )
+        if inspected.returncode != 0:
+            return
+        running, _, state = inspected.stdout.strip().partition(" ")
+        if running.lower() != "false":
+            return
+        exit_code, _, oom_killed = state.partition(" ")
+        LOGGER.warning(
+            "worker %s exited (code %s, oom_killed %s)",
+            worker_id or name,
+            exit_code or "unknown",
+            oom_killed or "unknown",
+        )
+        logs = self.runner.run(
+            [self.docker_binary, "logs", "--tail", str(WORKER_EXIT_LOG_LINES), name]
+        )
+        for line in (f"{logs.stdout}\n{logs.stderr}").splitlines():
+            if not line.strip():
+                continue
+            LOGGER.warning("worker %s: %s", worker_id or name, line)
+            if self.telemetry is not None:
+                self.telemetry.enqueue_log(
+                    line,
+                    source=AgentTelemetrySource.Worker,
+                    stream=AgentTelemetryStream.Stderr,
+                    worker_id=worker_id,
+                    level="error",
+                )
 
     def _slot_container_running(self, slot: AgentWorkerSlot) -> bool:
         name = f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}"
@@ -1505,10 +1560,15 @@ def build_agent_daemon_service(
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
 ) -> AgentDaemonService:
     state_dir = Path(options.state_dir)
+    # One buffer, shared with the worker controller. A worker's exit then rides
+    # the stream the agent already drains to the control plane, so reading why a
+    # worker failed does not depend on reaching the node it failed on.
+    telemetry = AgentTelemetryBuffer()
     return AgentDaemonService(
         options=options,
         client=client or HttpAgentGatewayClient.from_options(options),
         state_store=AgentStateStore(state_dir),
+        telemetry=telemetry,
         worker_controller=worker_controller
         or DockerAgentWorkerController(
             state_dir,
@@ -1519,6 +1579,7 @@ def build_agent_daemon_service(
             worker_network=options.worker_network,
             host_aliases=_worker_host_aliases(options),
             platform=agent_worker_platform(options.os_name, options.arch),
+            telemetry=telemetry,
         ),
         resource_detector=resource_detector,
         interruption_detector=(

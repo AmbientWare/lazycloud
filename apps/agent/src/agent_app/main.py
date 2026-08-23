@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import platform
 import shutil
@@ -191,6 +192,7 @@ def run_agent_daemon(
     tailnet_runtime: AgentTailnetRuntime | None = None,
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
 ) -> AgentDaemonRunResult:
+    _configure_daemon_logging()
     service = build_agent_daemon_service(
         options,
         client=client,
@@ -201,6 +203,21 @@ def run_agent_daemon(
     )
     with AgentProcessLock.acquire(Path(options.state_dir)):
         return service.run()
+
+
+def _configure_daemon_logging() -> None:
+    """Give the daemon's own account somewhere to go.
+
+    Without a handler Python emits nothing below `WARNING`, so a node under
+    investigation offered one journal line saying the unit had started and
+    nothing about what it then did. Records go to stderr because the commands
+    in this module write machine-readable results to stdout.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 def _add_daemon_options(
