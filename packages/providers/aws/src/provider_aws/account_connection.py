@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from shared.app_identity import ENV_PREFIX
 from shared.aws_connections import AwsAccountNetwork
 
 from .account_connection_policy import validate_aws_account_connection_template_policy
@@ -33,6 +35,8 @@ from .provider_control import (
     invalid_response_error,
     upstream_error,
 )
+
+AWS_CONNECTION_PROFILE_ENV = f"{ENV_PREFIX}_AWS_CONNECTION_PROFILE"
 
 AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-07-24.v12"
 
@@ -1318,8 +1322,9 @@ def require_resolvable_aws_credentials() -> None:
     stuck in `awaiting_authorization`, which names nothing about credentials.
     Resolution is deferred, so a role chain costs no call here.
     """
+    profile = connection_profile_name()
     try:
-        credentials = Session().get_credentials()
+        credentials = Session(profile_name=profile or None).get_credentials()
     except BotoCoreError as exc:
         raise ValueError(f"connected AWS credentials are unavailable: {exc}") from exc
     if credentials is None:
@@ -2206,6 +2211,20 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
     )
 
 
+def connection_profile_name() -> str:
+    """The AWS profile that reaches a connected account, or none for ambient.
+
+    Named here rather than exported as `AWS_PROFILE`, which every boto client in
+    the process reads. Reaching a customer account means becoming the control
+    principal, and making that the process default silently made it the identity
+    for object storage too, which is a role holding no S3 grant at all: a deploy
+    failed on `s3:PutObject` against a bucket the workload's own role may write.
+    The chain the roles describe is Pod Identity, then this profile, and only the
+    calls that cross into a customer account belong on the far side of it.
+    """
+    return os.environ.get(AWS_CONNECTION_PROFILE_ENV, "").strip()
+
+
 def _default_session(
     *,
     region_name: str,
@@ -2213,11 +2232,16 @@ def _default_session(
     aws_secret_access_key: str | None = None,
     aws_session_token: str | None = None,
 ) -> AwsConnectionSession:
+    profile = connection_profile_name()
     return _Boto3ConnectionSession(
         Session(
             region_name=region_name,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
+            # Only when no explicit credentials were handed in: a session already
+            # carrying keys is one the caller resolved, and naming a profile
+            # beside them asks boto to reconcile two identities.
+            profile_name=profile if profile and not aws_access_key_id else None,
         )
     )

@@ -75,9 +75,19 @@ class ClientConfig(BaseModel):
 
 
 class ClientSettings(BaseSettings):
+    """Where the CLI is pointed: the environment, then the stored profile.
+
+    A `.env` in the working directory is deliberately not read. It made the
+    target a property of the directory the operator happened to be standing in,
+    and it outranked a profile they had explicitly activated, so the same
+    command reached production from one directory and a local stack from
+    another with nothing said either way. `login` was the sharp edge: it takes
+    the environment's token over the stored one, so run beside a `.env` it
+    adopted that credential and reported success instead of authenticating.
+    """
+
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_",
-        env_file=".env",
         extra="ignore",
     )
 
