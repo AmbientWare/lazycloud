@@ -36,6 +36,9 @@ serviceAccounts:
 
 controlPlane:
   replicas: 1
+  # The tailnet state, which is a machine key and a node profile. Small, and the
+  # only reason the pod has a volume at all.
+  tailnetStateSize: 1Gi
   resources:
     requests: { cpu: 500m, memory: 1Gi }
     limits: { memory: 2Gi }

@@ -211,6 +211,12 @@ Three things survive it and have to be dealt with by hand:
 - **The PlanetScale role**, if the branch is destroyed after it. The role owns
   every table the schema created and cannot be dropped while it does; destroying
   the branch takes the role with it, so let the branch go first.
+- **This deployment's tailnet devices.** The records that retire a device live in
+  the database, so destroying the deployment destroys the thing that would have
+  cleaned up after it. Every node the deployment ever enrolled is left registered
+  in the tailnet, and the control plane's own device with them. Remove them by
+  hand after a teardown, or the next deployment starts beside a list of machines
+  that no longer exist.
 - **The operator document.** A destroy removes it and its values, so step 3 is
   done again on the next deployment. Keep a copy: the Stripe webhook signing
   secret is returned only when the endpoint is created, so it is the one value a
