@@ -118,6 +118,7 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
         }
     )
     pool = UnitResponse(
+        id="cu_01J8Z9QK2M0000000000000000",
         name="default",
         pool=MachinePool("lazycloud"),
         provider="agent",

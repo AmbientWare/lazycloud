@@ -63,6 +63,12 @@ class UnitCreateRequest(UnitPolicy):
 
 
 class UnitResponse(UnitPolicy):
+    # The value every other unit route is keyed by. Leaving it out made those
+    # routes unreachable: an operator holding a degraded pool could read its
+    # name, its phase and the reason it degraded, and had no supported way to
+    # learn the id needed to clear it. The name is deliberately not usable in
+    # its place, so the only remaining route was the database.
+    id: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
@@ -93,6 +99,7 @@ class UnitScaleRequest(HttpModel):
 
 
 class UnitScaleResponse(HttpModel):
+    id: str
     name: str
     desired_machines: int = Field(ge=0)
     max_machines: int = Field(ge=0)
