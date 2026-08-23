@@ -563,6 +563,25 @@ class WorkspaceMemberRepository:
         )
         return [WorkspaceRecord.model_validate(row.payload) for row in rows]
 
+    def owned_workspace(self, user_id: str) -> WorkspaceRecord | None:
+        """The workspace this account owns, which is the one it was given.
+
+        Signup creates exactly one, so this answers what a request meant when it
+        named no workspace. Ownership rather than "their only membership":
+        joining somebody else's workspace must not change which one is theirs.
+        """
+        row = self.session.scalars(
+            select(WorkspaceTable)
+            .join(WorkspaceMemberTable, WorkspaceMemberTable.workspace_id == WorkspaceTable.id)
+            .where(
+                WorkspaceMemberTable.user_id == user_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                WorkspaceTable.status == WorkspaceStatus.Active.value,
+            )
+            .order_by(WorkspaceTable.created_at.asc())
+        ).first()
+        return None if row is None else WorkspaceRecord.model_validate(row.payload)
+
     def set_role(self, *, workspace_id: str, user_id: str, role: WorkspaceRole) -> None:
         self.session.execute(
             update(WorkspaceMemberTable)
