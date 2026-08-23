@@ -10,6 +10,7 @@ from typing import Protocol, Self, TypeGuard, cast
 from boto3.session import Session
 from botocore.exceptions import BotoCoreError, ClientError
 
+from .account_connection import connection_profile_name
 from .boto3_clients import is_boto3_client_factory
 from .provider_control import (
     AwsProviderControlError,
@@ -131,7 +132,10 @@ def _is_capacity_image_client(value: object) -> TypeGuard[AwsCapacityImageEc2Cli
 
 
 def _default_ec2_client(*, region_name: str) -> AwsCapacityImageEc2Client:
-    source: object = Session(region_name=region_name)
+    # The control principal, like every other capacity call: the EC2 image
+    # grants live on that role and not on the one the workload runs as.
+    profile = connection_profile_name()
+    source: object = Session(region_name=region_name, profile_name=profile or None)
     if not is_boto3_client_factory(source):
         raise RuntimeError("boto3 session lacks the client factory operation")
     candidate = source.client("ec2")

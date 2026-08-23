@@ -31,7 +31,7 @@ from pydantic import (
 from shared.compute_policy import UnitName
 from shared.urls import normalize_http_origin
 
-from .account_connection import AwsAccountConnectionTarget
+from .account_connection import AwsAccountConnectionTarget, connection_profile_name
 from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_instance_catalog_entry, aws_managed_capacity_resource_name
 from .provider_control import (
@@ -1412,11 +1412,18 @@ def _default_session(
     aws_secret_access_key: str | None = None,
     aws_session_token: str | None = None,
 ) -> AwsManagedPoolSession:
+    # The same profile the connection path uses, and for the same reason: the
+    # customer's role trusts the control principal and nobody else, so a session
+    # that skipped the profile assumed from the workload's own role and was
+    # refused on sts:TagSession. Capacity is reached through a connection like
+    # any other call into that account, so it resolves its identity the one way.
+    profile = connection_profile_name()
     return _Boto3ManagedPoolSession(
         Session(
             region_name=region_name,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
+            profile_name=profile if profile and not aws_access_key_id else None,
         )
     )
