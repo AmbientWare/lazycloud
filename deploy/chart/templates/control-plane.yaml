@@ -85,11 +85,6 @@ spec:
               value: {{ include "lazycloud.awsProfile" . | quote }}
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
-            # The device goes away with the pod. Callers reach the advertised
-            # service rather than this device, so no address is lost with it,
-            # and a durable device would leave a dead peer behind per restart.
-            - name: LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE
-              value: "true"
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
