@@ -2109,6 +2109,7 @@ class ComputeService:
         if current.phase is ComputeUnitPhase.Deleted:
             self._retire_proven_provider_pool_machines(current, now=now)
             return None
+        current = self._unit_matching_its_connection(current, now=now)
         try:
             provider, offer = self._resolved_internal_unit_provider(current)
             pooled = provider.pooled
@@ -2158,6 +2159,51 @@ class ComputeService:
                 current,
                 preserve_deleting=True,
             )
+
+    def _unit_matching_its_connection(
+        self,
+        unit: ComputeUnitRecord,
+        *,
+        now: datetime,
+    ) -> ComputeUnitRecord:
+        """Bring a unit's pool identity back to what its connection now says.
+
+        The connection decides which pool its units feed and whether they are the
+        platform's own capacity, and preparing capacity stamps both onto the unit.
+        Preparing is demand-driven, though, so a unit that already holds the
+        machines it was asked for is never rebuilt: without this, a connection
+        corrected after its units exist leaves them feeding a pool no workload
+        names, and nothing converges them for as long as they keep working.
+
+        Narrow on purpose. Only the two fields the connection owns move, and a
+        unit that already agrees is left untouched rather than rewritten.
+        """
+        if unit.provider_connection_id is None:
+            return unit
+        with self.context.database.session() as session:
+            connection = AwsAccountConnectionRepository(session).get(unit.provider_connection_id)
+            if connection is None:
+                return unit
+            if unit.pool == connection.pool and unit.platform_fleet == connection.platform_fleet:
+                return unit
+            updated = ComputeUnitRepository(session).upsert(
+                unit.model_copy(
+                    update={
+                        "pool": connection.pool,
+                        "platform_fleet": connection.platform_fleet,
+                        "updated_at": now,
+                    }
+                )
+            )
+        LOGGER.info(
+            "compute unit %s follows its connection: pool %s -> %s, platform fleet %s -> %s",
+            unit.name,
+            unit.pool,
+            updated.pool,
+            unit.platform_fleet,
+            updated.platform_fleet,
+        )
+        return updated
 
     def _reclaim_pooled_bootstrap_failures(
         self,
