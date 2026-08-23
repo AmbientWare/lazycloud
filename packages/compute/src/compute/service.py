@@ -1506,6 +1506,7 @@ class ComputeService:
                     code="provider_unavailable",
                 )
             unit_pool = connection.pool
+            unit_platform_fleet = connection.platform_fleet
             repository = ComputeUnitRepository(session)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
@@ -1604,6 +1605,7 @@ class ComputeService:
                 workspace_id=workspace_id,
                 name=unit_name,
                 pool=unit_pool,
+                platform_fleet=unit_platform_fleet,
                 provider=provider.ref,
                 selector=unit_name,
                 source="workspace_policy",

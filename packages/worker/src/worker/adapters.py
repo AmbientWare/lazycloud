@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import Field, field_validator
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.routing import (
@@ -141,7 +141,7 @@ class SchedulerContainerRouteRepository(Protocol):
 
 class WorkerRouteIdentity(ContractModel):
     worker_id: str
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     machine_id: str = ""
     pod_address: str = ""
     container_service_port: int = 0

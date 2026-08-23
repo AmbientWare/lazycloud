@@ -24,7 +24,7 @@ from shared.app_identity import (
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import AgentCapacityState, PreflightSeverity
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.env import (
     GATEWAY_GRPC_HOST_ENV,
@@ -109,7 +109,7 @@ class AgentWorkerNetwork(ContractModel):
 
 class AgentJoinRequest(ContractModel):
     name: str
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     endpoint: str = "http://127.0.0.1:9000"
     token_secret: str | None = None
     version: str = "local"
@@ -1009,7 +1009,7 @@ class AgentWorkerDirs(ContractModel):
 class AgentWorkerSlot(ContractModel):
     worker_id: str
     worker_token: str = ""
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     billing_owner: UsageBillingOwner
     machine_id: str = ""

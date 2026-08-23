@@ -88,6 +88,9 @@ def fleet_ensure(
             subnet_ids=(subnet_id[0], subnet_id[1]),
             security_group_id=security_group_id,
         ),
+        # This account is the platform's, so its machines are shared capacity that
+        # serves every customer and bills to the fleet.
+        platform_fleet=True,
     )
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))

@@ -968,7 +968,6 @@ configs:
             gpu_count: 0
           pool_mode: public
           billing_owner: platform_fleet
-          requires_pool_selector: false
           preemptible: false
           persistent: true
           agent_worker: true

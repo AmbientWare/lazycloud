@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import Field, field_validator, model_validator
 
 from shared.capacity import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from shared.container_requests import CONTAINER_MEMORY_BURST_FLOOR_MIB
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
@@ -243,11 +244,27 @@ class AwsAccountConnection(ContractModel):
         pattern=r"^[A-Za-z0-9+=,.@:_/-]+$",
         repr=False,
     )
-    pool: MachinePool = Field(default=MachinePool("aws"), min_length=1, max_length=240)
+    platform_fleet: bool = False
+    """Whether this is the platform's own account rather than a customer's.
+
+    The fleet is capacity the platform bought and resells, so its machines serve
+    every account and are billed to the fleet. A customer's connection provisions
+    hardware that account owns, and its machines serve only that account. Both
+    arrive through the same enrolment, so nothing downstream can tell them apart
+    unless the connection says which it is.
+    """
+    pool: MachinePool = Field(
+        default=MachinePool(LAZYCLOUD_MACHINE_POOL), min_length=1, max_length=240
+    )
     """Pool every unit provisioned on this connection stamps.
 
     The customer's override point: units are created on demand per capability
     key, so the pool they belong to cannot live on any one of them.
+
+    Defaulted to the same constant a workload defaults to, because these two are
+    the ends of one match: capacity is stamped with this and a request carries
+    the other, and a bare string on either side names a pool the other has never
+    heard of. Placement then refuses every request with a pool no worker is in.
     """
     compute: AwsAccountComputeConfiguration = Field(default_factory=AwsAccountComputeConfiguration)
     """Provisioning limits and defaults applied to every workspace this account backs."""

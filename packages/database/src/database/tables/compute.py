@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import JsonValue
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -423,7 +424,7 @@ class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
     )
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
     external_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default="aws")
+    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
     phase: Mapped[str] = mapped_column(String(32), nullable=False)
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     next_reconcile_at: Mapped[datetime | None] = mapped_column(

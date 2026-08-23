@@ -18,6 +18,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
+from shared.capacity import MachinePool
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.mounts import MountAuthMode
 from tests.service_fixtures import workspace_owner_user_id
@@ -134,6 +135,7 @@ def _seed_ready_connection(isolated_services: ApiServices) -> None:
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
+                pool=MachinePool("aws"),
                 phase=AwsAccountConnectionPhase.Ready,
                 active_authorization=authorization,
                 node_role_arn=f"arn:aws:iam::{account_id}:role/compute-node",
