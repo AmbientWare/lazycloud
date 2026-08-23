@@ -17,10 +17,12 @@ them. It registers through the public API rather than against the database, so
 the control plane has to be serving before it can say anything. The others reach
 their own stores directly and go first.
 
-Idempotent, and deliberately not a reconciler: a connection already present is
-left alone rather than replaced, because reconnecting mints a new authorization
-generation and doing that on every deploy would churn the credential every pool
-depends on.
+Idempotent. A connection already present keeps its authorization and is restated
+as the fleet's, rather than replaced: reconnecting mints a new authorization
+generation, and doing that on every deploy would churn the credential every pool
+depends on. What the restatement corrects is which account this is and which pool
+its capacity feeds, both of which the deployment knows and neither of which the
+authorization has anything to do with.
 */}}
 {{- if .Values.fleet }}
 apiVersion: batch/v1
