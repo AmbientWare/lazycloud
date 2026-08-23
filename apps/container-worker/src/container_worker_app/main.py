@@ -254,20 +254,20 @@ def run_container_worker(
                 enabled=not once,
                 on_signal=record_shutdown_signal,
             ):
+                print(
+                    f"container worker {resolved_settings.worker_id} registering with "
+                    f"{resolved_settings.worker_repository_endpoint} "
+                    f"(timeout {resolved_settings.worker_repository_timeout_seconds:g}s)",
+                    file=sys.stderr,
+                )
                 registration = worker_services.lifecycle.register_available()
+                _report_registration(registration)
                 if not registration or not all(
                     step.status is WorkerLifecycleStatus.Ok for step in registration
                 ):
                     shutdown_registered_worker = any(
                         step.status is WorkerLifecycleStatus.Ok for step in registration
                     )
-                    for step in registration:
-                        if step.status is not WorkerLifecycleStatus.Ok:
-                            print(
-                                "container worker registration failed: "
-                                f"{step.action.value}: {step.error_message}",
-                                file=sys.stderr,
-                            )
                     detail = (
                         "; ".join(
                             f"{step.action.value}: {step.error_message}"
@@ -390,6 +390,26 @@ def run_container_worker(
         if container_service is not None:
             container_service.stop()
         runtime.close()
+
+
+def _report_registration(steps: list[WorkerLifecycleStepResult]) -> None:
+    """Say how each registration step went, whether or not any of them failed.
+
+    The origin is dialled before anything is written, so a worker that cannot
+    reach the control plane produced its first output only once every attempt
+    had run out its timeout, by which time the container was gone. Reporting
+    the successful steps too is what makes the silence after one of them mean
+    something.
+    """
+    if not steps:
+        print("container worker registration returned no steps", file=sys.stderr)
+        return
+    for step in steps:
+        detail = f": {step.error_message}" if step.error_message else ""
+        print(
+            f"container worker registration {step.action.value} {step.status.value}{detail}",
+            file=sys.stderr,
+        )
 
 
 def _reconcile_worker_artifacts(services: ContainerWorkerServices) -> None:
