@@ -1,11 +1,19 @@
 locals {
+  # Exactly what the control plane serves, and therefore exactly what the
+  # service may require. A port here that no host serves withholds the service
+  # from every consumer without failing anywhere.
+  control_plane_service_ports = concat(
+    ["tcp:${var.control_plane_port}"],
+    var.tcp_ingress_enabled ? ["tcp:${var.tcp_ingress_port}"] : [],
+  )
+
   policy = templatefile("${path.module}/policy.json.tftpl", {
-    agent_tag             = var.agent_tag
-    control_plane_tag     = var.control_plane_tag
-    agent_proxy_port      = var.agent_proxy_port
-    control_plane_port    = var.control_plane_port
-    control_plane_service = var.control_plane_service
-    tcp_ingress_port      = var.tcp_ingress_port
+    agent_tag                   = var.agent_tag
+    control_plane_tag           = var.control_plane_tag
+    agent_proxy_port            = var.agent_proxy_port
+    control_plane_port          = var.control_plane_port
+    control_plane_service       = var.control_plane_service
+    control_plane_service_ports = jsonencode(local.control_plane_service_ports)
   })
 }
 
@@ -39,7 +47,7 @@ resource "tailscale_acl" "customer_compute" {
 # create one.
 resource "tailscale_service" "control_plane" {
   name    = var.control_plane_service
-  ports   = [for port in [var.control_plane_port, var.tcp_ingress_port] : "tcp:${port}"]
+  ports   = local.control_plane_service_ports
   tags    = [var.control_plane_tag]
   comment = "LazyCloud ${var.environment} control plane"
 

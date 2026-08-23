@@ -22,7 +22,7 @@
     {
       "src": ["${agent_tag}"],
       "dst": ["${control_plane_service}"],
-      "ip": ["tcp:${control_plane_port}", "tcp:${tcp_ingress_port}"]
+      "ip": ${control_plane_service_ports}
     }
   ],
   "tests": [

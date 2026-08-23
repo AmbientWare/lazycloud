@@ -780,23 +780,14 @@ class TailnetRuntime:
         # resolver answering `*.ts.net` from public records that point at
         # Tailscale's infrastructure instead of the peer, so every lookup
         # succeeded and every connection timed out. Non-tailnet queries are
-        # forwarded upstream unchanged.
-        #
-        # Routes are accepted for the same reason. A service address is not a
-        # peer address. The host carries it as an extra prefix among its allowed
-        # IPs, and a client that declines routes drops every prefix that is not
-        # the peer's own, service VIPs included. The name still resolves and the
-        # policy still permits the connection, but the packet leaves by the
-        # default gateway and is discarded off-tailnet, so the node pings the
-        # control plane in milliseconds and cannot open a socket to the address
-        # it was told to dial. Nothing in this tailnet is a subnet router, so
-        # there is no foreign route to import by accepting them.
+        # forwarded upstream unchanged. Nothing here is a subnet router, so
+        # accepting routes would only import someone else's.
         args = self._tailscale_args(
             "up",
             f"--auth-key=file:{auth_key_path}",
             f"--hostname={hostname.strip()}",
             "--accept-dns=true",
-            "--accept-routes=true",
+            "--accept-routes=false",
             "--reset",
         )
         if control_url.strip():

@@ -75,6 +75,24 @@ variable "control_plane_service" {
   }
 }
 
+# Whether the control plane serves pod ingress, which decides whether the
+# service may require that port.
+#
+# A Tailscale service distributes its address only to hosts serving every port
+# it declares. Declaring one the deployment does not serve leaves the service
+# advertised, granted, resolvable, and reachable by nobody: the console reports
+# "advertising the service, but some required ports are missing", and no peer
+# ever receives the VIP. Nothing at either end reports an error, because at
+# either end nothing is wrong.
+#
+# This has to agree with LAZYCLOUD_TCP_INGRESS_ENABLED. They are two statements
+# of one fact and the failure when they disagree is silent.
+variable "tcp_ingress_enabled" {
+  description = "Whether the control plane serves the SNI-routed TCP ingress port. Must match LAZYCLOUD_TCP_INGRESS_ENABLED."
+  type        = bool
+  default     = false
+}
+
 variable "tcp_ingress_port" {
   description = "TCP port the control plane serves pod ingress on, routed by SNI."
   type        = number
