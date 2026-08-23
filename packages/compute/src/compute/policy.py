@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +48,8 @@ from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
 from compute.provider_machines import _provider_booted_template_version
+
+LOGGER = logging.getLogger(__name__)
 
 
 class _DeploymentPoolMetadata(ContractModel):
@@ -155,6 +158,10 @@ class AwsDefaultCapacityBaseline:
         behind.
         """
         if not self.capacity.workspace_has_ready_connection(workspace_id):
+            LOGGER.info(
+                "warm baseline for workspace %s declined: no connection hosting workloads",
+                workspace_id,
+            )
             return None
         if _aws_capacity_is_zero(configuration):
             self.capacity.clear_aws_default_capacity(
@@ -237,15 +244,34 @@ class WorkspaceComputePolicyService:
             )
 
     def reconcile_workspace_baseline(self, workspace_id: str) -> None:
-        """Apply the connected account's warm baseline in one workspace it backs."""
+        """Apply the connected account's warm baseline in one workspace it backs.
+
+        Both refusals below leave a workspace with whatever capacity it already
+        had and no account of why, which is indistinguishable from a baseline
+        that ran and decided nothing. They say which one it was.
+        """
         if self.aws_default_capacity is None:
+            LOGGER.info(
+                "warm baseline for workspace %s skipped: no default capacity owner",
+                workspace_id,
+            )
             return
         with self.context.database.session() as session:
             connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
                 workspace_id
             )
         if connection is None:
+            LOGGER.info(
+                "warm baseline for workspace %s skipped: its owner has no connection",
+                workspace_id,
+            )
             return
+        LOGGER.info(
+            "warm baseline for workspace %s: %d initial, %d minimum",
+            workspace_id,
+            connection.compute.initial_cpu_workers,
+            connection.compute.min_cpu_workers,
+        )
         self.aws_default_capacity.reconcile(
             workspace_id=workspace_id,
             configuration=connection.compute,
