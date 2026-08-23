@@ -454,8 +454,6 @@ class WorkerRepositoryService:
         if private_principal is not None:
             if not worker.private_worker:
                 raise ConflictError("private worker is not marked for private compute")
-            if not worker.requires_pool_selector:
-                raise ConflictError("private worker must require an explicit pool selector")
             if not worker.machine_id:
                 raise UpstreamUnavailableError(
                     f"private worker machine identity is unavailable: {worker_id}"

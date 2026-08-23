@@ -41,6 +41,7 @@ class AgentPoolConfig(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
+    default_eligible: bool = False
 
 
 class AgentPoolWorkerResult(ContractModel):
@@ -288,6 +289,7 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
         worker_build_version=str(
             state.metadata.get("worker_build_version") or DEFAULT_AGENT_WORKER_BUILD_VERSION
         ),
+        default_eligible=state.default_eligible,
     )
 
 
@@ -318,7 +320,7 @@ def agent_machine_worker_record(
         runtime_class=OciRuntimeName.Runsc.value,
         runtime_classes=[OciRuntimeName.Runsc.value],
         private_worker=True,
-        requires_pool_selector=True,
+        requires_pool_selector=not config.default_eligible,
         free_cpu_millicores=cpu_millicores,
         free_memory_mib=memory_mib,
         free_gpu_count=machine.gpu_count,
