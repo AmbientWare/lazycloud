@@ -252,6 +252,34 @@ class AwsAccountConnectionService:
             raise NotFoundError("AWS account connection not found")
         return connection
 
+    def adopt_as_fleet(self, *, user_id: str) -> AwsAccountConnection:
+        """Restate that this connection is the platform's own, without reconnecting.
+
+        Idempotent, and deliberately not a reconnect: minting a new authorization
+        generation would churn the credential every pool depends on, and what has
+        to change here is two facts the deployment already knows. A connection
+        made before the platform could say which it was still describes itself as
+        a customer's, and nothing else would ever correct it.
+        """
+        now = utc_now()
+        with self.context.database.session() as session:
+            repository = AwsAccountConnectionRepository(session)
+            current = repository.get_for_user(user_id, for_update=True)
+            if current is None:
+                raise NotFoundError("AWS account connection not found")
+            if current.platform_fleet:
+                return current
+            updated = current.model_copy(
+                update={
+                    "platform_fleet": True,
+                    "revision": current.revision + 1,
+                    "updated_at": now,
+                }
+            )
+            repository.save(updated)
+        self._publish(updated, WorkspaceChangeType.Updated)
+        return updated
+
     def update_compute_configuration(
         self,
         *,

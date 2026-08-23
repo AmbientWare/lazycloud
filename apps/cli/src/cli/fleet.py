@@ -67,11 +67,15 @@ def fleet_ensure(
 
     existing = client.current_connection()
     if existing is not None:
+        # Restated on every deploy, not just the first: a connection made before
+        # the platform could say which account was its own still describes itself
+        # as a customer's, and its machines would serve nobody but us.
+        adopted = client.adopt_fleet_account()
         if json_output_enabled(ctx):
-            print_payload(ctx, existing.model_dump(mode="json"))
+            print_payload(ctx, adopted.model_dump(mode="json"))
             return
-        console.print(f"AWS account {existing.account_id} is already connected ({existing.phase}).")
-        if existing.phase is not AwsAccountConnectionPhase.Ready:
+        console.print(f"AWS account {adopted.account_id} is already connected ({adopted.phase}).")
+        if adopted.phase is not AwsAccountConnectionPhase.Ready:
             console.print("Run `cloud validate` to advance it.")
         return
 

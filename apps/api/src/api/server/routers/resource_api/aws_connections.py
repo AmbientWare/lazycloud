@@ -186,6 +186,26 @@ def connect_aws_fleet_account(
     return _authorization_response(service.connect(request, user_id=user_id, platform_fleet=True))
 
 
+@router.post(
+    "/fleet/adopt",
+    response_model=AwsConnectionResponse,
+    operation_id="adopt_aws_fleet_account",
+)
+def adopt_aws_fleet_account(
+    _auth: admin_access,
+    user_id: write_user,
+    service: AwsAccountConnectionService = Depends(aws_account_connection_service),
+) -> AwsConnectionResponse:
+    """Restate that an existing connection is the platform's own.
+
+    A connection made before the platform could say which account was its own
+    still describes itself as a customer's, and nothing else corrects it.
+    Reconnecting would, but at the cost of a new authorization generation every
+    pool depends on.
+    """
+    return _response(service.adopt_as_fleet(user_id=user_id))
+
+
 @router.put(
     "/compute",
     response_model=AwsConnectionResponse,
