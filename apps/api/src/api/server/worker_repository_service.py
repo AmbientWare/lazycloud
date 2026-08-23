@@ -739,6 +739,7 @@ class WorkerRepositoryService:
         *,
         principal: WorkerRepositoryPrincipal,
     ) -> WorkerRecordResponse:
+        unit = self._feeding_unit(request.worker, principal)
         self._validate_runtime_worker_registration(request.worker, principal)
         source_cache = self._source_cache_service()
         generation = source_cache.register(
@@ -773,15 +774,19 @@ class WorkerRepositoryService:
                 # runs on hardware its owner may hold root on, so a registration
                 # naming its own billing owner could mark every container it runs
                 # self-hosted and drop them from the bill.
-                "billing_owner": self._billing_owner_for(request.worker, principal),
+                "billing_owner": self._billing_owner_for(unit, principal),
+                # The pool the unit feeds, not the one the worker arrived with.
+                # A machine carries the pool its join credential named at launch,
+                # so a unit corrected afterwards leaves every worker it starts in
+                # a pool no workload asks for, and the machine has to be replaced
+                # for a name to change. Told, not asserted.
+                "pool": unit.pool,
                 # Whose pool this is decides who may land on it, so the unit
                 # answers rather than the machine. A worker is launched by an
                 # agent holding a config that cannot see the unit, so left to the
                 # registration every worker declares itself selector-only and a
                 # pool that serves general work has none that will take it.
-                "requires_pool_selector": not self._feeding_unit(
-                    request.worker, principal
-                ).default_eligible,
+                "requires_pool_selector": not unit.default_eligible,
             }
         )
         try:
@@ -813,7 +818,7 @@ class WorkerRepositoryService:
             raise _scheduler_domain_error(exc) from exc
 
     def _billing_owner_for(
-        self, worker: SchedulerWorkerRecord, principal: WorkerRepositoryPrincipal
+        self, unit: ComputeUnitRecord, principal: WorkerRepositoryPrincipal
     ) -> UsageBillingOwner:
         """Who pays for containers this worker runs.
 
@@ -826,33 +831,39 @@ class WorkerRepositoryService:
 
         if not principal.is_private_worker:
             return UsageBillingOwner.PlatformFleet
-        return billing_owner_for_unit(self._feeding_unit(worker, principal))
+        return billing_owner_for_unit(unit)
 
     def _feeding_unit(
         self, worker: SchedulerWorkerRecord, principal: WorkerRepositoryPrincipal
     ) -> ComputeUnitRecord:
         """The unit a registering worker belongs to.
 
-        A pool is fed by any number of units, so the worker is admitted on the
-        unit it names and the pool is checked against that unit. The two failures
-        stay distinct: a pool no unit feeds yet may still be provisioning and is
-        worth retrying, while an owner that does not feed the pool it claims can
-        never succeed.
+        Resolved by the capacity owner the join credential stamped onto the
+        machine, never by the pool name the worker arrives holding: a pool is fed
+        by any number of units, so the name identifies none of them, and the unit
+        is what says which pool this worker is in.
+
+        The two failures stay distinct. A machine can reach registration while
+        the unit that owns it is still being written, which is worth retrying; a
+        unit belonging to another workspace never becomes this worker's.
         """
         if self.services is None:
             raise UpstreamUnavailableError(
                 "service dependencies are required for worker registration"
             )
+        if not worker.capacity_owner_id:
+            raise ConflictError("worker registration requires a capacity owner identity")
         with self.services.context.database.session() as session:
-            feeding = ComputeUnitRepository(session).list_for_machine_pool(
-                principal.workspace_id, worker.pool
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
+        if unit is None:
+            raise UpstreamUnavailableError(
+                f"worker capacity owner has no unit: {worker.capacity_owner_id}"
             )
-        if not feeding:
-            raise UpstreamUnavailableError(f"worker capacity pool is unavailable: {worker.pool}")
-        for unit in feeding:
-            if unit.capacity_owner_id == worker.capacity_owner_id:
-                return unit
-        raise ConflictError(f"worker capacity owner does not match pool {worker.pool}")
+        if unit.workspace_id != principal.workspace_id:
+            raise ConflictError(
+                f"worker capacity owner belongs to another workspace: {worker.capacity_owner_id}"
+            )
+        return unit
 
     def _validate_runtime_worker_registration(
         self,
@@ -863,9 +874,6 @@ class WorkerRepositoryService:
             raise UpstreamUnavailableError(
                 "service dependencies are required for worker registration"
             )
-        if not worker.capacity_owner_id:
-            raise ConflictError("worker registration requires a capacity owner identity")
-        self._feeding_unit(worker, principal)
         if not principal.is_private_worker:
             return
         if not worker.machine_id:
@@ -886,7 +894,7 @@ class WorkerRepositoryService:
                 raise ConflictError(
                     f"worker {worker.worker_id} does not belong to registration workspace"
                 )
-            if durable_worker.machine_id != worker.machine_id or durable_worker.pool != worker.pool:
+            if durable_worker.machine_id != worker.machine_id:
                 raise ConflictError(
                     f"worker {worker.worker_id} enrollment does not match registration"
                 )
