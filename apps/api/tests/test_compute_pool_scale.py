@@ -247,6 +247,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     assert state.status_code == 200, state.text
     assert cross_workspace_state.status_code == 404
     expected = UnitScaleResponse(
+        id=pool.id,
         name=pool.name,
         desired_machines=0,
         max_machines=10,

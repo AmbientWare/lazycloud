@@ -28,6 +28,7 @@ router = APIRouter()
 
 def _unit_state_response(pool: ComputeUnitRecord) -> UnitScaleResponse:
     return UnitScaleResponse(
+        id=pool.id,
         name=pool.name,
         desired_machines=pool.desired_machines,
         max_machines=pool.max_machines,
