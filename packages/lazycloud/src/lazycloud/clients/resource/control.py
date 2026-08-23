@@ -26,7 +26,7 @@ from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
 from shared.urls import url_path_segment
 
-from lazycloud.control import workspace_path
+from lazycloud.control import workspace_path, workspace_query
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -81,7 +81,7 @@ class ResourceControlClient:
         cursor: str | None = None,
     ) -> TaskPageResponse:
         query: list[tuple[str, str | int]] = [
-            ("workspace", self.workspace),
+            *workspace_query(self.workspace).items(),
             ("limit", limit),
             *(("stub_id", stub_id) for stub_id in stub_ids),
         ]
@@ -98,7 +98,7 @@ class ResourceControlClient:
         )
 
     def list_apps(self, *, active: bool | None = None) -> AppListResponse:
-        query: dict[str, str | bool] = {"workspace": self.workspace}
+        query: dict[str, str | bool] = dict(workspace_query(self.workspace))
         if active is not None:
             query["active"] = active
         return _validate_response(
@@ -132,7 +132,10 @@ class ResourceControlClient:
         )
 
     def stop_tasks(self, task_ids: Sequence[str]) -> TaskStopResponse:
-        query = [("workspace", self.workspace), *(("task_ids", task_id) for task_id in task_ids)]
+        query = [
+            *workspace_query(self.workspace).items(),
+            *(("task_ids", task_id) for task_id in task_ids),
+        ]
         return _validate_response(
             TaskStopResponse, self.channel.request("DELETE", f"/api/v1/tasks?{urlencode(query)}")
         )
@@ -148,7 +151,7 @@ class ResourceControlClient:
         cursor: str | None = None,
     ) -> DeploymentListResponse:
         query: dict[str, str | int | bool] = {
-            "workspace": self.workspace,
+            **workspace_query(self.workspace),
             "latest": latest,
             "limit": limit,
         }
@@ -202,7 +205,7 @@ class ResourceControlClient:
         cursor: str | None = None,
     ) -> ContainerWithAppPageResponse:
         query: list[tuple[str, str | int]] = [
-            ("workspace", self.workspace),
+            *workspace_query(self.workspace).items(),
             ("limit", limit),
             *(("stub_id", stub_id) for stub_id in stub_ids),
             *(("status", status.value) for status in statuses),

@@ -72,9 +72,9 @@ from agent.service_manager import (
     PreflightCheckName,
 )
 
-# Named because the agent both stamps these and searches by them. A worker
-# container now outlives its process so its logs can be read, which makes the
-# label the only way to find one whose slot the control plane has forgotten.
+# Named because the agent both stamps these and searches by them: a worker
+# container outlives its process so its logs can be read, and the label is the
+# only way to find one whose slot the control plane has forgotten.
 AGENT_MANAGED_LABEL = f"{NAME}.agent.managed"
 AGENT_WORKER_ID_LABEL = f"{NAME}.agent.worker_id"
 AGENT_WORKER_CONTAINER_SERVICE_BASE_PORT = 19000
@@ -1396,7 +1396,6 @@ def build_agent_worker_config(
             ),
             pool_mode=WorkerPoolMode.Private,
             billing_owner=slot.billing_owner,
-            requires_pool_selector=True,
             persistent=True,
             agent_worker=True,
         ),
@@ -1662,10 +1661,10 @@ def _worker_docker_args(
     host_aliases: list[str],
     network: AgentWorkerNetwork,
 ) -> list[str]:
-    # No `--rm`. A worker that cannot reach the control plane says so on stderr
-    # and exits, and self-removal deletes that account in the same instant,
-    # leaving a slot that restarts every minute and explains nothing. The agent
-    # reads the exit and the log off the stopped container and removes it then.
+    # No `--rm`: a worker that cannot reach the control plane says so on stderr
+    # and exits, and self-removal would delete that account in the same instant.
+    # The agent reads the exit and the log off the stopped container, then
+    # removes it.
     args = [
         "run",
         "--name",

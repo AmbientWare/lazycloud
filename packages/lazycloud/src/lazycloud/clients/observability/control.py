@@ -18,6 +18,7 @@ from shared.http.usage import UsageCostGroupKey, UsageCostListResponse, UsageRec
 from shared.http_transport import HttpChannel
 from shared.usage import UsageMetric
 
+from lazycloud.control import workspace_query
 from lazycloud.json_contracts import parse_json_value, validate_json_object
 from lazycloud.transport_retry import TRANSIENT_TRANSPORT_ERRORS, TransientRetry
 
@@ -118,7 +119,7 @@ class ObservabilityControlClient:
         limit: int = 100,
         cursor: str | None = None,
     ) -> UsageRecordListResponse:
-        query: dict[str, str | int] = {"workspace": self.workspace, "limit": limit}
+        query: dict[str, str | int] = {**workspace_query(self.workspace), "limit": limit}
         if metric is not None:
             query["metric"] = metric.value
         if resource_type is not None:

@@ -41,10 +41,6 @@ class AgentPoolConfig(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
-    # Whether this pool answers a workload that named no pool. The unit already
-    # decides that for scaling; the worker has to agree, or the unit grows a
-    # machine for a request its own worker then refuses.
-    default_eligible: bool = False
 
 
 class AgentPoolWorkerResult(ContractModel):
@@ -102,7 +98,6 @@ class AgentWorkerRepository(Protocol):
         *,
         workspace_id: str,
         owner_user_id: str,
-        requires_pool_selector: bool | None = None,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
@@ -209,11 +204,9 @@ class AgentWorkerPoolController:
         this. A narrow field update rather than a rewrite: the record also carries
         capacity and status a running worker is still changing.
         """
-        selector_required = not self.config.default_eligible
         if (
             worker.owner_user_id == machine.owner_user_id
             and worker.workspace_id == machine.workspace_id
-            and worker.requires_pool_selector == selector_required
         ):
             return AgentPoolWorkerResult(
                 action=AgentPoolWorkerAction.Existing,
@@ -225,14 +218,13 @@ class AgentWorkerPoolController:
             worker.worker_id,
             workspace_id=machine.workspace_id,
             owner_user_id=machine.owner_user_id,
-            requires_pool_selector=selector_required,
             now=now,
         )
         return AgentPoolWorkerResult(
             action=AgentPoolWorkerAction.Ensured,
             machine_id=machine.machine_id,
             worker_id=updated.worker_id,
-            reason="agent machine worker reconciled",
+            reason="agent machine worker tenancy reconciled",
         )
 
     def machine_schedulable(
@@ -296,7 +288,6 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
         worker_build_version=str(
             state.metadata.get("worker_build_version") or DEFAULT_AGENT_WORKER_BUILD_VERSION
         ),
-        default_eligible=bool(normalized and normalized.default_eligible),
     )
 
 
@@ -327,7 +318,7 @@ def agent_machine_worker_record(
         runtime_class=OciRuntimeName.Runsc.value,
         runtime_classes=[OciRuntimeName.Runsc.value],
         private_worker=True,
-        requires_pool_selector=not config.default_eligible,
+        requires_pool_selector=True,
         free_cpu_millicores=cpu_millicores,
         free_memory_mib=memory_mib,
         free_gpu_count=machine.gpu_count,

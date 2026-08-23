@@ -595,9 +595,6 @@ def _scheduler_worker_record(
         runtime_class=execution.runtime.value,
         runtime_classes=[runtime.value for runtime in runtime_classes],
         private_worker=execution.pool_mode is WorkerPoolMode.Private,
-        requires_pool_selector=(
-            execution.requires_pool_selector or execution.pool_mode is WorkerPoolMode.Private
-        ),
         preemptible=execution.preemptible,
         free_cpu_millicores=capacity.cpu_millicores,
         free_memory_mib=capacity.memory_mib,

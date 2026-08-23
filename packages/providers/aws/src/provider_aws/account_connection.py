@@ -2214,13 +2214,11 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
 def connection_profile_name() -> str:
     """The AWS profile that reaches a connected account, or none for ambient.
 
-    Named here rather than exported as `AWS_PROFILE`, which every boto client in
-    the process reads. Reaching a customer account means becoming the control
-    principal, and making that the process default silently made it the identity
-    for object storage too, which is a role holding no S3 grant at all: a deploy
-    failed on `s3:PutObject` against a bucket the workload's own role may write.
-    The chain the roles describe is Pod Identity, then this profile, and only the
-    calls that cross into a customer account belong on the far side of it.
+    Named here rather than exported as `AWS_PROFILE`, which boto applies to every
+    client in the process. The roles describe a chain — Pod Identity, then this
+    profile — and only calls crossing into a customer account belong on the far
+    side of it. Everything else answers as the workload's own role, which is the
+    one holding the deployment's storage and secrets.
     """
     return os.environ.get(AWS_CONNECTION_PROFILE_ENV, "").strip()
 

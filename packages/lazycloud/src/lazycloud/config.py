@@ -18,7 +18,6 @@ from shared.paths import state_home
 from lazycloud.json_contracts import validate_json_object
 
 DEFAULT_PROFILE = "default"
-DEFAULT_WORKSPACE = "default"
 
 # The profile file stores bearer tokens, so it is owner-only and every write
 # goes through `_write_config_document`. The directory is created owner-only for
@@ -48,11 +47,8 @@ class ClientProfile(BaseModel):
 
     name: str = DEFAULT_PROFILE
     endpoint: str = ""
-    # Blank, not `default`. A client that fills in a workspace name sends one
-    # on every request, so the control plane never sees an unnamed request and
-    # never gets to resolve the account's own. `default` is a workspace some
-    # one account owns and nobody else is in, so inventing it here refused
-    # everyone who had not pinned a workspace by hand.
+    # Blank, not `default`. A client that fills in a name sends one on every
+    # request, and the control plane never gets to resolve the account's own.
     workspace: str = ""
     # `repr=False` keeps the bearer token out of every rendering of a profile:
     # tracebacks, `--debug` output, assertion diffs, and anything that formats
@@ -82,13 +78,9 @@ class ClientConfig(BaseModel):
 class ClientSettings(BaseSettings):
     """Where the CLI is pointed: the environment, then the stored profile.
 
-    A `.env` in the working directory is deliberately not read. It made the
-    target a property of the directory the operator happened to be standing in,
-    and it outranked a profile they had explicitly activated, so the same
-    command reached production from one directory and a local stack from
-    another with nothing said either way. `login` was the sharp edge: it takes
-    the environment's token over the stored one, so run beside a `.env` it
-    adopted that credential and reported success instead of authenticating.
+    A `.env` in the working directory is deliberately not read. It would make
+    the target a property of whichever directory the operator is standing in,
+    and it outranks an explicitly activated profile.
     """
 
     model_config = SettingsConfigDict(
@@ -504,7 +496,6 @@ __all__ = [
     "CONFIG_DIRECTORY_MODE",
     "CONFIG_FILE_MODE",
     "DEFAULT_PROFILE",
-    "DEFAULT_WORKSPACE",
     "PACKAGED_DEFAULT_ENDPOINT",
     "ClientConfig",
     "ClientProfile",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from shared.http.collections import (
     SimpleQueueEmptyResponse,
@@ -13,6 +13,8 @@ from shared.http.collections import (
     SimpleQueueSizeResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class SimpleQueueControlChannel(Protocol):
@@ -75,12 +77,11 @@ class SimpleQueueControlClient:
         self.channel.delete(self._collection_path(name, workspace=self.workspace))
 
     def _path(self, name: str, suffix: str, *, workspace: str) -> str:
-        query = urlencode({"workspace": workspace})
-        return f"/api/v1/simplequeues/{quote(name, safe='')}/{suffix}?{query}"
+        base = f"/api/v1/simplequeues/{quote(name, safe='')}/{suffix}"
+        return workspace_path(base, workspace)
 
     def _collection_path(self, name: str, *, workspace: str) -> str:
-        query = urlencode({"workspace": workspace})
-        return f"/api/v1/simplequeues/{quote(name, safe='')}?{query}"
+        return workspace_path(f"/api/v1/simplequeues/{quote(name, safe='')}", workspace)
 
 
 __all__ = [

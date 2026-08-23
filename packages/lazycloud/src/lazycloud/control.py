@@ -14,7 +14,7 @@ from shared.env import (
     WORKSPACE_NAME_ENV,
 )
 
-from lazycloud.config import DEFAULT_WORKSPACE, get_profile
+from lazycloud.config import get_profile
 
 _CONTROL_WORKSPACE: ContextVar[str | None] = ContextVar(
     "lazycloud_control_workspace",
@@ -74,13 +74,10 @@ def resolve_control_client_config(
 def workspace_query(workspace: str) -> dict[str, str]:
     """The workspace a request names, or nothing at all.
 
-    The one place that decides. A blank workspace is not a missing value to be
-    filled in with a guess: it means the caller never chose one, and the control
-    plane answers that with the account's own. Every client asks here so the
-    question has one answer, because it did not before. A default in the stored
-    profile, a fallback here, a non-empty invariant on the scope, and a dozen
-    hand-built query strings each held their own opinion, and changing any one
-    of them moved the behaviour of paths that had never heard of it.
+    Blank is not a missing value to be filled in with a guess: it means the
+    caller chose none, and the control plane answers that with the account's
+    own. Clients ask here rather than building the query themselves so the
+    question has one answer.
     """
     selected = workspace.strip()
     return {"workspace": selected} if selected else {}
@@ -99,9 +96,8 @@ def workspace_path(path: str, workspace: str) -> str:
 def control_workspace_scope(workspace: str) -> Iterator[None]:
     """Act in one workspace for the duration, or leave the choice unmade.
 
-    Blank is a caller who named none, which is the ordinary case now that the
-    control plane resolves it. Refusing it here turned that into a crash on the
-    way into `run`.
+    Blank is a caller who named none, which the control plane resolves, so it
+    is yielded through rather than refused.
     """
     selected_workspace = workspace.strip()
     if not selected_workspace:
@@ -115,7 +111,6 @@ def control_workspace_scope(workspace: str) -> Iterator[None]:
 
 
 __all__ = [
-    "DEFAULT_WORKSPACE",
     "ControlClientConfig",
     "ControlClientConfigMixin",
     "control_workspace_scope",

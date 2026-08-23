@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urlencode
 
 from pydantic import JsonValue
 from shared.compute_policy import MachinePool
@@ -44,7 +43,7 @@ from lazycloud.abstractions.image import (
     ImageContextUploadResult,
 )
 from lazycloud.clients.image.control import ImageControlClient
-from lazycloud.control import ControlClientConfig, ControlClientConfigMixin
+from lazycloud.control import ControlClientConfig, ControlClientConfigMixin, workspace_path
 from lazycloud.control_clients import (
     control_http_channel,
     gateway_control_client,
@@ -454,12 +453,7 @@ class DeploymentClient(ControlClientConfigMixin):
         )
         response = FunctionInvokeResponse.model_validate(
             self._http_channel().post(
-                # Named, like every other call this method makes. Omitting it
-                # left the route to resolve the request's workspace itself, and
-                # what it resolves to is `default`, so an account whose
-                # workspace is its own was refused for lacking membership of a
-                # workspace it never asked for.
-                f"/api/v1/functions/invoke?{urlencode({'workspace': selected_workspace})}",
+                workspace_path("/api/v1/functions/invoke", selected_workspace),
                 request.model_dump(mode="json"),
             )
         )
@@ -662,7 +656,7 @@ class _DefaultObjectUploadClient:
         upload_timeout_seconds = object_upload_timeout_seconds(self.config.timeout_seconds)
         if not overwrite:
             response = channel.post(
-                f"/gateway/objects/head?{urlencode({'workspace': self.config.workspace})}",
+                workspace_path("/gateway/objects/head", self.config.workspace),
                 {"hash": object_hash, "bucket": bucket},
             )
             if (

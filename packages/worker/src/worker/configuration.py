@@ -68,7 +68,6 @@ class WorkerExecutionConfiguration(ContractModel):
     an agent worker slot, which states its own classification and overrides this.
     """
 
-    requires_pool_selector: bool = False
     preemptible: bool = False
     persistent: bool = False
     agent_worker: bool = True

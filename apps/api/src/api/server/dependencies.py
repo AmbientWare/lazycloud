@@ -85,16 +85,10 @@ def current_workspace_id(
 def _unnamed_workspace(services: ApiServices, token: AuthTokenRecord) -> str:
     """The workspace a request meant when it named none.
 
-    A person's credential carries no workspace, and resolving that to one called
-    "default" answers with a workspace nobody is necessarily in: every account
-    here gets its own, so the name belongs to whichever account claimed it first
-    and to no one else. Every unnamed request was then refused for lacking
-    membership of a workspace it had never asked for, which is why deploying
-    worked and invoking the same deployment did not.
-
-    The account's own workspace is the one it owns, not its only membership:
-    joining somebody else's must not change which workspace is theirs, and it
-    would if the answer were "whichever they have exactly one of".
+    Every account here is given its own, so a workspace literally called
+    "default" belongs to whichever account claimed that name and to nobody
+    else. The answer is the workspace the account owns rather than its only
+    membership: joining somebody else's must not change which one is theirs.
     """
     if not token.names_user or not token.user_id:
         return DEFAULT_WORKSPACE_NAME

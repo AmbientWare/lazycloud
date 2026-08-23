@@ -55,6 +55,7 @@ from scheduler.state import (
 )
 from shared.app_identity import NAME
 from shared.cache_records import CacheEntry
+from shared.compute_policy import ComputeUnitRecord
 from shared.container_requests import StopContainerReason
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import (
@@ -775,6 +776,14 @@ class WorkerRepositoryService:
                 # naming its own billing owner could mark every container it runs
                 # self-hosted and drop them from the bill.
                 "billing_owner": self._billing_owner_for(request.worker, principal),
+                # Whose pool this is decides who may land on it, so the unit
+                # answers rather than the machine. A worker is launched by an
+                # agent holding a config that cannot see the unit, so left to the
+                # registration every worker declares itself selector-only and a
+                # pool that serves general work has none that will take it.
+                "requires_pool_selector": not self._feeding_unit(
+                    request.worker, principal
+                ).default_eligible,
             }
         )
         try:
@@ -819,16 +828,33 @@ class WorkerRepositoryService:
 
         if not principal.is_private_worker:
             return UsageBillingOwner.PlatformFleet
+        return billing_owner_for_unit(self._feeding_unit(worker, principal))
+
+    def _feeding_unit(
+        self, worker: SchedulerWorkerRecord, principal: WorkerRepositoryPrincipal
+    ) -> ComputeUnitRecord:
+        """The unit a registering worker belongs to.
+
+        A pool is fed by any number of units, so the worker is admitted on the
+        unit it names and the pool is checked against that unit. The two failures
+        stay distinct: a pool no unit feeds yet may still be provisioning and is
+        worth retrying, while an owner that does not feed the pool it claims can
+        never succeed.
+        """
         if self.services is None:
-            raise UpstreamUnavailableError("service dependencies are required to price a worker")
+            raise UpstreamUnavailableError(
+                "service dependencies are required for worker registration"
+            )
         with self.services.context.database.session() as session:
             feeding = ComputeUnitRepository(session).list_for_machine_pool(
                 principal.workspace_id, worker.pool
             )
+        if not feeding:
+            raise UpstreamUnavailableError(f"worker capacity pool is unavailable: {worker.pool}")
         for unit in feeding:
             if unit.capacity_owner_id == worker.capacity_owner_id:
-                return billing_owner_for_unit(unit)
-        raise ConflictError(f"no compute unit feeds pool {worker.pool} for this worker")
+                return unit
+        raise ConflictError(f"worker capacity owner does not match pool {worker.pool}")
 
     def _validate_runtime_worker_registration(
         self,
@@ -841,26 +867,12 @@ class WorkerRepositoryService:
             )
         if not worker.capacity_owner_id:
             raise ConflictError("worker registration requires a capacity owner identity")
+        self._feeding_unit(worker, principal)
+        if not principal.is_private_worker:
+            return
+        if not worker.machine_id:
+            raise ConflictError("private worker requires a machine identity")
         with self.services.context.database.session() as session:
-            # A pool is fed by any number of units, so the worker is admitted on
-            # the unit it names and the pool is checked against that unit. The
-            # two failures stay distinct: a pool no unit feeds yet is a pool that
-            # may still be provisioning and is worth retrying, while an owner that
-            # does not feed the pool it claims can never succeed.
-            units = ComputeUnitRepository(session)
-            feeding = units.list_for_machine_pool(principal.workspace_id, worker.pool)
-            if not feeding:
-                raise UpstreamUnavailableError(
-                    f"worker capacity pool is unavailable: {worker.pool}"
-                )
-            if all(unit.capacity_owner_id != worker.capacity_owner_id for unit in feeding):
-                raise ConflictError(f"worker capacity owner does not match pool {worker.pool}")
-            if not principal.is_private_worker:
-                return
-            if not worker.machine_id or not worker.requires_pool_selector:
-                raise ConflictError(
-                    "private worker requires a machine identity and explicit pool selector"
-                )
             workers = WorkerRepository(session)
             durable_worker = workers.get_across_workspaces(worker.worker_id)
             machine = MachineRepository(session).get_across_workspaces(worker.machine_id)
@@ -888,10 +900,8 @@ class WorkerRepositoryService:
     ) -> None:
         if not principal.is_private_worker or self.services is None:
             return
-        if not worker.machine_id or not worker.requires_pool_selector:
-            raise ConflictError(
-                "private worker requires a machine identity and explicit pool selector"
-            )
+        if not worker.machine_id:
+            raise ConflictError("private worker requires a machine identity")
         now = utc_now()
         with self.services.context.database.session() as session:
             workers = WorkerRepository(session)
