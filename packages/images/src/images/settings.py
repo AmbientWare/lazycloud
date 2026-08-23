@@ -22,7 +22,16 @@ DEFAULT_IMAGE_BUILD_REGISTRY_INSPECT_TIMEOUT_SECONDS = 30
 
 
 class ImageBuildExecutionSettings(BaseSettings):
-    executor: ImageBuildExecutorKind = ImageBuildExecutorKind.Manifest
+    """How a build runs, defaulted to the only executor that publishes an archive.
+
+    A worker loads an image from the archive the build published, so an executor
+    that publishes none produces builds that complete and images no container can
+    start. The Compose stack named this and a deployment that did not silently
+    took the weaker route, which is the same argument against every setting that
+    lets one installation build differently from another.
+    """
+
+    executor: ImageBuildExecutorKind = ImageBuildExecutorKind.BuildContainer
     docker_binary: str = Field(default="docker", min_length=1)
 
     model_config = SettingsConfigDict(
