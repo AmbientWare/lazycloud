@@ -26,6 +26,8 @@ from shared.http.gateway import (
 )
 from shared.http_transport import HttpChannel
 
+from lazycloud.control import workspace_path
+
 
 class GatewayControlChannel(Protocol):
     def get(self, path: str) -> Any: ...
@@ -61,8 +63,7 @@ class GatewayControlClient:
         )
 
     def _scoped(self, path: str) -> str:
-        separator = "&" if "?" in path else "?"
-        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
     def checkpoint_container(
         self,

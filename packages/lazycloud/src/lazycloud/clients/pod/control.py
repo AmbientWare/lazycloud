@@ -50,6 +50,8 @@ from shared.http.pods import (
 )
 from shared.http_transport import HttpChannel
 
+from lazycloud.control import workspace_path
+
 
 class PodControlChannel(Protocol):
     def post(self, path: str, payload: dict[str, Any] | None = None) -> Any: ...
@@ -86,8 +88,7 @@ class PodControlClient:
         )
 
     def _scoped(self, path: str) -> str:
-        separator = "&" if "?" in path else "?"
-        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
     def create_pod(self, request: CreatePodRequest) -> CreatePodResponse:
         return CreatePodResponse.model_validate(

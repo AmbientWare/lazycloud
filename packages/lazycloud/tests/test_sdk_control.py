@@ -32,8 +32,8 @@ def reset_config_settings_cache() -> Iterator[None]:
         ("worker", ("http://control-plane:9000", "rt_worker", "workspace-id")),
         ("profile", ("https://api.example", "profile-token", "profile-workspace")),
         ("explicit", ("https://api.example", "explicit-token", "explicit-workspace")),
-        ("packaged", (PACKAGED_DEFAULT_ENDPOINT, None, "default")),
-        ("endpoint-env", ("https://env.example", None, "default")),
+        ("packaged", (PACKAGED_DEFAULT_ENDPOINT, None, "")),
+        ("endpoint-env", ("https://env.example", None, "")),
     ],
 )
 def test_resolve_control_client_config_precedence(

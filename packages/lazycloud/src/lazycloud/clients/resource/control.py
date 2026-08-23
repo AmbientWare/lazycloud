@@ -26,6 +26,8 @@ from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
 from shared.urls import url_path_segment
 
+from lazycloud.control import workspace_path
+
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 
@@ -250,7 +252,7 @@ class ResourceControlClient:
         )
 
     def _path(self, path: str) -> str:
-        return f"{path}?{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
 
 def _validate_response(model: type[ResponseT], value: object) -> ResponseT:

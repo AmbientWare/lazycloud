@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from shared.env import (
     GATEWAY_HTTP_URL_ENV,
@@ -65,22 +66,47 @@ def resolve_control_client_config(
     return ControlClientConfig(
         endpoint=selected_endpoint,
         token=token if token is not None else gateway_token or profile.token or None,
-        workspace=(
-            workspace
-            or _CONTROL_WORKSPACE.get()
-            or gateway_workspace
-            or profile.workspace
-            or DEFAULT_WORKSPACE
-        ),
+        workspace=(workspace or _CONTROL_WORKSPACE.get() or gateway_workspace or profile.workspace),
         timeout_seconds=timeout_seconds,
     )
 
 
+def workspace_query(workspace: str) -> dict[str, str]:
+    """The workspace a request names, or nothing at all.
+
+    The one place that decides. A blank workspace is not a missing value to be
+    filled in with a guess: it means the caller never chose one, and the control
+    plane answers that with the account's own. Every client asks here so the
+    question has one answer, because it did not before. A default in the stored
+    profile, a fallback here, a non-empty invariant on the scope, and a dozen
+    hand-built query strings each held their own opinion, and changing any one
+    of them moved the behaviour of paths that had never heard of it.
+    """
+    selected = workspace.strip()
+    return {"workspace": selected} if selected else {}
+
+
+def workspace_path(path: str, workspace: str) -> str:
+    """`path` with the workspace named on it, or unchanged when none was chosen."""
+    query = workspace_query(workspace)
+    if not query:
+        return path
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}{urlencode(query)}"
+
+
 @contextmanager
 def control_workspace_scope(workspace: str) -> Iterator[None]:
+    """Act in one workspace for the duration, or leave the choice unmade.
+
+    Blank is a caller who named none, which is the ordinary case now that the
+    control plane resolves it. Refusing it here turned that into a crash on the
+    way into `run`.
+    """
     selected_workspace = workspace.strip()
     if not selected_workspace:
-        raise ValueError("workspace must not be empty")
+        yield
+        return
     token = _CONTROL_WORKSPACE.set(selected_workspace)
     try:
         yield
@@ -94,4 +120,6 @@ __all__ = [
     "ControlClientConfigMixin",
     "control_workspace_scope",
     "resolve_control_client_config",
+    "workspace_path",
+    "workspace_query",
 ]

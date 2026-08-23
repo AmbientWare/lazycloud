@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import urlencode
 
 from shared.http.endpoints import (
     StartEndpointServeRequest,
     StartEndpointServeResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class EndpointControlChannel(Protocol):
@@ -42,8 +43,7 @@ class EndpointControlClient:
         )
 
     def _scoped(self, path: str) -> str:
-        separator = "&" if "?" in path else "?"
-        return f"{path}{separator}{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
     def start_serve(self, stub_id: str, *, timeout: int = 0) -> StartEndpointServeResponse:
         request = StartEndpointServeRequest(stub_id=stub_id, timeout=timeout)

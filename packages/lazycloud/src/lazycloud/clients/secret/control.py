@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from shared.http.secrets import (
     CreateSecretResponse,
@@ -13,6 +13,8 @@ from shared.http.secrets import (
     UpdateSecretResponse,
 )
 from shared.http_transport import HttpChannel
+
+from lazycloud.control import workspace_path
 
 
 class SecretControlChannel(Protocol):
@@ -86,7 +88,7 @@ class SecretControlClient:
         return self._workspace_path(f"/api/v1/secrets/{quote(name, safe='')}")
 
     def _workspace_path(self, path: str) -> str:
-        return f"{path}?{urlencode({'workspace': self.workspace})}"
+        return workspace_path(path, self.workspace)
 
 
 __all__ = [

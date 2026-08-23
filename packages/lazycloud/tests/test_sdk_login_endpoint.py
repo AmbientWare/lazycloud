@@ -97,6 +97,6 @@ def test_login_accepts_environment_token_without_exposing_it(
         "tls": False,
         "token": "set",
         "token_source": "environment",
-        "workspace": "default",
+        "workspace": "",
     }
     assert get_profile(apply_env=False).token == secret

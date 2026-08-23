@@ -28,7 +28,6 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.config import (
     DEFAULT_PROFILE,
-    DEFAULT_WORKSPACE,
     ClientProfile,
     ConfigError,
     activate_profile,
@@ -204,7 +203,7 @@ def login(
     profile_name = _target_profile_name(profile)
     existing = _stored_profile_or_default(profile_name)
     selected_endpoint = resolve_login_endpoint(endpoint, existing)
-    selected_workspace = workspace or existing.workspace or DEFAULT_WORKSPACE
+    selected_workspace = workspace or existing.workspace
     selected_tls = tls if tls is not None else existing.tls
     selected_token, token_source = resolve_login_token(token, existing)
     if not selected_token:

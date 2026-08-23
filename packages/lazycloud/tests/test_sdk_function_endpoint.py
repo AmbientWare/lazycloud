@@ -156,7 +156,7 @@ class FakeEndpointGatewayClient:
                         name="preview",
                         image="image-preview",
                         command=[],
-                        workspace_id="default",
+                        workspace_id="",
                         status=ContainerStatus.Running,
                         created_at=datetime(2026, 7, 12, tzinfo=UTC),
                     )
@@ -186,7 +186,7 @@ class FakeEndpointGatewayClient:
             name="preview",
             image="image-preview",
             command=[],
-            workspace_id="default",
+            workspace_id="",
             status=ContainerStatus.Stopped,
             created_at=datetime(2026, 7, 12, tzinfo=UTC),
         )
@@ -407,7 +407,7 @@ def test_function_spawn_serializes_call_dependencies(
     assert client.contexts[1][2] == [
         FunctionCallDependency(
             task_id="task-1",
-            workspace_id="default",
+            workspace_id="",
             edge_type="argument",
         )
     ]
@@ -419,7 +419,7 @@ def test_function_spawn_serializes_call_dependencies(
     assert client.contexts[2][2] == [
         FunctionCallDependency(
             task_id="task-1",
-            workspace_id="default",
+            workspace_id="",
             edge_type="argument",
         )
     ]
@@ -661,7 +661,7 @@ def test_endpoint_request_prefers_matching_serve_preview(
         kind=DeploymentKind.Endpoint,
         name="health",
         app="test",
-        workspace="default",
+        workspace="",
         endpoint="http://127.0.0.1:9000",
         stub_id="stub-preview",
         container_id="ctr-preview",
