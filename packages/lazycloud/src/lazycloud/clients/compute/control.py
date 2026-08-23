@@ -96,6 +96,11 @@ class ComputeClient:
             self.channel.post(path, request.model_dump(mode="json"))
         )
 
+    def adopt_fleet_account(self) -> AwsConnectionResponse:
+        return AwsConnectionResponse.model_validate(
+            self.channel.post(self._aws_path("/fleet/adopt"))
+        )
+
     def validate_connection(self) -> AwsConnectionResponse:
         return AwsConnectionResponse.model_validate(self.channel.post(self._aws_path("/validate")))
 
