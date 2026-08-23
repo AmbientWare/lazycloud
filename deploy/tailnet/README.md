@@ -52,6 +52,17 @@ preference, the coordination server reads it back, and the name still resolves
 nowhere while every process reports healthy. `autoApprovers` approves a proxy for
 a service; it does not create the service.
 
+Its ports are the deployment's, not a wish list. Tailscale hands the service
+address to consumers only once a host serves every port the service declares, so
+one extra port withholds the whole service. That is why `tcp_ingress_enabled`
+exists and why it has to say the same thing as `LAZYCLOUD_TCP_INGRESS_ENABLED`:
+a service declaring `tcp:9000` and `tcp:1995` against a control plane serving
+only 9000 is advertised, granted, and resolvable, and no peer ever receives the
+address. Both ends report healthy, every node enrols, and no worker ever
+registers. The console says "advertising the service, but some required ports
+are missing"; nothing else does. The control plane logs the ports it serves next
+to the origin it publishes, which is the other half of that comparison.
+
 ## Backend and credentials
 
 Terraform state contains secrets. Supply a standard remote backend owned by the
