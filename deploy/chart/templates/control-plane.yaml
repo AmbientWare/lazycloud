@@ -81,7 +81,10 @@ spec:
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE
               value: /run/lazycloud/aws/config
-            - name: AWS_PROFILE
+            # Not AWS_PROFILE: every boto client in the process reads that,
+            # so the identity for reaching a customer account became the
+            # identity for object storage, which it holds no grant for.
+            - name: LAZYCLOUD_AWS_CONNECTION_PROFILE
               value: {{ include "lazycloud.awsProfile" . | quote }}
             - name: LAZYCLOUD_TAILNET_STATE_DIR
               value: /run/lazycloud/tailnet
