@@ -84,10 +84,49 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # An ECR tag is immutable, so a deploy re-run for a commit whose images
+      # are already published cannot push them again. Recording the values is
+      # still the point of the run: a deployment moves onto a new release
+      # without its code changing, and that deploy has nothing to build.
+      #
+      # All or nothing. A tag present in some repositories and absent in others
+      # is a half-published build, and completing it would put images from two
+      # trees behind one tag -- the package-digest mismatch the managed runtime
+      # rejects at container start, which names a digest rather than the deploy
+      # that produced it.
+      - name: Check whether this commit is already published
+        id: published
+        run: |
+          set -euo pipefail
+          present=0
+          missing=0
+          for repository in api scheduler cache-server worker-bootstrap cli database-bootstrap; do
+            if aws ecr describe-images \
+              --repository-name "$DEPLOYMENT/$repository" \
+              --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
+              present=$((present + 1))
+            else
+              missing=$((missing + 1))
+              echo "not published: $DEPLOYMENT/$repository:$GITHUB_SHA"
+            fi
+          done
+          if [ "$present" -gt 0 ] && [ "$missing" -gt 0 ]; then
+            echo "::error::$present image(s) already published at $GITHUB_SHA and $missing missing; an immutable tag cannot be completed. Deploy a new commit."
+            exit 1
+          fi
+          if [ "$missing" -gt 0 ]; then
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "build=false" >>"$GITHUB_OUTPUT"
+            echo "every image is already published at $GITHUB_SHA; recording values only"
+          fi
+
       - name: Set up Docker Buildx
+        if: steps.published.outputs.build == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push every control-plane image
+        if: steps.published.outputs.build == 'true'
         uses: docker/bake-action@v7
         with:
           source: .
