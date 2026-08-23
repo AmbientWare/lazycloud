@@ -98,6 +98,12 @@ class WorkerTokenKind(StrEnum):
     Worker = "worker"
 
 
+_WORKER_SLOT_TOKEN_KINDS = frozenset({WorkerTokenKind.WorkerPrivate, WorkerTokenKind.Worker})
+"""Kinds a worker slot may hold. Which one it is decides whom the worker serves,
+and that is settled where the token is minted, from the connection the machine
+was provisioned through."""
+
+
 class WorkerStatus(StrEnum):
     Pending = "pending"
     Available = "available"
@@ -1276,7 +1282,7 @@ def plan_agent_worker_token(
         reusable = (
             existing_token.active
             and not existing_token.disabled_by_cluster_admin
-            and existing_token.token_type is WorkerTokenKind.WorkerPrivate
+            and existing_token.token_type in _WORKER_SLOT_TOKEN_KINDS
             and existing_token.reusable
             and existing_token.worker_id == expected_worker_id
             and existing_slot.worker_id == expected_worker_id
@@ -1303,7 +1309,7 @@ def plan_agent_worker_token(
     if (
         not created_token.active
         or created_token.disabled_by_cluster_admin
-        or created_token.token_type is not WorkerTokenKind.WorkerPrivate
+        or created_token.token_type not in _WORKER_SLOT_TOKEN_KINDS
         or not created_token.reusable
         or created_token.worker_id != expected_worker_id
     ):

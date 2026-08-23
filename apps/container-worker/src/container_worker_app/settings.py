@@ -17,7 +17,7 @@ from shared.app_identity import (
     OBJECT_STORE_SECRET_ACCESS_KEY,
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.env import (
     GATEWAY_HTTP_URL_ENV,
     WORKER_PEER_RESOLVER_ADDRESS_ENV,
@@ -107,7 +107,7 @@ class WorkerSettings(BaseSettings):
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
     )
     pool: MachinePool = Field(
-        default=MachinePool("default"),
+        default=MachinePool(LAZYCLOUD_MACHINE_POOL),
         validation_alias="WORKER_POOL",
     )
     capacity_owner_id: str = Field(

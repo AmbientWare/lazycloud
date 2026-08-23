@@ -25,7 +25,7 @@ from agent.service_manager import (
 )
 from pydantic import Field
 from shared.app_identity import AGENT_NAME, AGENT_SERVICE_DESCRIPTION
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 
 AGENT_JOIN_TOKEN_FILE = "join-token"
@@ -61,7 +61,7 @@ class AgentInstallCommandResult(ContractModel):
 
 class AgentInstallRequest(ContractModel):
     name: str = "agent"
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     endpoint: str = "http://127.0.0.1:9000"
     join_token: str = ""
     version: str = "local"

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.timestamps import utc_now
@@ -26,7 +26,7 @@ class LeaseStatus(StringEnum):
 
 class Machine(ContractModel):
     id: str
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     capacity_owner_id: str = ""
     """Unit that bought this machine, from the join credential it enrolled with.
 
@@ -47,7 +47,7 @@ class Machine(ContractModel):
 class Worker(ContractModel):
     id: str
     machine_id: str | None = None
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     status: ResourceStatus = ResourceStatus.Created
     labels: dict[str, str] = Field(default_factory=dict)
     last_seen_at: datetime = Field(default_factory=utc_now)
@@ -57,7 +57,7 @@ class Worker(ContractModel):
 class AgentRecord(ContractModel):
     id: str
     name: str
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     status: ResourceStatus = ResourceStatus.Created
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)

@@ -95,6 +95,7 @@ def _internal_compute_unit_state(
         name=pool.name,
         pool=pool.pool,
         capacity_owner_id=pool.capacity_owner_id,
+        platform_fleet=pool.platform_fleet,
         default_eligible=pool.default_eligible,
         provider=pool.provider_ref,
         status=_internal_pool_status(pool.phase),

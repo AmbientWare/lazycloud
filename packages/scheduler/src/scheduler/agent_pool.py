@@ -41,6 +41,7 @@ class AgentPoolConfig(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
+    platform_fleet: bool = False
     default_eligible: bool = False
 
 
@@ -289,6 +290,7 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
         worker_build_version=str(
             state.metadata.get("worker_build_version") or DEFAULT_AGENT_WORKER_BUILD_VERSION
         ),
+        platform_fleet=state.platform_fleet,
         default_eligible=state.default_eligible,
     )
 
@@ -313,13 +315,15 @@ def agent_machine_worker_record(
         # credential, which is what keeps that unit's drain from terminating it.
         capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
         workspace_id=machine.workspace_id,
-        owner_user_id=machine.owner_user_id,
+        # Empty on the fleet: an owner serves the comparison that decides who may
+        # be placed here, and platform capacity answers to everyone.
+        owner_user_id="" if config.platform_fleet else machine.owner_user_id,
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",
         runtime_class=OciRuntimeName.Runsc.value,
         runtime_classes=[OciRuntimeName.Runsc.value],
-        private_worker=True,
+        private_worker=not config.platform_fleet,
         requires_pool_selector=not config.default_eligible,
         free_cpu_millicores=cpu_millicores,
         free_memory_mib=memory_mib,

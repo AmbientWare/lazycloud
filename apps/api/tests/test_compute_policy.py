@@ -673,6 +673,7 @@ def _seed_ready_aws_connection(
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
+                pool=MachinePool("aws"),
                 # No warm baseline: control-plane startup reconciles what every
                 # connected account asks for, and none of these tests are about
                 # provisioning it.

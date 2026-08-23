@@ -121,6 +121,12 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     expires_at: datetime | None = None
     provider_ref: str = Field(default="", max_length=160)
     provider_connection_id: str | None = Field(default=None, pattern=_UUID_PATTERN)
+    platform_fleet: bool = False
+    """Whether this unit is the platform's own capacity rather than a customer's.
+
+    Copied from the connection beside the pool, in the same statement and from
+    the same source, so a consumer reads one record to know both what this
+    capacity is called and whom it serves."""
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
     visibility: ComputeUnitVisibility = ComputeUnitVisibility.Public
     region: str = Field(default="", max_length=64)

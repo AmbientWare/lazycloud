@@ -50,11 +50,14 @@ def billing_owner_for_unit(unit: ComputeUnitRecord) -> UsageBillingOwner:
     we neither bought nor manage. `ComputeUnitRecord` makes holding a connection
     exactly equivalent to being internal, and refuses one on any other unit.
 
-    The fleet is neither and never reaches here: its workers are started by the
-    platform rather than joined, and take the owner their own configuration
-    names.
+    The platform's own fleet reaches here too, because a hosted deployment
+    provisions it through a connection like any other and its machines join like
+    any other. What separates it is the connection saying so, not how the machine
+    arrived.
     """
 
+    if unit.platform_fleet:
+        return UsageBillingOwner.PlatformFleet
     if unit.provider_connection_id is not None:
         return UsageBillingOwner.ConnectedCloud
     return UsageBillingOwner.SelfHosted

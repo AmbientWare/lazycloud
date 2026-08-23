@@ -24,7 +24,7 @@ from shared.http.aws_connections import (
     AwsManagedAuthorizationResponse,
 )
 
-from api.server.auth import read_user, write_user
+from api.server.auth import admin_access, read_user, write_user
 from api.server.service_dependencies import (
     aws_account_connection_directory,
     aws_account_connection_service,
@@ -162,6 +162,28 @@ def connect_aws_account(
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionAuthorizationResponse:
     return _authorization_response(service.connect(request, user_id=user_id))
+
+
+@router.post(
+    "/fleet",
+    response_model=AwsConnectionAuthorizationResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="connect_aws_fleet_account",
+)
+def connect_aws_fleet_account(
+    request: AwsConnectionCreateRequest,
+    _auth: admin_access,
+    user_id: write_user,
+    service: AwsAccountConnectionService = Depends(aws_account_connection_service),
+) -> AwsConnectionAuthorizationResponse:
+    """Connect the platform's own account as shared capacity.
+
+    Separate from the customer route rather than a field on it. Declaring an
+    account to be the fleet makes its machines serve every customer and bill to
+    the platform, so it is an administrator's act and cannot be reached by a
+    credential that only speaks for one account.
+    """
+    return _authorization_response(service.connect(request, user_id=user_id, platform_fleet=True))
 
 
 @router.put(

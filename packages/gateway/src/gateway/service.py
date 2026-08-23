@@ -2232,6 +2232,7 @@ class GatewayControlService:
             agent_state,
             worker_id=worker.worker_id,
             existing_slot=existing,
+            billing_owner=billing_owner,
         )
         slot_plan = plan_agent_worker_slot(
             agent_state,
@@ -2311,7 +2312,16 @@ class GatewayControlService:
         *,
         worker_id: str,
         existing_slot: ComputeAgentWorkerSlotState | None,
+        billing_owner: UsageBillingOwner,
     ) -> AgentWorkerTokenPlan:
+        """Mint the credential this machine's worker registers with.
+
+        Its kind is the whole of the tenancy decision: a worker registers as
+        private or shared from the token alone, and everything downstream is
+        stamped from that. The fleet is capacity the platform bought, so its
+        machines serve every account; a customer's connection provisions hardware
+        that account owns, and its machines serve only that account.
+        """
         existing_token = self._existing_agent_worker_token(agent_state, existing_slot)
         token_plan = plan_agent_worker_token(
             existing_slot,
@@ -2329,7 +2339,11 @@ class GatewayControlService:
         raw_token, token_record = self.services.auth.create_token(
             f"agent-worker-{agent_state.machine_id}-{uuid4().hex[:8]}",
             scopes=[AuthScope.Worker.value],
-            kind=TokenKind.WorkerPrivate,
+            kind=(
+                TokenKind.Worker
+                if billing_owner is UsageBillingOwner.PlatformFleet
+                else TokenKind.WorkerPrivate
+            ),
             workspace_id=agent_state.workspace_id,
             worker_id=worker_id,
             reusable=True,

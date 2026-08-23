@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field, JsonValue, model_validator
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
 from shared.scheduling import worker_serves_owner
@@ -53,7 +53,7 @@ class SchedulingRequest(ContractModel):
 
 class WorkerCapacity(ContractModel):
     worker_id: str
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     owner_user_id: str = ""
     """Account whose machine this is; empty on the shared platform fleet."""
 

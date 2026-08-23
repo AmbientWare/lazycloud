@@ -49,6 +49,9 @@ class ComputeUnitState(ContractModel):
     """Pool the unit's machines serve. Carried so a consumer holding only this
     state never has to substitute the unit's name for the label."""
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+    platform_fleet: bool = False
+    """Whether this unit is the platform's own capacity, so the scheduler can
+    register a machine's worker with the tenancy the unit decided."""
     default_eligible: bool = False
     """Whether this unit answers a workload that named no pool.
 

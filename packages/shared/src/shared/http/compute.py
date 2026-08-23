@@ -16,7 +16,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import ComputeUnitPhase, MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase, MachinePool
 from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
@@ -118,7 +118,7 @@ class MachineCreateRequest(HttpModel):
 
 class MachineResponse(HttpModel):
     id: str
-    pool: MachinePool = MachinePool("default")
+    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None

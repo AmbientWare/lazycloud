@@ -81,6 +81,7 @@ class ComputeClient:
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
         external_id: str | None = None,
+        platform_fleet: bool = False,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
             account_id=account_id,
@@ -88,8 +89,11 @@ class ComputeClient:
             network=network,
             external_id=external_id,
         )
+        # A different route rather than a field: the platform's own account is an
+        # administrator's declaration, and the customer route cannot make it.
+        path = self._aws_path("/fleet" if platform_fleet else "")
         return AwsConnectionAuthorizationResponse.model_validate(
-            self.channel.post(self._aws_path(""), request.model_dump(mode="json"))
+            self.channel.post(path, request.model_dump(mode="json"))
         )
 
     def validate_connection(self) -> AwsConnectionResponse:

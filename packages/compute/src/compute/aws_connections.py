@@ -174,7 +174,15 @@ class AwsAccountConnectionService:
         request: AwsConnectionCreateRequest,
         *,
         user_id: str,
+        platform_fleet: bool = False,
     ) -> AwsAccountConnectionAuthorization:
+        """Connect an AWS account, a customer's by default.
+
+        `platform_fleet` says this is the platform's own account, which makes its
+        machines serve every customer and bill to the fleet. It is not on the
+        request contract: a customer who could set it would be declaring their own
+        hardware to be ours. Only the administrator route passes it.
+        """
         with self.context.database.session() as session:
             existing = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if existing is not None:
@@ -212,6 +220,7 @@ class AwsAccountConnectionService:
         connection = AwsAccountConnection(
             id=connection_id,
             user_id=user_id,
+            platform_fleet=platform_fleet,
             account_id=request.account_id,
             external_id=external_id,
             phase=AwsAccountConnectionPhase.AwaitingAuthorization,
