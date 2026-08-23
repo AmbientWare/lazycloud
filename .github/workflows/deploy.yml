@@ -23,6 +23,15 @@ on:
         description: Deployment prefix the ECR repositories and secrets carry
         type: string
         default: lazycloud-prod
+      release_manifest_url:
+        description: |
+          Release this deployment should run. Empty keeps whichever release it
+          already runs. Naming one by hand is how a deployment reaches a release
+          that published successfully and then lost its workflow, which the
+          anonymous registry read at the end of a release does often enough to
+          matter.
+        type: string
+        default: ""
   workflow_call:
     inputs:
       deployment:
