@@ -72,6 +72,11 @@ from agent.service_manager import (
     PreflightCheckName,
 )
 
+# Named because the agent both stamps these and searches by them. A worker
+# container now outlives its process so its logs can be read, which makes the
+# label the only way to find one whose slot the control plane has forgotten.
+AGENT_MANAGED_LABEL = f"{NAME}.agent.managed"
+AGENT_WORKER_ID_LABEL = f"{NAME}.agent.worker_id"
 AGENT_WORKER_CONTAINER_SERVICE_BASE_PORT = 19000
 AGENT_WORKER_CONTAINER_SERVICE_PORT_SPAN = 20000
 AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
@@ -1446,8 +1451,8 @@ def plan_worker_container(
     config_path = posixpath.join(dirs.slot, "worker.yaml")
     container_service_port = agent_worker_container_service_port(slot.worker_id)
     labels = {
-        f"{NAME}.agent.managed": "true",
-        f"{NAME}.agent.worker_id": slot.worker_id,
+        AGENT_MANAGED_LABEL: "true",
+        AGENT_WORKER_ID_LABEL: slot.worker_id,
         f"{NAME}.agent.machine_id": slot.machine_id,
         f"{NAME}.agent.pool_name": str(slot.pool),
     }

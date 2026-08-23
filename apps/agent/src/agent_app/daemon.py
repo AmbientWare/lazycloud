@@ -24,7 +24,9 @@ from typing import Protocol
 
 from agent.operations import (
     AGENT_AUTHORITY_REVOKED_FILE,
+    AGENT_MANAGED_LABEL,
     AGENT_RUNTIME_READY_FILE,
+    AGENT_WORKER_ID_LABEL,
     AgentAuthorityRevoked,
     AgentBootstrap,
     AgentCapacity,
@@ -629,6 +631,7 @@ class DockerAgentWorkerController:
                 self._start(action.slot, bootstrap)
                 active_by_id[action.worker_id] = action.slot
                 applied.append(action)
+        self._reap_forgotten_workers(set(active_by_id))
         self._save_active_slots(list(active_by_id.values()))
         return applied
 
@@ -709,6 +712,40 @@ class DockerAgentWorkerController:
         if result.returncode != 0 and not _slot_removal_is_settled(result.stderr or result.stdout):
             msg = f"stop worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
             raise RuntimeError(msg)
+
+    def _reap_forgotten_workers(self, active_worker_ids: set[str]) -> None:
+        """Remove worker containers that exited and will never be started again.
+
+        A stopped container is kept so its log can be read, and the only thing
+        that removes one is the next start or stop of its own slot. A slot the
+        control plane no longer offers gets neither, so without this its
+        container and its log file stay on the machine for as long as the agent
+        runs. That costs nothing on a node that lives ten minutes and grows
+        without bound on a machine an owner keeps.
+        """
+        listed = self.runner.run(
+            [
+                self.docker_binary,
+                "ps",
+                "--all",
+                "--filter",
+                f"label={AGENT_MANAGED_LABEL}=true",
+                "--format",
+                '{{.Names}}\t{{.State}}\t{{.Label "' + AGENT_WORKER_ID_LABEL + '"}}',
+            ]
+        )
+        if listed.returncode != 0:
+            LOGGER.warning("listing managed worker containers failed: %s", listed.stderr.strip())
+            return
+        for line in listed.stdout.splitlines():
+            name, _, remainder = line.partition("\t")
+            state, _, worker_id = remainder.partition("\t")
+            if not name or state.strip().lower() == "running":
+                continue
+            if worker_id and worker_id in active_worker_ids:
+                continue
+            self._collect_worker_exit(name, worker_id)
+            self.runner.run([self.docker_binary, "rm", "-f", name])
 
     def _collect_worker_exit(self, name: str, worker_id: str) -> None:
         """Take a stopped worker's account before its container is removed.

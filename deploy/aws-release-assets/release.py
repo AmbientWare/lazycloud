@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -37,6 +38,8 @@ from provider_clients.release_manifest import (
 )
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
+_ANONYMOUS_READ_ATTEMPTS = 5
+_ANONYMOUS_READ_BACKOFF_SECONDS = 4.0
 _OCI_IMAGE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 _DOCKER_IMAGE_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 _DOCKER_ATTESTATION_REFERENCE_TYPE = "attestation-manifest"
@@ -474,21 +477,7 @@ def verify_release(
     published_manifest = AwsReleaseManifest.model_validate_json(manifest_payload)
     if published_manifest != manifest:
         raise RuntimeError("published AWS release manifest does not match the local manifest")
-    with tempfile.TemporaryDirectory(prefix="lazycloud-anonymous-docker-") as docker_config:
-        environment = {**os.environ, "DOCKER_CONFIG": docker_config}
-        result = subprocess.run(
-            [
-                docker_cli,
-                "manifest",
-                "inspect",
-                "--verbose",
-                manifest.container_worker_image,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=environment,
-        )
+    result = _anonymous_image_manifest(manifest.container_worker_image, docker_cli=docker_cli)
     if result.returncode != 0:
         raise RuntimeError(
             "container-worker image is not anonymously readable by immutable digest: "
@@ -786,6 +775,51 @@ def _verify_public_object(release_object: ReleaseObject) -> bytes:
             f"public AWS release object failed integrity verification: {release_object.public_url}"
         )
     return payload
+
+
+def _anonymous_image_manifest(
+    image: str,
+    *,
+    docker_cli: str,
+) -> subprocess.CompletedProcess[str]:
+    """Read an image manifest with no credentials, waiting out the public rate limit.
+
+    The read is anonymous because that is the contract being checked: an account
+    holding none of our credentials has to be able to pull this image. The public
+    registry meters anonymous requests by source address, and a hosted runner's
+    address is shared with everything else building on it, so the throttle has
+    nothing to do with how much this release asks for. It arrived three seconds
+    into a step making its first request.
+
+    A throttle is not an unreadable image, and reporting it as one accuses the
+    artifact of a fault it does not have, after it has already been published.
+    """
+    result: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(_ANONYMOUS_READ_ATTEMPTS):
+        with tempfile.TemporaryDirectory(prefix="lazycloud-anonymous-docker-") as docker_config:
+            result = subprocess.run(
+                [docker_cli, "manifest", "inspect", "--verbose", image],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "DOCKER_CONFIG": docker_config},
+            )
+        if result.returncode == 0 or not _is_rate_limited(result):
+            return result
+        delay = _ANONYMOUS_READ_BACKOFF_SECONDS * (2**attempt)
+        print(
+            f"anonymous registry read was rate limited; retrying in {delay:g}s",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    if result is None:
+        raise RuntimeError("anonymous registry read was never attempted")
+    return result
+
+
+def _is_rate_limited(result: subprocess.CompletedProcess[str]) -> bool:
+    detail = f"{result.stdout}\n{result.stderr}".casefold()
+    return "toomanyrequests" in detail or "rate exceeded" in detail or "429" in detail
 
 
 def _download_public(url: str) -> bytes:
