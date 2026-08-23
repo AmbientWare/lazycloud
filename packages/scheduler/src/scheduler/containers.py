@@ -1077,9 +1077,18 @@ class SchedulerContainerRequestService:
             raise RuntimeError(f"failed to requeue scheduler request {request.container_id}")
 
     def _acknowledge(self, claim: SchedulerContainerRequestClaim) -> None:
+        """Release a claim this pass is finished with.
+
+        A claim whose lease lapsed while the batch was being planned is already
+        gone, and taking the whole batch down for it strands every other request
+        in the pass. It also loses the placement reason the caller computed
+        immediately before, which is the one thing that says why a request could
+        not be placed.
+        """
         if not self.workers.acknowledge_container_request(claim):
-            raise RuntimeError(
-                f"scheduler request claim is no longer owned: {claim.request.container_id}"
+            LOGGER.warning(
+                "scheduler request claim was already released: %s",
+                claim.request.container_id,
             )
 
 
