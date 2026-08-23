@@ -1832,20 +1832,22 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
-    floor = dict(
-        workspace="default",
-        region="us-east-1",
-        instance_type="m7i.xlarge",
-        initial_machines=1,
-        min_machines=1,
-        max_machines=10,
-        min_free_cpu_millicores=1_000,
-        min_free_memory_mib=1_024,
-        root_volume_gib=200,
-        idle_timeout_seconds=300,
-    )
 
-    unit = compute.reconcile_aws_default_capacity(**floor)
+    def ask_for_the_floor() -> ComputeUnitRecord:
+        return compute.reconcile_aws_default_capacity(
+            workspace="default",
+            region="us-east-1",
+            instance_type="m7i.xlarge",
+            initial_machines=1,
+            min_machines=1,
+            max_machines=10,
+            min_free_cpu_millicores=1_000,
+            min_free_memory_mib=1_024,
+            root_volume_gib=200,
+            idle_timeout_seconds=300,
+        )
+
+    unit = ask_for_the_floor()
     with isolated_services.context.database.session() as session:
         repository = ComputeUnitRepository(session)
         stored = repository.get(unit.id)
@@ -1859,7 +1861,7 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
             )
         )
 
-    revived = compute.reconcile_aws_default_capacity(**floor)
+    revived = ask_for_the_floor()
 
     assert revived.phase is not ComputeUnitPhase.Deleted
     assert revived.min_machines == 1
