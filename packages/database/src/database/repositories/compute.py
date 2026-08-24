@@ -807,6 +807,25 @@ class ComputeCapacityOperationRepository:
         return saved
 
 
+def _provider_instance_record(
+    row: ComputeProviderInstanceTable,
+) -> ComputeProviderInstanceRecord:
+    """Read one provider instance, taking its machine from the enforced column.
+
+    The payload is the record and the column is the constraint, and only the
+    column is maintained by the database: deleting a machine nulls it through
+    `ON DELETE SET NULL` and cannot reach into the JSON beside it. A reader that
+    trusted the payload would hand back a machine that no longer exists, and the
+    next write would offer it to the foreign key that had just removed it —
+    which every pass then fails on identically, so the pool degrades on an error
+    it can never get past.
+    """
+    record = ComputeProviderInstanceRecord.model_validate(row.payload)
+    if record.machine_id == row.machine_id:
+        return record
+    return record.model_copy(update={"machine_id": row.machine_id})
+
+
 @dataclass(slots=True)
 class ComputeProviderInstanceRepository:
     session: Session
@@ -837,10 +856,7 @@ class ComputeProviderInstanceRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        return [
-            ComputeProviderInstanceRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_provider_instance_record(row) for row in self.session.scalars(statement)]
 
     def bind_machine(
         self,
@@ -858,7 +874,7 @@ class ComputeProviderInstanceRepository:
         ).one_or_none()
         if row is None:
             return None
-        current = ComputeProviderInstanceRecord.model_validate(row.payload)
+        current = _provider_instance_record(row)
         if current.machine_id not in {None, machine_id}:
             return None
         if current.machine_id == machine_id:
@@ -892,7 +908,7 @@ class ComputeProviderInstanceRepository:
         ).one_or_none()
         if row is None:
             return None
-        current = ComputeProviderInstanceRecord.model_validate(row.payload)
+        current = _provider_instance_record(row)
         if current.machine_id != machine_id:
             return current
         released = current.model_copy(update={"machine_id": None, "updated_at": utc_now()})
@@ -916,9 +932,7 @@ class ComputeProviderInstanceRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return (
-            ComputeProviderInstanceRecord.model_validate(row.payload) if row is not None else None
-        )
+        return _provider_instance_record(row) if row is not None else None
 
     def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.scalars(
@@ -926,9 +940,7 @@ class ComputeProviderInstanceRepository:
                 ComputeProviderInstanceTable.machine_id == machine_id
             )
         ).one_or_none()
-        return (
-            ComputeProviderInstanceRecord.model_validate(row.payload) if row is not None else None
-        )
+        return _provider_instance_record(row) if row is not None else None
 
 
 @dataclass(slots=True)
