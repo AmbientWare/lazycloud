@@ -145,7 +145,11 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     # only for a bucket the customer attaches themselves.
     assert workspace.storage.prefix == ""
     assert workspace.storage.config["endpoint_url"] == "http://storage:9000"
-    assert workspace.storage.config["access_key"] == "default-access"
+    # The platform's own credentials are not copied here. They open every
+    # workspace's bucket, and this record is read to build a credential handed to
+    # a worker running other customers' containers.
+    assert "access_key" not in workspace.storage.config
+    assert "secret_key" not in workspace.storage.config
     assert bucket_client.created == [f"workspace-{created.workspace_id}"]
     assert bucket_client.validated == [f"workspace-{created.workspace_id}"]
     assert AuthService(isolated_services.context).authenticate(created.token).workspace_id == (
@@ -454,6 +458,7 @@ def _services_with_object_storage(
         isolated_services.database,
         root=isolated_services.root,
         create_schema=False,
+        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
         object_storage=object_storage,
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=isolated_services.redis_client,

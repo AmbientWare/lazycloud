@@ -370,6 +370,7 @@ class _ContainerWorkerServices:
         self.worker_events = worker_events
         self.memory_watcher = None
         self.retention = None
+        self.credential_refresher = None
 
 
 class _ContainerWorkerLifecycle:

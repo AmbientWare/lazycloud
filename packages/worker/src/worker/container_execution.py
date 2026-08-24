@@ -1261,7 +1261,13 @@ def _redact_runtime_output(output: str, request: ContainerRequestContext) -> str
             sensitive_values.add(value)
     workspace_storage = request.workspace_storage_credentials
     if workspace_storage is not None:
-        sensitive_values.update({workspace_storage.access_key, workspace_storage.secret_key})
+        sensitive_values.update(
+            {
+                workspace_storage.access_key,
+                workspace_storage.secret_key,
+                workspace_storage.session_token,
+            }
+        )
     for mount in request.mounts:
         mountpoint = mount.mountpoint_config
         if mountpoint is not None:

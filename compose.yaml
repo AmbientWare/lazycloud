@@ -78,6 +78,17 @@ x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: "${LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY-lazycloud-local-secret}"
   LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: "${LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE:-true}"
 
+# Which store cuts a workspace's storage credential, and how to reach its admin
+# API. Only the control plane mints; a worker is handed the result.
+x-workspace-storage-env: &workspace-storage-env
+  LAZYCLOUD_WORKSPACE_STORAGE_ISSUER: "garage"
+  LAZYCLOUD_GARAGE_ADMIN_ENDPOINT_URL: "http://object-store:3903"
+  LAZYCLOUD_GARAGE_ADMIN_TOKEN: "${LAZYCLOUD_GARAGE_ADMIN_TOKEN:-lazycloud-local-garage-admin}"
+  # Short by production standards, and deliberately: the rotation and refresh
+  # this drives are the parts that only ever run once an hour in production, so
+  # locally they run often enough to be seen failing.
+  LAZYCLOUD_GARAGE_ADMIN_CREDENTIAL_LIFETIME_SECONDS: "900"
+
 x-image-build-env: &image-build-env
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_TIMEOUT_SECONDS: "120"
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_INTERVAL_SECONDS: "0.5"
@@ -428,6 +439,7 @@ services:
           *github-env,
           *api-env,
           *object-store-env,
+          *workspace-storage-env,
           *image-build-env,
           *release-env,
           *agent-binary-env,

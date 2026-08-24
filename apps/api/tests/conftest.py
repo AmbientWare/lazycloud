@@ -13,8 +13,10 @@ from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
+from images.execution import ManifestImageBuildExecutor
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import owned_workspace
 
@@ -46,6 +48,11 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         binary_redis_client=binary_redis,
         owns_redis_client=False,
         owns_binary_redis_client=False,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
+        # Without this the graph builds the real scheduled-container executor,
+        # and a synchronous build request waits out its full address timeout
+        # against a worker that never arrives.
+        image_build_executor=ManifestImageBuildExecutor(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
             binary_version="test",

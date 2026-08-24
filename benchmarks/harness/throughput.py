@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -30,6 +31,7 @@ def run_throughput(
         binary_redis_client = RedisClient.from_settings(decode_responses=False)
         runtime_services = ApiServices.create(
             database,
+            workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
             redis_client=redis_client,
             binary_redis_client=binary_redis_client,
             owns_redis_client=True,

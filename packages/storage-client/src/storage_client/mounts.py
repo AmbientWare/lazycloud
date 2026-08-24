@@ -100,7 +100,13 @@ class GeeseFsMountConfig(ContractModel):
     access_key: str = ""
     secret_key: str = ""
     session_token: str = ""
-    credential_process: str = ""
+    shared_config_path: str = ""
+    """An AWS shared-config file whose `workspace` profile names a credential source.
+
+    Preferred over the key fields above for a mount that has to outlive its
+    credential: the SDK re-reads the profile when the cached credential nears
+    expiry, where the environment is read once at start and cannot be revised.
+    """
     force_path_style: bool = True
     cache_dir: str = ""
     memory_limit_mb: int = 1024
@@ -301,8 +307,8 @@ def geesefs_command(config: GeeseFsMountConfig, local_path: str) -> list[str]:
         command.append("--subdomain")
     if config.cache_dir:
         command.append(f"--cache={config.cache_dir}")
-    if config.credential_process:
-        command.extend([f"--shared-config={config.credential_process}", "--profile=workspace"])
+    if config.shared_config_path:
+        command.extend([f"--shared-config={config.shared_config_path}", "--profile=workspace"])
     command.extend([config.mount_target, local_path])
     return command
 

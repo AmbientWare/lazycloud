@@ -24,6 +24,7 @@ from shared.errors import ConflictError
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from storage.volume_filesystem import LocalVolumeFilesystem
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.backing_services import postgres_url
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import owned_workspace
@@ -211,6 +212,7 @@ def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
             binary_redis_client=redis.with_key_prefix("binary"),
             owns_redis_client=False,
             owns_binary_redis_client=False,
+            workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
             volume_filesystem=LocalVolumeFilesystem(tmp_path / "volumes"),
         )
         owned_workspace(ControlPlaneService(services.context), "default")

@@ -98,6 +98,7 @@ from worker.worker_lifecycle import (
     WorkerLifecycleOrchestrator,
     WorkerLifecycleRepository,
 )
+from worker.workspace_credential_refresh import WorkspaceCredentialRefresher
 
 
 class WorkerProcessWorkerRepository(
@@ -192,6 +193,7 @@ class WorkerProcessServices:
     processor: WorkerSchedulerRequestProcessor
     memory_watcher: WorkerMemoryPressureWatcher | None = None
     retention: WorkerRetentionService | None = None
+    credential_refresher: WorkspaceCredentialRefresher | None = None
 
 
 LOGGER = logging.getLogger(__name__)
@@ -216,6 +218,7 @@ def assemble_worker_process_services(
     image_build_dependencies: WorkerProcessImageBuildDependencies | None = None,
     source_cache_reconciler: WorkerSourceCacheReconciler | None = None,
     retention: WorkerRetentionService | None = None,
+    credential_refresher: WorkspaceCredentialRefresher | None = None,
 ) -> WorkerProcessServices:
     worker_repository = workers
     container_repository = containers
@@ -386,6 +389,7 @@ def assemble_worker_process_services(
         processor=processor,
         memory_watcher=_memory_pressure_watcher(processor, stopper=runtime_stopper),
         retention=retention,
+        credential_refresher=credential_refresher,
     )
 
 

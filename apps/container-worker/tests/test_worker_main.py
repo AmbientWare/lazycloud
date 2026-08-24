@@ -235,3 +235,4 @@ class _Services:
     worker_events: None = None
     retention: None = None
     memory_watcher: None = None
+    credential_refresher: None = None

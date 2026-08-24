@@ -286,6 +286,7 @@ def _services_with_volume_metering(
         isolated_services.database,
         root=isolated_services.root,
         create_schema=False,
+        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
         volume_metering=volume_metering,
         volume_filesystem=filesystem,
         redis_client=isolated_services.redis_client,

@@ -17,7 +17,7 @@ from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
 from shared.errors import NotFoundError
-from shared.identity import TokenKind, WorkspaceRecord, WorkspaceStorageConfig
+from shared.identity import TokenKind, WorkspaceRecord
 from shared.mounts import MountAuthMode
 from shared.scheduling import SchedulerContainerState
 from shared.secrets import SecretRecord
@@ -27,6 +27,7 @@ from shared.workload_config import (
     StubMountCredentialConfig,
     StubVolumeConfig,
 )
+from shared.workspace_storage import WorkspaceStorageGrant, WorkspaceStorageIssuer
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.tools import (
     ContainerCredentialRequest,
@@ -127,6 +128,7 @@ class WorkerCredentialService:
     gateway_token_ttl_seconds: int = DEFAULT_GATEWAY_TOKEN_TTL_SECONDS
     platform_storage_endpoint: str = ""
     platform_storage_public_endpoint: str = ""
+    storage_issuer: WorkspaceStorageIssuer | None = None
     _gateway_token_leases: dict[str, _GatewayTokenLease] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -272,7 +274,11 @@ class WorkerCredentialService:
         if not storage.bucket:
             msg = f"workspace storage is unavailable for {workspace_id!r}"
             raise WorkerCredentialError(msg)
-        credentials = workspace_storage_credentials(storage)
+        if self.storage_issuer is None:
+            msg = "workspace storage issuer is required to vend workspace credentials"
+            raise WorkerCredentialError(msg)
+        grant = self.storage_issuer.issue(workspace_id=workspace_id, storage=storage)
+        credentials = workspace_storage_credentials(grant)
         return credentials.model_copy(
             update={"endpoint_url": self._reachable_endpoint(credentials.endpoint_url)}
         )
@@ -352,15 +358,22 @@ class WorkerCredentialService:
         return None
 
 
-def workspace_storage_credentials(storage: WorkspaceStorageConfig) -> WorkspaceStorageCredentials:
+def workspace_storage_credentials(grant: WorkspaceStorageGrant) -> WorkspaceStorageCredentials:
+    """Project an issued grant onto the contract the worker reads.
+
+    Two models rather than one because they answer to different owners: the grant
+    is what an issuer decided, and this is what crosses the worker boundary.
+    """
     return WorkspaceStorageCredentials(
-        endpoint_url=storage.endpoint_url,
-        region=storage.region,
-        bucket_name=storage.bucket or "",
-        prefix=storage.key_prefix,
-        access_key=storage.access_key,
-        secret_key=storage.secret_key,
-        force_path_style=storage.force_path_style,
+        endpoint_url=grant.endpoint_url,
+        region=grant.region,
+        bucket_name=grant.bucket_name,
+        prefix=grant.prefix,
+        access_key=grant.access_key,
+        secret_key=grant.secret_key,
+        session_token=grant.session_token,
+        force_path_style=grant.force_path_style,
+        expires_at=grant.expires_at,
     )
 
 

@@ -41,6 +41,7 @@ from shared.http.functions import (
 from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest, StartTaskRequest
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import TaskStatus
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
@@ -99,6 +100,7 @@ def _services_with_redis(
 ) -> ApiServices:
     services = ApiServices.create(
         isolated_services.database,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         volume_filesystem=isolated_services.volume_filesystem,

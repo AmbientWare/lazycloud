@@ -891,6 +891,7 @@ def _services_with_object_storage(
         isolated_services.database,
         root=isolated_services.root,
         create_schema=False,
+        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
         object_storage=object_storage,
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=isolated_services.redis_client,

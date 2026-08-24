@@ -16,6 +16,7 @@ from networking.internal_http import (
     TailnetHostPolicy,
     TailnetPeerAddresses,
 )
+from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.adapters import WorkerRouteIdentity
 from worker.automatic_checkpoints import WorkerAutomaticCheckpointService
@@ -49,6 +50,7 @@ from worker.container_startup import (
     WorkerRequestMountPreparer,
 )
 from worker.credential_hydration import WorkerCredentialHydrator
+from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.events import WorkerPoolMode
 from worker.execution import (
     GatewayEndpointSettings,
@@ -116,6 +118,7 @@ from worker.source_code import DEFAULT_SOURCE_CACHE_ROOT, SourceCodePackageMater
 from worker.supervision import (
     WorkerSupervisionService,
 )
+from worker.workspace_credential_refresh import WorkspaceCredentialRefresher
 from worker.workspace_storage import WorkerWorkspaceStorageManager
 
 from .checkpoint_transfer import RemoteCheckpointPersister, RemoteCheckpointRestoreSource
@@ -209,9 +212,8 @@ def build_worker_process_services(
         config,
         list(available_runtime_configs),
     )
-    credential_hydrator = WorkerCredentialHydrator(
-        credentials=RemoteWorkerCredentialService(repository),
-    )
+    container_credentials = RemoteWorkerCredentialService(repository)
+    credential_hydrator = WorkerCredentialHydrator(credentials=container_credentials)
     event_sink = RemoteWorkerEventSink(repository)
     usage_recorder = RemoteWorkerUsageRecorder(repository)
     log_sink = RemoteSandboxProcessLogSink(repository)
@@ -436,6 +438,15 @@ def build_worker_process_services(
         image_build_dependencies=image_build_dependencies,
         source_cache_reconciler=worker_repository,
         retention=retention,
+        credential_refresher=WorkspaceCredentialRefresher(
+            storage=workspace_storage_mounter,
+            instances=instance_store,
+            credentials=container_credentials,
+            principal=WorkerCredentialPrincipal(
+                workspace_id="",
+                token_kind=TokenKind.Worker,
+            ),
+        ),
     )
 
 

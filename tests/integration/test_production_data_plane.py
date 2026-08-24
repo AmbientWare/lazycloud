@@ -17,6 +17,7 @@ from shared.app_lifecycle import AppLifecycleState
 from shared.deployment_records import DeploymentSpec
 from sqlalchemy.exc import IntegrityError
 from storage.volume_filesystem import LocalVolumeFilesystem
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from storage_client.s3 import (
     _add_delete_objects_content_md5,
     presign_endpoint_for_storage,
@@ -40,6 +41,7 @@ def _services(root: Path) -> ApiServices:
                 application_name=DatabaseApplicationName.Test,
             )
         ),
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=root,
         redis_client=redis,
         binary_redis_client=redis.with_key_prefix("test"),

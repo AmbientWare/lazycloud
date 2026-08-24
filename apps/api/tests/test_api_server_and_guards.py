@@ -12,6 +12,7 @@ from coordination.redis_client import RedisClient, RedisWireScalar
 from fastapi.testclient import TestClient
 from networking.tailnet import TailnetRuntimeError
 from shared.http.system import HealthResponse
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.redis_fakes import FakeRedis
 
 
@@ -107,6 +108,7 @@ def test_control_plane_health_endpoint_reports_dependency_failure(
     redis = RedisClient(_FailingRedis(), key_prefix="test")
     services = ApiServices.create(
         isolated_services.database,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         redis_client=redis,
@@ -130,6 +132,7 @@ def test_control_plane_refuses_to_start_without_its_tailnet(
     tailnet_runtime = _FailingTailnetRuntime()
     services = ApiServices.create(
         isolated_services.database,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         redis_client=isolated_services.redis_client,

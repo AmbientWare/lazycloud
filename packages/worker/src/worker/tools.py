@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import Field, model_validator
@@ -19,7 +20,14 @@ class WorkspaceStorageCredentials(ContractModel):
     prefix: str = ""
     access_key: str = ""
     secret_key: str = ""
+    session_token: str = ""
     force_path_style: bool = False
+    expires_at: datetime | None = None
+    """When this credential stops working, or `None` for a store that cannot say.
+
+    The mount outlives the container that caused it, so this is what the worker
+    refreshes against. Absent means nothing to refresh, not "already expired".
+    """
 
 
 class ContainerMount(ContractModel):

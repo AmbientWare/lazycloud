@@ -4,6 +4,7 @@ import posixpath
 import shutil
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
 from shared.container_requests import (
@@ -13,6 +14,7 @@ from shared.container_requests import (
     RequestMountType,
 )
 from shared.contracts import ContractModel
+from shared.timestamps import utc_now
 from storage_client.mounts import (
     GeeseFsMountConfig,
     GeeseFsMountManager,
@@ -23,16 +25,21 @@ from storage_client.mounts import (
     geesefs_memory_limit_mb,
 )
 
-from worker import cache_assets
 from worker.cache_assets import (
     WorkspaceMountState,
     WorkspaceStorageConfig,
     WorkspaceStorageMountAction,
     plan_workspace_mount_cleanup,
     plan_workspace_storage_mount,
+    validate_workspace_storage,
 )
 from worker.events import ContainerRequestContext
 from worker.tools import WorkspaceStorageCredentials
+from worker.workspace_credential_files import (
+    DEFAULT_WORKSPACE_CREDENTIAL_ROOT,
+    WorkspaceCredentialFiles,
+)
+from worker.workspace_credential_refresh import WorkspaceCredentialWindow
 
 
 class WorkspaceStorageEnsureStatus(StrEnum):
@@ -63,6 +70,7 @@ class _WorkspaceMountRecord:
     workspace_name: str
     mount_path: str
     manager: StorageMountManager
+    credential_window: WorkspaceCredentialWindow
 
 
 class WorkerWorkspaceStorageError(RuntimeError):
@@ -73,6 +81,7 @@ class WorkerWorkspaceStorageError(RuntimeError):
 class WorkerWorkspaceStorageManager:
     config: WorkspaceStorageConfig = field(default_factory=WorkspaceStorageConfig)
     system: StorageMountSystem = field(default_factory=StorageMountSystem)
+    credential_root: str = DEFAULT_WORKSPACE_CREDENTIAL_ROOT
     _mounts: dict[str, _WorkspaceMountRecord] = field(default_factory=dict)
     _locks: dict[str, threading.Lock] = field(default_factory=dict)
     _locks_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -95,14 +104,18 @@ class WorkerWorkspaceStorageManager:
 
         with self._lock(workspace_name):
             existing = self._mount_state(workspace_name)
-            credentials = _planned_credentials(request.workspace_storage_credentials)
             plan = plan_workspace_storage_mount(
                 workspace_name,
-                credentials=credentials,
+                credentials=request.workspace_storage_credentials,
                 config=self.config,
                 existing=existing,
             )
             if plan.action is WorkspaceStorageMountAction.Reuse:
+                # This container arrived with a credential newer than the one the
+                # mount is running on, so take it: it costs a file write, and the
+                # alternative is leaving a fresher credential unused until the
+                # refresh loop asks for one that already exists.
+                self._adopt_credentials(workspace_name, request.workspace_storage_credentials)
                 return WorkspaceStorageEnsureResult(
                     workspace_name=workspace_name,
                     mount_path=plan.mount_path,
@@ -119,6 +132,7 @@ class WorkerWorkspaceStorageManager:
                 workspace_name=workspace_name,
                 mount_path=plan.mount_path,
                 manager=manager,
+                credential_window=_credential_window(request.workspace_storage_credentials),
             )
             return WorkspaceStorageEnsureResult(
                 workspace_name=workspace_name,
@@ -177,12 +191,59 @@ class WorkerWorkspaceStorageManager:
             )
         return mounted
 
+    def credential_files(self, workspace_name: str) -> WorkspaceCredentialFiles:
+        return WorkspaceCredentialFiles(
+            root=self.credential_root,
+            workspace_name=workspace_name,
+        )
+
+    def workspaces_due_for_refresh(self, *, now: datetime | None = None) -> list[str]:
+        """Which mounted workspaces have used up enough of their credential's life."""
+        with self._locks_lock:
+            records = list(self._mounts.values())
+        return [
+            record.workspace_name for record in records if record.credential_window.due(now=now)
+        ]
+
+    def _adopt_credentials(
+        self,
+        workspace_name: str,
+        credentials: WorkspaceStorageCredentials | None,
+    ) -> None:
+        """Take a credential offered by a container joining an existing mount.
+
+        Called with the workspace lock already held, unlike `refresh_credentials`,
+        which is entered from the refresh loop and takes it itself.
+        """
+        record = self._mounts.get(workspace_name)
+        if record is None or credentials is None:
+            return
+        self.credential_files(workspace_name).write(credentials)
+        record.credential_window = _credential_window(credentials)
+
+    def refresh_credentials(
+        self,
+        workspace_name: str,
+        credentials: WorkspaceStorageCredentials,
+    ) -> None:
+        """Publish a newer credential to a mount that is already running.
+
+        The mount reads its credentials through a file rather than the environment
+        precisely so this is possible: one geesefs process serves a whole workspace
+        and outlives the container that started it, so a credential that expires
+        has to be replaceable underneath it.
+        """
+        with self._lock(workspace_name):
+            self._adopt_credentials(workspace_name, credentials)
+
     def _mount_manager(
         self,
         workspace_name: str,
         credentials: WorkspaceStorageCredentials | None,
     ) -> StorageMountManager:
         complete = _require_credentials(credentials)
+        files = self.credential_files(workspace_name)
+        files.write(complete)
         geesefs = self.config.geesefs
         return GeeseFsMountManager(
             GeeseFsMountConfig(
@@ -190,8 +251,10 @@ class WorkerWorkspaceStorageManager:
                 prefix=complete.prefix,
                 endpoint_url=complete.endpoint_url,
                 region=complete.region,
-                access_key=complete.access_key,
-                secret_key=complete.secret_key,
+                # The credential travels in the file rather than here, so a
+                # refresh reaches a running mount. The environment is read once at
+                # start and could not be revised afterwards.
+                shared_config_path=files.shared_config_path,
                 force_path_style=complete.force_path_style,
                 cache_dir=posixpath.join(geesefs.cache_root, workspace_name),
                 memory_limit_mb=geesefs_memory_limit_mb(
@@ -210,6 +273,7 @@ class WorkerWorkspaceStorageManager:
             posixpath.join(self.config.geesefs.cache_root, workspace_name),
             ignore_errors=True,
         )
+        self.credential_files(workspace_name).remove()
 
     def _unmount_existing(self, workspace_name: str) -> None:
         record = self._mounts.pop(workspace_name, None)
@@ -260,17 +324,12 @@ def _mount_requires_workspace_storage(mount: RequestMount) -> bool:
     )
 
 
-def _planned_credentials(
+def _credential_window(
     credentials: WorkspaceStorageCredentials | None,
-) -> cache_assets.WorkspaceStorageCredentials | None:
-    if credentials is None:
-        return None
-    return cache_assets.WorkspaceStorageCredentials(
-        endpoint_url=credentials.endpoint_url or None,
-        bucket_name=credentials.bucket_name or None,
-        access_key=credentials.access_key or None,
-        secret_key=credentials.secret_key or None,
-        region=credentials.region or None,
+) -> WorkspaceCredentialWindow:
+    return WorkspaceCredentialWindow(
+        issued_at=utc_now(),
+        expires_at=None if credentials is None else credentials.expires_at,
     )
 
 
@@ -280,14 +339,9 @@ def _require_credentials(
     if credentials is None:
         msg = "workspace storage metadata is required"
         raise WorkerWorkspaceStorageError(msg)
-    missing = [
-        name
-        for name in ("endpoint_url", "bucket_name", "access_key", "secret_key", "region")
-        if not getattr(credentials, name)
-    ]
-    if missing:
-        msg = f"workspace storage metadata is incomplete: {', '.join(missing)}"
-        raise WorkerWorkspaceStorageError(msg)
+    valid, reason = validate_workspace_storage(credentials)
+    if not valid:
+        raise WorkerWorkspaceStorageError(reason)
     return credentials
 
 

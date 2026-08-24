@@ -467,6 +467,7 @@ def _services_with_redis(
         isolated_services.database,
         root=isolated_services.root,
         create_schema=False,
+        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=redis,
         binary_redis_client=isolated_services.binary_redis_client,
