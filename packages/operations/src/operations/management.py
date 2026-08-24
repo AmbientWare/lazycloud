@@ -256,8 +256,10 @@ class AppOperationalSummary(ContractModel):
     running_containers: int = 0
     runs_24h: int = 0
     failed_runs_24h: int = 0
+    pending_runs_24h: int = 0
     activity_24h: tuple[int, ...] = ()
     failures_24h: tuple[int, ...] = ()
+    pending_24h: tuple[int, ...] = ()
     last_deployed_at: datetime | None = None
 
 
@@ -683,8 +685,10 @@ class ManagementService:
                     running_containers=facts.running_containers if facts is not None else 0,
                     runs_24h=facts.runs_24h if facts is not None else 0,
                     failed_runs_24h=facts.failed_runs_24h if facts is not None else 0,
+                    pending_runs_24h=facts.pending_runs_24h if facts is not None else 0,
                     activity_24h=(tuple(facts.activity_24h) if facts is not None else (0,) * 24),
                     failures_24h=(tuple(facts.failures_24h) if facts is not None else (0,) * 24),
+                    pending_24h=(tuple(facts.pending_24h) if facts is not None else (0,) * 24),
                     last_deployed_at=(latest.deployment.created_at if latest is not None else None),
                 )
             )

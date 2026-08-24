@@ -6,6 +6,8 @@ import {
   type MemoryRequest,
 } from "@/lib/api/schemas/resources";
 
+import { isKnownTaskStatus, isTerminalTaskStatus } from "@/lib/api/schemas/tasks";
+
 import type { RowValue } from "@/lib/api/resources";
 
 export function displayValue(value: RowValue): string {
@@ -96,6 +98,25 @@ export function statusTone(value: RowValue): StatusTone {
     return "danger";
   }
   return "muted";
+}
+
+export type TaskActivityBand = "succeeded" | "inFlight" | "failed" | "other";
+
+/**
+ * Which band of an activity bar a task status belongs to.
+ *
+ * Parts company with `statusTone` on `running`, which a chip paints healthy
+ * green because a running task is a working one. Over a window of finished
+ * work it is not a task that succeeded, and counting it as one is what lets an
+ * app whose queue never drained read as an app where everything worked. A
+ * status this build does not know lands in `other` for the same reason.
+ */
+export function taskActivityBand(status: string): TaskActivityBand {
+  const normalized = status.toLowerCase();
+  if (!isKnownTaskStatus(normalized)) return "other";
+  if (!isTerminalTaskStatus(normalized)) return "inFlight";
+  if (statusTone(normalized) === "danger") return "failed";
+  return normalized === "complete" ? "succeeded" : "other";
 }
 
 export function formatDuration(milliseconds: number): string {

@@ -50,8 +50,10 @@ class AppSummaryResponse(HttpModel):
     running_containers: int = 0
     runs_24h: int = 0
     failed_runs_24h: int = 0
+    pending_runs_24h: int = 0
     activity_24h: list[int] = Field(default_factory=list)
     failures_24h: list[int] = Field(default_factory=list)
+    pending_24h: list[int] = Field(default_factory=list)
     last_deployed_at: datetime | None = None
 
 

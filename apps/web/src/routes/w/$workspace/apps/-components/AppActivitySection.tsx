@@ -1,11 +1,15 @@
 import { Panel } from "@/components/shared/Panel";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { TaskTimeWindowBucket } from "@/lib/api/schemas";
-import { countLabel } from "@/lib/format";
+import { countLabel, type TaskActivityBand } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-import { ActivitySparkline } from "./ActivitySparkline";
-import { appRunActivity } from "./app-activity-buckets";
+import {
+  ActivitySparkline,
+  taskActivityBandLabel,
+  taskActivityBandStyle,
+} from "./ActivitySparkline";
+import { appRunActivity, type AppRunActivity } from "./app-activity-buckets";
 
 export function AppActivitySection({
   buckets,
@@ -28,8 +32,8 @@ export function AppActivitySection({
     >
       <Panel
         title={<span id="app-activity-heading">Activity</span>}
-        description="Hourly tasks and failures over the last 24 hours"
-        action={<ActivityLegend />}
+        description="Hourly tasks by outcome over the last 24 hours"
+        action={<ActivityLegend activity={activity} />}
         className="h-full"
         contentClassName="overflow-hidden p-0"
       >
@@ -59,10 +63,18 @@ export function AppActivitySection({
               <span
                 className={cn(
                   "text-xs",
-                  activity.failed > 0 ? "text-destructive" : "text-muted-foreground",
+                  activity.totals.failed > 0 ? "text-destructive" : "text-muted-foreground",
                 )}
               >
-                {activity.failed.toLocaleString()} failed
+                {activity.totals.failed.toLocaleString()} failed
+              </span>
+              <span
+                className={cn(
+                  "text-xs",
+                  activity.totals.inFlight > 0 ? "text-warning" : "text-muted-foreground",
+                )}
+              >
+                {activity.totals.inFlight.toLocaleString()} pending
               </span>
               {/* Counted now, not over the window the figures beside it cover —
                   labelled "running" rather than given the same 24-hour framing. */}
@@ -72,9 +84,8 @@ export function AppActivitySection({
             </div>
             <ActivitySparkline
               values={activity.tasks}
-              failures={activity.failures}
-              pending={activity.pending}
-              label="App task and failure activity over the last 24 hours"
+              bands={activity.bands}
+              label="App task activity by outcome over the last 24 hours"
               className="mt-2 min-h-8 flex-1"
             />
             <div
@@ -91,21 +102,20 @@ export function AppActivitySection({
   );
 }
 
-function ActivityLegend() {
+function ActivityLegend({ activity }: { activity: AppRunActivity }) {
+  // "Other" only earns a swatch when something landed there; cancelled work and
+  // statuses this build does not know are both rare enough to be noise otherwise.
+  const bands: TaskActivityBand[] = ["succeeded", "inFlight", "failed"];
+  if (activity.totals.other > 0) bands.push("other");
+
   return (
     <span className="flex items-center gap-3 text-[10px] text-muted-foreground" aria-hidden="true">
-      <span className="flex items-center gap-1.5">
-        <span className="size-1.5 bg-positive/75" />
-        Successful
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="size-1.5 bg-muted-foreground/50" />
-        Pending
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="size-1.5 bg-destructive" />
-        Failed
-      </span>
+      {bands.map((band) => (
+        <span key={band} className="flex items-center gap-1.5">
+          <span className={cn("size-1.5", taskActivityBandStyle[band])} />
+          {taskActivityBandLabel[band]}
+        </span>
+      ))}
     </span>
   );
 }

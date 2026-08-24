@@ -91,8 +91,10 @@ def _app_summary_response(
         running_containers=record.running_containers,
         runs_24h=record.runs_24h,
         failed_runs_24h=record.failed_runs_24h,
+        pending_runs_24h=record.pending_runs_24h,
         activity_24h=list(record.activity_24h),
         failures_24h=list(record.failures_24h),
+        pending_24h=list(record.pending_24h),
         last_deployed_at=record.last_deployed_at,
     )
 

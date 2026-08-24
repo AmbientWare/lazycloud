@@ -71,6 +71,7 @@ class AppTaskBucketResult(BaseModel):
     bucket: int
     runs: int
     failed: int | None
+    pending: int | None
 
 
 class ActivityStartSource(StringEnum):
@@ -104,8 +105,10 @@ class AppExecutionSummary(BaseModel):
     running_containers: int = 0
     runs_24h: int = 0
     failed_runs_24h: int = 0
+    pending_runs_24h: int = 0
     activity_24h: list[int]
     failures_24h: list[int]
+    pending_24h: list[int]
 
 
 @dataclass(slots=True)
@@ -464,12 +467,31 @@ class AppSummaryRepository:
                 else_=0,
             )
         ).label("failed")
+        # Counted rather than derived as runs less failed, because that
+        # difference is what the card paints as success, and a task that has not
+        # run is not one that succeeded.
+        pending = func.sum(
+            case(
+                (
+                    TaskTable.status.in_(
+                        [
+                            TaskStatus.Pending.value,
+                            TaskStatus.Running.value,
+                            TaskStatus.Retry.value,
+                        ]
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+        ).label("pending")
         task_statement = (
             select(
                 TaskTable.app_id,
                 bucket,
                 func.count(TaskTable.id).label("runs"),
                 failed,
+                pending,
             )
             .where(
                 TaskTable.workspace_id == workspace_id,
@@ -487,10 +509,13 @@ class AppSummaryRepository:
             if 0 <= index < bucket_count:
                 run_count = row.runs
                 failure_count = row.failed or 0
+                pending_count = row.pending or 0
                 summary.activity_24h[index] = run_count
                 summary.failures_24h[index] = failure_count
+                summary.pending_24h[index] = pending_count
                 summary.runs_24h += run_count
                 summary.failed_runs_24h += failure_count
+                summary.pending_runs_24h += pending_count
         return summaries
 
     def activity_by_app(
@@ -543,6 +568,7 @@ def _app_execution_summary(app_id: str, bucket_count: int) -> AppExecutionSummar
         app_id=app_id,
         activity_24h=[0] * bucket_count,
         failures_24h=[0] * bucket_count,
+        pending_24h=[0] * bucket_count,
     )
 
 

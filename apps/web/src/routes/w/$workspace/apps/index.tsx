@@ -155,10 +155,16 @@ function AppCard({
               {countLabel(item.failed_runs_24h, "failed", "failed")}
             </span>
           </div>
+          {/* The summary payload names failures and work still in flight; the
+              rest of each bar stays unattributed rather than being painted as
+              success. The app view breaks the same hours down by outcome. */}
           <ActivitySparkline
             values={normalizedActivity(item.activity_24h)}
-            failures={normalizedActivity(item.failures_24h)}
-            label={`${item.app.name} task and failure activity over the last 24 hours`}
+            bands={{
+              failed: normalizedActivity(item.failures_24h),
+              inFlight: normalizedActivity(item.pending_24h),
+            }}
+            label={`${item.app.name} task volume by outcome over the last 24 hours`}
             className="mt-3 h-14 min-w-0"
           />
         </section>
