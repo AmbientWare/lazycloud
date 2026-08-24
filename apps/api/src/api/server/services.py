@@ -725,9 +725,9 @@ class ApiServices(ApiServiceCore):
             workspace_storage_client_factory=_workspace_storage_client,
             workspace_changes=workspace_changes,
         )
-        # One issuer, built once and handed to both the side that provisions a
-        # workspace's bucket and the side that vends against it. Two would be two
-        # opinions about what a workspace's credential is.
+        # One issuer for the deployment. It mints on first ask and rotates
+        # afterwards, so nothing has to provision a workspace's credential ahead
+        # of the request that needs it.
         workspace_storage_issuer = (
             workspace_storage_issuer
             or WorkspaceStorageIssuerFactory(
@@ -735,7 +735,6 @@ class ApiServices(ApiServiceCore):
                 settings=WorkspaceStorageIssuerSettings(),
             ).create()
         )
-        control_plane.workspace_storage_issuer = workspace_storage_issuer
         payment_provider = stripe_config.provider_factory()
         # Neither adapter is constructed here — both are callables that read their
         # credential when first asked — so a deployment that has not configured a

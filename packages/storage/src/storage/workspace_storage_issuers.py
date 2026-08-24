@@ -15,10 +15,6 @@ class StoredWorkspaceStorageIssuer:
     bucket, so there is nothing for the platform to mint and no expiry to report.
     """
 
-    def provision(self, *, workspace_id: str, bucket: str) -> dict[str, str]:
-        _ = (workspace_id, bucket)
-        return {}
-
     def issue(
         self,
         *,

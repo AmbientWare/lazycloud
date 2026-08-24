@@ -117,11 +117,6 @@ class AwsWorkspaceStorageIssuer:
     settings: AwsWorkspaceStorageSettings
     session_factory: AwsConnectionSessionFactory = default_connection_session
 
-    def provision(self, *, workspace_id: str, bucket: str) -> dict[str, str]:
-        """Nothing to prepare: a session is cut fresh from the role each time."""
-        _ = (workspace_id, bucket)
-        return {}
-
     def issue(
         self,
         *,

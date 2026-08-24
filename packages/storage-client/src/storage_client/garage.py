@@ -86,10 +86,33 @@ class GarageAdminClient:
         self._call(f"/v2/DeleteKey?id={access_key}", body=None)
 
     def bucket_id(self, alias: str) -> str:
+        """Resolve a bucket by the name the platform knows it as.
+
+        Both alias kinds are searched because the two ways a bucket comes to
+        exist produce different ones: `--default-bucket` makes a global alias,
+        while creating through the S3 API makes an alias local to the key that
+        created it. A workspace bucket is made the second way.
+        """
         for bucket in self._call("/v2/ListBuckets", body=None, method="GET"):
             if alias in (bucket.get("globalAliases") or []):
                 return str(bucket["id"])
+            local = bucket.get("localAliases") or []
+            if any(entry.get("alias") == alias for entry in local):
+                return str(bucket["id"])
         raise GarageAdminError(f"Garage holds no bucket aliased {alias!r}")
+
+    def ensure_global_alias(self, *, bucket_id: str, alias: str) -> None:
+        """Make the bucket addressable by name to every key granted on it.
+
+        A local alias belongs to the key that created it, so a freshly minted key
+        holding permission on the bucket still could not name it in an S3
+        request. The name is already unique to one workspace, so promoting it to
+        a global alias collides with nothing.
+        """
+        info = self._call(f"/v2/GetBucketInfo?id={bucket_id}", body=None, method="GET")
+        if alias in (info.get("globalAliases") or []):
+            return
+        self._call("/v2/AddBucketAlias", {"bucketId": bucket_id, "globalAlias": alias})
 
     def allow_bucket_key(self, *, bucket_id: str, access_key: str) -> None:
         self._call(
@@ -159,14 +182,6 @@ class GarageWorkspaceStorageIssuer:
     state: WorkspaceStorageStateStore
     lifetime_seconds: int = DEFAULT_GARAGE_CREDENTIAL_LIFETIME_SECONDS
 
-    def provision(self, *, workspace_id: str, bucket: str) -> dict[str, str]:
-        access_key, secret_key = self._grant(workspace_id=workspace_id, bucket=bucket)
-        return {
-            _ACCESS_KEY_FIELD: access_key,
-            _SECRET_KEY_FIELD: secret_key,
-            _ISSUED_AT_FIELD: utc_now().isoformat(),
-        }
-
     def issue(
         self,
         *,
@@ -179,10 +194,15 @@ class GarageWorkspaceStorageIssuer:
         now = utc_now()
         fields = _credential_fields(storage)
         if fields is None:
-            raise GarageAdminError(
-                f"workspace {workspace_id!r} has no Garage credential: "
-                "its storage was never provisioned"
+            # First ask for this workspace: mint through the same path that
+            # replaces an aged key, so there is one way a key comes to exist.
+            access_key, secret_key, expires_at = self._rotate(
+                workspace_id=workspace_id,
+                storage=storage,
+                bucket=bucket,
+                now=now,
             )
+            return self._grant_for(storage, bucket, access_key, secret_key, expires_at)
         access_key, secret_key, issued_at = fields
         expires_at = issued_at + timedelta(seconds=self.lifetime_seconds)
         if now >= expires_at - timedelta(seconds=self.lifetime_seconds // 2):
@@ -192,6 +212,16 @@ class GarageWorkspaceStorageIssuer:
                 bucket=bucket,
                 now=now,
             )
+        return self._grant_for(storage, bucket, access_key, secret_key, expires_at)
+
+    def _grant_for(
+        self,
+        storage: WorkspaceStorageConfig,
+        bucket: str,
+        access_key: str,
+        secret_key: str,
+        expires_at: datetime,
+    ) -> WorkspaceStorageGrant:
         return WorkspaceStorageGrant(
             endpoint_url=storage.endpoint_url,
             region=storage.region,
@@ -235,6 +265,7 @@ class GarageWorkspaceStorageIssuer:
 
     def _grant(self, *, workspace_id: str, bucket: str) -> tuple[str, str]:
         bucket_id = self.admin.bucket_id(bucket)
+        self.admin.ensure_global_alias(bucket_id=bucket_id, alias=bucket)
         access_key, secret_key = self.admin.create_key(f"workspace-{workspace_id}")
         try:
             self.admin.allow_bucket_key(bucket_id=bucket_id, access_key=access_key)

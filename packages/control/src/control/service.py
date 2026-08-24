@@ -62,7 +62,6 @@ from shared.urls import (
     build_stub_url,
 )
 from shared.workload_config import StubConfig
-from shared.workspace_storage import WorkspaceStorageIssuer
 from sqlalchemy.orm import Session
 
 from control.apps import AppReader, AppRegistry
@@ -312,7 +311,6 @@ def _config_object_references(config: Mapping[str, JsonValue]) -> set[str]:
 class ControlPlaneService:
     context: ControlContext
     workspace_storage_client: WorkspaceBucketClient | None = None
-    workspace_storage_issuer: WorkspaceStorageIssuer | None = None
     workspace_storage_client_factory: (
         Callable[[WorkspaceStorageConfig], OwnedWorkspaceBucketClient] | None
     ) = None
@@ -580,13 +578,6 @@ class ControlPlaneService:
             "region": settings.region_name,
             "force_path_style": settings.force_path_style,
         }
-        if self.workspace_storage_issuer is not None:
-            default_config.update(
-                self.workspace_storage_issuer.provision(
-                    workspace_id=workspace_id,
-                    bucket=bucket,
-                )
-            )
         default_config.update(config or {})
         return WorkspaceStorageConfig(
             backend=backend,

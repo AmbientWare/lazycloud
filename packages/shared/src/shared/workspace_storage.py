@@ -71,15 +71,11 @@ class WorkspaceStorageGrant(ContractModel):
 class WorkspaceStorageIssuer(Protocol):
     """The authority that decides what a worker may reach in a workspace's bucket.
 
-    Two calls because the two stores divide the work differently. AWS holds no
-    per-workspace state and mints on demand; Garage creates a key once and rotates
-    it. `provision` returns whatever the issuer needs stored on the workspace to
-    answer `issue` later, which for AWS is nothing at all.
+    One call, because a store that needs durable state can create it the first
+    time it is asked and must already be able to replace it when it ages. Asking
+    at bucket creation instead would put the same requirement on every process
+    that can create a workspace, including the bootstrap CLI, for no gain.
     """
-
-    def provision(self, *, workspace_id: str, bucket: str) -> dict[str, str]:
-        """Prepare durable state for a workspace's bucket, at creation."""
-        ...
 
     def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
         """Vend a credential for this workspace's bucket, and no other."""
