@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
+from boto3.session import Session
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
@@ -13,10 +15,12 @@ from shared.identity import WorkspaceStorageConfig
 from shared.timestamps import utc_now
 from shared.workspace_storage import WorkspaceStorageGrant
 
-from provider_aws.account_connection import (
-    AwsConnectionSessionFactory,
-    default_connection_session,
-)
+from provider_aws.account_connection import AwsConnectionStsClient
+
+
+def _ambient_sts_client(region_name: str) -> AwsConnectionStsClient:
+    """STS as whatever identity this process already has, and no profile."""
+    return Session(region_name=region_name).client("sts")
 
 
 def _workspace_session_name(workspace_id: str) -> str:
@@ -115,7 +119,14 @@ class AwsWorkspaceStorageIssuer:
     """
 
     settings: AwsWorkspaceStorageSettings
-    session_factory: AwsConnectionSessionFactory = default_connection_session
+    sts_factory: Callable[[str], AwsConnectionStsClient] = _ambient_sts_client
+    """An STS client speaking as the workload's own role.
+
+    Deliberately not the connected-account session: that applies the profile
+    which chains onto the control principal, and the principal exists to cross
+    into a customer's account. A workspace's bucket is this deployment's own
+    storage, so the call belongs to the role the pod already holds.
+    """
 
     def issue(
         self,
@@ -127,8 +138,7 @@ class AwsWorkspaceStorageIssuer:
         if not bucket:
             raise ValueError(f"workspace {workspace_id!r} has no bucket to grant")
         seconds = max(self.settings.session_seconds, MINIMUM_SESSION_SECONDS)
-        session = self.session_factory(region_name=self.settings.region_name)
-        assumed = session.client("sts").assume_role(
+        assumed = self.sts_factory(self.settings.region_name).assume_role(
             RoleArn=self.settings.require_role_arn(),
             RoleSessionName=_workspace_session_name(workspace_id),
             DurationSeconds=seconds,
