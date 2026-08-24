@@ -95,6 +95,10 @@ export const taskTimeWindowBucketListSchema = z.object({
   items: z.array(taskTimeWindowBucketSchema).default([]),
 });
 
+export function isKnownTaskStatus(status: string): status is TaskStatusValue {
+  return (taskStatuses as readonly string[]).includes(status);
+}
+
 export function isTerminalTaskStatus(status: string): boolean {
   return (terminalTaskStatuses as readonly string[]).includes(status);
 }
