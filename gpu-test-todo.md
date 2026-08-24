@@ -80,7 +80,7 @@ The paid path is `tests/e2e/external/gpu/`, which runs against prepared GPU
 capacity on a deployed platform. It is blocked on IAM rather than on code: the
 `lazycloud-connected-aws-control` stack has been deleted, `lazycloud-default-test-operator`
 no longer exists, and `user/lazycloud-test` therefore cannot assume anything. The
-orphaned `lazycloud-compose-control` role blocks a clean re-bootstrap, since
+orphaned control principal role blocks a clean re-bootstrap, since
 CloudFormation cannot create a role whose name is taken.
 
 Recovering it: delete that orphan, then

@@ -50,7 +50,7 @@ plane and scheduler:
 
 ```sh
 LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR=/absolute/path/to/.aws \
-LAZYCLOUD_COMPOSE_AWS_PROFILE=compose-control \
+LAZYCLOUD_COMPOSE_AWS_PROFILE=control \
 docker compose up -d
 ```
 
