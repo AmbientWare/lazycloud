@@ -79,31 +79,30 @@ def workspace_bucket_session_policy(bucket: str, *, partition: str = "aws") -> d
     """
     if not bucket:
         raise ValueError("workspace storage session policy requires a bucket")
-    bucket_arn = f"arn:{partition}:s3:::{bucket}"
+    # Written for size as much as for meaning. A session policy is packed into a
+    # budget it shares with the caller's session tags, and EKS Pod Identity
+    # spends roughly half of it before this is added, so the spacious form —
+    # two statements, both ARNs spelled out, every action named — does not fit
+    # and STS refuses the call.
+    #
+    # One trailing wildcard covers the bucket and its objects. It cannot reach a
+    # second bucket: every workspace bucket is this prefix followed by a
+    # fixed-length id, so no bucket has another's full name as a prefix, and the
+    # role this is cut from reaches nothing outside that prefix either way.
     return {
         "Version": "2012-10-17",
         "Statement": [
             {
-                "Sid": "WorkspaceBucket",
                 "Effect": "Allow",
                 "Action": [
-                    "s3:GetBucketLocation",
-                    "s3:ListBucket",
-                    "s3:ListBucketMultipartUploads",
-                ],
-                "Resource": [bucket_arn],
-            },
-            {
-                "Sid": "WorkspaceObjects",
-                "Effect": "Allow",
-                "Action": [
-                    "s3:AbortMultipartUpload",
-                    "s3:DeleteObject",
                     "s3:GetObject",
                     "s3:PutObject",
+                    "s3:DeleteObject",
+                    "s3:ListBucket",
+                    "s3:AbortMultipartUpload",
                 ],
-                "Resource": [f"{bucket_arn}/*"],
-            },
+                "Resource": f"arn:{partition}:s3:::{bucket}*",
+            }
         ],
     }
 
@@ -142,7 +141,7 @@ class AwsWorkspaceStorageIssuer:
             RoleArn=self.settings.require_role_arn(),
             RoleSessionName=_workspace_session_name(workspace_id),
             DurationSeconds=seconds,
-            Policy=json.dumps(workspace_bucket_session_policy(bucket)),
+            Policy=json.dumps(workspace_bucket_session_policy(bucket), separators=(",", ":")),
         )
         credentials = assumed["Credentials"]
         if not isinstance(credentials, dict):
