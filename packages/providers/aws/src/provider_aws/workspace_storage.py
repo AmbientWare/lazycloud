@@ -94,12 +94,20 @@ def workspace_bucket_session_policy(bucket: str, *, partition: str = "aws") -> d
         "Statement": [
             {
                 "Effect": "Allow",
+                # Reads and aborts are wildcarded and writes are not. `s3:Get*`
+                # is what restores `GetBucketLocation`, which the mount calls
+                # before anything else and which naming every action left no
+                # room for; without it the mount is refused, retries under the
+                # v2 signer, and reports `Forbidden` rather than a missing
+                # permission. Widening the write side instead would have handed
+                # a container `PutBucketPolicy` and `DeleteBucket` over the
+                # bucket it mounts.
                 "Action": [
-                    "s3:GetObject",
+                    "s3:Get*",
+                    "s3:List*",
                     "s3:PutObject",
                     "s3:DeleteObject",
-                    "s3:ListBucket",
-                    "s3:AbortMultipartUpload",
+                    "s3:Abort*",
                 ],
                 "Resource": f"arn:{partition}:s3:::{bucket}*",
             }
