@@ -150,16 +150,16 @@ class _Compute:
     def release_internal_unit_machine(
         self,
         workspace_id: str,
-        pool: MachinePool,
+        capacity_owner_id: str,
         machine_id: str,
     ) -> ComputeUnitRecord:
         _ = workspace_id
-        self.released.append((pool, machine_id))
+        self.released.append((capacity_owner_id, machine_id))
         return ComputeUnitRecord(
             id=PROVIDER_OWNER_ID,
             capacity_owner_id=PROVIDER_OWNER_ID,
             workspace_id=WORKSPACE_ID,
-            name=UnitName(pool),
+            name=UnitName(POOL),
             pool=MachinePool(POOL),
             desired_machines=0,
             observed_machines=0,
@@ -267,7 +267,7 @@ def test_worker_pool_drain_releases_the_idle_provider_machine(
     result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
 
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
-    assert compute.released == [(POOL, "machine-provider")]
+    assert compute.released == [(PROVIDER_OWNER_ID, "machine-provider")]
 
 
 def test_worker_pool_drain_holds_at_the_pool_minimum(
@@ -331,7 +331,7 @@ def test_drain_never_releases_a_machine_another_unit_owns(
     result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
 
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
-    assert compute.released == [(POOL, "machine-provider")]
+    assert compute.released == [(PROVIDER_OWNER_ID, "machine-provider")]
     assert workers.get_worker("worker-joined-host") is not None
 
 
@@ -473,7 +473,7 @@ def test_replacement_releases_a_cordoned_machine_once_it_is_empty(
     result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
 
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
-    assert compute.released == [(POOL, "machine-i-old")]
+    assert compute.released == [(PROVIDER_OWNER_ID, "machine-i-old")]
 
 
 def test_replacement_cordons_one_machine_while_another_is_in_flight(
@@ -512,7 +512,7 @@ def test_replacement_cordons_one_machine_while_another_is_in_flight(
 
     # The one already cordoned is dealt with; the second stale machine is left alone.
     assert compute.cordoned == []
-    assert compute.released == [(POOL, "machine-i-a")]
+    assert compute.released == [(PROVIDER_OWNER_ID, "machine-i-a")]
 
 
 def test_replacement_releases_a_cordoned_machine_once_its_deadline_passes(
@@ -550,7 +550,7 @@ def test_replacement_releases_a_cordoned_machine_once_its_deadline_passes(
     result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
 
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
-    assert compute.released == [(POOL, "machine-i-old")]
+    assert compute.released == [(PROVIDER_OWNER_ID, "machine-i-old")]
 
 
 def test_replacement_holds_a_cordoned_machine_inside_its_deadline(

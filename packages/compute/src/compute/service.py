@@ -2048,7 +2048,7 @@ class ComputeService:
             or pool.capacity_mode is not ComputeCapacityMode.Pooled
         ):
             raise UpstreamUnavailableError("provider machine ownership is inconsistent")
-        self.release_internal_unit_machine(workspace_id, pool.name, machine_id)
+        self.release_internal_unit_machine(workspace_id, pool.capacity_owner_id, machine_id)
         return True
 
     def reconcile_pooled_capacity(
