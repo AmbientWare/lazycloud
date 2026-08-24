@@ -27,6 +27,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
+from control.workspace_storage_state import ControlPlaneWorkspaceStorageState
 from coordination.event_bus import RedisEventBus
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -188,6 +189,7 @@ from shared.http.functions import (
 )
 from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
 from shared.payments import PaymentProvider
+from shared.workspace_storage import WorkspaceStorageIssuer
 from storage.image_archive import (
     IMAGE_ARCHIVE_EXTENSION,
     ImageArchiveSettings,
@@ -233,6 +235,10 @@ from api.server.provider_compute import (
 from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
+)
+from api.server.workspace_storage_composition import (
+    WorkspaceStorageIssuerFactory,
+    WorkspaceStorageIssuerSettings,
 )
 from api.settings import (
     AgentDisconnectReconciliationSettings,
@@ -449,6 +455,7 @@ class ApiServiceCore:
     tailnet_control_settings: TailnetControlSettings
     backend_route_settings: BackendRouteSettings
     object_store_settings: S3ObjectStoreSettings
+    workspace_storage_issuer: WorkspaceStorageIssuer
     image_archive_settings: ResolvedImageArchiveSettings
     image_archive_presigner: PresignedPutClient
     image_build_registry_settings: ImageBuildRegistrySettings
@@ -555,6 +562,7 @@ class ApiServices(ApiServiceCore):
         tailnet_control_settings: TailnetControlSettings | None = None,
         backend_route_settings: BackendRouteSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
+        workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
         object_storage: ObjectStorage | None = None,
         object_store_client: ObjectByteClient | None = None,
         workspace_storage_client: WorkspaceBucketClient | None = None,
@@ -716,6 +724,16 @@ class ApiServices(ApiServiceCore):
             ),
             workspace_storage_client_factory=_workspace_storage_client,
             workspace_changes=workspace_changes,
+        )
+        # One issuer for the deployment. It mints on first ask and rotates
+        # afterwards, so nothing has to provision a workspace's credential ahead
+        # of the request that needs it.
+        workspace_storage_issuer = (
+            workspace_storage_issuer
+            or WorkspaceStorageIssuerFactory(
+                state=ControlPlaneWorkspaceStorageState(control_plane),
+                settings=WorkspaceStorageIssuerSettings(),
+            ).create()
         )
         payment_provider = stripe_config.provider_factory()
         # Neither adapter is constructed here — both are callables that read their
@@ -983,6 +1001,7 @@ class ApiServices(ApiServiceCore):
             tailnet_control_settings=resolved_tailnet_control_settings,
             backend_route_settings=resolved_backend_route_settings,
             object_store_settings=object_store_config,
+            workspace_storage_issuer=workspace_storage_issuer,
             image_archive_settings=image_archive_config,
             image_archive_presigner=resolved_image_archive_presigner,
             image_build_registry_settings=image_build_registry_config,
@@ -1316,6 +1335,7 @@ def _compose_api_services(
         tailnet_control_settings=core.tailnet_control_settings,
         backend_route_settings=core.backend_route_settings,
         object_store_settings=core.object_store_settings,
+        workspace_storage_issuer=core.workspace_storage_issuer,
         image_archive_settings=core.image_archive_settings,
         image_archive_presigner=core.image_archive_presigner,
         image_build_registry_settings=core.image_build_registry_settings,
@@ -1499,6 +1519,7 @@ def _worker_repository_service(
             platform_storage_public_endpoint=(
                 core.object_store_settings.presigned_endpoint_url or ""
             ),
+            storage_issuer=core.workspace_storage_issuer,
         ),
         origin_credentials=WorkerCacheOriginCredentialService(
             services=core,

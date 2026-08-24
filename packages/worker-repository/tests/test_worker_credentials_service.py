@@ -7,6 +7,7 @@ from identity.auth import AuthService
 from shared.container_requests import RequestMount, RequestMountPointConfig, RequestMountType
 from shared.identity import TokenKind, WorkspaceStorageConfig
 from shared.mounts import MountAuthMode
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.service_fixtures import owned_workspace
 from worker.container_execution import ContainerExecutionContext
 from worker.credential_hydration import WorkerCredentialHydrator
@@ -18,6 +19,11 @@ from worker_repository.credentials import (
     WorkerCredentialError,
     WorkerCredentialService,
 )
+
+
+def _credential_service(services: ApiServices) -> WorkerCredentialService:
+    """The service as production composes it, which is never without an issuer."""
+    return WorkerCredentialService(services, storage_issuer=StoredWorkspaceStorageIssuer())
 
 
 def test_worker_credential_service_vends_requested_bundle(isolated_services: ApiServices) -> None:
@@ -66,7 +72,9 @@ def test_worker_credential_service_vends_requested_bundle(isolated_services: Api
         stub_id=stub.id,
     )
 
-    service = WorkerCredentialService(isolated_services)
+    service = WorkerCredentialService(
+        isolated_services, storage_issuer=StoredWorkspaceStorageIssuer()
+    )
     credentials = service.vend(
         ContainerCredentialRequest(
             workspace_id=workspace.id,
@@ -116,7 +124,9 @@ def test_worker_credential_service_reuses_gateway_token_across_containers(
     control = ControlPlaneService(isolated_services.context)
     workspace = owned_workspace(control, "default")
     stub = control.create_stub("worker", workspace=workspace.id)
-    service = WorkerCredentialService(isolated_services)
+    service = WorkerCredentialService(
+        isolated_services, storage_issuer=StoredWorkspaceStorageIssuer()
+    )
     principal = WorkerCredentialPrincipal(
         workspace_id=workspace.id,
         token_kind=TokenKind.Worker,
@@ -158,7 +168,9 @@ def test_worker_credential_service_replaces_revoked_or_aging_gateway_tokens(
     control = ControlPlaneService(isolated_services.context)
     workspace = owned_workspace(control, "default")
     stub = control.create_stub("worker", workspace=workspace.id)
-    service = WorkerCredentialService(isolated_services)
+    service = WorkerCredentialService(
+        isolated_services, storage_issuer=StoredWorkspaceStorageIssuer()
+    )
     principal = WorkerCredentialPrincipal(
         workspace_id=workspace.id,
         token_kind=TokenKind.Worker,
@@ -239,7 +251,9 @@ def test_worker_credential_service_resolves_volume_secret_names(
         stub_id=stub.id,
     )
 
-    credentials = WorkerCredentialService(isolated_services).vend(
+    credentials = WorkerCredentialService(
+        isolated_services, storage_issuer=StoredWorkspaceStorageIssuer()
+    ).vend(
         ContainerCredentialRequest(
             workspace_id=workspace.id,
             stub_id=stub.id,
@@ -286,7 +300,9 @@ def test_worker_credential_service_rejects_invalid_principal_and_assignment(
         workspace_id=workspace.id,
         stub_id=stub.id,
     )
-    service = WorkerCredentialService(isolated_services)
+    service = WorkerCredentialService(
+        isolated_services, storage_issuer=StoredWorkspaceStorageIssuer()
+    )
     request = ContainerCredentialRequest(
         workspace_id=workspace.id,
         stub_id=stub.id,
@@ -344,7 +360,9 @@ def test_worker_credential_service_rejects_unavailable_secret_storage_and_mount(
         workspace_id=workspace.id,
         stub_id=stub.id,
     )
-    service = WorkerCredentialService(isolated_services)
+    service = WorkerCredentialService(
+        isolated_services, storage_issuer=StoredWorkspaceStorageIssuer()
+    )
     principal = WorkerCredentialPrincipal(
         workspace_id=workspace.id,
         token_kind=TokenKind.Worker,
@@ -435,7 +453,7 @@ def test_worker_credential_hydrator_applies_credentials_to_execution_context(
         stub_id=stub.id,
     )
     hydrator = WorkerCredentialHydrator(
-        WorkerCredentialService(isolated_services),
+        _credential_service(isolated_services),
         principal=WorkerCredentialPrincipal(
             workspace_id=workspace.id,
             token_kind=TokenKind.Worker,

@@ -17,7 +17,8 @@
    whole number, so the page renders a published price rather than a rounded
    one. */
 
-export type BillingOwner = "platform_fleet" | "connected_cloud" | "self_hosted";
+export const billingOwners = ["platform_fleet", "connected_cloud", "self_hosted"] as const;
+export type BillingOwner = (typeof billingOwners)[number];
 
 export type PublishedShapeRate = {
   nanosPerCpuCoreHour: number;

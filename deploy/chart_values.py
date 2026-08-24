@@ -62,6 +62,15 @@ REQUIRED_RUNTIME_VARIABLES = {
         "publisher checks the credential against it, and without it no plan or "
         "price exists for a sign-in to put anyone on"
     ),
+    "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": (
+        "which object store cuts a workspace's storage credential; without it "
+        "the control plane refuses to start rather than guessing, because the "
+        "two stores are reached in different ways"
+    ),
+    "LAZYCLOUD_WORKSPACE_STORAGE_ROLE_ARN": (
+        "the role a workspace's bucket-scoped credential is cut from; without it "
+        "no container can mount its workspace storage"
+    ),
     "LAZYCLOUD_REDIS_URL": (
         "the coordination Redis; without it the scheduler holds no lease and the "
         "control plane publishes no origin for a worker to dial"

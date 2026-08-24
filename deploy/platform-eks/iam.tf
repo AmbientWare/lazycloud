@@ -69,6 +69,12 @@ data "aws_iam_policy_document" "control_plane" {
   # deployments in one account share the bucket namespace and a grant on a bare
   # `workspace-*` would reach the other one's customers.
   statement {
+    sid       = "CutWorkspaceStorageCredentials"
+    actions   = ["sts:AssumeRole"]
+    resources = [aws_iam_role.workspace_storage.arn]
+  }
+
+  statement {
     sid = "OwnPlatformAndWorkspaceBuckets"
     actions = [
       "s3:CreateBucket",

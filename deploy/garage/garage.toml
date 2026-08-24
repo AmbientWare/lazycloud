@@ -12,4 +12,7 @@ api_bind_addr = "[::]:9000"
 root_domain = ".s3.localhost"
 
 [admin]
+# Enables the authenticated admin endpoints, which are what grant a workspace's
+# key on its own bucket. Without a token Garage serves none of them.
+admin_token = "lazycloud-local-garage-admin"
 api_bind_addr = "[::]:3903"

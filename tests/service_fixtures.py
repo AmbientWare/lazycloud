@@ -41,6 +41,7 @@ from shared.identity import (
 )
 from shared.timestamps import utc_now
 from storage.volume_filesystem import LocalVolumeFilesystem
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from storage_client.s3 import S3ObjectStoreSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -158,6 +159,10 @@ def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServi
         # wait on capacity no unit test has; a test that wants a real build
         # executor asks for one.
         image_build_executor=ManifestImageBuildExecutor(),
+        # The passthrough issuer, because these services hold a fake object client
+        # and no store to mint against. Which issuer a deployment uses is
+        # composition, proven where a real store is.
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         workspace_storage_client=_InMemoryWorkspaceBuckets(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,

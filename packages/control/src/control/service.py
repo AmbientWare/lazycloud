@@ -482,8 +482,16 @@ class ControlPlaneService:
         # `workspace-*` cannot tell theirs from ours.
         prefix = bucket_prefix or _workspace_bucket_settings(client).workspace_bucket_prefix
         bucket = f"{prefix}-{workspace_record.id}".replace("_", "-")
+        try:
+            client.create_bucket(bucket)
+            client.validate_bucket_access(bucket)
+        except Exception as exc:
+            msg = f"unable to create workspace storage bucket {bucket!r}: {exc}"
+            raise WorkspaceStorageError(msg) from exc
+        # After the bucket exists, because a grant names the bucket it is on.
         storage = self._default_workspace_storage(
             client=client,
+            workspace_id=workspace_record.id,
             bucket=bucket,
             # The bucket already belongs to one workspace, so no prefix is
             # needed. It stays meaningful only for a customer-attached bucket.
@@ -491,12 +499,6 @@ class ControlPlaneService:
             backend=backend,
             config=config,
         )
-        try:
-            client.create_bucket(bucket)
-            client.validate_bucket_access(bucket)
-        except Exception as exc:
-            msg = f"unable to create workspace storage bucket {bucket!r}: {exc}"
-            raise WorkspaceStorageError(msg) from exc
         updated = self.set_workspace_storage(workspace_record.id, storage)
         self._invalidate_token_cache_if_present(token_id_for_cache_invalidation)
         return updated
@@ -555,22 +557,26 @@ class ControlPlaneService:
         self,
         *,
         client: WorkspaceBucketClient,
+        workspace_id: str,
         bucket: str,
         prefix: str,
         backend: str,
         config: dict[str, JsonValue] | None,
     ) -> WorkspaceStorageConfig:
+        """Describe a workspace's bucket, and whatever its issuer needs to reach it.
+
+        The platform's own credentials are deliberately not copied here. They open
+        every workspace's bucket, and a worker holding them runs another
+        customer's container; what the issuer puts in their place opens this
+        bucket only. It is also what made the endpoint ambiguous: empty is correct
+        for the control plane's own client, where it resolves the pod's role, and
+        fatal for a worker in an account that role does not reach.
+        """
         settings = _workspace_bucket_settings(client)
-        if settings.session_token:
-            raise WorkspaceStorageError(
-                "temporary platform credentials cannot own durable workspace storage"
-            )
         default_config: dict[str, JsonValue] = {
             "endpoint_url": settings.endpoint_url or "",
             "region": settings.region_name,
             "force_path_style": settings.force_path_style,
-            "access_key": settings.access_key_id,
-            "secret_key": settings.secret_access_key,
         }
         default_config.update(config or {})
         return WorkspaceStorageConfig(

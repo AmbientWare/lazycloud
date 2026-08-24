@@ -436,6 +436,7 @@ class AwsConnectionStsClient(Protocol):
         RoleSessionName: str,
         DurationSeconds: int,
         ExternalId: str | None = None,
+        Policy: str | None = None,
     ) -> Mapping[str, object]: ...
 
     def get_caller_identity(self) -> Mapping[str, object]: ...
@@ -639,6 +640,13 @@ class _TemporaryCredentials(_AwsResponseModel):
     access_key_id: SecretStr = Field(alias="AccessKeyId")
     secret_access_key: SecretStr = Field(alias="SecretAccessKey")
     session_token: SecretStr = Field(alias="SessionToken")
+    expiration: datetime | None = Field(alias="Expiration", default=None)
+    """When STS says this stops working.
+
+    Optional because the callers that build a session from these credentials let
+    boto refresh them and never read it; the one that hands them to a worker
+    outside this process has nothing else to refresh against.
+    """
 
 
 class _AssumeRoleResponse(_AwsResponseModel):
@@ -2208,6 +2216,22 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
         error_code,
         operation=operation,
         detail=message.strip() or code.strip() or "AWS request failed",
+    )
+
+
+def default_connection_session(
+    *,
+    region_name: str,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_session_token: str | None = None,
+) -> AwsConnectionSession:
+    """The session every AWS caller in this process starts from."""
+    return _default_session(
+        region_name=region_name,
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+        aws_session_token=aws_session_token,
     )
 
 

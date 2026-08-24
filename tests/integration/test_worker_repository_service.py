@@ -1504,10 +1504,13 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
 
     assert missing_identity.status_code == 422
     assert "capacity_owner_id" in missing_identity.text
+    # The unit is resolved by the capacity owner the join credential stamped, so
+    # a worker whose owner names no unit is refused on the owner rather than on
+    # the pool it happens to be carrying.
     assert missing_pool.status_code == 503
-    assert "capacity pool is unavailable" in missing_pool.text
-    assert owner_mismatch.status_code == 409
-    assert "capacity owner does not match" in owner_mismatch.text
+    assert "capacity owner has no unit" in missing_pool.text
+    assert owner_mismatch.status_code == 503
+    assert "capacity owner has no unit" in owner_mismatch.text
     assert accepted.status_code == 200
 
 
