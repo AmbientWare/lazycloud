@@ -41,7 +41,7 @@ mount `LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR` (default `~/.lazycloud/compose-aws`) at
 differs from a local one by that variable alone.
 
 That directory holds only the test source credentials and the role-chain profiles
-ending in `compose-control`, never the root `default` keys. The SDK refreshes the
+ending in the control principal, never the root `default` keys. The SDK refreshes the
 chain, so no fixed session expiry exists. A stack whose credentials do not
 resolve refuses to start rather than reporting healthy and failing every
 connection later.

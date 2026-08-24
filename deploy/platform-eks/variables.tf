@@ -114,13 +114,18 @@ variable "control_role_name" {
     writes this role's ARN into every connection role's trust policy. Change it
     only for a deployment that has no existing customer connections.
 
+    It said `compose` until nothing external depended on it. The name came from
+    the local stack and then stood in production, where it described neither what
+    the role is nor where it runs, and the one error that named it read as a
+    misconfiguration rather than as the caller being wrong.
+
     It is also the one name that does not carry the deployment prefix, so two
     deployments sharing an AWS account must give it different values. A
     non-production deployment can pick freely, because the contract only binds
     where customers already connected.
   EOT
   type        = string
-  default     = "lazycloud-compose-control"
+  default     = "lazycloud-control-principal"
 
   validation {
     condition     = can(regex("^[A-Za-z0-9_+=,.@-]{1,64}$", var.control_role_name))
