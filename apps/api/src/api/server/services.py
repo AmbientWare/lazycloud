@@ -203,10 +203,6 @@ from storage.volume_filesystem import (
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
-from storage.workspace_storage_settings import (
-    WorkspaceStorageIssuerFactory,
-    WorkspaceStorageIssuerSettings,
-)
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.container_client.scheduler import (
     SchedulerContainerClientFactory,
@@ -239,6 +235,10 @@ from api.server.provider_compute import (
 from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
+)
+from api.server.workspace_storage_composition import (
+    WorkspaceStorageIssuerFactory,
+    WorkspaceStorageIssuerSettings,
 )
 from api.settings import (
     AgentDisconnectReconciliationSettings,
