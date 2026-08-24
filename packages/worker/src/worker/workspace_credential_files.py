@@ -6,7 +6,7 @@ import posixpath
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from worker.tools import WorkspaceStorageCredentials
@@ -28,7 +28,15 @@ _FILE_MODE = 0o600
 
 
 def _expiration_text(value: datetime) -> str:
-    return value.astimezone(tz=None).strftime("%Y-%m-%dT%H:%M:%S%z")
+    """RFC 3339, which is the only spelling the reader accepts.
+
+    The Go SDK behind the mount parses this with `Z07:00`, so a UTC offset
+    written as `+0000` is rejected and the mount falls back to no credentials at
+    all. It reports the parse failure and then times out waiting to mount, which
+    names neither the field nor the format.
+    """
+    moment = value.astimezone(UTC).replace(microsecond=0)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass(frozen=True, slots=True)
