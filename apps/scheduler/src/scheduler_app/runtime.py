@@ -277,8 +277,6 @@ class SchedulerRuntime:
                 agent_pool_configs=capacity_controllers.agent_pool_configs,
                 capacity_reservations=capacity_reservations,
                 worker_pool_drain=WorkerPoolDrainService(
-                    redis_client,
-                    pool_states,
                     capacity_controllers.worker_pool_drain_controllers,
                     capacity_reservations,
                 ),

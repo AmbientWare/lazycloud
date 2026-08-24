@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -9,17 +10,13 @@ from typing import Protocol, runtime_checkable
 from compute.providers import ProviderUnitSnapshot
 from compute.service import ComputeService
 from compute.state import ComputeUnitState, RedisComputeStateRepository
-from coordination.redis_client import RedisClient
 from pydantic import Field
 from shared.compute_policy import MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.env import truthy_env_value
+from shared.errors import ConflictError
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerStatus
 from shared.timestamps import utc_now
-
-from scheduler.state import WorkerPoolLockKind, WorkerPoolLockPlan
-
-DEFAULT_WORKER_POOL_DRAIN_OWNER = "scheduler"
 
 
 class WorkerPoolDrainAction(StrEnum):
@@ -82,15 +79,15 @@ class WorkerPoolDrainContainerRepository(Protocol):
     def list_by_worker(self, worker_id: str) -> Sequence[WorkerPoolDrainContainer]: ...
 
 
-class WorkerPoolDrainLockRepository(Protocol):
-    def lock_plan(
-        self,
-        capacity_owner_id: str,
-        kind: WorkerPoolLockKind,
-    ) -> WorkerPoolLockPlan: ...
+class WorkerPoolDrainCapacityOwner(Protocol):
+    """The capacity owner's mutation lease, and what is already claimed against it.
 
+    One lease, taken here and re-entered by whatever this decision calls: a surge
+    scales the unit, and scaling takes the same owner's lease for itself.
+    """
 
-class WorkerPoolDrainReservationGuard(Protocol):
+    def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
+
     def has_open_reservations(self, capacity_owner_id: str) -> bool: ...
 
 
@@ -109,10 +106,8 @@ class WorkerPoolDrainController(Protocol):
 
 @dataclass(slots=True)
 class WorkerPoolDrainService:
-    redis: RedisClient
-    locks: WorkerPoolDrainLockRepository
     controllers: Callable[[], Sequence[WorkerPoolDrainController]]
-    reservations: WorkerPoolDrainReservationGuard
+    capacity_owners: WorkerPoolDrainCapacityOwner
 
     def reconcile(
         self,
@@ -133,26 +128,23 @@ class WorkerPoolDrainService:
         now: datetime | None = None,
     ) -> WorkerPoolDrainResult:
         current_time = now or utc_now()
-        lock_plan = self.locks.lock_plan(
-            controller.capacity_owner_id,
-            WorkerPoolLockKind.Sizer,
-        )
-        token = f"{DEFAULT_WORKER_POOL_DRAIN_OWNER}:{current_time.timestamp()}"
-        if not self._acquire_lock(lock_plan, token):
+        try:
+            with self.capacity_owners.mutation_lock(controller.capacity_owner_id):
+                if self.capacity_owners.has_open_reservations(controller.capacity_owner_id):
+                    return WorkerPoolDrainResult(
+                        capacity_owner_id=controller.capacity_owner_id,
+                        pool=controller.pool,
+                        reason="capacity owner has open provisioning allocations",
+                    )
+                return controller.reconcile(now=current_time)
+        except ConflictError as conflict:
             return WorkerPoolDrainResult(
                 capacity_owner_id=controller.capacity_owner_id,
                 pool=controller.pool,
                 reason="capacity-owner mutation lock already held",
                 lock_acquired=False,
+                error=str(conflict),
             )
-        try:
-            if self.reservations.has_open_reservations(controller.capacity_owner_id):
-                return WorkerPoolDrainResult(
-                    capacity_owner_id=controller.capacity_owner_id,
-                    pool=controller.pool,
-                    reason="capacity owner has open provisioning allocations",
-                )
-            return controller.reconcile(now=current_time)
         except Exception as exc:
             return WorkerPoolDrainResult(
                 capacity_owner_id=controller.capacity_owner_id,
@@ -160,15 +152,6 @@ class WorkerPoolDrainService:
                 reason="worker-pool drain failed",
                 error=str(exc),
             )
-        finally:
-            self._release_lock(lock_plan, token)
-
-    def _acquire_lock(self, plan: WorkerPoolLockPlan, token: str) -> bool:
-        return bool(self.redis.set(plan.key, token, nx=True, ex=plan.ttl_seconds))
-
-    def _release_lock(self, plan: WorkerPoolLockPlan, token: str) -> None:
-        if self.redis.get(plan.key) == token:
-            self.redis.delete(plan.key)
 
 
 @dataclass(slots=True)

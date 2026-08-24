@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from secrets import token_urlsafe
-from threading import Event, Thread
+from threading import Event, Thread, local
 from typing import Protocol
 from uuid import uuid4
 
@@ -58,6 +58,26 @@ from scheduler.state import (
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
+
+_HELD_MUTATIONS = local()
+"""Capacity owners this thread already holds the mutation lease for.
+
+The lease says one mutation at a time per capacity owner, and a decision that
+holds it calls services which take it for themselves: the drain surges a
+replacement through `scale_internal_unit`, which locks the owner it was just
+locked for. Without re-entry that is a deadlock against itself, reported as
+contention with another holder, and the pool never rolls.
+"""
+
+
+def _reentrant_owners() -> set[str]:
+    owners = getattr(_HELD_MUTATIONS, "owners", None)
+    if owners is None:
+        owners = set()
+        _HELD_MUTATIONS.owners = owners
+    return owners
+
+
 DEFAULT_CAPACITY_RESERVATION_RETENTION_SECONDS = 86_400
 
 
@@ -621,12 +641,17 @@ class RedisCapacityReservationRepository:
         *,
         ttl_seconds: int = DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS,
     ) -> Iterator[None]:
+        owners = _reentrant_owners()
+        if capacity_owner_id in owners:
+            yield
+            return
         key = self.keys.mutation_lock(capacity_owner_id)
         token = token_urlsafe(24)
         if not try_acquire_token_lock(self.redis, key, token, ttl_seconds=ttl_seconds):
             raise CapacityReservationLockContendedError(
                 f"capacity owner {capacity_owner_id} is already being reconciled"
             )
+        owners.add(capacity_owner_id)
         stop_renewal = Event()
         lease_lost = Event()
         lease_loss: list[tuple[str, BaseException | None]] = []
@@ -667,6 +692,7 @@ class RedisCapacityReservationRepository:
             body_failed = True
             raise
         finally:
+            owners.discard(capacity_owner_id)
             stop_renewal.set()
             renewal.join(timeout=max(min(ttl_seconds / 3, 1.0), 0.1))
             try:
