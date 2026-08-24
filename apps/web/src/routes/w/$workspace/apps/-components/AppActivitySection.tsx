@@ -73,6 +73,7 @@ export function AppActivitySection({
             <ActivitySparkline
               values={activity.tasks}
               failures={activity.failures}
+              pending={activity.pending}
               label="App task and failure activity over the last 24 hours"
               className="mt-2 min-h-8 flex-1"
             />
@@ -96,6 +97,10 @@ function ActivityLegend() {
       <span className="flex items-center gap-1.5">
         <span className="size-1.5 bg-positive/75" />
         Successful
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="size-1.5 bg-muted-foreground/50" />
+        Pending
       </span>
       <span className="flex items-center gap-1.5">
         <span className="size-1.5 bg-destructive" />

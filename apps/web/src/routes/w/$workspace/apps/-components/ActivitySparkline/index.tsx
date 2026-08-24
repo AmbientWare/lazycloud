@@ -3,11 +3,18 @@ import { cn } from "@/lib/utils";
 export function ActivitySparkline({
   values,
   failures = [],
+  pending = [],
   label,
   className,
 }: {
   values: number[];
   failures?: number[];
+  /** Tasks still waiting, drawn between failed and successful.
+
+      Without it the bar shows only two states and everything that is not a
+      failure is painted as a success, so an app whose tasks are all stuck looks
+      like one where they all worked. */
+  pending?: number[];
   label: string;
   className?: string;
 }) {
@@ -22,7 +29,8 @@ export function ActivitySparkline({
     >
       {normalizedValues.map((value, index) => {
         const failed = Math.min(Math.max(failures[index] ?? 0, 0), value);
-        const successful = Math.max(value - failed, 0);
+        const waiting = Math.min(Math.max(pending[index] ?? 0, 0), Math.max(value - failed, 0));
+        const successful = Math.max(value - failed - waiting, 0);
         const height = value === 0 ? 2 : Math.max((value / max) * 100, 8);
 
         return (
@@ -30,7 +38,7 @@ export function ActivitySparkline({
             key={index}
             data-bucket={index}
             className="flex h-full min-w-0 flex-1 items-end"
-            title={`${value} task${value === 1 ? "" : "s"}, ${failed} failed`}
+            title={`${value} task${value === 1 ? "" : "s"}, ${failed} failed, ${waiting} pending`}
           >
             <span
               className={cn("flex w-full flex-col overflow-hidden", value === 0 && "bg-border")}
@@ -41,6 +49,13 @@ export function ActivitySparkline({
                   data-series="failures"
                   className="min-h-0 w-full bg-destructive"
                   style={{ flexGrow: failed }}
+                />
+              ) : null}
+              {waiting > 0 ? (
+                <span
+                  data-series="pending"
+                  className="min-h-0 w-full bg-muted-foreground/50"
+                  style={{ flexGrow: waiting }}
                 />
               ) : null}
               {successful > 0 ? (
