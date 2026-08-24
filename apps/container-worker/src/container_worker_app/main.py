@@ -487,6 +487,37 @@ def _run_worker_keepalive_loop(
             result,
             consecutive_failures=failures,
         )
+        _refresh_workspace_credentials(services)
+
+
+def _refresh_workspace_credentials(services: ContainerWorkerServices) -> None:
+    """Replace mount credentials that have used up half their life.
+
+    On this loop rather than one of its own: it runs at the same cadence, touches
+    nothing unless a credential is actually due, and a worker that has stopped
+    keeping itself alive has no mount worth refreshing.
+
+    Nothing here may propagate. Sharing the loop means a failure raised out of
+    this would stop the keepalives too, and a worker that stops renewing its lease
+    is removed from the fleet — a far worse outcome than a credential that gets
+    another attempt in one interval's time.
+    """
+    try:
+        refresher = services.credential_refresher
+        if refresher is None:
+            return
+        refreshed = refresher.refresh_due()
+    except Exception as exc:
+        print(
+            f"workspace storage credential refresh pass failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return
+    for workspace_name in refreshed:
+        print(
+            f"refreshed workspace storage credentials for {workspace_name}",
+            file=sys.stderr,
+        )
 
 
 def _report_keepalive_result(

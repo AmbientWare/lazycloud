@@ -62,6 +62,7 @@ from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import (
@@ -627,6 +628,7 @@ def _services_with_redis(
 ) -> ApiServices:
     services = ApiServices.create(
         isolated_services.database,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         volume_filesystem=isolated_services.volume_filesystem,

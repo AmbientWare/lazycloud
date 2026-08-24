@@ -15,6 +15,7 @@ from foundation.process import run_process
 from identity.users import UserService
 from pydantic import JsonValue
 from storage.service import CacheStorage, ObjectStorage
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from storage_client.s3 import S3ObjectInfo
 
 from benchmarks.harness.models import (
@@ -42,6 +43,7 @@ def _services(root: Path) -> ApiServices:
                 application_name=DatabaseApplicationName.Test,
             )
         ),
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=root,
         redis_client=redis_client,
         binary_redis_client=binary_redis_client,

@@ -15,6 +15,7 @@ from execution.collections.redis import (
 )
 from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import owned_workspace
 
@@ -46,6 +47,7 @@ def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
         binary_redis_client=binary_redis,
         owns_redis_client=False,
         owns_binary_redis_client=False,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
             binary_version="test",

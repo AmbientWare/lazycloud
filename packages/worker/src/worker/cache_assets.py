@@ -6,32 +6,14 @@ from enum import StrEnum
 from pydantic import Field
 from shared.contracts import ContractModel
 
+from worker.tools import WorkspaceStorageCredentials
+
 
 class WorkspaceStorageMountAction(StrEnum):
     Reuse = "reuse"
     Mount = "mount"
     Remount = "remount"
     Reject = "reject"
-
-
-class WorkspaceStorageCredentials(ContractModel):
-    endpoint_url: str | None = None
-    bucket_name: str | None = None
-    access_key: str | None = None
-    secret_key: str | None = None
-    region: str | None = None
-
-    @property
-    def complete(self) -> bool:
-        return all(
-            (
-                self.endpoint_url,
-                self.bucket_name,
-                self.access_key,
-                self.secret_key,
-                self.region,
-            )
-        )
 
 
 class WorkspaceGeeseFsStorageConfig(ContractModel):
@@ -78,10 +60,23 @@ class WorkspaceStorageCleanupPlan(ContractModel):
 def validate_workspace_storage(
     credentials: WorkspaceStorageCredentials | None,
 ) -> tuple[bool, str]:
+    """Decide whether these credentials can mount anything.
+
+    The endpoint is deliberately not required: empty means the store's own public
+    address, which is how every deployment against real S3 is configured, and
+    demanding it refused exactly the mounts that were correct.
+
+    What is required is the bucket, a region to sign in, and a credential. The
+    last is either a key pair or the file the mount refreshes through, and naming
+    which one is missing matters because the two are fixed in different places.
+    """
     if credentials is None:
         return (False, "workspace storage metadata is required")
-    if not credentials.complete:
-        return (False, "workspace storage metadata is incomplete")
+    missing = [name for name in ("bucket_name", "region") if not getattr(credentials, name)]
+    if missing:
+        return (False, f"workspace storage metadata is incomplete: {', '.join(missing)}")
+    if not (credentials.access_key and credentials.secret_key):
+        return (False, "workspace storage credentials are missing")
     return (True, "workspace storage metadata complete")
 
 

@@ -15,6 +15,7 @@ from worker.retention import WorkerRetentionService
 from worker.scheduler_requests import WorkerSchedulerRequestResult
 from worker.status import WorkerSpindownPlan
 from worker.worker_lifecycle import WorkerLifecycleStepResult, WorkerShutdownResult
+from worker.workspace_credential_refresh import WorkspaceCredentialRefresher
 
 from container_worker_app.composition import build_worker_process_services
 from container_worker_app.settings import WorkerSettings
@@ -76,6 +77,9 @@ class ContainerWorkerServices(Protocol):
 
     @property
     def memory_watcher(self) -> WorkerMemoryPressureWatcher | None: ...
+
+    @property
+    def credential_refresher(self) -> WorkspaceCredentialRefresher | None: ...
 
 
 @dataclass(slots=True)
