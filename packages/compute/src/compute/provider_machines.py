@@ -466,11 +466,18 @@ class ProviderMachineReconciler:
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
             if update_capacity:
+                # The provider reports what its group holds; the floor is a
+                # decision it was never told about. Releasing the last machine of
+                # a pool that keeps one takes the group to zero, and intent
+                # following it there is a record no unit may hold, so the release
+                # fails and the machine it was releasing stays. Deleting a unit
+                # lowers the floor first, which is what lets that path reach zero.
+                desired_machines = max(snapshot.desired_machines, pool.min_machines)
                 updated = repository.update_capacity(
                     pool.id,
                     expected_generation=pool.generation,
-                    desired_machines=snapshot.desired_machines,
-                    max_machines=max(snapshot.max_machines, snapshot.desired_machines, 1),
+                    desired_machines=desired_machines,
+                    max_machines=max(snapshot.max_machines, desired_machines, 1),
                     observed_machines=snapshot.observed_machines,
                     phase=phase,
                     provider_state=provider_state,
