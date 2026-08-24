@@ -25,7 +25,6 @@ from scheduler.pool_drain import (
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
-    RedisWorkerPoolStateRepository,
     SchedulerWorkerRecord,
 )
 from shared.capacity import CapacityPoolSizingSnapshot
@@ -236,8 +235,6 @@ def _drain_service(
     workers: RedisSchedulerWorkerRepository,
 ) -> WorkerPoolDrainService:
     return WorkerPoolDrainService(
-        redis,
-        RedisWorkerPoolStateRepository(redis),
         lambda: managed_compute_drain_controllers(
             compute,  # pyright: ignore[reportArgumentType]
             compute_states,

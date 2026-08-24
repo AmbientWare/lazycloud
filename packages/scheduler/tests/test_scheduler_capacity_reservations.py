@@ -1018,16 +1018,48 @@ def test_capacity_owner_mutation_lock_renews_during_slow_owner_operation(
     owner = _repository(real_redis_actors)
     contender = _repository(real_redis_actors)
 
+    # Contended from another thread, which is what a second holder is: the lease
+    # re-enters for the caller that already holds it, so a contender sharing this
+    # one's stack would be reporting on itself.
     with owner.mutation_lock(OWNER_ID, ttl_seconds=1):
         sleep(1.4)
-        with (
-            pytest.raises(CapacityReservationLockContendedError),
-            contender.mutation_lock(OWNER_ID, ttl_seconds=1),
-        ):
-            raise AssertionError("contender must not enter a renewed owner lease")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(_enters_lease, contender).result() is False
 
-    with contender.mutation_lock(OWNER_ID, ttl_seconds=1):
-        pass
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(_enters_lease, contender).result() is True
+
+
+def test_capacity_owner_mutation_lock_re_enters_for_the_holder(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    """A decision under the lease calls services that take the same lease.
+
+    The drain holds a capacity owner while it surges a replacement, and scaling
+    the unit locks that owner for itself. Refusing the second acquisition is a
+    deadlock against the caller's own lease, reported as another holder, and it
+    stops a pool ever moving onto a new launch template.
+    """
+
+    owner = _repository(real_redis_actors)
+    contender = _repository(real_redis_actors)
+
+    with owner.mutation_lock(OWNER_ID):
+        with owner.mutation_lock(OWNER_ID), ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(_enters_lease, contender).result() is False
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(_enters_lease, contender).result() is False
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(_enters_lease, contender).result() is True
+
+
+def _enters_lease(repository: RedisCapacityReservationRepository) -> bool:
+    try:
+        with repository.mutation_lock(OWNER_ID):
+            return True
+    except CapacityReservationLockContendedError:
+        return False
 
 
 def _worker(capacity_owner_id: str, *, created_at: datetime) -> SchedulerWorkerRecord:
