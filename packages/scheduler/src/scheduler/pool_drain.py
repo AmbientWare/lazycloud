@@ -267,7 +267,7 @@ class ManagedComputeWorkerPoolDrainController:
             )
         pooled = self.compute.release_internal_unit_machine(
             self.state.workspace_id,
-            self.unit_name,
+            self.capacity_owner_id,
             candidate.machine_id,
         )
         desired_replicas = pooled.desired_machines
@@ -478,7 +478,7 @@ class ManagedComputeWorkerPoolDrainController:
                 )
         pooled = self.compute.release_internal_unit_machine(
             self.state.workspace_id,
-            self.unit_name,
+            self.capacity_owner_id,
             machine_id,
         )
         return WorkerPoolDrainResult(
