@@ -1,12 +1,10 @@
 import { z } from "zod";
 
-import { appSchema, deploymentSchema } from "./apps";
 import { containerSchema } from "./compute";
 import { jsonValueSchema } from "./json";
-import { stubSchema } from "./stubs";
 
-// Synced to packages/shared/src/shared/http/tasks.py (TaskResponse, TaskPageResponse,
-// TaskMetricsSummaryResponse, TaskTimeWindowBucketListResponse) and
+// Synced to packages/shared/src/shared/http/tasks.py (TaskResponse, TaskDetailResponse,
+// TaskPageResponse, TaskMetricsSummaryResponse, TaskTimeWindowBucketListResponse) and
 // packages/shared/src/shared/http/functions.py (FunctionCallGraphNode, FunctionCallGraphResponse).
 
 export const taskStatuses = [
@@ -29,6 +27,17 @@ const terminalTaskStatuses: readonly TaskStatusValue[] = [
   "cancelled",
 ];
 
+/**
+ * The owning resources a task row names.
+ *
+ * The server sends what a reader sees — a name, a kind, a version — rather than
+ * the whole app, workload, and deployment records, which a page of a hundred
+ * rows would otherwise repeat a hundred times. Their ids are on the row itself.
+ */
+const taskAppReferenceSchema = z.object({ name: z.string() });
+const taskWorkloadReferenceSchema = z.object({ name: z.string(), kind: z.string() });
+const taskDeploymentReferenceSchema = z.object({ name: z.string(), version: z.number() });
+
 export const taskSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -49,9 +58,11 @@ export const taskSchema = z.object({
   created_at: z.string(),
   started_at: z.string().nullish(),
   finished_at: z.string().nullish(),
-  app: appSchema.nullish(),
-  workload: stubSchema.nullish(),
-  deployment: deploymentSchema.nullish(),
+  app: taskAppReferenceSchema.nullish(),
+  workload: taskWorkloadReferenceSchema.nullish(),
+  deployment: taskDeploymentReferenceSchema.nullish(),
+  // Only the single-task read (TaskDetailResponse) resolves a container; rows
+  // carry `container_id` and nothing more.
   container: containerSchema.nullish(),
   actions: z
     .object({

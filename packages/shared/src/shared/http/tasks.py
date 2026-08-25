@@ -4,11 +4,9 @@ from datetime import datetime
 
 from pydantic import Field, JsonValue
 
-from shared.http.apps import AppResponse
+from shared.deployments import StubKind
 from shared.http.base import HttpModel
 from shared.http.compute import ContainerResponse
-from shared.http.deployments import DeploymentResponse
-from shared.http.stubs import StubResponse
 from shared.tasks import TaskStatus
 
 
@@ -18,7 +16,29 @@ class TaskActionCapabilitiesResponse(HttpModel):
     can_shell: bool = False
 
 
+class TaskAppReferenceResponse(HttpModel):
+    name: str
+
+
+class TaskWorkloadReferenceResponse(HttpModel):
+    name: str
+    kind: StubKind
+
+
+class TaskDeploymentReferenceResponse(HttpModel):
+    name: str
+    version: int
+
+
 class TaskResponse(HttpModel):
+    """One task row, with its owning resources named rather than embedded.
+
+    A page repeats whatever a row carries, so a hundred rows of one app would
+    carry that app's record a hundred times. What a reader wants from the
+    resources around a task is a name, a kind, and a version, and their ids stay
+    on the row, so addressing the resource itself needs nothing more.
+    """
+
     id: str
     name: str
     status: TaskStatus = TaskStatus.Pending
@@ -42,11 +62,21 @@ class TaskResponse(HttpModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    app: AppResponse | None = None
-    workload: StubResponse | None = None
-    deployment: DeploymentResponse | None = None
-    container: ContainerResponse | None = None
+    app: TaskAppReferenceResponse | None = None
+    workload: TaskWorkloadReferenceResponse | None = None
+    deployment: TaskDeploymentReferenceResponse | None = None
     actions: TaskActionCapabilitiesResponse = Field(default_factory=TaskActionCapabilitiesResponse)
+
+
+class TaskDetailResponse(TaskResponse):
+    """A single task read, which additionally carries the container it ran in.
+
+    Absent from the row payload rather than sent empty there: a null container on
+    a row would read as "this task had none", which is a different fact from
+    "a listing does not resolve containers".
+    """
+
+    container: ContainerResponse | None = None
 
 
 class TaskPageResponse(HttpModel):
@@ -108,8 +138,11 @@ class TaskLogListResponse(HttpModel):
 
 __all__ = [
     "TaskActionCapabilitiesResponse",
+    "TaskAppReferenceResponse",
     "TaskCountByDeploymentListResponse",
     "TaskCountByDeploymentResponse",
+    "TaskDeploymentReferenceResponse",
+    "TaskDetailResponse",
     "TaskLogEntryResponse",
     "TaskLogListResponse",
     "TaskMetricsSummaryResponse",
@@ -118,4 +151,5 @@ __all__ = [
     "TaskStopResponse",
     "TaskTimeWindowBucketListResponse",
     "TaskTimeWindowBucketResponse",
+    "TaskWorkloadReferenceResponse",
 ]

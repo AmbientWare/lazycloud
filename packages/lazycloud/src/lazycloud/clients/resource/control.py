@@ -21,7 +21,7 @@ from shared.http.deployments import (
     DeploymentScaleRequest,
 )
 from shared.http.errors import HttpResponseDecodeError
-from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
+from shared.http.tasks import TaskDetailResponse, TaskPageResponse, TaskStopResponse
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
 from shared.urls import url_path_segment
@@ -126,9 +126,10 @@ class ResourceControlClient:
     def delete_app(self, app_id: str) -> None:
         self.channel.request("DELETE", self._path(f"/api/v1/apps/{url_path_segment(app_id)}"))
 
-    def task(self, task_id: str) -> TaskResponse:
+    def task(self, task_id: str) -> TaskDetailResponse:
         return _validate_response(
-            TaskResponse, self.channel.get(self._path(f"/api/v1/tasks/{url_path_segment(task_id)}"))
+            TaskDetailResponse,
+            self.channel.get(self._path(f"/api/v1/tasks/{url_path_segment(task_id)}")),
         )
 
     def stop_tasks(self, task_ids: Sequence[str]) -> TaskStopResponse:

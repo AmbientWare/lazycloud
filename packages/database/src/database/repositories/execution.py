@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from database.mappers.apps import app_record_from_table
 from database.mappers.execution import pod_url_record_from_table
-from database.records.apps import AppRecord, StubRecord
 from database.records.execution import PodUrlRecord
 from database.repositories.common import (
     GlobalTableRepository,
@@ -27,10 +25,9 @@ from database.tables.execution import (
     TaskTable,
 )
 from database.tables.orchestration import ContainerTable
-from pydantic import BaseModel, field_validator
-from shared.containers import ContainerRecord
+from pydantic import BaseModel, JsonValue, field_validator
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
-from shared.deployment_records import Deployment
 from shared.deployments import StubKind
 from shared.events import Event
 from shared.logs import LogEntry
@@ -91,10 +88,25 @@ class TaskDurationSample(BaseModel):
 
 
 class RelatedTaskRecord(BaseModel):
+    """A task with the facts a reader needs about the resources that own it.
+
+    Names, kinds, and versions read straight off the joined tables' own columns
+    rather than out of their payload documents. Absent means the joined row is
+    gone, which is why each is nullable on its own.
+    """
+
     task: Task
-    app: AppRecord | None = None
-    workload: StubRecord | None = None
-    deployment: Deployment | None = None
+    app_name: str | None = None
+    workload_name: str | None = None
+    workload_kind: StubKind | None = None
+    deployment_name: str | None = None
+    deployment_version: int | None = None
+    container_status: ContainerStatus | None = None
+
+
+class DetailedTaskRecord(RelatedTaskRecord):
+    """One task read whole, including the container record itself."""
+
     container: ContainerRecord | None = None
 
 
@@ -383,26 +395,11 @@ class TaskRepository:
         created_before: datetime | None = None,
         search: str | None = None,
         root_only: bool = False,
-        task_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> RelatedTaskPage:
-        """Read a filtered task page with its owning resource context in SQL."""
-        statement = (
-            select(
-                TaskTable.payload,
-                AppTable,
-                StubTable.payload,
-                DeploymentTable.payload,
-                ContainerTable.payload,
-            )
-            .select_from(TaskTable)
-            .outerjoin(AppTable, AppTable.id == TaskTable.app_id)
-            .outerjoin(StubTable, StubTable.id == TaskTable.stub_id)
-            .outerjoin(DeploymentTable, DeploymentTable.id == TaskTable.deployment_id)
-            .outerjoin(ContainerTable, ContainerTable.id == TaskTable.container_id)
-            .where(TaskTable.workspace_id == workspace_id)
-        )
+        """Read a filtered task page with its owning resources named in SQL."""
+        statement = _related_task_statement().where(TaskTable.workspace_id == workspace_id)
         if status is not None:
             statement = statement.where(TaskTable.status == status.value)
         if app_id is not None:
@@ -429,11 +426,6 @@ class TaskRepository:
             statement = statement.where(
                 or_(TaskTable.root_task_id.is_(None), TaskTable.root_task_id == TaskTable.id)
             )
-        if task_id is not None:
-            if not _is_uuid_text(task_id):
-                return RelatedTaskPage(data=[])
-            statement = statement.where(TaskTable.id == task_id)
-
         statement = (
             statement.order_by(TaskTable.created_at.desc(), TaskTable.id.desc())
             .offset(max(offset, 0))
@@ -441,37 +433,68 @@ class TaskRepository:
         )
         rows = list(self.session.execute(statement).tuples())
         page_rows = rows[: max(limit, 1)]
-        data: list[RelatedTaskRecord] = []
-        for task_payload, app_row, stub_payload, deployment_payload, container_payload in page_rows:
-            data.append(
+        return RelatedTaskPage(
+            data=[
                 RelatedTaskRecord(
                     task=Task.model_validate(task_payload),
-                    app=app_record_from_table(app_row) if app_row is not None else None,
-                    workload=StubRecord.model_validate(stub_payload) if stub_payload else None,
-                    deployment=(
-                        Deployment.model_validate(deployment_payload)
-                        if deployment_payload
-                        else None
-                    ),
-                    container=(
-                        ContainerRecord.model_validate(container_payload)
-                        if container_payload
-                        else None
+                    app_name=app_name,
+                    workload_name=stub_name,
+                    workload_kind=StubKind(stub_type) if stub_type is not None else None,
+                    deployment_name=deployment_name,
+                    deployment_version=deployment_version,
+                    container_status=(
+                        ContainerStatus(container_status) if container_status is not None else None
                     ),
                 )
-            )
-        return RelatedTaskPage(
-            data=data,
+                for (
+                    task_payload,
+                    app_name,
+                    stub_name,
+                    stub_type,
+                    deployment_name,
+                    deployment_version,
+                    container_status,
+                ) in page_rows
+            ],
             next=str(max(offset, 0) + len(page_rows)) if len(rows) > len(page_rows) else "",
         )
 
-    def get_with_related(self, task_id: str, *, workspace_id: str) -> RelatedTaskRecord | None:
-        page = self.page_with_related(
-            workspace_id=workspace_id,
-            task_id=task_id,
-            limit=1,
+    def get_with_related(self, task_id: str, *, workspace_id: str) -> DetailedTaskRecord | None:
+        """Read one task with its owning resources and the container it ran in."""
+        if not _is_uuid_text(task_id):
+            return None
+        statement = (
+            _related_task_statement()
+            .add_columns(ContainerTable.payload)
+            .where(TaskTable.workspace_id == workspace_id, TaskTable.id == task_id)
         )
-        return page.data[0] if page.data else None
+        row = self.session.execute(statement).tuples().first()
+        if row is None:
+            return None
+        (
+            task_payload,
+            app_name,
+            stub_name,
+            stub_type,
+            deployment_name,
+            deployment_version,
+            container_status,
+            container_payload,
+        ) = row
+        return DetailedTaskRecord(
+            task=Task.model_validate(task_payload),
+            app_name=app_name,
+            workload_name=stub_name,
+            workload_kind=StubKind(stub_type) if stub_type is not None else None,
+            deployment_name=deployment_name,
+            deployment_version=deployment_version,
+            container_status=(
+                ContainerStatus(container_status) if container_status is not None else None
+            ),
+            container=(
+                ContainerRecord.model_validate(container_payload) if container_payload else None
+            ),
+        )
 
     def ids_for_container(self, container_id: str) -> list[str]:
         """Ids of tasks bound to a container via the indexed column or kwargs."""
@@ -521,6 +544,34 @@ class TaskRepository:
         rows = list(self.session.execute(statement).mappings())
         rows.reverse()
         return [TaskDurationSample.model_validate(row) for row in rows]
+
+
+def _related_task_statement() -> Select[tuple[dict[str, JsonValue], str, str, str, str, int, str]]:
+    """Tasks joined to the columns that name their app, workload, and container.
+
+    Columns rather than the joined rows' payload documents. Every fact a reader
+    of a task needs about the resources around it is indexed beside the row
+    already, and deserializing four documents per row to reach four fields is
+    what makes a page of tasks expensive. The container contributes only its
+    status, which is what decides whether a shell can still attach.
+    """
+
+    return (
+        select(
+            TaskTable.payload,
+            AppTable.name,
+            StubTable.name,
+            StubTable.type,
+            DeploymentTable.name,
+            DeploymentTable.version,
+            ContainerTable.status,
+        )
+        .select_from(TaskTable)
+        .outerjoin(AppTable, AppTable.id == TaskTable.app_id)
+        .outerjoin(StubTable, StubTable.id == TaskTable.stub_id)
+        .outerjoin(DeploymentTable, DeploymentTable.id == TaskTable.deployment_id)
+        .outerjoin(ContainerTable, ContainerTable.id == TaskTable.container_id)
+    )
 
 
 def _utc_datetime(value: datetime) -> datetime:
