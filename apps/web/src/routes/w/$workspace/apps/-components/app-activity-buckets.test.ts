@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { appRunActivity } from "./app-activity-buckets";
+import { appRunActivity, appRunActivityFromSeries } from "./app-activity-buckets";
 
 describe("appRunActivity", () => {
   it("fills the current 24 hourly slots from sparse app-scoped buckets", () => {
@@ -64,5 +64,54 @@ describe("appRunActivity", () => {
 
     expect(activity.total).toBe(9);
     expect(activity.totals).toEqual({ failed: 1, inFlight: 5, other: 2, succeeded: 1 });
+  });
+});
+
+describe("appRunActivityFromSeries", () => {
+  it("draws the card's hour the same way the app view draws it", () => {
+    // The same nine tasks, told twice: the app view resolves them from statuses,
+    // the card reads the series the list sends. A reader moving between the two
+    // is looking at one hour and must not see it change colour.
+    const view = appRunActivity(
+      [
+        {
+          timestamp: "2026-08-24T22:00:00.000Z",
+          count: 9,
+          status_counts: {
+            pending: 3,
+            running: 1,
+            retry: 1,
+            complete: 1,
+            timeout: 1,
+            cancelled: 1,
+            reticulating: 1,
+          },
+        },
+      ],
+      new Date("2026-08-24T22:00:00.000Z"),
+    );
+    const card = appRunActivityFromSeries({
+      activity: [9],
+      failures: [1],
+      pending: [5],
+      succeeded: [1],
+    });
+
+    expect(card.totals).toEqual(view.totals);
+    expect(card.tasks.at(-1)).toBe(view.tasks.at(-1));
+    expect(card.bands.succeeded.at(-1)).toBe(view.bands.succeeded.at(-1));
+    expect(card.bands.other.at(-1)).toBe(view.bands.other.at(-1));
+  });
+
+  it("never draws a band taller than the hour it describes", () => {
+    const activity = appRunActivityFromSeries({
+      activity: [2],
+      failures: [5],
+      pending: [5],
+      succeeded: [5],
+    });
+
+    expect(activity.total).toBe(2);
+    expect(activity.totals).toEqual({ failed: 2, inFlight: 0, other: 0, succeeded: 0 });
   });
 });

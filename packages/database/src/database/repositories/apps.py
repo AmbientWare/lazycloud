@@ -72,6 +72,7 @@ class AppTaskBucketResult(BaseModel):
     runs: int
     failed: int | None
     pending: int | None
+    succeeded: int | None
 
 
 class ActivityStartSource(StringEnum):
@@ -106,9 +107,11 @@ class AppExecutionSummary(BaseModel):
     runs_24h: int = 0
     failed_runs_24h: int = 0
     pending_runs_24h: int = 0
+    succeeded_runs_24h: int = 0
     activity_24h: list[int]
     failures_24h: list[int]
     pending_24h: list[int]
+    succeeded_24h: list[int]
 
 
 @dataclass(slots=True)
@@ -467,9 +470,6 @@ class AppSummaryRepository:
                 else_=0,
             )
         ).label("failed")
-        # Counted rather than derived as runs less failed, because that
-        # difference is what the card paints as success, and a task that has not
-        # run is not one that succeeded.
         pending = func.sum(
             case(
                 (
@@ -485,6 +485,14 @@ class AppSummaryRepository:
                 else_=0,
             )
         ).label("pending")
+        # Counted rather than derived as runs less failed and pending, because
+        # that difference is not success: a cancelled task is neither, and
+        # deriving it would paint the one colour a reader trusts most over work
+        # nobody finished. `complete` is the only status that succeeded, and it
+        # is the same one the app view resolves its green band from.
+        succeeded = func.sum(
+            case((TaskTable.status == TaskStatus.Complete.value, 1), else_=0)
+        ).label("succeeded")
         task_statement = (
             select(
                 TaskTable.app_id,
@@ -492,6 +500,7 @@ class AppSummaryRepository:
                 func.count(TaskTable.id).label("runs"),
                 failed,
                 pending,
+                succeeded,
             )
             .where(
                 TaskTable.workspace_id == workspace_id,
@@ -510,12 +519,15 @@ class AppSummaryRepository:
                 run_count = row.runs
                 failure_count = row.failed or 0
                 pending_count = row.pending or 0
+                succeeded_count = row.succeeded or 0
                 summary.activity_24h[index] = run_count
                 summary.failures_24h[index] = failure_count
                 summary.pending_24h[index] = pending_count
+                summary.succeeded_24h[index] = succeeded_count
                 summary.runs_24h += run_count
                 summary.failed_runs_24h += failure_count
                 summary.pending_runs_24h += pending_count
+                summary.succeeded_runs_24h += succeeded_count
         return summaries
 
     def activity_by_app(
@@ -569,6 +581,7 @@ def _app_execution_summary(app_id: str, bucket_count: int) -> AppExecutionSummar
         activity_24h=[0] * bucket_count,
         failures_24h=[0] * bucket_count,
         pending_24h=[0] * bucket_count,
+        succeeded_24h=[0] * bucket_count,
     )
 
 

@@ -104,9 +104,11 @@ const appSummarySchema = z.object({
   runs_24h: z.number().default(0),
   failed_runs_24h: z.number().default(0),
   pending_runs_24h: z.number().default(0),
+  succeeded_runs_24h: z.number().default(0),
   activity_24h: z.array(z.number()).default([]),
   failures_24h: z.array(z.number()).default([]),
   pending_24h: z.array(z.number()).default([]),
+  succeeded_24h: z.array(z.number()).default([]),
   last_deployed_at: z.string().nullish(),
 });
 export type AppSummary = z.infer<typeof appSummarySchema>;

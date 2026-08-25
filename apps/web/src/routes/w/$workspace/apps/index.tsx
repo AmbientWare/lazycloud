@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { AppCardActionsTrigger } from "./-components/AppCardActionsTrigger";
-import { ActivitySparkline } from "./-components/ActivitySparkline";
+import { AppActivityChart } from "./-components/AppActivityChart";
+import { appRunActivityFromSeries } from "./-components/app-activity-buckets";
 import { QuickstartEmptyState } from "./-components/QuickstartEmptyState";
 
 export const Route = createFileRoute("/w/$workspace/apps/")({
@@ -155,17 +156,16 @@ function AppCard({
               {countLabel(item.failed_runs_24h, "failed", "failed")}
             </span>
           </div>
-          {/* The summary payload names failures and work still in flight; the
-              rest of each bar stays unattributed rather than being painted as
-              success. The app view breaks the same hours down by outcome. */}
-          <ActivitySparkline
-            values={normalizedActivity(item.activity_24h)}
-            bands={{
-              failed: normalizedActivity(item.failures_24h),
-              inFlight: normalizedActivity(item.pending_24h),
-            }}
+          <AppActivityChart
+            activity={appRunActivityFromSeries({
+              activity: item.activity_24h,
+              failures: item.failures_24h,
+              pending: item.pending_24h,
+              succeeded: item.succeeded_24h,
+            })}
             label={`${item.app.name} task volume by outcome over the last 24 hours`}
-            className="mt-3 h-14 min-w-0"
+            className="mt-3"
+            chartClassName="h-14 min-w-0"
           />
         </section>
 
@@ -225,10 +225,4 @@ function AppCardsSkeleton() {
       ))}
     </div>
   );
-}
-
-function normalizedActivity(values: number[]): number[] {
-  return values.length === 24
-    ? values
-    : [...Array.from({ length: Math.max(24 - values.length, 0) }, () => 0), ...values].slice(-24);
 }
