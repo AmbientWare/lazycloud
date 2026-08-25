@@ -140,3 +140,27 @@ through `.remote()`, `.map()` or `lazycloud run` before anything is deployed has
 a backlog like any other, and it is the one case where the first container came
 from an invocation rather than from here, so refusing it leaves a fan-out being
 served one container at a time.
+
+## Priority ranks capacity, and higher wins
+
+One number, one direction, in both places that read it: the order capacity is
+acquired in and the choice of which existing worker a request lands on. It was
+briefly opposite in two sorts ten lines apart, one ascending and one negated,
+which is the shape of a value whose polarity nobody wrote down.
+
+It is a tier, not a weight. Work fills the highest tier that fits before any of
+the next, and inside a tier placement is exactly what it was. A weighted score
+would make preference and free CPU commensurable, which needs a ratio nobody can
+justify, and it would put the packing that lets an idle pool drain at the mercy
+of whatever number an operator typed. A tier cannot be tuned into breaking it.
+
+Below liveness, though. A worker that has not registered yet is not a better
+choice than one that can run the request now, however it is ranked.
+
+The unit owns it and the worker is told, like tenancy and billing owner beside
+it. A machine its customer holds root on could otherwise register the largest
+integer there is and pull every one of that account's requests onto itself,
+starving the cloud pool that account is paying for.
+
+It is a property of capacity rather than of work, so there is no per-request
+priority. Requests are served oldest first.

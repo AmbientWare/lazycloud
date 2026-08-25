@@ -178,6 +178,16 @@ class SchedulerWorkerRecord(ContractModel):
     platform started is the only kind that arrives without an enrolling unit.
     """
 
+    priority: int = 0
+    """Preference for landing work here, taken from the unit that feeds this pool.
+
+    Higher is preferred, the same direction capacity acquisition already reads.
+    Stamped from the same authority as the three fields above, and for the same
+    reason: a worker on hardware its owner holds root on could otherwise name the
+    largest integer there is and pull every one of that account's requests onto
+    itself, starving the cloud pool the account is paying for.
+    """
+
     machine_id: str = ""
     status: SchedulerWorkerStatus = SchedulerWorkerStatus.Pending
     unavailable_reason: WorkerUnavailableReason | None = None

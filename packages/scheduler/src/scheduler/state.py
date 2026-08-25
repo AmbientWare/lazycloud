@@ -836,15 +836,16 @@ class RedisSchedulerWorkerRepository:
         *,
         workspace_id: str,
         owner_user_id: str,
+        priority: int,
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
         """Restate who a worker belongs to without touching what it is doing.
 
-        Two fields only. Re-adding the worker would reset its resource version and
-        overwrite the capacity and status a running worker is concurrently
-        changing, which is how a reconcile pass would hand a busy machine back its
-        idle capacity.
+        Three fields only, all of them the unit's to decide. Re-adding the worker
+        would reset its resource version and overwrite the capacity and status a
+        running worker is concurrently changing, which is how a reconcile pass
+        would hand a busy machine back its idle capacity.
         """
 
         def write() -> SchedulerWorkerRecord:
@@ -855,6 +856,7 @@ class RedisSchedulerWorkerRepository:
                 update={
                     "workspace_id": workspace_id,
                     "owner_user_id": owner_user_id,
+                    "priority": priority,
                     "resource_version": worker.resource_version + 1,
                     "updated_at": now or utc_now(),
                 }

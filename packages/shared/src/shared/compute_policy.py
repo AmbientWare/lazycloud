@@ -143,6 +143,17 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     scaling_enabled: bool = False
     default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
+    """Preference for this unit over another that could serve the same work.
+
+    Higher is preferred, in the order capacity is acquired and in the choice of
+    which existing worker a request lands on. The polarity is stated because it
+    was once opposite in two sorts ten lines apart, and a number whose direction
+    nobody wrote down is a number the next reader has to guess.
+
+    A tier rather than a weight: work fills the highest tier that fits before any
+    of the next, and inside a tier placement is unchanged. It cannot be tuned to
+    a value that stops capacity packing, which is what lets an idle pool drain.
+    """
     min_free_cpu_millicores: int = Field(default=0, ge=0)
     min_free_memory_mib: int = Field(default=0, ge=0)
     min_free_gpu_count: int = Field(default=0, ge=0)

@@ -147,3 +147,59 @@ def test_work_packs_onto_the_fullest_worker_that_fits() -> None:
 
     assert chosen is not None
     assert chosen.worker_id == "busy"
+
+
+def test_priority_tiers_above_packing_without_replacing_it() -> None:
+    """An operator's ranking of capacity, and what it must not cost.
+
+    The preferred worker here is the emptier one, so packing on its own would
+    pass it over. That is the whole test: the two rules disagree, and the
+    ranking has to win without packing stopping working underneath it. Ranked
+    as a weight rather than a tier they stop being separable, and the ratio of
+    free CPU at which preference loses is written down nowhere.
+    """
+    preferred = WorkerCapacity(
+        worker_id="preferred",
+        pool=MachinePool("lazycloud"),
+        priority=10,
+        total_cpu=4,
+        free_cpu=4,
+        total_memory_mib=8192,
+        free_memory_mib=8192,
+        total_gpu=0,
+        free_gpu=0,
+    )
+    preferred_fuller = WorkerCapacity(
+        worker_id="preferred-fuller",
+        pool=MachinePool("lazycloud"),
+        priority=10,
+        total_cpu=4,
+        free_cpu=3,
+        total_memory_mib=8192,
+        free_memory_mib=6144,
+        total_gpu=0,
+        free_gpu=0,
+    )
+    spare_fuller = WorkerCapacity(
+        worker_id="spare-fuller",
+        pool=MachinePool("lazycloud"),
+        priority=0,
+        total_cpu=4,
+        free_cpu=2,
+        total_memory_mib=8192,
+        free_memory_mib=4096,
+        total_gpu=0,
+        free_gpu=0,
+    )
+    request = SchedulingRequest(id="c-1", cpu=1, memory_mib=1024)
+
+    # Packing alone would take the fuller spare. The ranking outranks it.
+    assert select_worker_for_request(request, [spare_fuller, preferred]) is preferred
+    # Inside the preferred tier packing still decides, so the fuller one wins.
+    assert (
+        select_worker_for_request(request, [spare_fuller, preferred, preferred_fuller])
+        is preferred_fuller
+    )
+    # A request the preferred tier cannot hold still falls through to the spare.
+    large = SchedulingRequest(id="c-2", cpu=4, memory_mib=1024)
+    assert select_worker_for_request(large, [spare_fuller, preferred_fuller]) is None

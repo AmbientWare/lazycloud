@@ -43,6 +43,7 @@ class AgentPoolConfig(ContractModel):
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
     platform_fleet: bool = False
     default_eligible: bool = False
+    priority: int = 0
 
 
 class AgentPoolWorkerResult(ContractModel):
@@ -100,6 +101,7 @@ class AgentWorkerRepository(Protocol):
         *,
         workspace_id: str,
         owner_user_id: str,
+        priority: int,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
@@ -205,10 +207,16 @@ class AgentWorkerPoolController:
         and an empty owner serves nobody, so nothing would place on it again without
         this. A narrow field update rather than a rewrite: the record also carries
         capacity and status a running worker is still changing.
+
+        Priority rides along because a joined machine is never replaced. A unit
+        retuned after its machines registered would otherwise reach them only if
+        somebody rejoined the hardware, and preferring capacity you cannot change
+        your mind about is not a preference.
         """
         if (
             worker.owner_user_id == machine.owner_user_id
             and worker.workspace_id == machine.workspace_id
+            and worker.priority == self.config.priority
         ):
             return AgentPoolWorkerResult(
                 action=AgentPoolWorkerAction.Existing,
@@ -220,6 +228,7 @@ class AgentWorkerPoolController:
             worker.worker_id,
             workspace_id=machine.workspace_id,
             owner_user_id=machine.owner_user_id,
+            priority=self.config.priority,
             now=now,
         )
         return AgentPoolWorkerResult(
@@ -276,6 +285,7 @@ def agent_pool_config_from_pool(pool: ComputeUnitRecord) -> AgentPoolConfig | No
         capacity_owner_id=pool.capacity_owner_id,
         gpu_type=pool.worker_gpu_type,
         worker_build_version=DEFAULT_AGENT_WORKER_BUILD_VERSION,
+        priority=pool.priority,
     )
 
 
@@ -292,6 +302,7 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
         ),
         platform_fleet=state.platform_fleet,
         default_eligible=state.default_eligible,
+        priority=normalized.priority if normalized else 0,
     )
 
 
@@ -325,6 +336,7 @@ def agent_machine_worker_record(
         runtime_classes=[OciRuntimeName.Runsc.value],
         private_worker=not config.platform_fleet,
         requires_pool_selector=not config.default_eligible,
+        priority=config.priority,
         free_cpu_millicores=cpu_millicores,
         free_memory_mib=memory_mib,
         free_gpu_count=machine.gpu_count,

@@ -71,8 +71,7 @@ class SchedulerCapacityControllerProvider:
                 self.workers,
             )
             for unit in self.services.compute.list_units_across_workspaces()
-            if unit.capacity_owner_kind
-            in {CapacityOwnerKind.PooledProvider, CapacityOwnerKind.PooledProvider}
+            if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider
         ]
         controllers.sort(key=lambda item: item.capacity_owner_id)
         return controllers

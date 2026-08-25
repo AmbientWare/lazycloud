@@ -1199,6 +1199,7 @@ def _worker_capacity(
         pool=worker.pool,
         owner_user_id=worker.owner_user_id,
         private_worker=worker.private_worker,
+        priority=worker.priority,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,
         runtime_classes=list(worker.runtime_classes),
