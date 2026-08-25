@@ -462,6 +462,15 @@ class Scheduler:
     all, and a page query per second per replica buys nothing against that."""
 
     last_billing_enforcement_at: datetime | None = field(default=None, init=False)
+    worker_pool_drain_logged_at: dict[str, datetime] = field(default_factory=dict)
+    """When each pool's drain decision was last written to the log.
+
+    The event beside it is emitted only when the decision changes, which says
+    nothing at all about a pool that has been stuck on one answer for an hour --
+    exactly the case an operator is looking at when they ask why nothing scaled
+    down. This is the heartbeat that makes a standing reason readable.
+    """
+
     worker_pool_drain_event_signatures: dict[str, tuple[str, ...]] = field(
         default_factory=dict,
         init=False,
@@ -659,6 +668,11 @@ class Scheduler:
             self.runtime_services,
             results,
             event_signatures=self.worker_pool_drain_event_signatures,
+        )
+        _log_worker_pool_drain_decisions(
+            results,
+            logged_at=self.worker_pool_drain_logged_at,
+            now=now or utc_now(),
         )
         return results
 
@@ -1662,6 +1676,38 @@ class SchedulerRunResult(ContractModel):
     billing_enforcement_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
+
+
+WORKER_POOL_DRAIN_LOG_INTERVAL_SECONDS = 300.0
+
+
+def _log_worker_pool_drain_decisions(
+    results: list[WorkerPoolDrainResult],
+    *,
+    logged_at: dict[str, datetime],
+    now: datetime,
+) -> None:
+    """Say what each pool decided, including when it decides the same thing."""
+
+    for result in results:
+        pool = str(result.pool)
+        last = logged_at.get(pool)
+        acted = result.action is not WorkerPoolDrainAction.None_
+        due = last is None or (now - last).total_seconds() >= (
+            WORKER_POOL_DRAIN_LOG_INTERVAL_SECONDS
+        )
+        if not acted and not due:
+            continue
+        logged_at[pool] = now
+        LOGGER.info(
+            "worker-pool drain for %s: action=%s reason=%s desired=%d observed=%d%s",
+            pool,
+            result.action.value,
+            result.reason or "-",
+            result.desired_replicas,
+            result.observed_replicas,
+            f" error={result.error}" if result.error else "",
+        )
 
 
 def _record_worker_pool_drain_observability(
