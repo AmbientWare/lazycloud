@@ -50,6 +50,62 @@ export function appRunActivity(
   };
 }
 
+/** The same 24 hours from the app list, which sends one series per band.
+
+    The list cannot afford a bucket per app per status, so it sends four totals
+    an hour instead. Both sources end up in this shape so one chart draws them,
+    and the remainder of an hour that no band claims stays `other` rather than
+    being folded into the nearest one. */
+export function appRunActivityFromSeries(series: {
+  activity: number[];
+  failures: number[];
+  pending: number[];
+  succeeded: number[];
+}): AppRunActivity {
+  const tasks = alignToWindow(series.activity);
+  const bands = emptyBands();
+  const failures = alignToWindow(series.failures);
+  const pending = alignToWindow(series.pending);
+  const succeeded = alignToWindow(series.succeeded);
+
+  for (let index = 0; index < HOUR_COUNT; index += 1) {
+    const total = Math.max(tasks[index], 0);
+    // Clamped against the hour's own total so a series that disagrees with it
+    // cannot draw a bar taller than the work it describes.
+    let claimed = 0;
+    for (const [band, values] of [
+      ["failed", failures],
+      ["inFlight", pending],
+      ["succeeded", succeeded],
+    ] as const) {
+      const amount = Math.min(Math.max(values[index], 0), Math.max(total - claimed, 0));
+      bands[band][index] = amount;
+      claimed += amount;
+    }
+    bands.other[index] = Math.max(total - claimed, 0);
+    tasks[index] = total;
+  }
+
+  return {
+    tasks,
+    bands,
+    totals: {
+      failed: sum(bands.failed),
+      inFlight: sum(bands.inFlight),
+      other: sum(bands.other),
+      succeeded: sum(bands.succeeded),
+    },
+    total: sum(tasks),
+  };
+}
+
+/** Right-aligns a server series on the window: the last value is the current hour. */
+function alignToWindow(values: number[]): number[] {
+  if (values.length === HOUR_COUNT) return [...values];
+  const padding = Array.from({ length: Math.max(HOUR_COUNT - values.length, 0) }, () => 0);
+  return [...padding, ...values].slice(-HOUR_COUNT);
+}
+
 function emptyBands(): Record<TaskActivityBand, number[]> {
   const hours = () => Array.from({ length: HOUR_COUNT }, () => 0);
   return { failed: hours(), inFlight: hours(), other: hours(), succeeded: hours() };
