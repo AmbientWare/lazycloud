@@ -16,7 +16,7 @@ kind: StorageClass
 metadata:
   name: {{ .Values.storage.className }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-4"
+    argocd.argoproj.io/sync-wave: "-5"
 provisioner: ebs.csi.eks.amazonaws.com
 volumeBindingMode: WaitForFirstConsumer
 # The cache is rebuilt on a miss, so a volume that outlived its claim would be

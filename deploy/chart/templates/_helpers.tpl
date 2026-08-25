@@ -102,10 +102,10 @@ timeouts under load, in whichever process happens to ask last, minutes after the
 value that caused it was changed. Checked here so it is a rendering error naming
 the sum instead.
 
-One job's worth, not every job's: the two that open a database are in different
-sync waves and the third opens none, so they never hold connections at once. The
-worst moment is a job running while the previous release's pods still serve,
-which this counts.
+One job's worth, not every job's: the three that open a database are each in a
+sync wave of their own and the fourth opens none, so they never hold connections
+at once. The worst moment is a job running while the previous release's pods
+still serve, which this counts.
 */}}
 {{- define "lazycloud.databaseBudget" -}}
 {{- $ceiling := int .Values.database.maxConnections -}}
