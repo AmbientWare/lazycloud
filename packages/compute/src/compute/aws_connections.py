@@ -320,9 +320,7 @@ class AwsAccountConnectionService:
                 }
             )
             repository.save(updated)
-        if self.capacity_baseline is not None:
-            for workspace_id in self._owned_workspace_ids(user_id):
-                self.capacity_baseline.reconcile_workspace_baseline(workspace_id)
+        self._apply_capacity_baseline(updated)
         self._publish(updated, WorkspaceChangeType.Updated)
         return updated
 
@@ -360,6 +358,8 @@ class AwsAccountConnectionService:
             validation_generation=target.validation_generation + 1,
             result=result,
         )
+        if ready.phase is AwsAccountConnectionPhase.Ready:
+            self._apply_capacity_baseline(ready)
         self._publish(ready, WorkspaceChangeType.Updated)
         return ready
 
@@ -693,19 +693,34 @@ class AwsAccountConnectionService:
             AwsAccountConnectionPhase.VerifyingRevocation,
         }:
             return self._reconcile_cleanup(claimed, now)
-        if claimed.phase is AwsAccountConnectionPhase.Ready and self.capacity_baseline is not None:
-            # The account's compute configuration decides how much warm capacity
-            # each of its workspaces holds, and it is applied when that
-            # configuration is written or at control-plane startup. A connection
-            # reaching Ready is the third moment that capacity can first become
-            # buildable, so without this an account waits for its next
-            # configuration write to get the baseline it already asked for.
-            #
-            # Every workspace the account backs, not one: the connection became
-            # usable for all of them at the same instant.
-            for workspace_id in self._owned_workspace_ids(claimed.user_id):
-                self.capacity_baseline.reconcile_workspace_baseline(workspace_id)
+        if claimed.phase is AwsAccountConnectionPhase.Ready:
+            self._apply_capacity_baseline(claimed)
         return self._release_unchanged_claim(claimed, now)
+
+    def _apply_capacity_baseline(self, connection: AwsAccountConnection) -> None:
+        """Hold the account's compute configuration in every workspace it backs.
+
+        The configuration decides how much warm capacity each workspace holds.
+        It is applied when the configuration is written, at control-plane
+        startup, and at every moment a connection first becomes able to build
+        capacity at all.
+
+        There are two ways to reach Ready and both call this. A caller asking to
+        validate takes one, the background reconciler takes the other, and
+        neither goes through the other's code. A first connection then settles
+        with `next_reconcile_at` cleared, so a baseline left to a later pass
+        over an already-Ready connection never runs, and the account holds the
+        floor it asked for as a number and no machine until its next
+        configuration write. A reconnect schedules that pass while retiring its
+        predecessor, which is why only a first connection lost its capacity.
+
+        Every workspace the account backs, not one. The connection became usable
+        for all of them at the same instant.
+        """
+        if self.capacity_baseline is None:
+            return
+        for workspace_id in self._owned_workspace_ids(connection.user_id):
+            self.capacity_baseline.reconcile_workspace_baseline(workspace_id)
 
     def _reconcile_validation(self, claimed: AwsAccountConnection, now: datetime) -> bool:
         target = claimed.pending_authorization or claimed.active_authorization
@@ -744,6 +759,8 @@ class AwsAccountConnectionService:
             result=result,
         )
         saved = self._finish_connection_claim(claimed, ready)
+        if saved is not None and saved.phase is AwsAccountConnectionPhase.Ready:
+            self._apply_capacity_baseline(saved)
         return saved is not None and saved.next_reconcile_at is None
 
     def _reconcile_drain(self, claimed: AwsAccountConnection, now: datetime) -> bool:

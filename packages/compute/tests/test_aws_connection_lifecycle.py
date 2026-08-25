@@ -171,6 +171,14 @@ class _BucketAccessReconciler:
             raise UpstreamUnavailableError("temporary IAM failure")
 
 
+@dataclass(slots=True)
+class _CapacityBaseline:
+    workspaces: list[str] = field(default_factory=list)
+
+    def reconcile_workspace_baseline(self, workspace_id: str) -> None:
+        self.workspaces.append(workspace_id)
+
+
 def _owner(services: ApiServices, *, workspace: str = "default") -> str:
     """The account that owns a workspace, which is what a connection now belongs to."""
     with services.context.database.session() as session:
@@ -184,6 +192,7 @@ def _service(
     lifecycle: _Lifecycle | None = None,
     validator: _Validator | None = None,
     bucket_access: AwsConnectionBucketAccessReconciler | None = None,
+    capacity_baseline: _CapacityBaseline | None = None,
 ) -> AwsAccountConnectionService:
     return AwsAccountConnectionService(
         context=services.context,
@@ -192,6 +201,7 @@ def _service(
         authorization_lifecycle=lifecycle or _Lifecycle(),
         pool_drainer=_Drainer(),
         bucket_access_reconciler=bucket_access,
+        capacity_baseline=capacity_baseline,
     )
 
 
@@ -418,3 +428,27 @@ def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
         )
     assert stale is None
     assert service.get(user_id=owner).id == connection.id
+
+
+def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
+    isolated_services: ApiServices,
+) -> None:
+    """The pass that drives a connection to Ready is the one that must apply it.
+
+    A first connection settles on Ready with no further reconcile scheduled, so
+    a baseline applied only by a later pass over an already-Ready connection
+    never runs. The account then holds the floor it asked for as a number and no
+    machine, until a configuration write that may never come.
+    """
+    owner = _owner(isolated_services)
+    baseline = _CapacityBaseline()
+    service = _service(isolated_services, capacity_baseline=baseline)
+    service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
+
+    ready = service.validate(user_id=owner)
+
+    assert ready.phase is AwsAccountConnectionPhase.Ready
+    assert ready.next_reconcile_at is None
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.workspace(session, "default").id
+    assert baseline.workspaces == [workspace_id]
