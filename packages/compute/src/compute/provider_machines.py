@@ -13,6 +13,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Protocol
 
 from database.repositories.compute import (
@@ -57,8 +58,8 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.timestamps import to_utc, utc_now
 
 from compute.agent_control import (
+    MachineWorkerAvailability,
     agent_machine_worker_id,
-    machine_serves_workloads,
 )
 from compute.context import ComputeContext
 from compute.offers import (
@@ -122,6 +123,21 @@ def _metadata_time(metadata: Mapping[str, JsonValue], key: str) -> datetime | No
 
 def _reservation_open(status: str) -> bool:
     return status not in {ReservationStatus.Deleted.value, ReservationStatus.Failed.value}
+
+
+class ServiceObservation(StrEnum):
+    """What one pass could tell about a machine, including nothing.
+
+    `Unknown` is the member that matters. Folding it into `Silent` terminates a
+    fleet whenever the platform itself stumbles; folding it into `Serving` clears
+    the evidence against a machine that really has gone, so a machine seen as
+    unknown, silent, unknown, silent would never accumulate enough to be
+    reclaimed.
+    """
+
+    Serving = "serving"
+    Silent = "silent"
+    Unknown = "unknown"
 
 
 def _require_internal_pooled_unit(
@@ -321,6 +337,22 @@ class ProviderMachineReconciler:
                 "bootstrap_phase": bootstrap_phase,
                 "bootstrap_failure_reason": bootstrap_failure_reason,
                 "bootstrap_observed_at": bootstrap_observed_at,
+                # Named rather than omitted, because an omitted key on the
+                # relaunch path keeps the reclaimed launch's value: a new
+                # machine would inherit a proof that some earlier machine once
+                # served, and never be judged as the new machine it is.
+                "first_enrolled_at": (
+                    settled_existing.first_enrolled_at if settled_existing is not None else None
+                ),
+                "first_served_at": (
+                    settled_existing.first_served_at if settled_existing is not None else None
+                ),
+                "last_served_at": (
+                    settled_existing.last_served_at if settled_existing is not None else None
+                ),
+                "unserved_observations": (
+                    settled_existing.unserved_observations if settled_existing is not None else 0
+                ),
                 "launch_attempt": launch_attempt,
                 "metadata": {
                     **metadata,
@@ -708,6 +740,100 @@ class ProviderMachineReconciler:
             now=_utc(now),
         )
 
+    def _observe_provider_service_state(
+        self,
+        session: DatabaseSession,
+        pool: ComputeUnitRecord,
+        record: ComputeProviderInstanceRecord,
+        *,
+        pool_reachable: bool,
+    ) -> ServiceObservation:
+        """Whether this machine is serving, not serving, or cannot be judged.
+
+        Runs for every open record on every pass, ahead of any deadline. The
+        reclaim used to look only at machines it had already decided were late,
+        which left it with no memory of the ones that were working: a machine
+        healthy for a week and silent for a minute presented exactly like one
+        that had never started.
+        """
+
+        if not pool_reachable:
+            return ServiceObservation.Unknown
+        if record.machine_id is None:
+            return ServiceObservation.Silent
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            pool.workspace_id,
+            record.machine_id,
+        )
+        if enrollment is None:
+            return ServiceObservation.Silent
+        if self.scheduler_hooks is None:
+            msg = "provider bootstrap reclaim requires scheduler worker state"
+            raise RuntimeError(msg)
+        try:
+            availability = self.scheduler_hooks.machine_worker_availability(record.machine_id)
+        except Exception:
+            # This answer decides whether a billable machine is terminated. An
+            # unreachable worker-state store is "unknown", and unknown is not an
+            # observation: it neither counts against the machine nor clears what
+            # counted against it before.
+            LOGGER.exception(
+                "worker state was unreachable while observing machine %s; keeping it",
+                record.machine_id,
+            )
+            return ServiceObservation.Unknown
+        if availability is MachineWorkerAvailability.Unknown:
+            # Asked before the enrollment, because a missing worker record leaves
+            # nothing to disagree with. The record is a cache the worker re-arms
+            # as it reports, so its absence is a gap in what we heard rather than
+            # an answer about the machine.
+            return ServiceObservation.Unknown
+        if (
+            availability is MachineWorkerAvailability.Available
+            and enrollment.status is ComputeMachineEnrollmentStatus.Active
+            and enrollment.readiness_phase is MachineReadinessPhase.Ready
+        ):
+            return ServiceObservation.Serving
+        return ServiceObservation.Silent
+
+    def _record_service_observation(
+        self,
+        session: DatabaseSession,
+        record: ComputeProviderInstanceRecord,
+        observation: ServiceObservation,
+        *,
+        now: datetime,
+    ) -> ComputeProviderInstanceRecord:
+        """Persist what this pass saw, so the next pass is not the first one."""
+
+        if observation is ServiceObservation.Unknown:
+            return record
+        if observation is ServiceObservation.Serving:
+            if (
+                record.first_served_at is not None
+                and record.last_served_at == now
+                and record.unserved_observations == 0
+            ):
+                return record
+            update: dict[str, object] = {
+                "last_served_at": now,
+                "unserved_observations": 0,
+                "updated_at": now,
+            }
+            if record.first_served_at is None:
+                update["first_served_at"] = now
+            return ComputeProviderInstanceRepository(session).upsert(
+                record.model_copy(update=update)
+            )
+        return ComputeProviderInstanceRepository(session).upsert(
+            record.model_copy(
+                update={
+                    "unserved_observations": record.unserved_observations + 1,
+                    "updated_at": now,
+                }
+            )
+        )
+
     def _provider_bootstrap_failure_to_reclaim(
         self,
         session: DatabaseSession,
@@ -715,17 +841,42 @@ class ProviderMachineReconciler:
         record: ComputeProviderInstanceRecord,
         *,
         now: datetime,
+        observing_since: datetime,
+        live_containers: int,
     ) -> MachineBootstrapFailureReason | None:
-        deadline = self.reclaim.phase_deadline_for(record.provider, record.bootstrap_phase)
-        if deadline is None:
-            return None
-        phase_started_at = _utc(record.bootstrap_observed_at or record.created_at)
-        if now - phase_started_at < deadline:
-            return None
+        """Whether to take this machine away, over an already-recorded history.
+
+        Two regimes, split by whether the platform ever saw the machine serve.
+        Before that, a machine is judged on how long it has been stuck in one
+        bootstrap phase. After it, the bootstrap deadlines no longer say anything
+        true — `joining` is the last phase the model has, so a working machine
+        sits past its deadline for as long as it lives — and what matters instead
+        is how long it has been since it last worked.
+        """
+
         if record.bootstrap_phase is MachineBootstrapPhase.Failed:
             # The node named its own failure. Reclaim it under that reason rather
             # than re-diagnosing it as a timeout it did not have.
+            deadline = self.reclaim.phase_deadline_for(record.provider, record.bootstrap_phase)
+            if deadline is None or not self._deadline_elapsed(
+                record, now, observing_since, deadline
+            ):
+                return None
             return record.bootstrap_failure_reason or MachineBootstrapFailureReason.Unknown
+        if record.first_served_at is not None:
+            return self._service_loss_to_reclaim(
+                record,
+                now=now,
+                observing_since=observing_since,
+                live_containers=live_containers,
+            )
+        deadline = self.reclaim.phase_deadline_for(record.provider, record.bootstrap_phase)
+        if deadline is None:
+            return None
+        if not self._deadline_elapsed(record, now, observing_since, deadline):
+            return None
+        if record.unserved_observations < self.reclaim.bootstrap_failure_observations:
+            return None
         if record.bootstrap_phase in {
             MachineBootstrapPhase.Requested,
             MachineBootstrapPhase.Provisioning,
@@ -733,32 +884,54 @@ class ProviderMachineReconciler:
         }:
             return MachineBootstrapFailureReason.BootstrapTimedOut
         if record.machine_id is None:
+            # A record that reached `joining` proved a machine was bound to it,
+            # and the column is cleared by the foreign key when that machine row
+            # is deleted. Reporting a bootstrap timeout for one of those blames
+            # the boot for a deletion that happened long after it.
+            if record.first_enrolled_at is not None:
+                return MachineBootstrapFailureReason.MachineRecordDeleted
             return MachineBootstrapFailureReason.BootstrapTimedOut
-        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            pool.workspace_id,
-            record.machine_id,
-        )
-        if enrollment is None:
-            return MachineBootstrapFailureReason.BootstrapTimedOut
-        if self.scheduler_hooks is None:
-            msg = "provider bootstrap reclaim requires scheduler worker state"
-            raise RuntimeError(msg)
-        try:
-            serves = machine_serves_workloads(
-                enrollment,
-                machine_id=record.machine_id,
-                worker_state=self.scheduler_hooks,
-            )
-        except Exception:
-            # This answer decides whether a billable machine is terminated. An
-            # unreachable worker-state store is "unknown", and unknown machines
-            # are kept, not reclaimed.
-            LOGGER.exception(
-                "worker state was unreachable while reclaiming machine %s; keeping it",
-                record.machine_id,
-            )
+        return MachineBootstrapFailureReason.WorkerReadinessFailed
+
+    def _service_loss_to_reclaim(
+        self,
+        record: ComputeProviderInstanceRecord,
+        *,
+        now: datetime,
+        observing_since: datetime,
+        live_containers: int,
+    ) -> MachineBootstrapFailureReason | None:
+        if record.unserved_observations < self.reclaim.service_loss_observations:
             return None
-        return None if serves else MachineBootstrapFailureReason.WorkerReadinessFailed
+        last_served_at = _utc(record.last_served_at or record.first_served_at or record.created_at)
+        silent_since = max(last_served_at, observing_since)
+        if now - silent_since < self.reclaim.service_loss_window:
+            return None
+        if live_containers > 0 and now - silent_since < self.reclaim.live_container_reclaim_grace:
+            # Work still claims this machine. The claim is bounded rather than
+            # absolute: container rows outlive the worker that owned them when
+            # nothing ticks to settle them, and a veto with no end is a meter
+            # with no end.
+            return None
+        return MachineBootstrapFailureReason.ServiceLost
+
+    def _deadline_elapsed(
+        self,
+        record: ComputeProviderInstanceRecord,
+        now: datetime,
+        observing_since: datetime,
+        deadline: timedelta,
+    ) -> bool:
+        """Deadlines run from when someone was listening, not from wall clock.
+
+        A control plane that was down was not observing, and every machine it
+        serves looks silent for exactly as long as it was away. Starting the
+        clock at the later of the two means a restart costs a machine its
+        deadline afresh rather than costing the fleet its life.
+        """
+
+        phase_started_at = _utc(record.bootstrap_observed_at or record.created_at)
+        return now - max(phase_started_at, observing_since) >= deadline
 
     def _persist_zero_capacity_repair(
         self,

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.offers import ComputeOffer
 from compute.policy import (
     AwsDefaultCapacityBaseline,
@@ -259,7 +259,9 @@ class _Resolver(ComputeProviderResolver):
 class _SchedulerHooks:
     retired: list[tuple[str, str, str]] = field(default_factory=list)
     available_machines: set[str] = field(default_factory=set)
+    unknown_machines: set[str] = field(default_factory=set)
     revoked_join_tokens: list[str] = field(default_factory=list)
+    intake_observing_since: datetime | None = None
 
     def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None:
         del unit, offer
@@ -267,8 +269,15 @@ class _SchedulerHooks:
     def disable_machine(self, machine_id: str, reason: str) -> None:
         del machine_id, reason
 
-    def machine_worker_available(self, machine_id: str) -> bool:
-        return machine_id in self.available_machines
+    def machine_worker_availability(self, machine_id: str) -> MachineWorkerAvailability:
+        if machine_id in self.available_machines:
+            return MachineWorkerAvailability.Available
+        if machine_id in self.unknown_machines:
+            return MachineWorkerAvailability.Unknown
+        return MachineWorkerAvailability.Unavailable
+
+    def agent_intake_observing_since(self) -> datetime | None:
+        return self.intake_observing_since
 
     def retire_machine(
         self,
@@ -1303,11 +1312,13 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
 ) -> None:
     _seed_connection(isolated_services)
     provider = _PooledProvider()
+    hooks = _SchedulerHooks(intake_observing_since=datetime.now(UTC) - timedelta(hours=1))
     compute = ComputeService(
         isolated_services.context,
         provider_resolver=_Resolver(provider),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=hooks,
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -1357,6 +1368,9 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         reclaim=ComputeReclaimPolicy(max_launch_attempts=2),
+        scheduler_hooks=_SchedulerHooks(
+            intake_observing_since=datetime.now(UTC) - timedelta(hours=1)
+        ),
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -1371,11 +1385,15 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     first = _mark_open_record_booting(isolated_services, pool.id, at=moment)
     assert first.launch_attempt == 1
 
+    # Two looks per reclaim: the deadline says a machine is late, and a second
+    # observation says it was still late when we looked again.
+    compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=200))
     moment += timedelta(seconds=301)
     compute.reconcile_pooled_capacity(now=moment)
     relaunched = _mark_open_record_booting(isolated_services, pool.id, at=moment)
     assert relaunched.launch_attempt == 2
 
+    compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=200))
     moment += timedelta(seconds=301)
     ensure_calls_before_exhaustion = len(provider.ensure_calls)
     compute.reconcile_pooled_capacity(now=moment)
@@ -1865,3 +1883,230 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
 
     assert revived.phase is not ComputeUnitPhase.Deleted
     assert revived.min_machines == 1
+
+
+def _seed_serving_machine(
+    isolated_services: ApiServices,
+    pool: ComputeUnitRecord,
+    hooks: _SchedulerHooks,
+    *,
+    machine_id: str,
+    instance_id: str,
+    now: datetime,
+) -> None:
+    """Enrol one provider instance as a machine that takes work."""
+
+    worker_id = agent_machine_worker_id(machine_id)
+    with isolated_services.context.database.session() as session:
+        connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id or "")
+        assert connection is not None
+        MachineRepository(session).upsert(
+            Machine(
+                id=machine_id,
+                pool=pool.pool,
+                provider="agent",
+                status=ResourceStatus.Running,
+            ),
+            workspace_id=pool.workspace_id,
+        )
+        WorkerRepository(session).upsert(
+            Worker(
+                id=worker_id,
+                machine_id=machine_id,
+                pool=pool.pool,
+                status=ResourceStatus.Running,
+            ),
+            workspace_id=pool.workspace_id,
+        )
+        credential = ComputeJoinCredentialRepository(session).create(
+            token_hash=machine_id.replace("-", "")[:16].ljust(64, "a"),
+            user_id=connection.user_id,
+            workspace_id=pool.workspace_id,
+            capacity_owner_id=pool.capacity_owner_id,
+            pool=pool.pool,
+            created_by_token_id=None,
+            max_uses=1,
+            expires_at=now + timedelta(minutes=2),
+        )
+        ComputeMachineEnrollmentRepository(session).create(
+            ComputeMachineEnrollmentCreate(
+                user_id=connection.user_id,
+                workspace_id=pool.workspace_id,
+                capacity_owner_id=pool.capacity_owner_id,
+                pool=pool.pool,
+                machine_id=machine_id,
+                machine_fingerprint_hash="b" * 64,
+                join_credential_id=credential.id,
+                credential_hash="c" * 64,
+                status=ComputeMachineEnrollmentStatus.Active,
+                preflight_passed=True,
+                heartbeat_confirmed=True,
+                schedulable=True,
+                readiness_phase=MachineReadinessPhase.Ready,
+                tailnet_generation=1,
+                tailnet_phase=TailnetEnrollmentPhase.Bound,
+                tailnet_device_id=f"device-{machine_id[:4]}",
+                last_join_at=now,
+                last_heartbeat_at=now,
+            )
+        )
+        ComputeProviderInstanceRepository(session).bind_machine(pool.id, instance_id, machine_id)
+        ComputeService(
+            isolated_services.context,
+            capacity_owner_mutations=_MutationLeases(),
+        ).record_provider_bootstrap_status(
+            pool_id=pool.id,
+            provider_instance_id=instance_id,
+            phase=MachineBootstrapPhase.Joining,
+            failure_reason=None,
+            now=now,
+        )
+    hooks.available_machines.add(machine_id)
+
+
+def _serving_pool(
+    isolated_services: ApiServices,
+    hooks: _SchedulerHooks,
+    provider: _PooledProvider,
+    *,
+    now: datetime,
+    reclaim: ComputeReclaimPolicy | None = None,
+) -> tuple[ComputeService, ComputeUnitRecord]:
+    _seed_connection(isolated_services)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=hooks,
+        **({} if reclaim is None else {"reclaim": reclaim}),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        workspace_machine_limit=10,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity(now=now)
+    _seed_serving_machine(
+        isolated_services,
+        pool,
+        hooks,
+        machine_id="44444444-4444-4444-8444-444444444444",
+        instance_id="i-00000000000000000",
+        now=now,
+    )
+    # One pass with the machine serving, which is what ends its bootstrap.
+    compute.reconcile_pooled_capacity(now=now + timedelta(seconds=30))
+    return compute, pool
+
+
+def _open_record(
+    isolated_services: ApiServices,
+    pool_id: str,
+) -> ComputeProviderInstanceRecord | None:
+    with isolated_services.context.database.session() as session:
+        return next(
+            (
+                item
+                for item in ComputeProviderInstanceRepository(session).list_for_pool(pool_id)
+                if item.status not in {"deleted", "failed", "terminating"}
+            ),
+            None,
+        )
+
+
+def test_a_machine_that_serves_is_not_reclaimed_when_its_worker_record_lapses(
+    isolated_services: ApiServices,
+) -> None:
+    """The invariant the production outage broke.
+
+    A machine well past every bootstrap deadline, running work, whose hot worker
+    record goes missing for a few passes. The record is a cache with a one-minute
+    lifetime; its absence is silence, and silence is not grounds to destroy a
+    machine that has already proved it serves.
+    """
+
+    started_at = datetime.now(UTC)
+    hooks = _SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1))
+    provider = _PooledProvider()
+    compute, pool = _serving_pool(isolated_services, hooks, provider, now=started_at)
+
+    served = _open_record(isolated_services, pool.id)
+    assert served is not None
+    assert served.first_served_at is not None
+
+    hooks.available_machines.clear()
+    hooks.unknown_machines.add("44444444-4444-4444-8444-444444444444")
+    for offset in range(1, 12):
+        compute.reconcile_pooled_capacity(now=started_at + timedelta(minutes=offset))
+
+    survived = _open_record(isolated_services, pool.id)
+    assert survived is not None
+    assert survived.id == served.id
+    assert survived.unserved_observations == 0
+    assert provider.release_calls == []
+
+
+def test_a_machine_that_served_and_stopped_is_reclaimed_once_its_window_passes(
+    isolated_services: ApiServices,
+) -> None:
+    """The other half: not reclaiming is a meter that never stops."""
+
+    started_at = datetime.now(UTC)
+    hooks = _SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1))
+    provider = _PooledProvider()
+    # One attempt, so the pool degrades instead of relaunching into the same row:
+    # a reclaim and its replacement land in one pass, and the reason the machine
+    # was taken away is only readable while no replacement has overwritten it.
+    compute, pool = _serving_pool(
+        isolated_services,
+        hooks,
+        provider,
+        now=started_at,
+        reclaim=ComputeReclaimPolicy(max_launch_attempts=1),
+    )
+    served = _open_record(isolated_services, pool.id)
+    assert served is not None
+
+    hooks.available_machines.clear()
+    for offset in range(1, 13):
+        compute.reconcile_pooled_capacity(now=started_at + timedelta(minutes=offset))
+
+    with isolated_services.context.database.session() as session:
+        records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+    reclaimed = next(item for item in records if item.id == served.id)
+    assert reclaimed.bootstrap_failure_reason is MachineBootstrapFailureReason.ServiceLost
+    assert reclaimed.bootstrap_phase is MachineBootstrapPhase.Failed
+    assert provider.release_calls == [served.instance_id]
+
+
+def test_a_control_plane_that_just_started_reclaims_nothing(
+    isolated_services: ApiServices,
+) -> None:
+    """Silence measured across an outage is a fact about the outage.
+
+    Every enrollment looks stale after the process that receives heartbeats
+    restarts, so a reclaim that starts its clock at the record would take the
+    whole fleet on its first pass back.
+    """
+
+    started_at = datetime.now(UTC)
+    hooks = _SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1))
+    provider = _PooledProvider()
+    compute, pool = _serving_pool(isolated_services, hooks, provider, now=started_at)
+    served = _open_record(isolated_services, pool.id)
+    assert served is not None
+
+    hooks.available_machines.clear()
+    restarted_at = started_at + timedelta(hours=6)
+    hooks.intake_observing_since = restarted_at
+    for offset in range(1, 13):
+        compute.reconcile_pooled_capacity(now=restarted_at + timedelta(seconds=offset * 30))
+
+    survived = _open_record(isolated_services, pool.id)
+    assert survived is not None
+    assert survived.id == served.id
+    assert provider.release_calls == []

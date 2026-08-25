@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Protocol
+from uuid import uuid4
+
+from shared.timestamps import to_utc, utc_now
+
+from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_serialization import redis_strings
+
+PROCESS_PRESENCE_NAMESPACE = "process-presence"
+DEFAULT_PRESENCE_TTL_SECONDS = 45
+DEFAULT_PRESENCE_REFRESH_SECONDS = 15.0
+
+
+class ProcessPresenceReader(Protocol):
+    def observing_since(self, *, now: datetime | None = ...) -> datetime | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RedisProcessPresence:
+    """How long some process of one role has been continuously alive.
+
+    A reconciler that acts on silence needs to know whether anyone was listening
+    for it. That is a fact about a different process, often on a different host,
+    so it cannot be answered from a local start time: a scheduler up for a week
+    knows nothing about the API restart two minutes ago that stopped every
+    heartbeat it is now judging.
+
+    Each process publishes its own start time under its own key with a TTL it
+    re-arms, so a process that dies stops answering without anything having to
+    notice. Readers take the *oldest* live start, because a rolling deploy always
+    has a young process and the question is whether some endpoint was reachable,
+    not whether every one of them was.
+    """
+
+    redis: RedisClient
+    role: str
+    ttl_seconds: int = DEFAULT_PRESENCE_TTL_SECONDS
+    process_id: str = field(default_factory=lambda: str(uuid4()))
+
+    def key(self) -> str:
+        return self._key_for(self.process_id)
+
+    def index_key(self) -> str:
+        return self.redis.key(PROCESS_PRESENCE_NAMESPACE, self._role(), "index")
+
+    def publish(self, started_at: datetime) -> None:
+        """Announce this process, and keep announcing it on every call."""
+
+        key = self.key()
+        self.redis.set(key, to_utc(started_at).isoformat(), ex=self.ttl_seconds)
+        self.redis.set_add(self.index_key(), key)
+
+    def withdraw(self) -> None:
+        key = self.key()
+        self.redis.delete(key)
+        self.redis.set_remove(self.index_key(), key)
+
+    def observing_since(self, *, now: datetime | None = None) -> datetime | None:
+        """The oldest live start time, or None when nothing of this role answers.
+
+        None is not "forever ago". A caller that treats an empty registry as a
+        long observation reinstates exactly the failure this exists to prevent,
+        so the absence is returned as an absence and left for the caller to
+        refuse on.
+        """
+
+        current_time = now or utc_now()
+        index = self.index_key()
+        oldest: datetime | None = None
+        for member in redis_strings(self.redis.set_members(index)):
+            raw = self.redis.get(member)
+            if raw is None:
+                # Expired under the index. Dropping it here keeps the index from
+                # growing by one entry per process restart forever.
+                self.redis.set_remove(index, member)
+                continue
+            started_at = _parse_started_at(redis_text(raw))
+            if started_at is None or started_at > current_time:
+                continue
+            if oldest is None or started_at < oldest:
+                oldest = started_at
+        return oldest
+
+    def _role(self) -> str:
+        role = self.role.strip()
+        if not role:
+            raise ValueError("process presence role is required")
+        return role
+
+    def _key_for(self, process_id: str) -> str:
+        return self.redis.key(PROCESS_PRESENCE_NAMESPACE, self._role(), process_id)
+
+
+def presence_refresh_interval(ttl_seconds: int) -> float:
+    """Refresh well inside the TTL, so one missed pass is not a disappearance."""
+
+    return max(min(DEFAULT_PRESENCE_REFRESH_SECONDS, ttl_seconds / 3), 1.0)
+
+
+def observed_for(
+    presence: ProcessPresenceReader,
+    window: timedelta,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Whether the role has been alive for the whole of `window`."""
+
+    current_time = now or utc_now()
+    since = presence.observing_since(now=current_time)
+    if since is None:
+        return False
+    return current_time - since >= window
+
+
+def _parse_started_at(value: str) -> datetime | None:
+    try:
+        return to_utc(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
+__all__ = [
+    "DEFAULT_PRESENCE_TTL_SECONDS",
+    "PROCESS_PRESENCE_NAMESPACE",
+    "ProcessPresenceReader",
+    "RedisProcessPresence",
+    "observed_for",
+    "presence_refresh_interval",
+]

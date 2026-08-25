@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.offers import ComputeOffer
 from compute.state import ComputeUnitState, ComputeUnitStatus
+from coordination.process_presence import ProcessPresenceReader
 from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
 
@@ -43,6 +44,7 @@ class SchedulerHookWorkerRepository(Protocol):
 class SchedulerComputeHooks:
     compute_states: ComputeUnitStateRepository
     workers: SchedulerHookWorkerRepository
+    agent_intake: ProcessPresenceReader | None = None
 
     def register_internal_unit(self, unit: ComputeUnitRecord, offer: ComputeOffer) -> None:
         self.compute_states.save_unit_state(_internal_compute_unit_state(unit, offer))
@@ -67,9 +69,25 @@ class SchedulerComputeHooks:
     def revoke_unit_join_token(self, token_hash: str) -> None:
         self.compute_states.revoke_join_token_state(token_hash)
 
-    def machine_worker_available(self, machine_id: str) -> bool:
+    def machine_worker_availability(self, machine_id: str) -> MachineWorkerAvailability:
+        """What the hot record says about this machine's worker, including nothing.
+
+        An absent record is `Unknown`, not `Unavailable`. The key carries a short
+        TTL that a worker re-arms as it reports, so its absence means we have not
+        heard rather than that the worker refused, and the reclaim terminates
+        billable machines on the difference.
+        """
         worker = self.workers.get_worker(agent_machine_worker_id(machine_id))
-        return worker is not None and worker.status is SchedulerWorkerStatus.Available
+        if worker is None:
+            return MachineWorkerAvailability.Unknown
+        if worker.status is SchedulerWorkerStatus.Available:
+            return MachineWorkerAvailability.Available
+        return MachineWorkerAvailability.Unavailable
+
+    def agent_intake_observing_since(self) -> datetime | None:
+        if self.agent_intake is None:
+            return None
+        return self.agent_intake.observing_since()
 
     def _workers_for_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]:
         workers = [
