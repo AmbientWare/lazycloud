@@ -16,7 +16,6 @@ from coordination.token_lock import (
     try_acquire_token_lock,
 )
 from pydantic import Field, field_validator
-from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute
@@ -61,9 +60,6 @@ DEFAULT_WORKER_LOCK_TTL_SECONDS = 10
 DEFAULT_WORKER_LOCK_RETRIES = 3
 DEFAULT_CONTAINER_LOCK_TTL_SECONDS = 10
 DEFAULT_CONTAINER_LOCK_RETRIES = 3
-DEFAULT_WORKER_POOL_STATE_LOCK_TTL_SECONDS = 10
-DEFAULT_WORKER_POOL_SIZER_LOCK_TTL_SECONDS = 300
-DEFAULT_WORKER_POOL_CLEANER_LOCK_TTL_SECONDS = 300
 DEFAULT_IMAGE_PULL_LOCK_TTL_SECONDS = 30
 DEFAULT_IMAGE_PULL_LOCK_RETRIES = 600
 DEFAULT_NETWORK_LOCK_TTL_SECONDS = 30
@@ -417,12 +413,6 @@ class ConcurrencyReservationStatus(StrEnum):
     Missing = "missing"
 
 
-class WorkerPoolLockKind(StrEnum):
-    State = "state"
-    Sizer = "sizer"
-    Cleaner = "cleaner"
-
-
 @dataclass(frozen=True, slots=True)
 class SchedulerContainerRequestClaim:
     request: SchedulerWorkerRequest
@@ -497,14 +487,6 @@ class CapacityReservationDispatchAllocation:
     request_index_key: str
     allocation_key: str
     allocation_index_key: str
-
-
-class WorkerPoolLockPlan(ContractModel):
-    pool: MachinePool
-    kind: WorkerPoolLockKind
-    key: str
-    ttl_seconds: int
-    retries: int
 
 
 class SchedulerRepositoryError(RuntimeError):
@@ -3053,13 +3035,6 @@ class RedisWorkerPoolStateRepository:
             )
         )
 
-    def lock_plan(
-        self,
-        capacity_owner_id: str,
-        kind: WorkerPoolLockKind,
-    ) -> WorkerPoolLockPlan:
-        return worker_pool_lock_plan(self.keys, MachinePool(capacity_owner_id), kind)
-
 
 def capacity_memory_mib(memory_mib: int) -> int:
     if memory_mib <= 0:
@@ -3414,32 +3389,6 @@ def _same_route(
     if left is None or right is None:
         return False
     return left.route_id == right.route_id
-
-
-def worker_pool_lock_plan(
-    keys: SchedulerStateKeys,
-    pool: MachinePool,
-    kind: WorkerPoolLockKind,
-) -> WorkerPoolLockPlan:
-    if kind is WorkerPoolLockKind.State:
-        return WorkerPoolLockPlan(
-            pool=pool,
-            kind=kind,
-            key=keys.worker_pool_lock(pool),
-            ttl_seconds=DEFAULT_WORKER_POOL_STATE_LOCK_TTL_SECONDS,
-            retries=0,
-        )
-    return WorkerPoolLockPlan(
-        pool=pool,
-        kind=kind,
-        key=keys.capacity_owner_mutation_lock(pool),
-        ttl_seconds=(
-            DEFAULT_WORKER_POOL_SIZER_LOCK_TTL_SECONDS
-            if kind is WorkerPoolLockKind.Sizer
-            else DEFAULT_WORKER_POOL_CLEANER_LOCK_TTL_SECONDS
-        ),
-        retries=0 if kind is WorkerPoolLockKind.Sizer else 3,
-    )
 
 
 def capacity_owner_key_segment(capacity_owner_id: str) -> str:
