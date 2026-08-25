@@ -21,10 +21,12 @@ resource "planetscale_postgres_branch_role" "control_plane" {
   database     = planetscale_postgres_branch.control_plane.database
   branch       = planetscale_postgres_branch.control_plane.name
 
-  # Terraform destroys the role before the branch it depends on, and PlanetScale
-  # refuses a role that is still referenced, so `terraform destroy` cannot remove
-  # the database on its own. Deleting the database takes both with it; the
-  # runbook says so rather than leaving the next person to discover the 422.
+  # Terraform destroys this before the branch it depends on, and PlanetScale
+  # refuses a role that still owns the tables the schema created, so a destroy
+  # stops here with a 422 and everything else already gone. Deleting the branch
+  # takes the role and the database with it, which is why the teardown in
+  # LIFECYCLE.md drops this from state first rather than asking Terraform for
+  # something the API will not do.
 
   # A branch role inherits nothing by default, and a role that cannot CREATE in
   # `public` fails on the very first DDL the schema bootstrap issues. The schema
