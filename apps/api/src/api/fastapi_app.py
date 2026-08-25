@@ -9,6 +9,7 @@ from datetime import datetime
 from uuid import uuid4
 
 import uvicorn
+from anyio import to_thread
 from compute.aws_connections import AwsAccountConnectionService
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from coordination.process_presence import RedisProcessPresence, presence_refresh_interval
@@ -162,6 +163,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                     recovery_fence.stop_serving,
                 )
                 recovery_fence.start_serving()
+                _bound_request_concurrency_to_the_pool(api_services)
                 if api_services.tailnet_runtime is not None:
                     # Fatal rather than logged: the control plane reaches every
                     # agent over the tailnet, so one that comes up without it
@@ -472,6 +474,28 @@ async def _reconcile_agent_routes(
             logger.exception("agent route registry reconciliation failed")
             _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
+
+
+def _bound_request_concurrency_to_the_pool(api_services: ApiServices) -> None:
+    """Let requests queue where the wait is visible, not at the connection pool.
+
+    Every ordinary handler here is sync, so Starlette runs it in a worker pool
+    of forty. Each one that touches the database wants a connection from a pool
+    of far fewer, and the ceiling is shared with the rest of the deployment, so
+    the excess threads do not add throughput: they turn a queue into a burst of
+    checkout timeouts, spread across whichever requests happened to arrive.
+
+    Derived from the pool rather than configured beside it, because two numbers
+    that must agree and are written in two places eventually will not.
+    """
+
+    settings = api_services.context.database.settings
+    capacity = settings.pool_size + settings.max_overflow
+    # One is held for the process's lifetime by the recovery fence, and one is
+    # left for the health check to answer while the rest of the pool is busy.
+    limit = max(capacity - 2, 1)
+    to_thread.current_default_thread_limiter().total_tokens = limit
+    logger.info("request concurrency bounded to %d by the database pool", limit)
 
 
 async def _publish_agent_intake_presence(

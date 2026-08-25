@@ -283,7 +283,10 @@ def _postgres_database() -> DatabaseClient:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url,
-            pool_size=6,
+            # Above the widest contender count below, because those tests hold
+            # every connection at a barrier at once. A pool smaller than the
+            # concurrency it serves waits for a connection nobody will return.
+            pool_size=8,
             max_overflow=0,
             application_name=DatabaseApplicationName.Test,
         )

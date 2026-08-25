@@ -1528,11 +1528,18 @@ class ManagementService:
             cursor=cursor,
             limit=limit,
         )
+        # One lookup for the page's stubs, not one per row: a hundred containers
+        # used to mean a hundred sessions against a connection budget the whole
+        # deployment shares, which is how a dashboard left open exhausted it.
+        app_ids = self.control_plane.stub_app_ids(
+            [container.stub_id for container in page.data if not container.app_id],
+            workspace_id=workspace_record.id,
+        )
         return CursorPage(
             data=tuple(
                 ContainerStateWithApp(
                     container=container,
-                    app_id=container.app_id or self._app_id_for_stub(container.stub_id),
+                    app_id=container.app_id or app_ids.get(container.stub_id or "", ""),
                 )
                 for container in page.data
             ),
@@ -1779,12 +1786,3 @@ class ManagementService:
         )
         next_cursor = str(offset + limit) if offset + limit < total else ""
         return EventQueryResponse(data=tuple(data), next=next_cursor, count=total)
-
-    def _app_id_for_stub(self, stub_id: str | None) -> str:
-        if not stub_id:
-            return ""
-        try:
-            stub = self.control_plane.get_stub(stub_id)
-        except NotFoundError:
-            return ""
-        return stub.app_id or ""

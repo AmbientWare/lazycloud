@@ -733,6 +733,17 @@ class ControlPlaneService:
         self._publish_stub_change(record, change)
         return record
 
+    def stub_app_ids(
+        self,
+        stub_ids: Sequence[str],
+        *,
+        workspace_id: str,
+    ) -> dict[str, str]:
+        """Resolve a page of stubs to their apps in one session."""
+
+        with self.context.database.session() as session:
+            return StubRepository(session).app_ids_by_id(stub_ids, workspace_id=workspace_id)
+
     def get_stub(self, stub_id_or_name: str, *, workspace: str | None = None) -> StubRecord:
         workspace_id = self.get_workspace(workspace).id if workspace is not None else None
         with self.context.database.session() as session:

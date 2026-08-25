@@ -53,6 +53,7 @@ spec:
           image: {{ include "lazycloud.image" (list . "scheduler") }}
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.databaseEnv" .Values.scheduler.database | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE

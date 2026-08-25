@@ -1,3 +1,4 @@
+{{- include "lazycloud.databaseBudget" . -}}
 {{/*
 The API, and the tailnet device it holds.
 
@@ -74,6 +75,7 @@ spec:
               containerPort: 9000
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
             # An emptyDir, because the identity here is worth less than the
             # restart it would delay: the device is ephemeral and re-registers
             # in seconds, and a PVC would tie a replica to one zone.
