@@ -150,10 +150,13 @@ gh workflow run ship.yml -f deployment=lazycloud-prod
 
 `ship` publishes the release and then deploys onto it, handing the manifest URL
 from the first half to the second. Do that for a first bring-up, and for any
-change to the agent, the container-worker image, or the node AMI. It bakes the
-image every time and takes about fifteen minutes, because the image carries the
-agent and worker this release publishes and one baked earlier describes an
-earlier release.
+change to the agent, the container-worker image, or the node AMI. It bakes both
+node images every time, CPU and GPU, and takes about half an hour, because each
+carries the agent and worker this release publishes and one baked earlier
+describes an earlier release. Each bake registers its image under its own name.
+`bake.py` matches an existing image by name alone, so a shared name would find
+the CPU image already available and publish a driverless AMI as the GPU catalog
+entry.
 
 `deploy` on its own is the ordinary case afterwards, and runs many times against
 one release: it builds the control-plane images, tags them with the commit, and
