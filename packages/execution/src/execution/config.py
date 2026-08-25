@@ -171,8 +171,9 @@ class ContainerResourceConfig(BaseModel):
     memory_mib: int = Field(default=0, ge=0)
     memory_limit_mib: int = Field(default=0, ge=0)
     disk: str | int = DEFAULT_DISK
-    gpu: str | None = None
-    gpu_type: str | None = None
+    gpu: list[str] = Field(default_factory=list)
+    """Models this workload accepts, best first; empty asks for no GPU."""
+
     gpu_count: int = Field(default=0, ge=0)
     image_id: str | None = None
     pool_selector: str | None = None
@@ -241,7 +242,3 @@ class ContainerResourceConfig(BaseModel):
         # Reuses the memory parser: the units are the same and disk accepts the
         # same "10Gi" strings users already write for memory.
         return parse_memory_mib(self.disk) or 0
-
-    @property
-    def requested_gpu_type(self) -> str:
-        return self.gpu or self.gpu_type or ""

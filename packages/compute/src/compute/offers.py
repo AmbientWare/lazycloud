@@ -6,6 +6,7 @@ from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode
 from shared.container_requests import OciRuntimeName, capacity_with_overhead
 from shared.contracts import ContractModel
+from shared.gpu import gpu_preference_accepts, gpu_preference_rank
 
 
 class ReservationStatus(StrEnum):
@@ -110,8 +111,9 @@ class OfferRequest(ContractModel):
     min_storage_mb: int = 0
     architecture: str = ""
     runtime: str = ""
-    gpu: str | None = None
-    gpus: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
+    """Models this request accepts, best first; empty asks for no GPU."""
+
     min_gpu_count: int = 0
     nodes: int = 0
     min_reliability: float = 0.0
@@ -139,12 +141,14 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             continue
         if request.runtime and offer.runtime != request.runtime:
             continue
-        requested_gpus = request.gpus or ([request.gpu] if request.gpu is not None else [])
-        if requested_gpus and offer.gpu not in requested_gpus:
+        # Through the shared rule rather than a string compare, so an offer for a
+        # card the request would accept is not passed over for spelling it the
+        # way the provider does, and `any` means here what it means everywhere.
+        if request.gpu and not gpu_preference_accepts(request.gpu, offer.gpu or ""):
             continue
         if offer.gpu_count < request.min_gpu_count:
             continue
-        if request.nodes > 0 and not requested_gpus and offer.gpu_count > 0:
+        if request.nodes > 0 and not request.gpu and offer.gpu_count > 0:
             continue
         if (
             request.min_reliability > 0
@@ -168,7 +172,27 @@ def choose_offer(offers: list[ComputeOffer], request: OfferRequest) -> ComputeOf
     if not candidates:
         msg = "no compute offers match request"
         raise ValueError(msg)
-    return min(candidates, key=lambda item: (offer_cost_per_node(item), -item.reliability))
+
+    # Preference outranks price. "Cheapest of everything acceptable" is a set
+    # rather than an order, and would send every `["h100", "t4"]` to the T4,
+    # which is the behaviour a chain exists to replace. Cost still decides
+    # within a tier, where one model spans many instance sizes and regions.
+    def preference_rank(offer: ComputeOffer) -> int:
+        # Unaccepted sorts last rather than first. `filter_offers` has already
+        # dropped those, so this is unreachable, and a rank of 0 is falsy: the
+        # obvious `or 0` would quietly promote a card the author refused to the
+        # front the moment that filtering changed.
+        rank = gpu_preference_rank(request.gpu, offer.gpu or "")
+        return len(request.gpu) if rank is None else rank
+
+    return min(
+        candidates,
+        key=lambda item: (
+            preference_rank(item),
+            offer_cost_per_node(item),
+            -item.reliability,
+        ),
+    )
 
 
 def offer_node_capacity(offer: ComputeOffer) -> int:

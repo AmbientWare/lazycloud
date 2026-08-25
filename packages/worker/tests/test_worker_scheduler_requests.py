@@ -483,7 +483,7 @@ def _request(
         container_id="ctr-1",
         cpu_millicores=1000,
         memory_mib=512,
-        gpu_type=gpu_type,
+        gpu=[gpu_type] if gpu_type else [],
         gpu_count=gpu_count,
         payload=payload or {},
     )

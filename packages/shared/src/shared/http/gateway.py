@@ -174,7 +174,7 @@ class GetOrCreateStubRequest(HttpModel):
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str | int | None = None
-    gpu: str = ""
+    gpu: list[str] = Field(default_factory=list)
     handler: str = ""
     route: str | None = None
     domain: str | None = None

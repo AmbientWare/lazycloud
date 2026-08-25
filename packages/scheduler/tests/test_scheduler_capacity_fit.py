@@ -19,7 +19,7 @@ def _gpu_worker(gpu_type: str) -> WorkerCapacity:
 
 
 def _gpu_request(gpu_type: str) -> SchedulingRequest:
-    return SchedulingRequest(id="request-1", cpu=1, memory_mib=512, gpu_type=gpu_type, gpu_count=1)
+    return SchedulingRequest(id="request-1", cpu=1, memory_mib=512, gpu=[gpu_type], gpu_count=1)
 
 
 @pytest.mark.parametrize("requested", ["L4", "l4", "nvidia-l4", "NVIDIA L4"])
@@ -203,3 +203,49 @@ def test_priority_tiers_above_packing_without_replacing_it() -> None:
     # A request the preferred tier cannot hold still falls through to the spare.
     large = SchedulingRequest(id="c-2", cpu=4, memory_mib=1024)
     assert select_worker_for_request(large, [spare_fuller, preferred_fuller]) is None
+
+
+def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
+    """What a chain is for: the preferred card is busy, the work still runs.
+
+    Without an order this is a set, and the request lands on whichever of the
+    two the packing key happens to prefer. That is the same answer roughly half
+    the time, which is why it has to be asserted both ways round.
+    """
+    preferred = WorkerCapacity(
+        worker_id="h100",
+        pool=MachinePool("lazycloud"),
+        gpu_type="H100",
+        total_cpu=8,
+        free_cpu=8,
+        total_memory_mib=32768,
+        free_memory_mib=32768,
+        total_gpu=1,
+        free_gpu=1,
+    )
+    fallback = WorkerCapacity(
+        worker_id="l4",
+        pool=MachinePool("lazycloud"),
+        gpu_type="L4",
+        total_cpu=8,
+        free_cpu=8,
+        total_memory_mib=32768,
+        free_memory_mib=32768,
+        total_gpu=1,
+        free_gpu=1,
+    )
+    request = SchedulingRequest(
+        id="c-1",
+        cpu=1,
+        memory_mib=1024,
+        gpu=["H100", "L4"],
+        gpu_count=1,
+    )
+
+    assert select_worker_for_request(request, [fallback, preferred]) is preferred
+    assert select_worker_for_request(request, [preferred, fallback]) is preferred
+    # With no H100 registered the work runs on the card the author accepted.
+    assert select_worker_for_request(request, [fallback]) is fallback
+    # And a card nobody named is still refused.
+    t4 = fallback.model_copy(update={"worker_id": "t4", "gpu_type": "T4"})
+    assert select_worker_for_request(request, [t4]) is None

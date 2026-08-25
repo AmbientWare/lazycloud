@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import shlex
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -230,8 +230,7 @@ class ContainerService:
         cpu_millicores: int = 0,
         memory_mib: int = 0,
         disk_mib: int = DEFAULT_CONTAINER_DISK_MIB,
-        gpu_type: str = "",
-        gpu_request: Iterable[str] | None = None,
+        gpu: Sequence[str] = (),
         gpu_count: int = 0,
         pool_selector: str = "",
         runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
@@ -296,8 +295,7 @@ class ContainerService:
                 cpu_millicores=cpu_millicores,
                 memory_mib=memory_mib,
                 disk_mib=disk_mib,
-                gpu_type=gpu_type,
-                gpu_request=list(gpu_request) if gpu_request is not None else None,
+                gpu=list(gpu),
                 gpu_count=gpu_count,
                 pool_selector=pool_selector,
                 runtime=runtime,
@@ -363,11 +361,7 @@ class ContainerService:
             runtime=runtime_name,
             gpu_count=max(
                 options.gpu_count,
-                gpu_count_for_capacity(
-                    options.gpu_type,
-                    list(options.gpu_request or ()),
-                    options.gpu_count,
-                ),
+                gpu_count_for_capacity(options.gpu, options.gpu_count),
             ),
             readiness_path=options.checkpoint_readiness_path,
             readiness_port=options.checkpoint_readiness_port,
@@ -426,8 +420,7 @@ class ContainerService:
             container_id=record.id,
             cpu_millicores=options.cpu_millicores,
             memory_mib=options.memory_mib,
-            gpu_type=options.gpu_type,
-            gpu_request=[str(item) for item in options.gpu_request or []],
+            gpu=list(options.gpu),
             gpu_count=options.gpu_count,
             pool_selector=options.pool_selector,
             runtime_class=runtime_constraint,

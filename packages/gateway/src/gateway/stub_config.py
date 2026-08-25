@@ -20,6 +20,7 @@ from shared.deployment_records import (
     resolve_timeout_seconds,
 )
 from shared.deployments import DeploymentKind
+from shared.gpu import gpu_preference
 from shared.http.gateway import GetOrCreateStubRequest
 from shared.image_building.authoring import ImageBuildStep, ImageSpec
 from shared.tasks import RetryPolicy
@@ -99,7 +100,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             cpu=resolve_cpu(request.stub_type, request.cpu),
             memory=resolve_memory(request.stub_type, request.memory),
             disk=resolve_disk(request.disk),
-            gpu=request.gpu or None,
+            gpu=list(gpu_preference(request.gpu)),
             gpu_count=request.gpu_count,
             timeout_seconds=resolve_timeout_seconds(
                 request.stub_type,

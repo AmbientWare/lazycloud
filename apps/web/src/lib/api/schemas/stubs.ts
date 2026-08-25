@@ -29,7 +29,7 @@ export type WorkloadKind = (typeof workloadKinds)[number];
 const stubRuntimeConfigSchema = z.object({
   cpu: z.union([cpuRequestSchema, z.string()]).nullish(),
   memory: memoryRequestSchema.nullish(),
-  gpu: z.string().nullish(),
+  gpu: z.array(z.string()).default([]),
   gpu_count: z.number().nullish(),
   keep_warm: z.number().nullish(),
   timeout_seconds: z.number().nullish(),

@@ -37,7 +37,7 @@ class StubRuntimeConfigResponse(HttpModel):
     cpu: int | float | None = None
     memory: int | str | None = None
     disk: int | str | None = None
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int | None = None
     keep_warm: int | None = Field(default=None, ge=-1)
     timeout_seconds: int | None = None
@@ -132,7 +132,7 @@ class StubConfigUpdateResponse(HttpModel):
 class StubCloneOverrideRequest(HttpModel):
     cpu: int | None = None
     memory: int | None = None
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int | None = None
 
 

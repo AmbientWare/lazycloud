@@ -29,7 +29,16 @@ def dev(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
+    gpu: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--gpu",
+            help=(
+                "GPU model to run on. Repeat for a preference, best first: "
+                "--gpu h100 --gpu l4 takes an H100 where one is free and an L4 otherwise."
+            ),
+        ),
+    ] = None,
     gpu_count: Annotated[int | None, typer.Option("--gpu-count", min=0)] = None,
     image: Annotated[str | None, typer.Option("--image")] = None,
     dockerfile: Annotated[str | None, typer.Option("--dockerfile")] = None,
@@ -94,7 +103,7 @@ def _default_dev_pod(overrides: DeploymentOverrides) -> Pod:
         env=dict(overrides.env),
         cpu=overrides.cpu,
         memory=overrides.memory,
-        gpu=overrides.gpu,
+        gpu=list(overrides.gpu or ()),
         gpu_count=overrides.gpu_count or 0,
         secrets=list(overrides.secrets),
         pool=overrides.pool,

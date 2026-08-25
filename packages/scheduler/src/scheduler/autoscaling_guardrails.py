@@ -119,8 +119,7 @@ def plan_autoscaler_start_guardrails(
 
 def _gpu_per_container(runtime_config: StubRuntimeConfig) -> int:
     return gpu_count_for_capacity(
-        runtime_config.gpu or runtime_config.gpu_type or "",
-        runtime_config.gpu_request,
+        runtime_config.gpu,
         runtime_config.gpu_count,
     )
 

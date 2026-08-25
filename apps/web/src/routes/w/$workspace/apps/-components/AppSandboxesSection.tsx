@@ -89,7 +89,7 @@ function SandboxRowContent({ sandbox, linked }: { sandbox: SandboxRow; linked: b
           {sandbox.name}
         </span>
         <span className="mt-0.5 block text-[11px] text-muted-foreground">
-          {sandbox.gpu || "CPU"}
+          {sandbox.gpu.length > 0 ? sandbox.gpu.join(" → ") : "CPU"}
         </span>
       </span>
       <span className="flex items-center justify-end gap-2">

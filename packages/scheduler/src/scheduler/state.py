@@ -1803,11 +1803,7 @@ class RedisSchedulerWorkerRepository:
             )
             reserved.cpu_millicores += request.cpu_millicores
             reserved.memory_mib += capacity_memory_mib(request.memory_mib)
-            reserved.gpu_count += gpu_count_for_capacity(
-                request.gpu_type,
-                request.gpu_request,
-                request.gpu_count,
-            )
+            reserved.gpu_count += gpu_count_for_capacity(request.gpu, request.gpu_count)
 
         index_key = self.keys.container_worker_index(worker_id)
         for state_key in sorted(
@@ -1825,11 +1821,11 @@ class RedisSchedulerWorkerRepository:
                 continue
             reserved.cpu_millicores += state.cpu_millicores
             reserved.memory_mib += capacity_memory_mib(state.memory_mib)
-            reserved.gpu_count += gpu_count_for_capacity(
-                state.gpu_type,
-                None,
-                state.gpu_count,
-            )
+            # The state's count is already resolved, so it is added as it
+            # stands. Put back through the request-side helper it answered zero
+            # for any state whose card was not recorded, and a worker's reserved
+            # GPUs were undercounted by exactly the ones nobody had named.
+            reserved.gpu_count += state.gpu_count
         return reserved
 
     def _get_worker_from_key(self, key: str) -> SchedulerWorkerRecord | None:
@@ -3064,7 +3060,7 @@ def plan_worker_capacity_change(
     gpu_count = (
         reserved_capacity.gpu_count
         if reserved_capacity is not None
-        else gpu_count_for_capacity(request.gpu_type, request.gpu_request, request.gpu_count)
+        else gpu_count_for_capacity(request.gpu, request.gpu_count)
     )
     if change is WorkerCapacityChange.Add:
         updated = worker.model_copy(

@@ -1,4 +1,12 @@
-from shared.gpu import SUPPORTED_GPU_TYPES, normalize_gpu_type
+import pytest
+from shared.gpu import (
+    GPU_ANY,
+    SUPPORTED_GPU_NAMES,
+    SUPPORTED_GPU_TYPES,
+    gpu_preference,
+    gpu_preference_rank,
+    normalize_gpu_type,
+)
 
 
 def test_gpu_normalization_preserves_no_gpu_any_and_overlapping_aliases() -> None:
@@ -29,3 +37,45 @@ def test_every_supported_model_is_already_its_own_normalized_form() -> None:
 
     for gpu in SUPPORTED_GPU_TYPES:
         assert normalize_gpu_type(gpu.value) == gpu.value
+
+
+def test_every_gpu_the_docs_offer_can_actually_be_scheduled() -> None:
+    """The documentation is a contract, and this is the one it broke.
+
+    `gpu="a100"` was advertised for months. It normalises to a real vocabulary
+    member, so nothing rejected it, and no worker ever reports it, because a
+    card is a 40GB or an 80GB one. The workload placed nowhere and said
+    `offer_unavailable` at deploy time, hours from the line that caused it.
+    """
+    documented = ("t4", "l4", "a10g", "a100-40", "a100-80", "l40s", "h100", "h200", "any")
+
+    for name in documented:
+        preference = gpu_preference(name)
+        assert preference, name
+        assert set(preference) <= SUPPORTED_GPU_NAMES | {GPU_ANY}, name
+
+
+def test_a_model_with_two_sizes_is_refused_rather_than_guessed() -> None:
+    """Neither size is the safe default, so the platform declines to pick one.
+
+    Choosing the smaller OOMs a model that needed the larger; choosing the
+    larger doubles a bill nobody agreed to. The refusal names both.
+    """
+    with pytest.raises(ValueError) as refusal:
+        gpu_preference("a100")
+
+    assert "A100-40" in str(refusal.value)
+    assert "A100-80" in str(refusal.value)
+
+
+def test_an_order_is_kept_and_a_wildcard_cannot_hide_what_follows_it() -> None:
+    """The order is the instruction, and `any` swallows whatever comes after."""
+    assert gpu_preference(["h100", "l4"]) == ("H100", "L4")
+    assert gpu_preference(["h100", "H100", "l4"]) == ("H100", "L4")
+    assert gpu_preference_rank(("H100", "L4"), "L4") == 1
+    assert gpu_preference_rank(("H100", "L4"), "T4") is None
+    # A worker reports its hardware however its driver spells it.
+    assert gpu_preference_rank(("A100-40",), "NVIDIA A100-SXM4-40GB") == 0
+
+    with pytest.raises(ValueError):
+        gpu_preference(["h100", "any", "l4"])

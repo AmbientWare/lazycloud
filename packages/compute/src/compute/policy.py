@@ -494,7 +494,7 @@ class WorkspaceComputePolicyService:
         return ComputeResourceRequirements(
             cpu_millicores=int(float(cpu_request or 0) * 1000),
             memory_mb=_memory_mb(memory_request),
-            gpu=resources.gpu,
+            gpu=list(resources.gpu),
             gpu_count=resources.gpu_count,
         )
 
