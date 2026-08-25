@@ -65,6 +65,8 @@ spec:
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -115,6 +117,8 @@ spec:
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
 ---
 {{/*
 The catalog, every sync rather than once.
@@ -181,3 +185,5 @@ spec:
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}

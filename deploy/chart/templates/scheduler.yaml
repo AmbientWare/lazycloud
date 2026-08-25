@@ -48,6 +48,8 @@ spec:
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
+          resources:
+            {{- toYaml .Values.scheduler.initResources | nindent 12 }}
       containers:
         - name: scheduler
           image: {{ include "lazycloud.image" (list . "scheduler") }}

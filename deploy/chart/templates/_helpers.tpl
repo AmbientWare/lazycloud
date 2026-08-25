@@ -48,6 +48,37 @@ reads it to disagree.
 {{- define "lazycloud.awsProfile" -}}control{{- end -}}
 
 {{/*
+One replica per node, for the workloads where a second replica is redundancy.
+
+A name rather than a setting, like the profile above: nothing outside this chart
+picks it, and both workloads that take it want it for the same reason. Two
+replicas of the API on one node are one replica that costs twice as much, and
+two connectors on one node are one connector -- the node is the failure they
+were both added to survive.
+
+`DoNotSchedule` because the alternative does nothing here. `ScheduleAnyway` is a
+preference, and a preference is satisfied by the packing that already exists; a
+requirement leaves the second replica Pending, and Pending is the only state
+Karpenter provisions for. So this is also what asks for a second node. A cluster
+sized purely by whether the pods fit will always answer that they do, on one.
+
+`matchLabelKeys` scopes the skew to one ReplicaSet. Without it a rolling update
+counts the pods it is replacing, the surge pod satisfies no placement on either
+node, and the rollout waits for a third node it does not need and gives back
+minutes later.
+*/}}
+{{- define "lazycloud.spreadAcrossNodes" -}}
+- maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: DoNotSchedule
+  matchLabelKeys:
+    - pod-template-hash
+  labelSelector:
+    matchLabels:
+      app: {{ . }}
+{{- end -}}
+
+{{/*
 One workload's database pool, as environment.
 
 Per workload rather than in the shared env block, because the processes differ:

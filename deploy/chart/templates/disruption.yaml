@@ -1,0 +1,39 @@
+{{/*
+What spreading the replicas is worth once something wants the node back.
+
+Karpenter consolidates on a 30s timer and evicts what it finds underutilised, and
+it does that by draining nodes. Nothing in a spread constraint survives that: it
+governs where a pod is placed, not how many of them may be taken away at once, so
+two replicas on two nodes are still two replicas one drain can remove together.
+These are the half that says not together.
+
+`maxUnavailable` rather than `minAvailable`, and for a reason that only shows up
+at one replica. `minAvailable: 1` on a single-replica workload permits no
+eviction at all, so a node holding one blocks its own drain indefinitely and the
+cluster stops being able to replace nodes. `maxUnavailable: 1` degrades to
+"evict it, one at a time" instead of to a deadlock.
+
+Only the two workloads on the request path. The scheduler tolerates overlapping
+ticks and the cache server is a local directory behind a ReadWriteOnce volume;
+neither gains anything from a budget, and a budget on a workload that cannot use
+one is a drain that fails for no benefit.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: control-plane
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudflared
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: cloudflared
