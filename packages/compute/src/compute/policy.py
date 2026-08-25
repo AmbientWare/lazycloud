@@ -536,10 +536,22 @@ def _service_state(
     phase: MachineBootstrapPhase,
     *,
     serving: bool,
+    served_before: bool = False,
 ) -> MachineServiceState:
-    """What the platform concludes, from what the node reported plus who takes work."""
+    """What the platform concludes, from what the node reported plus who takes work.
+
+    A machine that served once and does not now is `Degraded`, not `Joining`.
+    Reporting it as still joining describes a machine that never worked, which
+    is the opposite of what happened and hides the only case where an operator
+    has something to look at.
+    """
     if serving:
         return MachineServiceState.Serving
+    if served_before and phase not in {
+        MachineBootstrapPhase.Failed,
+        MachineBootstrapPhase.Deleting,
+    }:
+        return MachineServiceState.Degraded
     return _SERVICE_STATE_BY_PHASE[phase]
 
 
@@ -597,7 +609,11 @@ def _compute_instance_view(
         record=record,
         region=region,
         bootstrap_phase=phase,
-        service_state=_service_state(phase, serving=serving),
+        service_state=_service_state(
+            phase,
+            serving=serving,
+            served_before=record.first_served_at is not None,
+        ),
         bootstrap_failure_reason=failure_reason,
         bootstrap_failure_detail=record.bootstrap_failure_detail,
         bootstrap_observed_at=observed_at,

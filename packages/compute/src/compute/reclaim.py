@@ -53,6 +53,34 @@ otherwise terminate and relaunch billable machines forever; after the bound the
 pool is marked degraded until capacity is explicitly changed.
 """
 
+DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS = 2
+"""Consecutive non-serving observations before a bootstrap deadline reclaims.
+
+The deadline says a machine is late; this says we looked twice and it was still
+late. One sample is a fact about the instant it was taken, and the things that
+make it wrong — a hot record between writes, a heartbeat mid-flight — clear
+within a pass.
+"""
+
+DEFAULT_SERVICE_LOSS_OBSERVATIONS = 5
+DEFAULT_SERVICE_LOSS_WINDOW_SECONDS = 600
+"""What it takes to believe a machine that worked has stopped.
+
+Both, not either. A window alone reduces to one sample taken late: nothing looks
+for ten minutes, then the first look after them terminates. A count alone is
+satisfied by a burst of passes in a few seconds. The count is "we looked
+repeatedly", the window is "over real time", and a machine that served has
+earned the longer of the two.
+"""
+
+DEFAULT_LIVE_CONTAINER_RECLAIM_GRACE_SECONDS = 1800
+"""How long a machine's own containers may hold it against reclaim.
+
+A machine still running work is not one to terminate on a readiness signal, but
+the claim has to end: container rows outlive the worker that owned them when
+nothing ticks to settle them, and an unbounded veto is a meter that never stops.
+"""
+
 _DEADLINE_PHASES = frozenset(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
 
 
@@ -66,10 +94,26 @@ class ComputeReclaimPolicy(ContractModel):
         default_factory=lambda: dict(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
     )
     max_launch_attempts: int = Field(default=DEFAULT_MAX_LAUNCH_ATTEMPTS, gt=0)
+    bootstrap_failure_observations: int = Field(
+        default=DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS, gt=0
+    )
+    service_loss_observations: int = Field(default=DEFAULT_SERVICE_LOSS_OBSERVATIONS, gt=0)
+    service_loss_window_seconds: int = Field(default=DEFAULT_SERVICE_LOSS_WINDOW_SECONDS, gt=0)
+    live_container_reclaim_grace_seconds: int = Field(
+        default=DEFAULT_LIVE_CONTAINER_RECLAIM_GRACE_SECONDS, gt=0
+    )
     provider_bootstrap_phase_deadline_seconds: dict[str, dict[str, int]] = Field(
         default_factory=dict
     )
     provider_max_launch_attempts: dict[str, int] = Field(default_factory=dict)
+
+    @property
+    def service_loss_window(self) -> timedelta:
+        return timedelta(seconds=self.service_loss_window_seconds)
+
+    @property
+    def live_container_reclaim_grace(self) -> timedelta:
+        return timedelta(seconds=self.live_container_reclaim_grace_seconds)
 
     def phase_deadline_for(
         self,
@@ -115,6 +159,14 @@ class ComputeReclaimSettings(BaseSettings):
         default_factory=lambda: dict(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
     )
     max_launch_attempts: int = Field(default=DEFAULT_MAX_LAUNCH_ATTEMPTS, gt=0)
+    bootstrap_failure_observations: int = Field(
+        default=DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS, gt=0
+    )
+    service_loss_observations: int = Field(default=DEFAULT_SERVICE_LOSS_OBSERVATIONS, gt=0)
+    service_loss_window_seconds: int = Field(default=DEFAULT_SERVICE_LOSS_WINDOW_SECONDS, gt=0)
+    live_container_reclaim_grace_seconds: int = Field(
+        default=DEFAULT_LIVE_CONTAINER_RECLAIM_GRACE_SECONDS, gt=0
+    )
     provider_bootstrap_phase_deadline_seconds: dict[str, dict[str, int]] = Field(
         default_factory=dict
     )
@@ -165,6 +217,10 @@ class ComputeReclaimSettings(BaseSettings):
         return ComputeReclaimPolicy(
             bootstrap_phase_deadline_seconds=self.bootstrap_phase_deadline_seconds,
             max_launch_attempts=self.max_launch_attempts,
+            bootstrap_failure_observations=self.bootstrap_failure_observations,
+            service_loss_observations=self.service_loss_observations,
+            service_loss_window_seconds=self.service_loss_window_seconds,
+            live_container_reclaim_grace_seconds=self.live_container_reclaim_grace_seconds,
             provider_bootstrap_phase_deadline_seconds=(
                 self.provider_bootstrap_phase_deadline_seconds
             ),
@@ -173,8 +229,12 @@ class ComputeReclaimSettings(BaseSettings):
 
 
 __all__ = [
+    "DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS",
     "DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS",
+    "DEFAULT_LIVE_CONTAINER_RECLAIM_GRACE_SECONDS",
     "DEFAULT_MAX_LAUNCH_ATTEMPTS",
+    "DEFAULT_SERVICE_LOSS_OBSERVATIONS",
+    "DEFAULT_SERVICE_LOSS_WINDOW_SECONDS",
     "ComputeReclaimPolicy",
     "ComputeReclaimSettings",
 ]

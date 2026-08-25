@@ -115,6 +115,15 @@ class ComputeProviderInstanceRecord(ContractModel):
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
     bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime = Field(default_factory=utc_now)
+    # What the platform concluded, beside what the node reported above. A node
+    # cannot observe that it serves workloads, so these are stamped by the
+    # reconcile that watches it rather than by anything the machine says. They
+    # are what lets the reclaim tell a machine that never worked from one that
+    # worked and stopped, which the bootstrap phase alone cannot express.
+    first_enrolled_at: datetime | None = None
+    first_served_at: datetime | None = None
+    last_served_at: datetime | None = None
+    unserved_observations: int = Field(default=0, ge=0)
     launch_attempt: int = Field(default=1, ge=1)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)

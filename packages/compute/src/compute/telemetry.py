@@ -18,6 +18,13 @@ from compute.state import ComputeAgentTokenState
 TELEMETRY_CREDENTIAL_TIMEOUT_SECONDS = 10.0
 AGENT_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 AGENT_HEARTBEAT_FUTURE_TOLERANCE_SECONDS = 5.0
+AGENT_INTAKE_PRESENCE_ROLE = "agent-intake"
+"""Names the processes that receive agent heartbeats.
+
+Read by the reclaim, which acts on a machine's silence and needs to know whether
+anything was there to hear it. Written by whichever process serves the agent
+stream, so the two never have to agree on a hostname or a replica count.
+"""
 DEFAULT_TELEMETRY_STREAM_PREFIX = "events"
 TELEMETRY_REDACTED_VALUE = "redacted"
 

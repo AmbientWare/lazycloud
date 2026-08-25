@@ -15,6 +15,7 @@ from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicySer
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
+from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from control.apps import (
     AppService,
     DatabaseAppExecutionAdmission,
@@ -29,6 +30,7 @@ from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
 from control.workspace_storage_state import ControlPlaneWorkspaceStorageState
 from coordination.event_bus import RedisEventBus
+from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
@@ -823,6 +825,7 @@ class ApiServices(ApiServiceCore):
         scheduler_hooks = SchedulerComputeHooks(
             RedisComputeStateRepository(redis),
             worker_repository,
+            agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
         )
         compute = ComputeService(
             context,

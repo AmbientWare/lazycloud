@@ -378,15 +378,29 @@ def agent_machine_worker_id(machine_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"agent-worker\x00{machine_id}"))
 
 
+class MachineWorkerAvailability(StrEnum):
+    """What the scheduler's hot state can say about one machine's worker.
+
+    Three answers rather than two, because the reclaim terminates billable
+    machines on this and a bool cannot separate "the worker says no" from "we
+    have not heard". The hot record carries a short TTL, so its absence is a
+    silence, not a verdict.
+    """
+
+    Available = "available"
+    Unavailable = "unavailable"
+    Unknown = "unknown"
+
+
 class MachineWorkerState(Protocol):
     """Narrow view of the scheduler's hot worker state.
 
     Implementations raise when the state store is unreachable rather than
-    answering False: the reclaim path terminates billable machines on this
-    answer, and an outage must read as "unknown", never as "gone".
+    answering `Unavailable`: the reclaim path terminates billable machines on
+    this answer, and an outage must read as "unknown", never as "gone".
     """
 
-    def machine_worker_available(self, machine_id: str) -> bool: ...
+    def machine_worker_availability(self, machine_id: str) -> MachineWorkerAvailability: ...
 
 
 def machine_serves_workloads(
@@ -409,7 +423,9 @@ def machine_serves_workloads(
         return False
     if enrollment.readiness_phase is not MachineReadinessPhase.Ready:
         return False
-    return worker_state.machine_worker_available(machine_id)
+    return (
+        worker_state.machine_worker_availability(machine_id) is MachineWorkerAvailability.Available
+    )
 
 
 def join_token_ttl_seconds(value: str) -> int:

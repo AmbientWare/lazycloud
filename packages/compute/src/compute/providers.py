@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
@@ -18,6 +19,7 @@ from shared.compute_policy import (
 from shared.contracts import ContractModel
 from shared.urls import normalize_http_origin
 
+from compute.agent_control import MachineWorkerAvailability
 from compute.offers import ComputeOffer
 
 
@@ -259,7 +261,16 @@ class ComputeSchedulerHooks(Protocol):
 
     def disable_machine(self, machine_id: str, reason: str) -> None: ...
 
-    def machine_worker_available(self, machine_id: str) -> bool: ...
+    def machine_worker_availability(self, machine_id: str) -> MachineWorkerAvailability: ...
+
+    def agent_intake_observing_since(self) -> datetime | None:
+        """Since when some process has been receiving agent heartbeats, if any.
+
+        The reclaim judges machines on silence, and silence means nothing while
+        nothing was listening. `None` says no intake answers at all, which is a
+        reason to decline the pass rather than a licence to run every clock.
+        """
+        ...
 
     def retire_machine(
         self,

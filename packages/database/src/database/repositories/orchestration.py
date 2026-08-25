@@ -395,6 +395,25 @@ class ContainerRepository:
             {"lock_key": f"stub-container-capacity:{stub_id}"},
         )
 
+    def count_live_for_machine(self, machine_id: str) -> int:
+        """How much work would be taken away with this machine.
+
+        Read before reclaiming one, so a machine that is running containers is
+        not terminated on a readiness signal that says only that we have stopped
+        hearing from it. The reclaim bounds how long this may hold: rows outlive
+        the worker that owned them when nothing settles them.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(ContainerTable.id)).where(
+                    ContainerTable.machine_id == machine_id,
+                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                )
+            )
+            or 0
+        )
+
     def count_live_for_stub(self, stub_id: str) -> int:
         """How many containers are already serving this stub, or about to.
 

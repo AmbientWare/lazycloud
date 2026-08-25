@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.compute import (
@@ -40,6 +40,7 @@ from shared.capacity import (
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
+    ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
@@ -68,7 +69,7 @@ from shared.errors import (
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
@@ -103,6 +104,7 @@ from compute.providers import (
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
+from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -236,16 +238,20 @@ class ComputeService:
                         "provider bootstrap phase cannot move from "
                         f"{record.bootstrap_phase.value} to {phase.value}"
                     )
-            updated = record.model_copy(
-                update={
-                    "bootstrap_phase": phase,
-                    "bootstrap_failure_reason": failure_reason,
-                    "bootstrap_failure_detail": failure_detail,
-                    "bootstrap_observed_at": current_time,
-                    "updated_at": current_time,
-                }
-            )
-            return repository.upsert(updated)
+            update: dict[str, object] = {
+                "bootstrap_phase": phase,
+                "bootstrap_failure_reason": failure_reason,
+                "bootstrap_failure_detail": failure_detail,
+                "bootstrap_observed_at": current_time,
+                "updated_at": current_time,
+            }
+            if phase is MachineBootstrapPhase.Joining and record.first_enrolled_at is None:
+                # Kept in the payload, where the machine row's foreign key cannot
+                # reach it. `machine_id` is cleared when that row is deleted, and
+                # without this the record would read afterwards as one that never
+                # enrolled at all.
+                update["first_enrolled_at"] = current_time
+            return repository.upsert(record.model_copy(update=update))
 
     def ensure_capacity(
         self,
@@ -2205,6 +2211,52 @@ class ComputeService:
         )
         return updated
 
+    def _pool_agents_reachable(
+        self,
+        session: DatabaseSession,
+        pool: ComputeUnitRecord,
+        records: list[ComputeProviderInstanceRecord],
+        *,
+        now: datetime,
+    ) -> bool:
+        """Whether anything in this pool is still getting through to us.
+
+        A control plane that is up but refusing every agent looks, machine by
+        machine, exactly like a pool of machines that each died at once. If a
+        populated pool has nobody reporting, the fault is far more likely ours
+        than theirs, and the pass says so by judging nothing.
+
+        Two or more, because a pool of one that genuinely died would otherwise
+        be immortal: with a single machine there is no majority to disagree with
+        and its own silence would excuse it forever.
+        """
+
+        machine_ids = [record.machine_id for record in records if record.machine_id is not None]
+        if len(machine_ids) < 2:
+            return True
+        enrollments = ComputeMachineEnrollmentRepository(session)
+        cutoff = now - timedelta(seconds=AGENT_HEARTBEAT_TIMEOUT_SECONDS)
+        active = 0
+        for machine_id in machine_ids:
+            enrollment = enrollments.by_machine(pool.workspace_id, machine_id)
+            if enrollment is None:
+                continue
+            if enrollment.status is not ComputeMachineEnrollmentStatus.Active:
+                continue
+            active += 1
+            if (
+                enrollment.last_heartbeat_at is not None
+                and to_utc(enrollment.last_heartbeat_at) >= cutoff
+            ):
+                return True
+        if active < 2:
+            return True
+        LOGGER.warning(
+            "pooled capacity reclaim observed no agent reporting in %s; judging nothing this pass",
+            pool.name,
+        )
+        return False
+
     def _reclaim_pooled_bootstrap_failures(
         self,
         pool: ComputeUnitRecord,
@@ -2221,21 +2273,64 @@ class ComputeService:
         its volumes absent during snapshot application. Exhausted relaunch
         attempts durably degrade the pool instead of relaunching forever.
         """
+        hooks = self.provider_machines.scheduler_hooks
+        if hooks is None:
+            # Nothing can say whether these machines take work, so nothing here
+            # can say they failed to. Declining is the same answer as an absent
+            # heartbeat intake below, for the same reason.
+            LOGGER.warning(
+                "pooled capacity reclaim declined for %s: no scheduler worker state is configured",
+                pool.name,
+            )
+            return pool
+        observing_since = hooks.agent_intake_observing_since()
+        if observing_since is None:
+            # Nothing is receiving agent heartbeats, so every machine looks
+            # silent and none of that silence is evidence. Declining is loud
+            # rather than quiet: a registry that stays empty stops reclaim
+            # entirely, and a machine that leaks bills until someone reads this.
+            LOGGER.warning(
+                "pooled capacity reclaim declined for %s: no agent heartbeat intake is registered",
+                pool.name,
+            )
+            return pool
         to_reclaim: list[tuple[ComputeProviderInstanceRecord, MachineBootstrapFailureReason]] = []
         with self.context.database.session() as session:
-            for record in ComputeProviderInstanceRepository(session).list_for_pool(pool.id):
-                if not _reservation_open(record.status):
-                    continue
-                if record.status == ReservationStatus.Terminating.value:
-                    continue
-                failure = self.provider_machines._provider_bootstrap_failure_to_reclaim(
+            records = [
+                record
+                for record in ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+                if _reservation_open(record.status)
+                and record.status != ReservationStatus.Terminating.value
+            ]
+            pool_reachable = self._pool_agents_reachable(session, pool, records, now=now)
+            containers = ContainerRepository(session)
+            for record in records:
+                observation = self.provider_machines._observe_provider_service_state(
                     session,
                     pool,
                     record,
+                    pool_reachable=pool_reachable,
+                )
+                observed = self.provider_machines._record_service_observation(
+                    session,
+                    record,
+                    observation,
                     now=now,
                 )
+                failure = self.provider_machines._provider_bootstrap_failure_to_reclaim(
+                    session,
+                    pool,
+                    observed,
+                    now=now,
+                    observing_since=observing_since,
+                    live_containers=(
+                        containers.count_live_for_machine(observed.machine_id)
+                        if observed.machine_id is not None
+                        else 0
+                    ),
+                )
                 if failure is not None:
-                    to_reclaim.append((record, failure))
+                    to_reclaim.append((observed, failure))
         if not to_reclaim:
             return pool
         current = pool

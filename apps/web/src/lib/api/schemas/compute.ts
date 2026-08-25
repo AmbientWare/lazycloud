@@ -168,6 +168,8 @@ export const customerComputeInstanceSchema = z
         "worker_start_failed",
         "worker_readiness_failed",
         "bootstrap_timed_out",
+        "service_lost",
+        "machine_record_deleted",
         "provider_stopped",
         "provider_terminated",
         "unknown",

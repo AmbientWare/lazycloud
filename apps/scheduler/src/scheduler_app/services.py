@@ -11,6 +11,7 @@ from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
+from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from control.apps import (
     AppService,
     DatabaseAppExecutionAdmission,
@@ -23,6 +24,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.service import ControlPlaneService
 from coordination.event_bus import RedisEventBus
+from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
@@ -270,6 +272,7 @@ class SchedulerAppServices:
         scheduler_hooks = SchedulerComputeHooks(
             RedisComputeStateRepository(redis),
             worker_repository,
+            agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
         )
         compute_policies.worker_state = scheduler_hooks
         compute = ComputeService(

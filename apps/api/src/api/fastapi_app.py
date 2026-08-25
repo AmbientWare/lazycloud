@@ -5,10 +5,13 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import uuid4
 
 import uvicorn
 from compute.aws_connections import AwsAccountConnectionService
+from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
+from coordination.process_presence import RedisProcessPresence, presence_refresh_interval
 from coordination.redis_client import RedisClient
 from coordination.token_lock import renew_token_lock, try_acquire_token_lock
 from execution.artifacts.service import ArtifactStorageService
@@ -47,6 +50,7 @@ from shared.errors import (
 )
 from shared.events import Event, EventLevel
 from shared.http.errors import ErrorResponse
+from shared.timestamps import utc_now
 from starlette.types import Scope
 
 from api.control_runtime import ControlPlaneRuntime
@@ -195,6 +199,17 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                     _capture_task_cleanup_failure,
                     cleanup_failures,
                     route_reconciliation,
+                )
+                intake_presence = _create_background_task(
+                    _publish_agent_intake_presence(
+                        api_services.redis_client,
+                        utc_now(),
+                    )
+                )
+                cleanup.push_async_callback(
+                    _capture_task_cleanup_failure,
+                    cleanup_failures,
+                    intake_presence,
                 )
                 disconnect_reconciliation = _create_background_task(
                     _reconcile_agent_disconnects(
@@ -457,6 +472,39 @@ async def _reconcile_agent_routes(
             logger.exception("agent route registry reconciliation failed")
             _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
+
+
+async def _publish_agent_intake_presence(
+    redis: RedisClient,
+    started_at: datetime,
+) -> None:
+    """Say that this process is receiving agent heartbeats, and keep saying it.
+
+    The reclaim terminates machines for going silent, and silence proves nothing
+    about a machine while nothing was listening to it. That fact belongs to
+    whoever serves the agent stream, and it cannot be inferred by the scheduler:
+    a scheduler up for a week has no way to know this process restarted a minute
+    ago and took every heartbeat with it.
+
+    Not leader-elected. Every replica that takes agent traffic publishes its own
+    start, because the question readers ask is whether *some* intake was up.
+    """
+
+    presence = RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE)
+    interval_seconds = presence_refresh_interval(presence.ttl_seconds)
+    try:
+        while True:
+            try:
+                await asyncio.to_thread(presence.publish, started_at)
+            except Exception:
+                # Reported and retried: the key carries a TTL, so a failed
+                # refresh is a countdown rather than a disappearance, and the
+                # reclaim declines while it is absent instead of acting.
+                logger.exception("agent intake presence refresh failed")
+            await asyncio.sleep(interval_seconds)
+    finally:
+        with suppress(Exception):
+            await asyncio.to_thread(presence.withdraw)
 
 
 async def _reconcile_agent_disconnects(

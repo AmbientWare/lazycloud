@@ -79,6 +79,19 @@ class MachineBootstrapFailureReason(StringEnum):
     WorkerStartFailed = "worker_start_failed"
     WorkerReadinessFailed = "worker_readiness_failed"
     BootstrapTimedOut = "bootstrap_timed_out"
+    ServiceLost = "service_lost"
+    """Served once, then stopped, and stayed stopped long enough to be believed.
+
+    Distinct from `WorkerReadinessFailed`, which says a machine never got as far
+    as taking work. Naming them apart is what keeps a fleet-wide outage from
+    reading as a fleet of machines that each failed to start.
+    """
+    MachineRecordDeleted = "machine_record_deleted"
+    """The machine row this instance enrolled as is gone.
+
+    The provider instance still exists and still bills; only the join between
+    them was severed, which reads locally as an instance that never enrolled.
+    """
     ProviderStopped = "provider_stopped"
     ProviderTerminated = "provider_terminated"
     Unknown = "unknown"
