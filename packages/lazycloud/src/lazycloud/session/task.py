@@ -12,7 +12,12 @@ from pydantic import JsonValue
 from shared.function_payloads import FunctionResultPayload
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
 from shared.http.observability import LogQueryRequest, LogQueryResponse, LogRecord
-from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
+from shared.http.tasks import (
+    TaskDetailResponse,
+    TaskPageResponse,
+    TaskResponse,
+    TaskStopResponse,
+)
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus, is_terminal_task_status
 from shared.transport_retry import (
@@ -50,7 +55,7 @@ class TaskControlClient(Protocol):
         cursor: str | None = None,
     ) -> TaskPageResponse: ...
 
-    def task(self, task_id: str) -> TaskResponse: ...
+    def task(self, task_id: str) -> TaskDetailResponse: ...
 
     def stop_tasks(self, task_ids: tuple[str, ...]) -> TaskStopResponse: ...
 
@@ -111,7 +116,7 @@ class TaskSubscription:
 
 
 class TaskHandleClient(Protocol):
-    def get(self, task_id: str) -> TaskResponse: ...
+    def get(self, task_id: str) -> TaskDetailResponse: ...
 
     def get_result_task(self, task_id: str) -> shared.tasks.Task: ...
 
@@ -137,7 +142,7 @@ class Task:
     def get(self) -> shared.tasks.Task:
         return self.client.get_result_task(self.task_id)
 
-    def view(self) -> TaskResponse:
+    def view(self) -> TaskDetailResponse:
         return self.client.get(self.task_id)
 
     def result(
@@ -439,7 +444,7 @@ class TaskClient(ControlClientConfigMixin):
         )
         return response.data
 
-    def get(self, task_id: str) -> TaskResponse:
+    def get(self, task_id: str) -> TaskDetailResponse:
         try:
             return self.control_client.task(task_id)
         except HttpApiError as exc:
@@ -484,7 +489,7 @@ class TaskClient(ControlClientConfigMixin):
         except (TaskOperationError, ValueError) as exc:
             raise TaskOperationError(f"failed to load task result for {task_id}") from exc
 
-    def detail(self, task_id: str) -> TaskResponse:
+    def detail(self, task_id: str) -> TaskDetailResponse:
         return self.control_client.task(task_id)
 
     def result(self, task_id: str, *, wait: bool = False) -> TaskResult:

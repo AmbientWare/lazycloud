@@ -28,6 +28,7 @@ from database.repositories.apps import (
 )
 from database.repositories.billing_costs import BillingLedgerCostRepository
 from database.repositories.execution import (
+    DetailedTaskRecord,
     LogRepository,
     RelatedTaskRecord,
     TaskRepository,
@@ -66,6 +67,12 @@ from shared.http.observability import (
     LogObjectType,
     LogQueryResponse,
     LogRecord,
+)
+from shared.http.tasks import (
+    TaskActionCapabilitiesResponse,
+    TaskAppReferenceResponse,
+    TaskDeploymentReferenceResponse,
+    TaskWorkloadReferenceResponse,
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
@@ -263,18 +270,25 @@ class AppOperationalSummary(ContractModel):
     last_deployed_at: datetime | None = None
 
 
-class TaskActionCapabilities(ContractModel):
-    can_cancel: bool = False
-    can_rerun: bool = False
-    can_shell: bool = False
+class TaskView(ContractModel):
+    """A task, the resources around it named, and what this reader may do to it.
+
+    The task is a field rather than a base class, so passing one on re-reads
+    nothing: it arrives validated from the repository and travels untouched into
+    the response.
+    """
+
+    task: Task
+    app: TaskAppReferenceResponse | None = None
+    workload: TaskWorkloadReferenceResponse | None = None
+    deployment: TaskDeploymentReferenceResponse | None = None
+    actions: TaskActionCapabilitiesResponse = Field(default_factory=TaskActionCapabilitiesResponse)
 
 
-class TaskView(Task):
-    app: AppRecord | None = None
-    workload: StubRecord | None = None
-    deployment: Deployment | None = None
+class TaskDetailView(TaskView):
+    """One task read on its own, which carries the container it ran in."""
+
     container: ContainerRecord | None = None
-    actions: TaskActionCapabilities = Field(default_factory=TaskActionCapabilities)
 
 
 class TaskMetricsSummary(ContractModel):
@@ -377,28 +391,62 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
-def _task_view(record: RelatedTaskRecord, *, can_write: bool) -> TaskView:
+def _task_actions(
+    record: RelatedTaskRecord,
+    *,
+    can_write: bool,
+) -> TaskActionCapabilitiesResponse:
     terminal = is_terminal_task_status(record.task.status)
-    rerunnable_stub = record.workload is not None and record.workload.kind is StubKind.Function
-    actions = TaskActionCapabilities(
+    return TaskActionCapabilitiesResponse(
         can_cancel=can_write and not terminal,
-        can_rerun=can_write and terminal and rerunnable_stub,
+        can_rerun=can_write and terminal and record.workload_kind is StubKind.Function,
         can_shell=(
             can_write
-            and record.container is not None
-            and record.container.status is ContainerStatus.Running
+            and record.container_status is ContainerStatus.Running
             and record.task.stub_id is not None
         ),
     )
-    return TaskView.model_validate(
-        {
-            **record.task.model_dump(),
-            "app": record.app,
-            "workload": record.workload,
-            "deployment": record.deployment,
-            "container": record.container,
-            "actions": actions,
-        }
+
+
+def _task_app(record: RelatedTaskRecord) -> TaskAppReferenceResponse | None:
+    if record.app_name is None:
+        return None
+    return TaskAppReferenceResponse(name=record.app_name)
+
+
+def _task_workload(record: RelatedTaskRecord) -> TaskWorkloadReferenceResponse | None:
+    if record.workload_name is None or record.workload_kind is None:
+        return None
+    return TaskWorkloadReferenceResponse(name=record.workload_name, kind=record.workload_kind)
+
+
+def _task_deployment(record: RelatedTaskRecord) -> TaskDeploymentReferenceResponse | None:
+    if record.deployment_name is None or record.deployment_version is None:
+        return None
+    return TaskDeploymentReferenceResponse(
+        name=record.deployment_name,
+        version=record.deployment_version,
+    )
+
+
+def _task_view(record: RelatedTaskRecord, *, can_write: bool) -> TaskView:
+    return TaskView(
+        task=record.task,
+        app=_task_app(record),
+        workload=_task_workload(record),
+        deployment=_task_deployment(record),
+        actions=_task_actions(record, can_write=can_write),
+    )
+
+
+def _task_detail_view(record: DetailedTaskRecord, *, can_write: bool) -> TaskDetailView:
+    return TaskDetailView(
+        task=record.task,
+        app=_task_app(record),
+        workload=_task_workload(record),
+        deployment=_task_deployment(record),
+        actions=_task_actions(record, can_write=can_write),
+        container=record.container,
     )
 
 
@@ -1103,7 +1151,7 @@ class ManagementService:
         task_id: str,
         *,
         can_write: bool = False,
-    ) -> TaskView:
+    ) -> TaskDetailView:
         workspace_record = self.control_plane.get_workspace(workspace)
         with self.services.context.database.session() as session:
             related = TaskRepository(session).get_with_related(
@@ -1113,10 +1161,10 @@ class ManagementService:
         if related is None:
             msg = f"task not found in workspace: {task_id}"
             raise NotFoundError(msg)
-        return _task_view(related, can_write=can_write)
+        return _task_detail_view(related, can_write=can_write)
 
     def workspace_task(self, workspace: str, task_id: str) -> Task:
-        return self.task_detail(workspace, task_id)
+        return self.task_detail(workspace, task_id).task
 
     def task_counts_by_deployment(self, workspace: str) -> tuple[TaskCountByDeployment, ...]:
         counts: dict[str, Counter[TaskStatus]] = {}

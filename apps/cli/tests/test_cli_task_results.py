@@ -13,8 +13,7 @@ from lazycloud.session.task import TaskResult
 from pydantic import JsonValue
 from shared.deployments import StubKind
 from shared.function_payloads import FunctionCloudpickleResult, FunctionJsonResult
-from shared.http.stubs import StubResponse
-from shared.http.tasks import TaskResponse
+from shared.http.tasks import TaskResponse, TaskWorkloadReferenceResponse
 from shared.tasks import TaskStatus
 from typer.testing import CliRunner
 
@@ -157,12 +156,5 @@ def _task_response(
         result=result,
         exit_code=0,
         created_at=created_at,
-        workload=StubResponse(
-            id="stub-result",
-            workspace_id="workspace-result",
-            name="function-result",
-            kind=kind,
-            created_at=created_at,
-            updated_at=created_at,
-        ),
+        workload=TaskWorkloadReferenceResponse(name="function-result", kind=kind),
     )

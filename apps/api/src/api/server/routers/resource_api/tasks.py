@@ -10,12 +10,14 @@ from execution.task_rerun import TaskRerunService
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from identity.authz import token_has_scope
-from operations.management import TaskView
+from operations.management import TaskDetailView, TaskView
 from shared.deployments import StubKind
+from shared.http.compute import ContainerResponse
 from shared.http.functions import FunctionCallGraphResponse
 from shared.http.tasks import (
     TaskCountByDeploymentListResponse,
     TaskCountByDeploymentResponse,
+    TaskDetailResponse,
     TaskLogEntryResponse,
     TaskLogListResponse,
     TaskMetricsSummaryResponse,
@@ -31,7 +33,6 @@ from shared.tasks import Task, TaskStatus
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
-from api.server.response_mapping import deployment_response
 from api.server.routers.resource_api.common import _management
 from api.server.service_dependencies import task_rerun_service
 from api.server.services import ApiServices
@@ -39,17 +40,48 @@ from api.server.services import ApiServices
 router = APIRouter()
 
 
-def _task_response(task: Task) -> TaskResponse:
-    response = TaskResponse.model_validate(task)
+def _task_payload[TPayload: TaskResponse](model: type[TPayload], task: Task) -> TPayload:
+    """A task rendered into `model`, with the durable function result published.
+
+    The stored result is a typed envelope the public contract states as JSON, so
+    it is projected here rather than left for a serializer to guess at.
+    """
+
+    response = model.model_validate(task)
     if task.function_result is None:
         return response
     return response.model_copy(update={"result": task.function_result.model_dump(mode="json")})
 
 
-def _task_view_response(task: TaskView) -> TaskResponse:
-    deployment = deployment_response(task.deployment) if task.deployment is not None else None
-    response = _task_response(task.model_copy(update={"deployment": None}))
-    return response.model_copy(update={"deployment": deployment})
+def _task_response(task: Task) -> TaskResponse:
+    return _task_payload(TaskResponse, task)
+
+
+def _task_view_response(view: TaskView) -> TaskResponse:
+    return _task_payload(TaskResponse, view.task).model_copy(
+        update={
+            "app": view.app,
+            "workload": view.workload,
+            "deployment": view.deployment,
+            "actions": view.actions,
+        }
+    )
+
+
+def _task_detail_response(view: TaskDetailView) -> TaskDetailResponse:
+    return _task_payload(TaskDetailResponse, view.task).model_copy(
+        update={
+            "app": view.app,
+            "workload": view.workload,
+            "deployment": view.deployment,
+            "actions": view.actions,
+            "container": (
+                ContainerResponse.model_validate(view.container)
+                if view.container is not None
+                else None
+            ),
+        }
+    )
 
 
 @router.get("/api/v1/tasks", response_model=TaskPageResponse, operation_id="list_tasks")
@@ -261,7 +293,7 @@ def rerun_task(
 
 @router.get(
     "/api/v1/tasks/{task_id}",
-    response_model=TaskResponse,
+    response_model=TaskDetailResponse,
     operation_id="get_task",
 )
 def get_task(
@@ -269,8 +301,8 @@ def get_task(
     workspace_id: read_workspace,
     token: read_token,
     services: ApiServices = Depends(current_services),
-) -> TaskResponse:
-    return _task_view_response(
+) -> TaskDetailResponse:
+    return _task_detail_response(
         _management(services).task_detail(
             workspace_id,
             task_id,

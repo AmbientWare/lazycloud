@@ -8,7 +8,7 @@ from pathlib import Path
 from shared.events import Event
 from shared.http.deployments import DeploymentResponse
 from shared.http.observability import EventHistoryRequest, EventQueryResponse
-from shared.http.tasks import TaskResponse
+from shared.http.tasks import TaskDetailResponse, TaskResponse
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
 from typing_extensions import Self
@@ -153,7 +153,7 @@ class Client:
             timeout_seconds=self.timeout_seconds,
         )
 
-    def task(self, task_id: str) -> TaskResponse:
+    def task(self, task_id: str) -> TaskDetailResponse:
         return self.task_client.get(task_id)
 
     def task_handle(self, task_id: str) -> Task:
