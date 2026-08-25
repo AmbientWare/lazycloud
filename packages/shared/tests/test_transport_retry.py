@@ -5,10 +5,10 @@ import io
 import urllib.error
 
 import pytest
-from lazycloud.transport_retry import (
+from shared.http.errors import HttpApiError
+from shared.transport_retry import (
     is_transient_transport_error,
 )
-from shared.http.errors import HttpApiError
 
 
 def _http_error(status: int = 404) -> urllib.error.HTTPError:

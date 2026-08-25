@@ -11,7 +11,9 @@ together or not at all.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -22,6 +24,7 @@ from provider_aws import aws_account_connection_template_identity
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
+from shared.transport_retry import TransientRetryPolicy, call_with_transient_retry
 
 from provider_clients.release_manifest import AwsReleaseManifest
 from provider_clients.settings import (
@@ -202,7 +205,13 @@ def materialize_agent_artifact(
         method="GET",
         headers={"User-Agent": "lazycloud-release-resolver/1"},
     )
-    try:
+
+    def transfer() -> None:
+        # Re-opened per attempt, and the digest and the staged file start over
+        # with it: a retry that resumed into a half-written file would hash bytes
+        # from two transfers and fail the check that exists to catch exactly that.
+        nonlocal digest
+        digest = hashlib.sha256()
         with (
             urllib.request.urlopen(request, timeout=timeout_seconds) as response,
             staged.open("wb") as handle,
@@ -210,6 +219,13 @@ def materialize_agent_artifact(
             while chunk := response.read(_TRANSFER_CHUNK_BYTES):
                 digest.update(chunk)
                 handle.write(chunk)
+
+    try:
+        call_with_transient_retry(
+            transfer,
+            policy=ARTIFACT_FETCH_RETRY_POLICY,
+            sleep=_retry_sleep,
+        )
     except OSError as exc:
         staged.unlink(missing_ok=True)
         raise ReleaseManifestError(
@@ -245,15 +261,59 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+LOGGER = logging.getLogger(__name__)
+
+RELEASE_FETCH_RETRY_POLICY = TransientRetryPolicy(
+    max_attempts=6,
+    base_delay_seconds=0.5,
+    max_delay_seconds=5.0,
+    budget_seconds=60.0,
+)
+"""How hard to try before calling the release unreachable.
+
+Startup gets the same tolerance as steady state. A process that resolves this
+once and exits on the first refused connection turns a moment of packet loss
+into a crash loop, and a crash loop into an outage that outlasts its cause by
+however long nobody is watching. Bounded, because a release that is genuinely
+gone has to be said out loud rather than waited on forever.
+"""
+
+ARTIFACT_FETCH_RETRY_POLICY = TransientRetryPolicy(
+    max_attempts=6,
+    base_delay_seconds=0.5,
+    max_delay_seconds=5.0,
+    budget_seconds=180.0,
+)
+"""Longer budget, because each attempt moves tens of megabytes.
+
+A transfer that dies near its end has spent minutes to get there and is worth
+one more try; the budget still bounds the whole thing well inside the transfer
+timeout above it.
+"""
+
+
+def _retry_sleep(delay: float) -> None:
+    LOGGER.warning("release transfer failed; retrying in %.1fs", delay)
+    time.sleep(delay)
+
+
 def _download_manifest(url: str, *, timeout_seconds: float) -> bytes:
     request = urllib.request.Request(
         url,
         method="GET",
         headers={"User-Agent": "lazycloud-release-resolver/1"},
     )
-    try:
+
+    def read_manifest() -> bytes:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            payload = response.read(_MAXIMUM_MANIFEST_BYTES + 1)
+            return response.read(_MAXIMUM_MANIFEST_BYTES + 1)
+
+    try:
+        payload = call_with_transient_retry(
+            read_manifest,
+            policy=RELEASE_FETCH_RETRY_POLICY,
+            sleep=_retry_sleep,
+        )
     except OSError as exc:
         raise ReleaseManifestError(f"release manifest is not readable: {url}") from exc
     if len(payload) > _MAXIMUM_MANIFEST_BYTES:

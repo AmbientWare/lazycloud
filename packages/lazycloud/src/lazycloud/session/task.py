@@ -15,6 +15,12 @@ from shared.http.observability import LogQueryRequest, LogQueryResponse, LogReco
 from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus, is_terminal_task_status
+from shared.transport_retry import (
+    TRANSIENT_TRANSPORT_ERRORS,
+    TransientRetry,
+    call_with_transient_retry,
+    is_transient_transport_error,
+)
 
 from lazycloud.clients.observability.control import ObservabilityClient
 from lazycloud.control import ControlClientConfigMixin
@@ -28,12 +34,6 @@ from lazycloud.function_results import (
     decode_function_result,
 )
 from lazycloud.json_contracts import parse_json_value, validate_json_object
-from lazycloud.transport_retry import (
-    TRANSIENT_TRANSPORT_ERRORS,
-    TransientRetry,
-    call_with_transient_retry,
-    is_transient_transport_error,
-)
 
 R = TypeVar("R")
 
