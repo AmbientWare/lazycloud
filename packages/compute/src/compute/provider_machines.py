@@ -377,6 +377,15 @@ class ProviderMachineReconciler:
             if missing_since is None:
                 existing_metadata["missing_since"] = now.isoformat()
                 missing_since = now
+            elif not _reservation_open(existing.status):
+                # A settled row with its absence already recorded has nothing
+                # left to say. Writing it anyway moves `updated_at`, and the
+                # pool's scale-down cooldown reads the newest write across
+                # closed rows as the moment capacity was last released: rows
+                # closed two days ago were re-dated every pass, so the cooldown
+                # was re-armed exactly as fast as it expired and the idle drain
+                # was never reached.
+                continue
             if (
                 (now - missing_since).total_seconds() < 120
                 and snapshot.phase is not ProviderCapacityPhase.Deleted
