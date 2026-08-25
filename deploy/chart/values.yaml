@@ -49,6 +49,12 @@ controlPlane:
     limits: { memory: 2Gi }
   # One of these is held for the process's lifetime by the recovery fence, so a
   # replica works with one fewer than it appears to have.
+  #
+  # Sized for the requests that hold a connection, which is not the same as the
+  # requests in flight: the worker long-polls (`get-next-container-request`,
+  # `stream-worker-events`) hold a thread for their whole wait and no connection
+  # at all. Bounding one by the other starves them, and a fleet whose workers
+  # cannot long-poll stops taking work while reporting itself healthy.
   database:
     poolSize: 4
     maxOverflow: 2
