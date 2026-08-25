@@ -10,6 +10,12 @@ import {
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
+/**
+ * Queues and maps are written by running user code, which the change stream
+ * says nothing about: its topics cover the platform's own records. A queue
+ * draining is exactly what somebody has this inspector open to watch, so it
+ * asks, and stops asking with the tab.
+ */
 const LIVE_INTERVAL_MS = 2_000;
 
 export function queueSizeQueryOptions(workspaceId: string, name: string) {
