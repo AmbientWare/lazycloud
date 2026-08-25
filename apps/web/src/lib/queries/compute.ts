@@ -14,6 +14,25 @@ import {
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
 export const accountComputeQueryKeys = accountQueryKeys.compute;
+
+/**
+ * How often capacity is re-read while its panel is open.
+ *
+ * Readiness here is not a stored column the change stream can announce: the
+ * server derives a machine's phase and an instance's service state from how
+ * recently its agent was heard from. A host that dies stops sending, and
+ * silence publishes nothing, so the only way the panel can show it leaving is
+ * to ask again. These panels live inside the settings dialog, so the interval
+ * runs while somebody is watching and stops with the tab.
+ */
+const CAPACITY_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * The connected cloud announces every transition it makes, but only to the
+ * workspaces the account owns; somebody working inside a workspace they were
+ * invited to would watch a stack finish and never be told. Slow because it is
+ * a backstop for that case rather than the mechanism.
+ */
 const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 
 /** Machines this account connected. They serve every workspace it owns. */
@@ -21,7 +40,7 @@ export function machinesQueryOptions() {
   return queryOptions({
     queryKey: accountComputeQueryKeys.machines(),
     queryFn: () => apiRequest("/api/v1/machines/self-hosted?limit=250", unitMachineListSchema),
-    refetchInterval: 5_000,
+    refetchInterval: CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -31,7 +50,7 @@ export function computeInstancesQueryOptions(enabled = true) {
     queryKey: accountComputeQueryKeys.instances(),
     enabled,
     queryFn: () => apiRequest("/api/v1/compute/instances", customerComputeInstanceListSchema),
-    refetchInterval: 5_000,
+    refetchInterval: CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
   });
 }
