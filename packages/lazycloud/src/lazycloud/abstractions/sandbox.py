@@ -68,6 +68,7 @@ from shared.http.pods import (
     SandboxTimeline,
     SandboxTimelineRequest,
 )
+from shared.transport_retry import call_with_transient_retry
 from typing_extensions import Never, Self
 
 from lazycloud.abstractions.image import Image
@@ -78,7 +79,6 @@ from lazycloud.control import ControlClientConfigMixin
 from lazycloud.control_clients import pod_control_client
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
-from lazycloud.transport_retry import call_with_transient_retry
 
 SANDBOX_CONTROL_TIMEOUT_SECONDS = 30.0
 SANDBOX_READY_TIMEOUT_SECONDS = 120.0

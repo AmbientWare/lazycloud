@@ -74,6 +74,23 @@ def _reject_self_token_mutation(
         raise ConflictError(f"cannot {action} the authenticating token")
 
 
+@router.get("/livez", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
+async def livez() -> Response:
+    """Whether this process is still running its own event loop, and nothing else.
+
+    Liveness asks whether to kill the process. A database it cannot reach is a
+    reason to stop taking traffic, which is readiness; killing for it turns one
+    dependency's bad minute into a restart loop that makes the minute worse.
+
+    `async` on purpose, and with no dependencies: every ordinary handler here is
+    sync and runs in a bounded worker pool, so an endpoint that needed one of
+    those threads would answer slowest exactly when the answer matters, and one
+    that resolved services could fault before the app has published them.
+    """
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/health", response_model=HealthResponse)
 def health(
     response: Response,

@@ -102,6 +102,35 @@ def test_control_plane_health_endpoint(isolated_services: ApiServices) -> None:
     assert health.checks["redis"].ok is True
 
 
+def test_liveness_answers_without_the_service_graph(
+    isolated_services: ApiServices,
+) -> None:
+    """Liveness must not depend on anything that can be broken or slow.
+
+    The probe decides whether to kill the process, and both times production
+    crashlooped it was a pod that could not reach a dependency being restarted
+    into a start that needed that dependency. A `/livez` that resolved services
+    or opened a connection would restore exactly that.
+    """
+
+    redis = RedisClient(_FailingRedis(), key_prefix="test")
+    services = ApiServices.create(
+        isolated_services.database,
+        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
+        root=isolated_services.root,
+        create_schema=False,
+        redis_client=redis,
+        binary_redis_client=redis,
+    )
+    app = create_app(services)
+    # Read before any request, because a dependency resolved at import time
+    # would answer here and fail in a pod that has not published its services.
+    assert getattr(app.state, "api_services", None) is None
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 503
+        assert client.get("/livez").status_code == 204
+
+
 def test_control_plane_health_endpoint_reports_dependency_failure(
     isolated_services: ApiServices,
 ) -> None:

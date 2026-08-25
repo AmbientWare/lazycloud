@@ -16,11 +16,11 @@ from shared.http.observability import (
 )
 from shared.http.usage import UsageCostGroupKey, UsageCostListResponse, UsageRecordListResponse
 from shared.http_transport import HttpChannel
+from shared.transport_retry import TRANSIENT_TRANSPORT_ERRORS, TransientRetry
 from shared.usage import UsageMetric
 
 from lazycloud.control import workspace_query
 from lazycloud.json_contracts import parse_json_value, validate_json_object
-from lazycloud.transport_retry import TRANSIENT_TRANSPORT_ERRORS, TransientRetry
 
 
 class ObservabilityControlChannel(Protocol):

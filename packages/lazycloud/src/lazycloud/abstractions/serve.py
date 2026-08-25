@@ -24,15 +24,15 @@ from shared.http.gateway import (
     SyncContainerWorkspaceResponse,
 )
 from shared.paths import state_home
-
-from lazycloud.json_contracts import parse_json_object
-from lazycloud.session.source_sync import collect_source_files
-from lazycloud.terminal import Terminal
-from lazycloud.transport_retry import (
+from shared.transport_retry import (
     TRANSIENT_TRANSPORT_ERRORS,
     TransientRetry,
     is_transient_transport_error,
 )
+
+from lazycloud.json_contracts import parse_json_object
+from lazycloud.session.source_sync import collect_source_files
+from lazycloud.terminal import Terminal
 
 LOGGER = logging.getLogger(__name__)
 

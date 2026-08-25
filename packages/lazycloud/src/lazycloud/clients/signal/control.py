@@ -21,9 +21,9 @@ from shared.signals import (
     normalize_clear_after_interval,
     signal_name,
 )
+from shared.transport_retry import call_with_transient_retry
 
 from lazycloud.control import workspace_query
-from lazycloud.transport_retry import call_with_transient_retry
 
 
 class SignalControlChannel(Protocol):

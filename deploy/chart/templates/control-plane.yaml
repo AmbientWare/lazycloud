@@ -102,18 +102,40 @@ spec:
           # Loopback rather than the advertised address: a replica has to prove
           # it serves before it can be one of the things that address resolves
           # to, so a check going out through the tailnet could never pass cold.
+          #
+          # Startup is a phase, not a delay. uvicorn binds nothing until the
+          # lifespan finishes, so a passing /livez is proof composition ended,
+          # and five minutes of it covers a slow release fetch and tailnet join
+          # without the other two probes judging a process that has not started.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          # Readiness owns the dependencies: a replica that cannot reach the
+          # database should stop taking traffic. Five seconds because /health
+          # opens a real connection, and a one-second default reports a busy
+          # pool as a dead process.
           readinessProbe:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness owns only the process. It asks nothing of Postgres or Redis,
+          # because restarting for their sake removes capacity from the thing
+          # already struggling and returns a pod that must reach them again to
+          # start at all.
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
-            initialDelaySeconds: 60
-            periodSeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
 ---
 apiVersion: v1
 kind: Service
