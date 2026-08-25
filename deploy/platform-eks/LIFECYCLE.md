@@ -200,17 +200,46 @@ cluster rather than by a host.
 
 ## Taking one down
 
+Take the fleet's capacity away first, through the control plane that owns it:
+
 ```sh
+WORKSPACE_ID=<platform workspace> lazycloud-admin unit delete <capacity owner id>
+```
+
+The pool's autoscaling group and launch template are created at runtime, so
+Terraform has never heard of them. Destroying the cluster first leaves an
+autoscaling group launching instances with nothing left alive to stop it, and
+the bill runs until somebody notices.
+
+Then drop the branch role from state and destroy:
+
+```sh
+terraform -chdir=deploy/platform-eks state rm planetscale_postgres_branch_role.control_plane
 terraform -chdir=deploy/platform-eks destroy -var="deployment=$DEPLOYMENT" ...
+```
+
+The role is removed rather than destroyed because Terraform cannot destroy it:
+it depends on the branch, so it goes first, and PlanetScale refuses to drop a
+role that still owns the tables the schema created. Deleting the branch takes
+the role and the database with it. Skip the `state rm` and the destroy runs to
+the end, fails on the role, and leaves you doing this anyway with ninety
+resources already gone.
+
+The destroy also leaves detached volumes behind, one per dynamic claim the
+cluster provisioned. They bill until removed:
+
+```sh
+aws ec2 describe-volumes --filters Name=status,Values=available \
+  --query 'Volumes[].[VolumeId,Size,Tags[?Key==`Name`]|[0].Value]' --output text
 ```
 
 Three things survive it and have to be dealt with by hand:
 
 - **Workspace buckets.** The control plane creates `<deployment>-workspace-<uuid>`
   lazily at runtime, so Terraform never knew them and leaves one per workspace.
-- **The PlanetScale role**, if the branch is destroyed after it. The role owns
-  every table the schema created and cannot be dropped while it does; destroying
-  the branch takes the role with it, so let the branch go first.
+- **The PlanetScale database**, if a branch other than `main` was ever created.
+  Deleting `main` takes the database with it, so an organisation left holding a
+  database after a destroy is holding one this module did not make.
 - **The operator document.** A destroy removes it and its values, so step 3 is
   done again on the next deployment. Keep a copy: the Stripe webhook signing
   secret is returned only when the endpoint is created, so it is the one value a
