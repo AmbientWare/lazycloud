@@ -42,11 +42,37 @@ database:
   # Kept back for an operator's psql and the database's own sessions.
   reserved: 3
 
+# Every workload below states a CPU and a memory request, and the reason is that
+# Karpenter sizes the cluster from exactly this. A pod that requests nothing is
+# not a pod that uses nothing: it is a pod the node's arithmetic cannot see, so
+# the node is provisioned as though it were not there and then runs it anyway.
+# Requests are measured from `/api/v1/nodes/<node>/proxy/metrics/resource`
+# rather than estimated, because the estimate is what produced a node whose
+# requests read 75% while its CPU sat at 85%.
+#
+# Memory carries a limit and CPU does not. A memory limit is a ceiling on a
+# process that would otherwise take the node down with it; a CPU limit is
+# throttling, which turns contention into latency in exactly the processes least
+# able to absorb it. The request is what apportions CPU under contention, and it
+# is the lever used here.
+
 controlPlane:
   replicas: 2
+  # 126m sustained on the replica taking traffic, 143m at its peak. The request
+  # is several times that because the spike this has to absorb is not a request
+  # rate: it is the fleet reconnecting at once, which arrives as a step rather
+  # than a ramp.
   resources:
-    requests: { cpu: 500m, memory: 1Gi }
+    requests: { cpu: 400m, memory: 1Gi }
     limits: { memory: 2Gi }
+  # The artifact fetch, which runs before the container above and is sized on
+  # its own. A pod's request is the larger of its init containers and the sum of
+  # its containers, so this adds nothing to what the node reserves; what it buys
+  # is an init container that is not the first thing descheduled while it pulls
+  # 48MB over the network.
+  initResources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
   # One of these is held for the process's lifetime by the recovery fence, so a
   # replica works with one fewer than it appears to have.
   #
@@ -61,9 +87,22 @@ controlPlane:
 
 scheduler:
   replicas: 1
+  # The largest consumer in the deployment by a wide margin: 678m sustained,
+  # 899m at its peak, 497Mi resident. Whatever this process does not request it
+  # takes anyway, out of whatever on the node has no request of its own, so an
+  # understated figure here is charged to the ingress and to Argo rather than
+  # reported against the scheduler.
+  #
+  # This is what the process uses, not what it ought to. A tick loop that
+  # serialises on Redis leases has no obvious reason to hold two thirds of a
+  # core at rest, and that question belongs to `packages/scheduler`. Until it is
+  # answered the number has to be the true one.
   resources:
-    requests: { cpu: 250m, memory: 512Mi }
+    requests: { cpu: 750m, memory: 640Mi }
     limits: { memory: 1Gi }
+  initResources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
   database:
     poolSize: 4
     maxOverflow: 2
@@ -73,6 +112,12 @@ bootstrap:
   database:
     poolSize: 1
     maxOverflow: 1
+  # Shared by every Job in the chart. They are brief, but they are not free and
+  # they run while the previous release's pods are still serving, which is the
+  # moment the node has least to spare.
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
 
 # The class every claim in this chart names, created here because Auto Mode
 # provides the driver and no class.
@@ -82,9 +127,15 @@ storage:
 cacheServer:
   replicas: 1
   storage: 20Gi
+  # It serves a local directory, so its cost is disk rather than either of
+  # these: 28Mi resident and no measurable CPU while nothing pulls from it. The
+  # CPU request covers the moment a build does. The memory limit is close enough
+  # to the request to mean something, since a ceiling far above anything the
+  # process can reach reserves nothing and only inflates what the node appears
+  # to have promised.
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { memory: 1Gi }
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
 
 cloudflared:
   # More than one connector, which is how a tunnel is meant to be run and what a
@@ -95,6 +146,18 @@ cloudflared:
   # The zone this deployment answers for, which the ingress rules are written
   # against and the public origin is built from.
   apex: ""
+  # Deliberately far above what it measures at rest, which is 7m and 26Mi.
+  #
+  # This process is the whole product's ingress and its failure mode is
+  # scheduling latency rather than throughput. A QUIC connection is declared
+  # dead when its keepalive stops arriving, so a connector that cannot run for a
+  # few seconds does not serve slowly. It drops every connection it holds and
+  # every stream on them, and Cloudflare answers 502 while the origin behind it
+  # is idle and healthy. A request is what apportions a contended CPU, so this
+  # one is sized for the contention rather than for the average.
+  resources:
+    requests: { cpu: 150m, memory: 96Mi }
+    limits: { memory: 256Mi }
 
 tunnel:
   # The tunnel credentials arrive in the same Secret as everything else.

@@ -4,7 +4,8 @@ More than one connector, which is the whole reason this moved.
 Cloudflare balances a tunnel's traffic across every connector attached to it, so
 one host running one connector was a single point of failure that also collided
 with any other process holding the same credentials. Several pods is how a tunnel
-is meant to be run.
+is meant to be run, and the constraint below is what keeps them from all landing
+on the one node whose loss they exist to survive.
 
 The ingress rules come from the repository rather than from Cloudflare, so a
 route is reviewed where it is written. Ordered, first match wins, and the two
@@ -63,6 +64,8 @@ spec:
       labels:
         app: cloudflared
     spec:
+      topologySpreadConstraints:
+        {{- include "lazycloud.spreadAcrossNodes" "cloudflared" | nindent 8 }}
       volumes:
         - name: config
           configMap:
@@ -84,3 +87,5 @@ spec:
             - name: credentials
               mountPath: /etc/cloudflared/credentials.json
               subPath: credentials.json
+          resources:
+            {{- toYaml .Values.cloudflared.resources | nindent 12 }}

@@ -10,10 +10,14 @@ SOCKS5 or HTTP proxy. This process dials every agent's route proxy by name, so i
 holds a real device. An operator exposing it as a Service answers the half that
 was never the problem.
 
-That is what NET_ADMIN, NET_RAW and /dev/net/tun below are for. Where it runs is
-Auto Mode's decision: the device is a property of the node image rather than of
-one instance type, and pinning a pool would be choosing hardware to obtain
-something every node already has.
+That is what NET_ADMIN, NET_RAW and /dev/net/tun below are for. Which hardware it
+runs on stays Auto Mode's decision: the device is a property of the node image
+rather than of one instance type, and pinning a pool would be choosing hardware
+to obtain something every node already has.
+
+How many nodes is a different question, and the spread constraint answers it.
+Two replicas are here to survive losing a node, which they do not do while both
+are on the same one.
 */}}
 apiVersion: apps/v1
 kind: Deployment
@@ -30,6 +34,8 @@ spec:
         app: control-plane
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      topologySpreadConstraints:
+        {{- include "lazycloud.spreadAcrossNodes" "control-plane" | nindent 8 }}
       volumes:
         - name: tun
           hostPath:
@@ -64,6 +70,8 @@ spec:
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
+          resources:
+            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
       containers:
         - name: control-plane
           image: {{ include "lazycloud.image" (list . "api") }}

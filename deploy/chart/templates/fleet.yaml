@@ -88,4 +88,6 @@ spec:
             # nothing to do with it.
             - name: LAZYCLOUD_ENDPOINT
               value: http://control-plane:9000
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
 {{- end }}

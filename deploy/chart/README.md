@@ -24,16 +24,38 @@ resetting the schema.
 
 Write it before the first install.
 
-## Why the control plane is pinned to its own nodes
+## Why the control plane is not pinned to a node
 
 It holds a tailnet device, for outbound rather than inbound. Userspace
 networking would serve workers reaching it by tailnet name; what it cannot do is
 dial, and this process dials every agent's route proxy by name. So it needs
 `NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`.
 
-The platform module declares a node group for this and taints it. Exposing the
-control plane through the Tailscale operator instead would answer the inbound
-half and leave the outbound half needing `tailscaled` anyway.
+None of those is a reason to choose hardware. The capabilities are a property of
+the pod and the device node is a property of the node image every Auto Mode node
+already runs, so nothing here names a node group, a taint or an instance type.
+Exposing the control plane through the Tailscale operator instead would answer
+the inbound half and leave the outbound half needing `tailscaled` anyway.
+
+## Requests, and the node count that follows from them
+
+Karpenter provisions from what the pods request, which makes a request an
+instruction to the cluster rather than a description of a process. Every
+container in this chart states one, including the Jobs and the init containers,
+because a pod that requests nothing is not one the node's arithmetic can see.
+It is provisioned around, and then run anyway.
+
+The figures come from `/api/v1/nodes/<node>/proxy/metrics/resource` on a live
+node, not from estimates. Memory carries a limit; CPU does not, because a CPU
+limit is throttling, and throttling a connector or an API turns contention into
+the latency the request was meant to prevent.
+
+`control-plane` and `cloudflared` also spread one replica per node. That is what
+makes their second replica redundancy rather than cost, and it is what obliges
+the cluster to hold more than one node: `DoNotSchedule` leaves the second
+replica Pending, and Pending is the only thing Karpenter provisions for. A
+`PodDisruptionBudget` on each is the other half. Spreading decides placement,
+and only a budget stops one drain removing both.
 
 ## Replica counts
 

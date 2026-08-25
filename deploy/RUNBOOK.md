@@ -293,6 +293,54 @@ kubectl -n argocd get applications
 kubectl -n lazycloud get pods
 ```
 
+### Capacity, and why the cluster holds two nodes
+
+Auto Mode sizes the cluster from what the pods request, and from nothing else.
+There is no node group to grow and no instance type to pick. The way to give
+this deployment more machine is to request accurately; the way to give it less
+is the same.
+
+Requests are declared in three files, and they have to be read together because
+they land on the same nodes:
+
+| Workload | Declared in |
+| --- | --- |
+| control plane, scheduler, cache, tunnel, Jobs | `deploy/chart/values.yaml` |
+| External Secrets (3 pods) | `deploy/argocd/apps/external-secrets.yaml` |
+| Argo CD (7 pods) | `deploy/platform-eks/argocd.tf` |
+
+Two nodes is the floor and it is deliberate. `control-plane` and `cloudflared`
+each spread one replica per node with `DoNotSchedule`, so a second replica
+cannot share a node with the first. During bring-up, a rollout, or a node
+replacement that replica sits `Pending` for around a minute while Karpenter
+provisions. That is the constraint doing its job. `Pending` is the only state
+Karpenter provisions for, so a spread that could be satisfied by packing would
+never ask for the node.
+
+A node vanishing from `kubectl get nodes` until only one remains is not
+consolidation working. It means something started requesting less than it uses.
+
+There is no metrics-server in this cluster, so `kubectl top` returns
+`Metrics API not available`. Read usage from the kubelet through the API server
+instead. It needs no install and no write:
+
+```sh
+kubectl get --raw "/api/v1/nodes/<node>/proxy/metrics/resource" \
+  | grep -E 'container_(cpu_usage_seconds_total|memory_working_set_bytes)'
+```
+
+`container_cpu_usage_seconds_total` is a counter. Sample it twice and divide by
+the wall time between the samples; a single reading is a lifetime average and
+hides everything that matters.
+
+The failure this guards against does not look like a resource problem from
+outside. A starved node reports its requests at 75% while its CPU sits at 85%,
+every process keeps running, and what the user sees is Cloudflare returning 502
+because `cloudflared` could not run for long enough to answer a QUIC keepalive.
+Liveness probes timing out with `context deadline exceeded` across unrelated
+pods at once is the signal. One workload failing its own probe is that
+workload's problem; four failing together is the node.
+
 ### What a deployment runs, and what it does not
 
 `deploy/chart` is what a deployment runs, and it is not the local `compose.yaml`

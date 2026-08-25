@@ -1,9 +1,21 @@
 # The cluster the control plane runs on.
 #
 # Auto Mode provisions nodes, so there is no node group, no launch template and
-# no AMI to keep current here. What it does not decide is where a pod that needs
-# a TUN device may be scheduled, which is why `tailnet` below is its own node
-# pool rather than a label on the default one.
+# no AMI to keep current here, and no NodePool either: `general-purpose` below is
+# a built-in that EKS creates and reconciles, and its instance families and sizes
+# are not this module's to set.
+#
+# That is deliberate rather than a limitation. Karpenter sizes the cluster from
+# what the pods request, so the way to obtain more machine here is to request
+# accurately, in `deploy/chart/values.yaml`, in the Argo CD values in
+# `argocd.tf`, and in `deploy/argocd/apps/external-secrets.yaml`. A floor on
+# instance size would buy one shortfall at a fixed price, be wrong again at the
+# next one, and hide the pod that caused it.
+#
+# The failure this pool is blamed for is always the same one: a pod that
+# requests nothing still runs, so the node is sized as though it were not there.
+# Nothing reports the gap, because by every number the scheduler holds the pods
+# fit.
 
 resource "aws_eks_cluster" "control_plane" {
   name     = var.deployment

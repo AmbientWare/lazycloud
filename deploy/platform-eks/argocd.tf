@@ -29,9 +29,68 @@ resource "helm_release" "argocd" {
     # Reachable through the cluster only. The tunnel serves the product, and
     # exposing a deployment controller beside it would publish the thing that can
     # change everything. Operators reach it with `kubectl port-forward`.
+    #
+    # Seven pods, and this chart declares a request for none of them. In a
+    # cluster Karpenter sizes from requests that is not a rounding error: it is
+    # seven pods the node is provisioned as though it does not carry, sharing
+    # that node with the workloads it was sized for. Every one of them is given
+    # a request below.
+    #
+    # `repo-server` and the application controller are the two with a spike.
+    # Both run on every sync, and repo-server renders this repository's chart
+    # while it does. A pod with no request holds the smallest share of a
+    # contended CPU, which is where a controller misses its own liveness probe
+    # and is killed for it, and a controller that cannot stay up cannot deploy
+    # the change that would relieve the contention killing it.
     server = {
       service   = { type = "ClusterIP" }
       extraArgs = ["--insecure"]
+      resources = {
+        requests = { cpu = "75m", memory = "128Mi" }
+        limits   = { memory = "256Mi" }
+      }
+    }
+
+    controller = {
+      resources = {
+        requests = { cpu = "150m", memory = "384Mi" }
+        limits   = { memory = "768Mi" }
+      }
+    }
+
+    repoServer = {
+      resources = {
+        requests = { cpu = "150m", memory = "256Mi" }
+        limits   = { memory = "512Mi" }
+      }
+    }
+
+    redis = {
+      resources = {
+        requests = { cpu = "50m", memory = "64Mi" }
+        limits   = { memory = "128Mi" }
+      }
+    }
+
+    applicationSet = {
+      resources = {
+        requests = { cpu = "25m", memory = "64Mi" }
+        limits   = { memory = "128Mi" }
+      }
+    }
+
+    notifications = {
+      resources = {
+        requests = { cpu = "25m", memory = "64Mi" }
+        limits   = { memory = "128Mi" }
+      }
+    }
+
+    dex = {
+      resources = {
+        requests = { cpu = "25m", memory = "64Mi" }
+        limits   = { memory = "128Mi" }
+      }
     }
 
     # The only Application Terraform declares; everything else is a file in the
