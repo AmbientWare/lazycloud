@@ -1,5 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import type { ContainerWithAppPage } from "@/lib/api/schemas";
 
@@ -63,6 +64,14 @@ describe("container pagination", () => {
       workspaceLiveCritical: true,
       workspaceLiveRecoverErrors: true,
     });
+  });
+
+  it("keeps a live list bounded, so one change event is not twenty requests", () => {
+    // The change stream refetches every page a list holds. Unbounded, an app
+    // view that had scrolled through two thousand containers re-requested all
+    // of them each time anything in the workspace moved.
+    expect(containersQueryOptions("workspace-1").maxPages).toBe(LIVE_LIST_MAX_PAGES);
+    expect(LIVE_LIST_MAX_PAGES).toBeLessThanOrEqual(5);
   });
 });
 

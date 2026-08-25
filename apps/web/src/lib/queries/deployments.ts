@@ -1,4 +1,5 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
+import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
 import { deploymentListSchema, type Deployment, type DeploymentList } from "@/lib/api/schemas";
@@ -31,6 +32,7 @@ export function deploymentsInfiniteQueryOptions(
       );
     },
     getNextPageParam: nextDeploymentCursor,
+    maxPages: LIVE_LIST_MAX_PAGES,
     meta: workspaceLiveQueryMeta(true),
   });
 }
