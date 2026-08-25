@@ -55,8 +55,10 @@ def publish_rates(
 
     The rates themselves are refused if they would reach back over usage the
     ledger has already frozen, so the operator cannot reprice a figure a customer
-    has been shown. Running twice with the same instant is refused rather than
-    duplicated.
+    has been shown. Running twice with the same instant publishes nothing the
+    second time, which is what lets a deployment run this on every sync; figures
+    that disagree with what that instant already holds are refused rather than
+    written over, and the run says which of the two it found for each rate.
 
     Without `--confirm` the write is still attempted and then rolled back, so a
     dry run answers whether it would be accepted rather than only what it would
@@ -69,21 +71,11 @@ def publish_rates(
     client = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin)
     )
-    planned: list[dict[str, str | int]] = [
-        {
-            "billing_owner": rate.billing_owner.value,
-            "gpu_type": rate.gpu_type or "-",
-            "nanos_per_container_hour": rate.nanos_per_container_hour,
-            "nanos_per_cpu_core_hour": rate.nanos_per_cpu_core_hour,
-            "nanos_per_memory_gib_hour": rate.nanos_per_memory_gib_hour,
-            "nanos_per_gpu_card_hour": rate.nanos_per_gpu_card_hour,
-        }
-        for rate in PUBLISHED_COMPUTE_RATES
-    ]
+    compute_rates: list[dict[str, str | int]] = []
     payload: dict[str, object] = {
         "pricing_version": PRICING_VERSION,
         "effective_at": moment.isoformat(),
-        "compute_rates": planned,
+        "compute_rates": compute_rates,
         # Both units. The stored rate is what the ledger multiplies, and the
         # whole-unit figure beside it is what the pricing page states — an
         # operator checking a cutover against the page should not have to
@@ -104,15 +96,15 @@ def publish_rates(
         # against a version its neighbours do not share.
         #
         # Attempted either way, and kept only on `--confirm`. Everything that can
-        # refuse this — a boundary that would reach back over frozen usage, an
-        # instant already published for — refuses inside the write, so a dry run
-        # that skipped it would report a plan it could not carry out and exit
-        # zero doing so. The operator running this before a cutover is asking
-        # exactly that question.
+        # refuse this — a boundary that would reach back over frozen usage, a
+        # figure this instant already holds at another number — refuses inside
+        # the write, so a dry run that skipped it would report a plan it could
+        # not carry out and exit zero doing so. The operator running this before
+        # a cutover is asking exactly that question.
         with client.session() as session:
             compute = ComputeRateRepository(session)
             for rate in PUBLISHED_COMPUTE_RATES:
-                compute.publish(
+                publication = compute.publish(
                     billing_owner=rate.billing_owner,
                     gpu_type=rate.gpu_type,
                     pricing_version=PRICING_VERSION,
@@ -122,12 +114,24 @@ def publish_rates(
                     nanos_per_memory_gib_second=rate.nanos_per_memory_gib_second,
                     nanos_per_gpu_card_second=rate.nanos_per_gpu_card_second,
                 )
-            PlatformRateRepository(session).publish(
+                compute_rates.append(
+                    {
+                        "billing_owner": rate.billing_owner.value,
+                        "gpu_type": rate.gpu_type or "-",
+                        "nanos_per_container_hour": rate.nanos_per_container_hour,
+                        "nanos_per_cpu_core_hour": rate.nanos_per_cpu_core_hour,
+                        "nanos_per_memory_gib_hour": rate.nanos_per_memory_gib_hour,
+                        "nanos_per_gpu_card_hour": rate.nanos_per_gpu_card_hour,
+                        "state": publication.value,
+                    }
+                )
+            platform = PlatformRateRepository(session).publish(
                 pricing_version=PRICING_VERSION,
                 effective_at=moment,
                 nanos_per_egress_byte=PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte,
                 nanos_per_volume_byte_second=(PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second),
             )
+            payload["platform_rate_state"] = platform.value
             if confirm:
                 session.commit()
             else:

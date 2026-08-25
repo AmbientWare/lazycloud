@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -9,12 +9,24 @@ from uuid import uuid4
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from shared.billing_quotes import BilledDimension, ContainerShape, LedgerComponent, Quote
+from shared.enums import StringEnum
 from shared.errors import ConflictError, InvalidInputError
 from shared.timestamps import to_utc, to_utc_or_none
 from shared.usage import UsageBillingOwner
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+
+class RatePublication(StringEnum):
+    """What a publish did with the boundary it was given.
+
+    Read by a caller that runs on a schedule rather than by hand, so "the card is
+    already published here" has to be an answer rather than an exception.
+    """
+
+    Published = "published"
+    AlreadyPublished = "already_published"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +80,14 @@ class ComputeRateRepository:
         nanos_per_cpu_core_second: Decimal,
         nanos_per_memory_gib_second: Decimal,
         nanos_per_gpu_card_second: Decimal,
-    ) -> None:
+    ) -> RatePublication:
         """Close the rate in force and open its successor, in one transaction.
+
+        A boundary already holding these figures is left exactly as it stands,
+        which is what lets a deployment publish its card on every sync. Figures
+        that disagree with it are refused rather than written over: the published
+        ones are what customers have been charged against, so changing them is a
+        later boundary rather than an edit to this one.
 
         Refuses an `effective_at` at or before the newest instant this shape
         class has a frozen segment for. Reaching further back would reprice usage
@@ -77,10 +95,44 @@ class ComputeRateRepository:
         what was charged and only the ledger would be right.
         """
 
+        moment = to_utc(effective_at)
+        subject = f"{billing_owner.value}/{gpu_type or 'cpu'}"
+        published = self.session.scalars(
+            select(ComputeRateTable).where(
+                ComputeRateTable.billing_owner == billing_owner.value,
+                ComputeRateTable.gpu_type == gpu_type,
+                ComputeRateTable.effective_at == moment,
+            )
+        ).first()
+        if published is not None:
+            # Ahead of the frozen-edge check rather than behind it. Publishing a
+            # boundary prices the usage over it, which puts the ledger's frozen
+            # edge past that instant, so the run that repeats the publish would
+            # otherwise be refused for reaching back over segments it is itself
+            # the rate for.
+            _require_agreement(
+                subject=subject,
+                effective_at=moment,
+                published={
+                    "pricing_version": published.pricing_version,
+                    "nanos_per_container_second": published.nanos_per_container_second,
+                    "nanos_per_cpu_core_second": published.nanos_per_cpu_core_second,
+                    "nanos_per_memory_gib_second": published.nanos_per_memory_gib_second,
+                    "nanos_per_gpu_card_second": published.nanos_per_gpu_card_second,
+                },
+                stated={
+                    "pricing_version": pricing_version,
+                    "nanos_per_container_second": nanos_per_container_second,
+                    "nanos_per_cpu_core_second": nanos_per_cpu_core_second,
+                    "nanos_per_memory_gib_second": nanos_per_memory_gib_second,
+                    "nanos_per_gpu_card_second": nanos_per_gpu_card_second,
+                },
+            )
+            return RatePublication.AlreadyPublished
         _require_unfrozen(
             self.session,
-            effective_at,
-            subject=f"{billing_owner.value}/{gpu_type or 'cpu'}",
+            moment,
+            subject=subject,
             frozen=self.session.scalar(
                 select(func.max(BillingLedgerSegmentTable.segment_ended_at)).where(
                     BillingLedgerSegmentTable.dimension == BilledDimension.ComputeRuntime.value,
@@ -94,23 +146,23 @@ class ComputeRateRepository:
             .where(
                 ComputeRateTable.billing_owner == billing_owner.value,
                 ComputeRateTable.gpu_type == gpu_type,
-                ComputeRateTable.effective_at < effective_at,
+                ComputeRateTable.effective_at < moment,
                 or_(
                     ComputeRateTable.valid_until.is_(None),
-                    ComputeRateTable.valid_until > effective_at,
+                    ComputeRateTable.valid_until > moment,
                 ),
             )
             .with_for_update()
         ).first()
         if predecessor is not None:
-            predecessor.valid_until = effective_at
+            predecessor.valid_until = moment
         self.session.add(
             ComputeRateTable(
                 id=str(uuid4()),
                 billing_owner=billing_owner.value,
                 gpu_type=gpu_type,
                 pricing_version=pricing_version,
-                effective_at=effective_at,
+                effective_at=moment,
                 valid_until=None,
                 nanos_per_container_second=nanos_per_container_second,
                 nanos_per_cpu_core_second=nanos_per_cpu_core_second,
@@ -118,7 +170,8 @@ class ComputeRateRepository:
                 nanos_per_gpu_card_second=nanos_per_gpu_card_second,
             )
         )
-        _flush(self.session, f"{billing_owner.value}/{gpu_type or 'cpu'} at {effective_at}")
+        _flush(self.session, f"{subject} at {moment.isoformat()}")
+        return RatePublication.Published
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,8 +207,11 @@ class PlatformRateRepository:
         effective_at: datetime,
         nanos_per_egress_byte: Decimal,
         nanos_per_volume_byte_second: Decimal,
-    ) -> None:
+    ) -> RatePublication:
         """Close the rate in force and open its successor, in one transaction.
+
+        A boundary already holding these figures is left as it stands and a
+        disagreement at it is refused, for the same reason as compute above.
 
         Refused at or before the newest instant any platform-rated dimension has
         a frozen segment for, for the same reason as compute above.
@@ -165,9 +221,29 @@ class PlatformRateRepository:
         keeps a deliberate zero distinguishable from an omission.
         """
 
+        moment = to_utc(effective_at)
+        published = self.session.scalars(
+            select(PlatformRateTable).where(PlatformRateTable.effective_at == moment)
+        ).first()
+        if published is not None:
+            _require_agreement(
+                subject="platform rates",
+                effective_at=moment,
+                published={
+                    "pricing_version": published.pricing_version,
+                    "nanos_per_egress_byte": published.nanos_per_egress_byte,
+                    "nanos_per_volume_byte_second": published.nanos_per_volume_byte_second,
+                },
+                stated={
+                    "pricing_version": pricing_version,
+                    "nanos_per_egress_byte": nanos_per_egress_byte,
+                    "nanos_per_volume_byte_second": nanos_per_volume_byte_second,
+                },
+            )
+            return RatePublication.AlreadyPublished
         _require_unfrozen(
             self.session,
-            effective_at,
+            moment,
             subject="platform rates",
             frozen=self.session.scalar(
                 select(func.max(BillingLedgerSegmentTable.segment_ended_at)).where(
@@ -178,27 +254,28 @@ class PlatformRateRepository:
         predecessor = self.session.scalars(
             select(PlatformRateTable)
             .where(
-                PlatformRateTable.effective_at < effective_at,
+                PlatformRateTable.effective_at < moment,
                 or_(
                     PlatformRateTable.valid_until.is_(None),
-                    PlatformRateTable.valid_until > effective_at,
+                    PlatformRateTable.valid_until > moment,
                 ),
             )
             .with_for_update()
         ).first()
         if predecessor is not None:
-            predecessor.valid_until = effective_at
+            predecessor.valid_until = moment
         self.session.add(
             PlatformRateTable(
                 id=str(uuid4()),
                 pricing_version=pricing_version,
-                effective_at=effective_at,
+                effective_at=moment,
                 valid_until=None,
                 nanos_per_egress_byte=nanos_per_egress_byte,
                 nanos_per_volume_byte_second=nanos_per_volume_byte_second,
             )
         )
-        _flush(self.session, f"platform rates at {effective_at}")
+        _flush(self.session, f"platform rates at {moment.isoformat()}")
+        return RatePublication.Published
 
 
 def _compute_quote(row: ComputeRateTable, component: LedgerComponent) -> Quote:
@@ -259,6 +336,33 @@ def _require_unfrozen(
         )
 
 
+def _require_agreement(
+    *,
+    subject: str,
+    effective_at: datetime,
+    published: Mapping[str, Decimal | str],
+    stated: Mapping[str, Decimal | str],
+) -> None:
+    """Refuse to move a figure that is already published at this instant.
+
+    Republishing the same card is the ordinary path, so agreement is silence. A
+    disagreement is the case that must not be: the published figure is what
+    customers have been charged against and there is no un-publish, so both are
+    named and the caller decides on a later boundary rather than this one moving.
+    """
+
+    differing = [name for name, value in stated.items() if published[name] != value]
+    if not differing:
+        return
+    detail = ", ".join(
+        f"{name} is published as {published[name]} and this rate card states {stated[name]}"
+        for name in differing
+    )
+    raise ConflictError(
+        f"the rate published for {subject} at {effective_at.isoformat()} cannot be edited: {detail}"
+    )
+
+
 def _flush(session: Session, subject: str) -> None:
     try:
         session.flush()
@@ -266,4 +370,4 @@ def _flush(session: Session, subject: str) -> None:
         raise ConflictError(f"a published rate already covers {subject}") from exc
 
 
-__all__ = ["ComputeRateRepository", "PlatformRateRepository"]
+__all__ = ["ComputeRateRepository", "PlatformRateRepository", "RatePublication"]

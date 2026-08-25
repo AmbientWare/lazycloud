@@ -12,6 +12,7 @@ from compute.aws_connections import (
     AwsAuthorizationCleanupResult,
 )
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
+from compute.policy import WorkspaceComputePolicyService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
@@ -28,10 +29,11 @@ from shared.aws_connections import (
     AwsAuthorizationCleanupStatus,
     AwsManagedAuthorizationReference,
 )
+from shared.compute_policy import MachinePool
 from shared.errors import UpstreamUnavailableError
 from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
 from shared.timestamps import utc_now
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 TEMPLATE_SHA256 = "a" * 64
@@ -452,3 +454,43 @@ def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.workspace(session, "default").id
     assert baseline.workspaces == [workspace_id]
+
+
+def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
+    isolated_services: ApiServices,
+) -> None:
+    """What the shared fleet is for, and what naming a pool decides.
+
+    The second workspace here is a customer who connected nothing, which is the
+    ordinary case on a fleet the platform runs. Resolving only their own
+    connection left them able to use capacity that happened to exist and unable
+    to cause any, so their workload deployed, queued, and died on a retry limit
+    reporting that it needed a GPU worker, naming neither the fleet nor the
+    account. The pool answers instead: theirs when they connected one, and
+    whatever feeds it otherwise.
+    """
+    owner = _owner(isolated_services)
+    service = _service(isolated_services)
+    service.connect(
+        AwsConnectionCreateRequest(account_id=ACCOUNT_ID),
+        user_id=owner,
+        platform_fleet=True,
+    )
+    fleet = service.validate(user_id=owner)
+    assert fleet.hosts_workloads is True
+    assert fleet.platform_fleet is True
+
+    # A separate account, holding no connection of its own.
+    customer = owned_workspace(isolated_services.control_plane_service, "customer")
+    policies = WorkspaceComputePolicyService(isolated_services.context)
+
+    resolved = policies.connection_for_machine_pool(workspace=customer.name, pool=fleet.pool)
+
+    assert resolved is not None, "a customer on the shared fleet reaches the fleet's account"
+    assert resolved.account_id == ACCOUNT_ID
+    # A pool nothing feeds still answers None, so naming one cannot conjure an
+    # account to buy machines in.
+    assert (
+        policies.connection_for_machine_pool(workspace=customer.name, pool=MachinePool("nobody"))
+        is None
+    )
