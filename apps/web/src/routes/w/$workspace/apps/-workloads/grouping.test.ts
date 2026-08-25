@@ -13,7 +13,7 @@ function deployment(overrides: Partial<Deployment>): Deployment {
     stub_id: "stub-1",
     version: 1,
     spec: {
-      resources: { gpu_count: 0, concurrency: 1 },
+      resources: { gpu: [], gpu_count: 0, concurrency: 1 },
       methods: [],
       command: [],
       ports: {},

@@ -787,6 +787,12 @@ class WorkerRepositoryService:
                 # registration every worker declares itself selector-only and a
                 # pool that serves general work has none that will take it.
                 "requires_pool_selector": not unit.default_eligible,
+                # Which capacity an account's work prefers, so it answers to the
+                # unit for the same reason the rest of this block does. A machine
+                # its customer holds root on could otherwise register the largest
+                # integer there is and pull every one of that account's requests
+                # onto itself, starving the cloud pool they are paying for.
+                "priority": unit.priority,
             }
         )
         try:

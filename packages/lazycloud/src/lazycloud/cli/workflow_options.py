@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from shared.compute_policy import MachinePool
 from shared.deployment_records import CpuRequest, MemoryRequest
+from shared.gpu import GpuInput
 
 WorkflowValue = (
     str
@@ -24,7 +25,7 @@ class DeploymentOverrides:
     resource: str | None = None
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
-    gpu: str | None = None
+    gpu: GpuInput = None
     gpu_count: int | None = None
     image: str | None = None
     dockerfile: str | None = None
@@ -69,7 +70,7 @@ def build_deployment_overrides(
     resource: str | None = None,
     cpu: CpuRequest | None = None,
     memory: MemoryRequest | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int | None = None,
     image: str | None = None,
     dockerfile: str | None = None,
@@ -114,7 +115,7 @@ def workflow_kwargs(
         "resource": overrides.resource,
         "cpu": overrides.cpu,
         "memory": overrides.memory,
-        "gpu": overrides.gpu,
+        "gpu": list(overrides.gpu) if overrides.gpu else None,
         "gpu_count": overrides.gpu_count,
         "image": overrides.image,
         "dockerfile": overrides.dockerfile,

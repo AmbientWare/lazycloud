@@ -18,7 +18,6 @@ class PodImageConfig(BaseModel):
 
 
 class PodRuntimeConfig(ContainerResourceConfig):
-    gpu_request: list[str] = Field(default_factory=list)
     requires_gpu: bool = False
     keep_warm: int = Field(default=0, ge=-1)
     checkpoint_enabled: bool = False
@@ -47,7 +46,7 @@ class PodRuntimeConfig(ContainerResourceConfig):
 
     @property
     def gpu_required(self) -> bool:
-        return self.requires_gpu or bool(self.requested_gpu_type) or self.gpu_count > 0
+        return self.requires_gpu or bool(self.gpu) or self.gpu_count > 0
 
 
 class PodStubConfig(BaseModel):

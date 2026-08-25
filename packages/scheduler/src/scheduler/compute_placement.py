@@ -8,7 +8,7 @@ from compute.request_placement import (
     ComputeCapacityPlacementResult,
 )
 from shared.compute_policy import ComputeResourceRequirements
-from shared.scheduling import SchedulerWorkerRequest
+from shared.scheduling import SchedulerWorkerRequest, gpu_count_for_capacity
 
 
 class SchedulerCapacityPlacement(Protocol):
@@ -26,8 +26,10 @@ class SchedulerComputePlacement:
         is the capacity controllers' arbitration, so naming one now would leave
         the acquisition loop a single candidate and no failover to run.
         """
-        gpu_count = max(request.gpu_count, len(request.gpu_request))
-        gpu = request.gpu_type or (request.gpu_request[0] if request.gpu_request else None)
+        # The canonical count, not the length of the list: a request naming two
+        # acceptable models wants one card, and reading it as two asked for
+        # hardware nobody has and placed nowhere.
+        gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
         result = self.capacity.place(
             ComputeCapacityPlacementRequest(
                 workspace_id=request.workspace_id,
@@ -36,7 +38,7 @@ class SchedulerComputePlacement:
                 requirements=ComputeResourceRequirements(
                     cpu_millicores=request.cpu_millicores,
                     memory_mb=request.memory_mib,
-                    gpu=gpu if gpu_count > 0 else None,
+                    gpu=list(request.gpu) if gpu_count > 0 else [],
                     gpu_count=gpu_count,
                     architecture=request.architecture,
                     runtime=request.provider_runtime,

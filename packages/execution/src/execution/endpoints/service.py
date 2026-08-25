@@ -219,7 +219,7 @@ class EndpointControlService:
                 memory_mib=config.runtime.requested_memory_mib,
                 memory_limit_mib=config.runtime.limit_memory_mib,
                 disk_mib=config.runtime.requested_disk_mib,
-                gpu_type=config.runtime.requested_gpu_type,
+                gpu=list(config.runtime.gpu),
                 gpu_count=config.runtime.gpu_count,
                 pool_selector=config.effective_pool_selector,
                 runtime=config.runtime.runtime,

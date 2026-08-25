@@ -190,7 +190,7 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
             "runtime": {
                 "cpu": 1.5,
                 "memory": "256Mi",
-                "gpu": "T4",
+                "gpu": ["T4"],
                 "gpu_count": 1,
                 "keep_warm": 60,
                 "runtime_class": "runsc",
@@ -316,7 +316,7 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
     assert scheduler.requests[0].container_id == container_id
     assert scheduler.requests[0].cpu_millicores == 1500
     assert scheduler.requests[0].memory_mib == 256
-    assert scheduler.requests[0].gpu_type == "T4"
+    assert scheduler.requests[0].gpu == ["T4"]
     assert scheduler.requests[0].gpu_count == 1
     assert scheduler.requests[0].pool_selector == "gpu-pool"
     assert scheduler.requests[0].runtime_class == "runsc"

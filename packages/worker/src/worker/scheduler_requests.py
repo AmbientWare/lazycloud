@@ -804,7 +804,7 @@ def image_build_request_context(
     metered window and the priced shape describe one container.
     """
 
-    gpu_count = gpu_count_for_capacity(request.gpu_type, request.gpu_request, request.gpu_count)
+    gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
     return ContainerRequestContext(
         container_id=request.container_id,
         stub_id=request.stub_id,
@@ -841,7 +841,7 @@ def container_execution_context_from_scheduler_request(
         memory_limit_bytes = container_memory_limit_mib(request.memory_mib) * MIB
     # One allocation count, so the model and the count it is charged by can never
     # disagree about whether this container held a GPU at all.
-    gpu_count = gpu_count_for_capacity(request.gpu_type, request.gpu_request, request.gpu_count)
+    gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
     return ContainerExecutionContext(
         request=ContainerRequestContext(
             container_id=request.container_id,

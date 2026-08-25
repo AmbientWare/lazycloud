@@ -7,7 +7,7 @@ from enum import StrEnum
 from pydantic import Field, JsonValue, model_validator
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
-from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
+from shared.gpu import gpu_preference_accepts
 from shared.scheduling import worker_serves_owner
 from shared.timestamps import utc_now
 
@@ -38,10 +38,10 @@ class SchedulingRequest(ContractModel):
     payload: JsonValue = None
     cpu: float = 1
     memory_mib: int = 512
-    gpu_type: str = ""
-    gpu_request: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
+    """Models this request accepts, best first; empty asks for no GPU."""
+
     gpu_count: int = 0
-    priority: int = 100
     pool_selector: str = ""
     runtime_class: str = ""
     docker_enabled: bool = False
@@ -58,6 +58,13 @@ class WorkerCapacity(ContractModel):
     """Account whose machine this is; empty on the shared platform fleet."""
 
     private_worker: bool = False
+    priority: int = 0
+    """Feeding unit's preference for this worker, higher preferred.
+
+    A tier above packing rather than a term mixed into it, so no value of it can
+    stop capacity concentrating and no weight has to be justified.
+    """
+
     gpu_type: str = ""
     runtime_class: str = ""
     runtime_classes: list[str] = Field(default_factory=list)
@@ -137,9 +144,7 @@ class WorkerCapacity(ContractModel):
         if not request.preemptible and self.preemptible:
             return False
         if request.gpu_count > 0:
-            if _requires_specific_gpu_type(request) and (
-                not self.gpu_type or not _gpu_type_matches_request(self.gpu_type, request)
-            ):
+            if not gpu_preference_accepts(request.gpu, self.gpu_type):
                 return False
         elif self.gpu_type:
             return False
@@ -190,37 +195,6 @@ class SchedulingBatchPlan(ContractModel):
 _DOCKER_ENABLED_RUNTIME_CLASSES = frozenset({"runsc", "gvisor", "sandboxed-oci"})
 
 
-def _gpu_type_matches_request(worker_gpu_type: str, request: SchedulingRequest) -> bool:
-    """Match the way placement matches, or the two disagree about the same worker.
-
-    Pool selection normalises both sides through `normalize_gpu_type`, so a
-    request naming a GPU in any of its spellings finds a pool and provisions a
-    machine. Comparing raw strings here then refused the very worker that machine
-    registered: the documented `gpu="l4"` reached a pool advertising `"L4"` and
-    never placed, and the workload failed on a retry limit that named nothing.
-    """
-    requested = {
-        normalize_gpu_type(item)
-        for item in request.gpu_request
-        if item and normalize_gpu_type(item) != NO_GPU
-    }
-    if request.gpu_type:
-        requested.add(normalize_gpu_type(request.gpu_type))
-    requested.discard(NO_GPU)
-    if not requested:
-        return True
-    if GPU_ANY in requested:
-        return True
-    return normalize_gpu_type(worker_gpu_type) in requested
-
-
-def _requires_specific_gpu_type(request: SchedulingRequest) -> bool:
-    requested = {item.lower() for item in request.gpu_request if item and item.lower() != "none"}
-    if request.gpu_type:
-        requested.add(request.gpu_type.lower())
-    return bool(requested - {"any"})
-
-
 def select_worker_for_request(
     request: SchedulingRequest,
     workers: Iterable[WorkerCapacity],
@@ -241,10 +215,19 @@ def select_worker_for_request(
     # of machines it takes to keep them all warm rather than the number the work
     # needs. Packing leaves machines genuinely empty, which is the only thing
     # the idle drain can act on.
+    #
+    # Priority tiers above that packing and below liveness. Above, because as a
+    # tiebreak on a tuple of floats it would decide almost nothing and read as
+    # implemented while doing nothing. Below `pending`, because a pending worker
+    # has not registered yet: preferring one over a worker that can run the
+    # request now leaves the request waiting beside capacity that was ready.
+    # Within a tier the key is unchanged, so packing stays exact, and a tier
+    # that receives nothing empties faster than it does today.
     return min(
         candidates,
         key=lambda item: (
             item.pending,
+            -item.priority,
             *_post_placement_headroom(item, request),
             item.worker_id,
         ),
@@ -279,7 +262,10 @@ def plan_scheduling_batch(
 ) -> SchedulingBatchPlan:
     remaining = {worker.worker_id: worker.model_copy() for worker in workers}
     plan = SchedulingBatchPlan()
-    ordered_requests = sorted(requests, key=lambda item: (item.priority, item.created_at, item.id))
+    # Oldest first. There is no per-request priority in the product, and the
+    # unit's priority is a property of the capacity rather than of the work, so
+    # it ranks workers below and not requests here.
+    ordered_requests = sorted(requests, key=lambda item: (item.created_at, item.id))
     for request in ordered_requests:
         worker = select_worker_for_request(request, remaining.values())
         if worker is not None:

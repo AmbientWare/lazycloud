@@ -49,7 +49,7 @@ class FunctionRuntimeConfig(ContainerResourceConfig):
 
     @property
     def gpu_required(self) -> bool:
-        return self.requires_gpu or bool(self.requested_gpu_type) or self.gpu_count > 0
+        return self.requires_gpu or bool(self.gpu) or self.gpu_count > 0
 
 
 class FunctionStubConfig(BaseModel):

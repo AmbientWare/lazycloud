@@ -15,7 +15,7 @@ class DeploymentResourcesResponse(HttpModel):
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str | None = None
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int = 0
     timeout_seconds: int | None = None
     concurrency: int = Field(default=1, gt=0)

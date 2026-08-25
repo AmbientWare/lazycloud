@@ -30,10 +30,10 @@ export function WorkloadConfiguration({
       <ConfigurationGroup title="Runtime">
         <Fact label="CPU" value={resourceAllocation(resources.cpu, "cores")} />
         <Fact label="Memory" value={resourceAllocation(resources.memory)} />
-        {resources.gpu ? (
+        {resources.gpu.length > 0 ? (
           <Fact
             label="GPU"
-            value={`${resources.gpu}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+            value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
           />
         ) : null}
         <Fact label="Pool" value={deployment.spec.pool || "Not reported"} />

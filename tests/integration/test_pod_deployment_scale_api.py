@@ -164,7 +164,7 @@ def test_pod_scale_rejects_incompatible_checkpoint_before_mutation(
         DeploymentSpec(
             name="checkpoint-invalid-multi-gpu",
             kind=DeploymentKind.Pod,
-            resources=Resources(gpu="nvidia", gpu_count=2, keep_warm=120),
+            resources=Resources(gpu=["T4"], gpu_count=2, keep_warm=120),
             command=["python", "-m", "http.server", "8080"],
             ports={"8080": 8080},
             metadata={

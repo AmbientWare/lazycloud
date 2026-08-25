@@ -43,7 +43,7 @@ const sandboxRowSchema = z.object({
   name: z.string(),
   created_at: z.string(),
   status: z.enum(["pending", "running", "stopping", "stopped", "failed"]),
-  gpu: z.string().nullish(),
+  gpu: z.array(z.string()).default([]),
   container_id: z.string().nullish(),
   time_to_started_ms: z.number().nullish(),
   lifetime_ms: z.number().nullish(),

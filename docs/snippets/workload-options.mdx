@@ -6,7 +6,7 @@ Every workload decorator on `App` shares this base set of options:
 | `name` | `str` | Deployment resource name. Defaults to the decorated callable's name. |
 | `cpu` | `float` | CPU cores requested per container. |
 | `memory` | `str` | Memory requested per container, for example `"512Mi"` or `"2Gi"`. |
-| `gpu` | `str` | GPU type: `"t4"`, `"l4"`, `"a10g"`, `"a100"`, `"h100"`, or `"any"`. |
+| `gpu` | `str \| list[str]` | GPU models, best first: `"t4"`, `"l4"`, `"a10g"`, `"a100-40"`, `"a100-80"`, `"l40s"`, `"h100"`, `"h200"`, or `"any"` last. A list is a preference, so `["h100", "l4"]` takes an H100 where one is available and an L4 otherwise. The two A100 sizes are named separately because they are not interchangeable. |
 | `gpu_count` | `int` | Number of GPUs per container. Defaults to `0`. |
 | `env` | `dict[str, str]` | Plain environment variables injected into containers. |
 | `secrets` | `list[str]` | Workspace secret names injected as environment variables. |

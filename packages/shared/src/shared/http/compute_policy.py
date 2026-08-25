@@ -135,7 +135,7 @@ class WorkspaceComputeWorkloadResponse(HttpModel):
     pool: MachinePool
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int = Field(default=0, ge=0)
 
 

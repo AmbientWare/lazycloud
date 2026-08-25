@@ -113,3 +113,34 @@ def test_a_ceiling_below_its_request_is_refused_at_the_public_boundary() -> None
                     memory=memory,
                 )
             )
+
+
+def test_a_gpu_the_platform_cannot_schedule_is_refused_at_the_public_boundary() -> None:
+    """Refused where it is written, not as `offer_unavailable` hours later.
+
+    `a100` reached here for months. It is a real name that no worker reports and
+    no offer carries, so it passed every check and placed nowhere, and what the
+    author saw was a deploy that failed for no stated reason.
+    """
+    with pytest.raises(ValueError) as refusal:
+        stub_config(
+            GetOrCreateStubRequest(
+                name="ambiguous-a100",
+                stub_type=DeploymentKind.Function.value,
+                gpu=["a100"],
+                gpu_count=1,
+            )
+        )
+
+    assert "A100-40" in str(refusal.value)
+
+    # The order an author wrote survives the boundary intact.
+    config = stub_config(
+        GetOrCreateStubRequest(
+            name="chained",
+            stub_type=DeploymentKind.Function.value,
+            gpu=["h100", "l4"],
+            gpu_count=1,
+        )
+    )
+    assert config.runtime.gpu == ["H100", "L4"]

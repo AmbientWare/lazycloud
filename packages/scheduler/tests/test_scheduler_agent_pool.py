@@ -283,6 +283,7 @@ class _WorkerRepo:
         *,
         workspace_id: str,
         owner_user_id: str,
+        priority: int,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
         worker = self.workers[worker_id]
@@ -290,6 +291,7 @@ class _WorkerRepo:
             update={
                 "workspace_id": workspace_id,
                 "owner_user_id": owner_user_id,
+                "priority": priority,
                 "updated_at": now or worker.updated_at,
             }
         )

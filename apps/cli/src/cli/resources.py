@@ -333,6 +333,16 @@ def unit_create(
     max_machines: Annotated[int, typer.Option("--max-machines", min=0)] = 1,
     scaling_enabled: Annotated[bool, typer.Option("--scaling-enabled")] = False,
     default_eligible: Annotated[bool, typer.Option("--default-eligible")] = False,
+    priority: Annotated[
+        int,
+        typer.Option(
+            "--priority",
+            help=(
+                "Preference over other units serving the same work. Higher is "
+                "preferred; work fills the highest tier that fits before the next."
+            ),
+        ),
+    ] = 0,
     worker_cpu_millicores: Annotated[
         int,
         typer.Option("--worker-cpu-millicores", min=0),
@@ -364,6 +374,7 @@ def unit_create(
             max_machines=max_machines,
             scaling_enabled=scaling_enabled,
             default_eligible=default_eligible,
+            priority=priority,
             worker_cpu_millicores=worker_cpu_millicores,
             worker_memory_mib=worker_memory_mib,
             worker_gpu_type=worker_gpu_type,
@@ -427,7 +438,7 @@ def unit_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Pools",
-            ["name", "pool", "provider", "owner", "initial", "min", "max", "scaling"],
+            ["name", "pool", "provider", "owner", "initial", "min", "max", "scaling", "priority"],
             [
                 [
                     item.name,
@@ -438,6 +449,7 @@ def unit_list(ctx: typer.Context) -> None:
                     str(item.min_machines),
                     str(item.max_machines),
                     str(item.scaling_enabled),
+                    str(item.priority),
                 ]
                 for item in records
             ],

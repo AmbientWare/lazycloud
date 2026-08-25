@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from database.records.apps import AppRecord, StubKind, StubRecord
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
 from shared.identity import ConcurrencyLimitRecord, WorkspaceRecord
@@ -49,7 +49,7 @@ class StubConfigUpdateResult(ContractModel):
 class StubCloneOverride(ContractModel):
     cpu: int | None = None
     memory: int | None = None
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int | None = None
 
 

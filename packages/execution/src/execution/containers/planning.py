@@ -49,8 +49,7 @@ class ContainerSchedulingOptions(ContractModel):
     # here rather than silently fall back to the platform default, and zero
     # would mean unlimited, which no container gets.
     disk_mib: int = Field(gt=0)
-    gpu_type: str = ""
-    gpu_request: list[str] | None = None
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int = 0
     pool_selector: str = ""
     runtime: OciRuntimeName | str = OciRuntimeName.Runsc

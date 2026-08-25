@@ -38,7 +38,7 @@ def test_deployment_response_exposes_safe_workload_configuration() -> None:
             "cpu": 2.0,
             "memory": "2Gi",
             "disk": "100Gi",
-            "gpu": None,
+            "gpu": [],
             "gpu_count": 0,
             "timeout_seconds": 180,
             "concurrency": 8,

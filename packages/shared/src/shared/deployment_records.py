@@ -52,7 +52,9 @@ class Resources(ContractModel):
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str = DEFAULT_DISK
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
+    """Models this workload accepts, best first; empty asks for no GPU."""
+
     gpu_count: int = 0
     timeout_seconds: int | None = None
     concurrency: int = 1

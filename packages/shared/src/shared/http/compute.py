@@ -40,6 +40,15 @@ class UnitPolicy(HttpModel):
     scaling_enabled: bool = False
     default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
+    """Preference for this unit over another that could serve the same work.
+
+    Higher is preferred. Work fills the highest tier that fits before any of the
+    next, and inside a tier placement is unchanged.
+
+    A provider unit's machines read it when they launch, so retuning it reaches
+    the fleet as machines turn over rather than at once. A joined machine is
+    never replaced, so its workers converge on the next reconcile instead.
+    """
     min_free_cpu_millicores: int = Field(default=0, ge=0)
     min_free_memory_mib: int = Field(default=0, ge=0)
     min_free_gpu_count: int = Field(default=0, ge=0)

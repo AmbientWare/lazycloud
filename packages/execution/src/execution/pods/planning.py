@@ -46,7 +46,7 @@ class PodContainerStartRequest(ContractModel):
     disk_mib: int = Field(default=0, ge=0)
     requires_gpu: bool = False
     gpu_count: int = Field(default=0, ge=0)
-    gpu_request: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
     image_id: str = ""
     env: list[str] = Field(default_factory=list)
     secret_env: list[str] = Field(default_factory=list)
@@ -64,7 +64,7 @@ class PodContainerStartPlan(ContractModel):
     memory_limit_mib: int = 0
     disk_mib: int = 0
     gpu_count: int
-    gpu_request: list[str]
+    gpu: list[str]
     image_id: str
     ports: list[int]
     checkpoint_enabled: bool
@@ -147,7 +147,7 @@ def plan_pod_container_start(request: PodContainerStartRequest) -> PodContainerS
         memory_limit_mib=request.memory_limit_mib,
         disk_mib=request.disk_mib,
         gpu_count=gpu_count,
-        gpu_request=request.gpu_request,
+        gpu=request.gpu,
         image_id=request.image_id,
         ports=request.ports,
         checkpoint_enabled=request.checkpoint_enabled,

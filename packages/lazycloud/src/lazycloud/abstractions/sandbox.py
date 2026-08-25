@@ -22,6 +22,7 @@ from shared.deployment_records import (
     request_and_limit,
 )
 from shared.deployments import DeploymentKind
+from shared.gpu import GpuInput, gpu_preference
 from shared.http import pods
 from shared.http.errors import HttpApiError
 from shared.http.pods import (
@@ -218,7 +219,7 @@ class SandboxOptions(TypedDict, total=False):
     cpu: CpuRequest | str
     memory: MemoryRequest
     disk: str | None
-    gpu: str | None
+    gpu: GpuInput
     gpu_count: int
     image: Image | None
     keep_warm_seconds: int
@@ -1527,7 +1528,7 @@ class Sandbox(ControlClientConfigMixin):
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str | None = None
-    gpu: str | None = None
+    gpu: GpuInput = None
     gpu_count: int = 0
     keep_warm_seconds: int = 600
     secrets: list[str] = field(default_factory=list)
@@ -1559,7 +1560,7 @@ class Sandbox(ControlClientConfigMixin):
         cpu: CpuRequest | str = 1.0,
         memory: MemoryRequest = 128,
         disk: str | None = None,
-        gpu: str | None = None,
+        gpu: GpuInput = None,
         gpu_count: int = 0,
         image: Image | None = None,
         keep_warm_seconds: int = 600,
@@ -1633,7 +1634,7 @@ class Sandbox(ControlClientConfigMixin):
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
-                gpu=self.gpu,
+                gpu=list(gpu_preference(self.gpu)),
                 gpu_count=self.gpu_count,
                 keep_warm=self.keep_warm_seconds,
                 preemptible=self.preemptible,

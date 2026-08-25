@@ -810,7 +810,7 @@ class RemoteWorkerRepositoryState:
                 worker_id=self.worker_id,
                 cpu_millicores=request.cpu_millicores,
                 memory_mib=request.memory_mib,
-                gpu_type=request.gpu_type,
+                gpu_type=next(iter(request.gpu), ""),
                 gpu_count=request.gpu_count,
                 status=SchedulerContainerStatus.Pending,
                 scheduled_at=request.timestamp,

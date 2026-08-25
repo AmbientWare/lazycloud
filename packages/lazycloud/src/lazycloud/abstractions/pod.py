@@ -15,6 +15,7 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DeploymentKind
+from shared.gpu import GpuInput, gpu_preference
 from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentResponse
 from shared.http.gateway import (
@@ -79,7 +80,7 @@ class PodOptions(TypedDict, total=False):
     cpu: CpuRequest | None
     memory: MemoryRequest | None
     disk: str | None
-    gpu: str | None
+    gpu: GpuInput
     gpu_count: int
     keep_warm: int
     secrets: list[str]
@@ -188,7 +189,7 @@ class Pod(ControlClientConfigMixin):
     cpu: CpuRequest | None = 1.0
     memory: MemoryRequest | None = "128Mi"
     disk: str | None = None
-    gpu: str | None = None
+    gpu: GpuInput = None
     gpu_count: int = 0
     keep_warm: int = 600
     secrets: list[str] = field(default_factory=list)
@@ -272,7 +273,7 @@ class Pod(ControlClientConfigMixin):
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
-                gpu=self.gpu,
+                gpu=list(gpu_preference(self.gpu)),
                 gpu_count=self.gpu_count,
                 keep_warm=self.keep_warm,
                 preemptible=self.preemptible,
@@ -318,7 +319,7 @@ class Pod(ControlClientConfigMixin):
         cpu: CpuRequest | None = None,
         memory: MemoryRequest | None = None,
         disk: str | None = None,
-        gpu: str | None = None,
+        gpu: GpuInput = None,
         gpu_count: int | None = None,
         keep_warm: int | None = None,
         secrets: list[str] | None = None,

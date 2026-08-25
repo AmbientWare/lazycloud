@@ -28,6 +28,7 @@ from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
+from shared.gpu import GPU_ANY, gpu_preference_accepts
 from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
@@ -128,11 +129,7 @@ class CapacityRequestShape(ContractModel):
         return self
 
     def can_host(self, request: SchedulerWorkerRequest) -> bool:
-        requested_gpu = gpu_count_for_capacity(
-            request.gpu_type,
-            request.gpu_request,
-            request.gpu_count,
-        )
+        requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
         if self.cpu_millicores < request.cpu_millicores:
             return False
         if self.memory_mib < capacity_memory_mib(request.memory_mib):
@@ -141,7 +138,7 @@ class CapacityRequestShape(ContractModel):
             return False
         if requested_gpu <= 0 and self.gpu_count > 0:
             return False
-        if requested_gpu > 0 and not _gpu_matches(self.gpu_type, request):
+        if requested_gpu > 0 and not gpu_preference_accepts(request.gpu, self.gpu_type):
             return False
         if request.runtime_class and request.runtime_class not in self.runtime_classes:
             return False
@@ -770,11 +767,7 @@ class RedisCapacityReservationRepository:
             workspace_id=request.workspace_id,
             cpu_millicores=request.cpu_millicores,
             memory_mib=capacity_memory_mib(request.memory_mib),
-            gpu_count=gpu_count_for_capacity(
-                request.gpu_type,
-                request.gpu_request,
-                request.gpu_count,
-            ),
+            gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
             created_at=current_time,
         )
         self._store_reservation_and_allocation(reservation, allocation, created=created)
@@ -972,11 +965,7 @@ class RedisCapacityReservationRepository:
             used_cpu = sum(item.cpu_millicores for item in allocations)
             used_memory = sum(item.memory_mib for item in allocations)
             used_gpu = sum(item.gpu_count for item in allocations)
-            requested_gpu = gpu_count_for_capacity(
-                request.gpu_type,
-                request.gpu_request,
-                request.gpu_count,
-            )
+            requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
             if (
                 used_cpu + request.cpu_millicores <= reservation.allocation_shape.cpu_millicores
                 and used_memory + capacity_memory_mib(request.memory_mib)
@@ -1629,11 +1618,7 @@ def reservation_shape_for_request(
     worker_runtimes: Iterable[str],
     worker_preemptible: bool,
 ) -> CapacityRequestShape:
-    requested_gpu_count = gpu_count_for_capacity(
-        request.gpu_type,
-        request.gpu_request,
-        request.gpu_count,
-    )
+    requested_gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
     requested_gpu_type = _requested_gpu_type(request)
     gpu_count = max(worker_gpu_count, requested_gpu_count)
     gpu_type = worker_gpu_type or requested_gpu_type if gpu_count > 0 else ""
@@ -1796,26 +1781,14 @@ def _redis_strings(values: Iterable[str | bytes | int | float | bool]) -> list[s
 
 
 def _requested_gpu_type(request: SchedulerWorkerRequest) -> str:
-    if request.gpu_type and request.gpu_type.lower() not in {"any", "gpu_any", "none"}:
-        return request.gpu_type
-    for candidate in request.gpu_request:
-        if candidate and candidate.lower() not in {"any", "gpu_any", "none"}:
-            return candidate
-    return ""
+    """The card a shape is named after, which is the first real model asked for.
 
+    A shape describes one machine, so it carries one model however many the
+    request would accept. `any` is not one: it is a wildcard, and a shape built
+    around it would name hardware nothing reports.
+    """
 
-def _gpu_matches(gpu_type: str, request: SchedulerWorkerRequest) -> bool:
-    requested = {
-        candidate.lower()
-        for candidate in [request.gpu_type, *request.gpu_request]
-        if candidate and candidate.lower() not in {"none"}
-    }
-    return (
-        not requested
-        or "any" in requested
-        or "gpu_any" in requested
-        or gpu_type.lower() in requested
-    )
+    return next((entry for entry in request.gpu if entry != GPU_ANY), "")
 
 
 def _supports_docker(runtimes: Iterable[str]) -> bool:
