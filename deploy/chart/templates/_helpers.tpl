@@ -46,3 +46,44 @@ outside picks it, and a value would be a way for the file and the process that
 reads it to disagree.
 */}}
 {{- define "lazycloud.awsProfile" -}}control{{- end -}}
+
+{{/*
+One workload's database pool, as environment.
+
+Per workload rather than in the shared env block, because the processes differ:
+the API serves concurrent requests, the scheduler runs a few loops, and a
+bootstrap job is one thread that exits. A single value for all of them is either
+too small for the API or, multiplied across every pod, larger than the server
+allows.
+*/}}
+{{- define "lazycloud.databaseEnv" -}}
+- name: LAZYCLOUD_DATABASE_POOL_SIZE
+  value: {{ .poolSize | quote }}
+- name: LAZYCLOUD_DATABASE_MAX_OVERFLOW
+  value: {{ .maxOverflow | quote }}
+{{- end -}}
+
+{{/*
+Refuse to render a deployment that cannot connect.
+
+The ceiling is shared and nothing enforces it: exceeding it produces connection
+timeouts under load, in whichever process happens to ask last, minutes after the
+value that caused it was changed. Checked here so it is a rendering error naming
+the sum instead.
+
+One job's worth, not every job's: the two that open a database are in different
+sync waves and the third opens none, so they never hold connections at once. The
+worst moment is a job running while the previous release's pods still serve,
+which this counts.
+*/}}
+{{- define "lazycloud.databaseBudget" -}}
+{{- $ceiling := int .Values.database.maxConnections -}}
+{{- $reserved := int .Values.database.reserved -}}
+{{- $api := mul (int .Values.controlPlane.replicas) (add (int .Values.controlPlane.database.poolSize) (int .Values.controlPlane.database.maxOverflow)) -}}
+{{- $scheduler := mul (int .Values.scheduler.replicas) (add (int .Values.scheduler.database.poolSize) (int .Values.scheduler.database.maxOverflow)) -}}
+{{- $jobs := add (int .Values.bootstrap.database.poolSize) (int .Values.bootstrap.database.maxOverflow) -}}
+{{- $total := add $api $scheduler $jobs -}}
+{{- if gt (add $total $reserved) $ceiling -}}
+{{- fail (printf "database pools may open %d connections (control plane %d, scheduler %d, jobs %d) with %d reserved, and the server allows %d" $total $api $scheduler $jobs $reserved $ceiling) -}}
+{{- end -}}
+{{- end -}}

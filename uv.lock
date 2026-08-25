@@ -149,6 +149,7 @@ version = "0.1.0"
 source = { editable = "apps/api" }
 dependencies = [
     { name = "agent" },
+    { name = "anyio" },
     { name = "billing" },
     { name = "cache" },
     { name = "cloudpickle" },
@@ -184,6 +185,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
+    { name = "anyio", specifier = ">=4,<5" },
     { name = "billing", editable = "packages/billing" },
     { name = "cache", editable = "packages/cache" },
     { name = "cloudpickle", specifier = ">=3,<4" },

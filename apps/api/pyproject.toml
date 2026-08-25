@@ -5,6 +5,7 @@ description = "FastAPI control-plane server for LazyCloud."
 requires-python = ">=3.12"
 dependencies = [
     "agent",
+    "anyio>=4,<5",
     "billing",
     "cache",
     "cloudpickle>=3,<4",

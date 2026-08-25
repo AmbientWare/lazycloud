@@ -34,17 +34,39 @@ serviceAccounts:
   scheduler: scheduler
   externalSecrets: external-secrets
 
+# The server's own ceiling, divided below. Every process holds its own pool, so
+# the sum of what they may open is the number that has to fit, and nothing
+# reports the overrun except requests failing to connect once it is exceeded.
+database:
+  maxConnections: 25
+  # Kept back for an operator's psql and the database's own sessions.
+  reserved: 3
+
 controlPlane:
-  replicas: 1
+  replicas: 2
   resources:
     requests: { cpu: 500m, memory: 1Gi }
     limits: { memory: 2Gi }
+  # One of these is held for the process's lifetime by the recovery fence, so a
+  # replica works with one fewer than it appears to have.
+  database:
+    poolSize: 4
+    maxOverflow: 2
 
 scheduler:
   replicas: 1
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { memory: 1Gi }
+  database:
+    poolSize: 4
+    maxOverflow: 2
+
+# Single-threaded, and they run to completion before anything serves.
+bootstrap:
+  database:
+    poolSize: 1
+    maxOverflow: 1
 
 # The class every claim in this chart names, created here because Auto Mode
 # provides the driver and no class.

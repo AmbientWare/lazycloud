@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass
 from threading import RLock
 from uuid import uuid4
 
+from shared.errors import UpstreamUnavailableError
 from sqlalchemy import Engine, create_engine, event, literal, select, text
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -18,6 +21,8 @@ from sqlalchemy.pool import StaticPool
 
 from database.settings import DatabaseApplicationName, DatabaseSettings
 from database.tables import DatabaseBase
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -42,7 +47,7 @@ class DatabaseClient:
     @contextmanager
     def session(self) -> Iterator[Session]:
         with _optional_lock(self.session_lock):
-            session = self.sessions()
+            session = self._checkout()
             try:
                 yield session
                 session.commit()
@@ -51,6 +56,34 @@ class DatabaseClient:
                 raise
             finally:
                 session.close()
+
+    def _checkout(self) -> Session:
+        session = self.sessions()
+        try:
+            session.connection()
+        except PoolTimeout as exc:
+            session.close()
+            raise self._pool_exhausted(exc) from exc
+        return session
+
+    def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
+        """Name the pool, so exhaustion is not read as an unreachable database.
+
+        The two look identical from a failed query and want opposite responses:
+        one is fixed by waiting or shedding load, the other by looking at the
+        database. Saying which, with the pool's own numbers, is the difference
+        between a minute and an afternoon.
+        """
+
+        LOGGER.warning(
+            "database pool exhausted for %s: %s (%s)",
+            self.settings.application_name.value,
+            self.engine.pool.status(),
+            exc,
+        )
+        return UpstreamUnavailableError(
+            f"database connections are exhausted for {self.settings.application_name.value}"
+        )
 
     def create_schema(self) -> None:
         if self.engine.dialect.name == "postgresql":
@@ -61,8 +94,11 @@ class DatabaseClient:
         DatabaseBase.metadata.create_all(self.engine)
 
     def ping(self) -> bool:
-        with self.engine.connect() as connection:
-            return connection.scalar(select(literal(1))) == 1
+        try:
+            with self.engine.connect() as connection:
+                return connection.scalar(select(literal(1))) == 1
+        except PoolTimeout as exc:
+            raise self._pool_exhausted(exc) from exc
 
     def dispose(self) -> None:
         self.engine.dispose()
@@ -134,6 +170,9 @@ def _engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
         "echo": settings.echo,
         "pool_size": settings.pool_size,
         "max_overflow": settings.max_overflow,
+        "pool_timeout": settings.pool_timeout_seconds,
+        "pool_recycle": settings.pool_recycle_seconds,
+        "pool_use_lifo": settings.pool_use_lifo,
         "pool_pre_ping": True,
     }
 

@@ -593,6 +593,33 @@ class StubRepository:
     def list(self, *, workspace_id: str) -> list[StubRecord]:
         return self.records.list(workspace_id=workspace_id)
 
+    def app_ids_by_id(
+        self,
+        stub_ids: Sequence[str],
+        *,
+        workspace_id: str,
+    ) -> dict[str, str]:
+        """Which app each of these stubs belongs to, in one query.
+
+        Resolved for a whole page at once because the caller has a page: asking
+        per row turned one list request into a hundred round trips against a
+        connection budget shared with everything else the deployment does.
+
+        Scoped, unlike the per-row lookup it replaces, which read across every
+        workspace to answer a question about one.
+        """
+
+        wanted = [stub_id for stub_id in dict.fromkeys(stub_ids) if stub_id]
+        if not wanted:
+            return {}
+        rows = self.session.execute(
+            select(StubTable.id, StubTable.app_id).where(
+                StubTable.workspace_id == workspace_id,
+                StubTable.id.in_(wanted),
+            )
+        )
+        return {str(stub_id): str(app_id) for stub_id, app_id in rows if app_id}
+
     def list_for_app(self, *, workspace_id: str, app_id: str) -> list[StubRecord]:
         statement = select(StubTable).where(
             StubTable.workspace_id == workspace_id,
