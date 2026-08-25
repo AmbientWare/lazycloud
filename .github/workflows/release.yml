@@ -154,6 +154,34 @@ jobs:
           test -n "${cpu_ami_ids}"
           echo "cpu_ami_ids=${cpu_ami_ids}" >> "${GITHUB_OUTPUT}"
 
+      # A second image from the same release, carrying the NVIDIA driver and
+      # toolkit. One image covers every card, because the driver branch is
+      # unified across Turing through Blackwell.
+      #
+      # Baked here rather than by hand so both catalogs describe one release. A
+      # GPU AMI from an earlier bake names an earlier agent and worker image
+      # than the CPU one beside it.
+      #
+      # A release without this publishes an empty GPU catalog and nothing fails.
+      # Every GPU instance type stops being offerable while CPU capacity keeps
+      # working, so the symptom is a priced fleet that will not launch the cards
+      # it is priced for.
+      - name: Bake connected AWS GPU node image
+        id: bake-gpu
+        shell: bash
+        run: |
+          gpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
+            --variant gpu \
+            --release-version "${{ steps.version.outputs.version }}" \
+            --agent-version-dir "dist/agent-binarys/${{ steps.version.outputs.version }}" \
+            --worker-image \
+            "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
+            --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
+            --bucket-region "${AWS_RELEASE_REGION}" \
+            --regions us-east-1)"
+          test -n "${gpu_ami_ids}"
+          echo "gpu_ami_ids=${gpu_ami_ids}" >> "${GITHUB_OUTPUT}"
+
       - name: Stage immutable connected AWS release bundle
         run: >-
           uv run --group workspace python deploy/aws-release-assets/release.py stage
@@ -165,6 +193,7 @@ jobs:
           --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
           --region "${AWS_RELEASE_REGION}"
           --cpu-ami-ids '${{ steps.bake.outputs.cpu_ami_ids }}'
+          --gpu-ami-ids '${{ steps.bake-gpu.outputs.gpu_ami_ids }}'
           --output dist/connected-aws
 
       - name: Publish and anonymously verify connected AWS release bundle
