@@ -71,7 +71,17 @@ class WorkerPoolDrainContainer(Protocol):
 
 @runtime_checkable
 class WorkerPoolDrainWorkerRepository(Protocol):
-    def list_workers_in_pool(self, pool: str) -> Sequence[WorkerPoolDrainWorker]: ...
+    def list_workers_for_capacity_owner(
+        self,
+        capacity_owner_id: str,
+    ) -> Sequence[WorkerPoolDrainWorker]:
+        """Workers this capacity owner holds.
+
+        Asked by owner rather than by pool name: a unit's name and the pool its
+        workers register under are different strings, and asking for one by the
+        other returns nothing at all rather than failing.
+        """
+        ...
 
 
 @runtime_checkable
@@ -228,11 +238,7 @@ class ManagedComputeWorkerPoolDrainController:
                 reason="pool is at min machines",
             )
         workers_by_machine = _workers_by_machine(
-            [
-                worker
-                for worker in self.workers.list_workers_in_pool(self.unit_name)
-                if worker.capacity_owner_id == self.capacity_owner_id
-            ]
+            self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
         )
         candidate = _idle_machine_candidate(
             workers_by_machine,
@@ -312,11 +318,7 @@ class ManagedComputeWorkerPoolDrainController:
             return None
 
         workers_by_machine = _workers_by_machine(
-            [
-                worker
-                for worker in self.workers.list_workers_in_pool(self.unit_name)
-                if worker.capacity_owner_id == self.capacity_owner_id
-            ]
+            self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
         )
         cordoned_since = self.compute.internal_unit_cordoned_machines(
             self.state.workspace_id,
