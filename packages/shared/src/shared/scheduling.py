@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -65,8 +66,15 @@ class SchedulerWorkerRequest(ContractModel):
     container_id: str
     cpu_millicores: int = 0
     memory_mib: int = 0
-    gpu_type: str = ""
-    gpu_request: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
+    """Models this request accepts, best first; empty asks for no GPU.
+
+    Ordered, and the order is the author's instruction rather than a set the
+    platform may reorder by price. A card several times dearer may be several
+    times faster for their kernel, and nothing here models throughput, so the
+    platform cannot make that trade and does not try.
+    """
+
     gpu_count: int = 0
     pool_selector: str = ""
     """Pool this request must land in, empty to take the default.
@@ -176,6 +184,16 @@ class SchedulerWorkerRecord(ContractModel):
     worker that named its own billing owner could mark its compute self-hosted and
     have it dropped from every bill. The default is the fleet because a worker the
     platform started is the only kind that arrives without an enrolling unit.
+    """
+
+    priority: int = 0
+    """Preference for landing work here, taken from the unit that feeds this pool.
+
+    Higher is preferred, the same direction capacity acquisition already reads.
+    Stamped from the same authority as the three fields above, and for the same
+    reason: a worker on hardware its owner holds root on could otherwise name the
+    largest integer there is and pull every one of that account's requests onto
+    itself, starving the cloud pool the account is paying for.
     """
 
     machine_id: str = ""
@@ -358,12 +376,15 @@ class ContainerSchedulingDirectory(Protocol):
     def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap: ...
 
 
-def gpu_count_for_capacity(
-    gpu_type: str,
-    gpu_request: list[str] | None,
-    gpu_count: int,
-) -> int:
-    if gpu_type == "" and not gpu_request:
+def gpu_count_for_capacity(gpu: Sequence[str], gpu_count: int) -> int:
+    """Cards to reserve for a request that named some models but no number.
+
+    The list says which models will do, never how many are wanted: asking for
+    an H100 or an L4 is one card either way. Counting its length read a
+    two-model preference as a two-GPU request.
+    """
+
+    if not gpu:
         return 0
     if gpu_count == 0:
         return 1

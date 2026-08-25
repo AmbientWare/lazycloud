@@ -426,7 +426,9 @@ class SchedulerContainerRequestService:
                 labels={
                     "workspace_id": request.workspace_id,
                     "stub_id": request.stub_id,
-                    "gpu": request.gpu_type,
+                    # What was asked for, not what ran: the worker's own card is
+                    # what billing reads, at the shape below.
+                    "gpu_request": ",".join(request.gpu),
                 },
                 metadata={
                     "container_id": request.container_id,
@@ -704,11 +706,7 @@ class SchedulerContainerRequestService:
     def _reserve_quota(self, request: SchedulerWorkerRequest, now: datetime) -> str:
         if not _request_uses_quota(request):
             return ""
-        gpu_count = gpu_count_for_capacity(
-            request.gpu_type,
-            request.gpu_request,
-            request.gpu_count,
-        )
+        gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
         workspace_gpu_quota = (
             request.workspace_gpu_quota
             if request.workspace_gpu_quota > 0
@@ -993,11 +991,7 @@ class SchedulerContainerRequestService:
         return WorkerReservedCapacity(
             cpu_millicores=request.cpu_millicores,
             memory_mib=capacity_memory_mib(request.memory_mib),
-            gpu_count=gpu_count_for_capacity(
-                request.gpu_type,
-                request.gpu_request,
-                request.gpu_count,
-            ),
+            gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
         )
 
     def _fail_request(
@@ -1108,12 +1102,8 @@ def _container_state(
         worker_id=worker_id,
         status=status,
         scheduled_at=scheduled_at or utc_now(),
-        gpu_type=request.gpu_type,
-        gpu_count=gpu_count_for_capacity(
-            request.gpu_type,
-            request.gpu_request,
-            request.gpu_count,
-        ),
+        gpu_type=next(iter(request.gpu), ""),
+        gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
         cpu_millicores=request.cpu_millicores,
         memory_mib=request.memory_mib,
         image_build_id=str(request.payload.get("build_id") or "") if is_image_build else "",
@@ -1133,11 +1123,7 @@ def _scheduling_request(
 ) -> SchedulingRequest:
     memory_mib = capacity_memory_mib(request.memory_mib)
     cpu = request.cpu_millicores / 1000
-    gpu_count = gpu_count_for_capacity(
-        request.gpu_type,
-        request.gpu_request,
-        request.gpu_count,
-    )
+    gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
     return SchedulingRequest(
         id=request.container_id,
         owner_user_id=owner_user_id,
@@ -1146,8 +1132,7 @@ def _scheduling_request(
         cpu=cpu,
         memory_mib=memory_mib,
         gpu_count=gpu_count,
-        gpu_type=request.gpu_type,
-        gpu_request=list(request.gpu_request),
+        gpu=list(request.gpu),
         pool_selector=request.pool_selector,
         runtime_class=request.runtime_class,
         docker_enabled=request.docker_enabled,
@@ -1199,6 +1184,7 @@ def _worker_capacity(
         pool=worker.pool,
         owner_user_id=worker.owner_user_id,
         private_worker=worker.private_worker,
+        priority=worker.priority,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,
         runtime_classes=list(worker.runtime_classes),

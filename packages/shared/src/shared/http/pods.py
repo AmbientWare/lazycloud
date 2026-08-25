@@ -228,7 +228,7 @@ class SandboxRow(HttpModel):
     name: str
     created_at: datetime
     status: SandboxDashboardStatus
-    gpu: str | None = None
+    gpu: list[str] = Field(default_factory=list)
     container_id: str | None = None
     time_to_started_ms: int | None = None
     lifetime_ms: int | None = None

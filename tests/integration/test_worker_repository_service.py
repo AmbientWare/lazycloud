@@ -2458,6 +2458,9 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
                 status=SchedulerWorkerStatus.Available,
                 private_worker=False,
                 requires_pool_selector=True,
+                # Which capacity this account's work prefers is the unit's to
+                # decide, so a host that names its own is answered the same way.
+                priority=2**31 - 1,
                 total_cpu_millicores=1000,
                 total_memory_mib=1024,
                 free_cpu_millicores=1000,
@@ -2477,6 +2480,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     assert stored is not None
     assert stored.private_worker is True
     assert stored.owner_user_id == workspace_owner_user_id(isolated_services.context, workspace_id)
+    assert stored.priority == joined_unit.priority
 
 
 def _join_gateway_agent(

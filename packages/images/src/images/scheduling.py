@@ -129,8 +129,10 @@ def plan_image_build_container_request(
         container_id=request.session.container_id,
         cpu_millicores=cpu_millicores,
         memory_mib=memory_mib,
-        gpu_type=gpu,
-        gpu_request=[gpu] if gpu else [],
+        # One model, deliberately. A build picks the machine an image is baked
+        # on, which is a reproducibility question rather than a placement
+        # preference, so it does not take an ordered chain.
+        gpu=[gpu] if gpu else [],
         gpu_count=1 if gpu else 0,
         pool_selector="" if gpu else pool_selector.strip(),
         # No explicit selector means the workspace policy decides where the build

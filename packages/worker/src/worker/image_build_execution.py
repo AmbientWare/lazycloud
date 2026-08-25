@@ -1029,7 +1029,7 @@ def _request_context(
         env=list(payload.env),
         cpu_millicores=request.cpu_millicores,
         memory_mib=request.memory_mib,
-        gpu=request.gpu_type,
+        gpu=next(iter(request.gpu), ""),
         gpu_count=request.gpu_count,
     )
 

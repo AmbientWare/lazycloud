@@ -161,10 +161,10 @@ function PodInstanceDrawerBody({
             <Fact label="Uptime" value={podInstanceUptime(record)} mono />
             <Fact label="CPU allocation" value={resourceAllocation(resources.cpu, "vCPU")} mono />
             <Fact label="Memory allocation" value={resourceAllocation(resources.memory)} mono />
-            {resources.gpu ? (
+            {resources.gpu.length > 0 ? (
               <Fact
                 label="GPU allocation"
-                value={`${resources.gpu}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+                value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
                 mono
               />
             ) : null}

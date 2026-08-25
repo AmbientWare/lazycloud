@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from functools import lru_cache
 
 from shared.enums import StringEnum
 
 NO_GPU = ""
 GPU_ANY = "any"
+
+GpuInput = str | Sequence[str] | None
+"""What a caller may write for `gpu=`: one model, an ordered list, or nothing."""
 
 
 class GpuType(StringEnum):
@@ -154,13 +158,99 @@ def compact_gpu_name(value: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", value.upper())
 
 
+def gpu_preference(value: GpuInput) -> tuple[str, ...]:
+    """The models a request accepts, best first, or empty for no GPU at all.
+
+    Strict where `normalize_gpu_type` is forgiving, and they are not the same
+    question. That one reads a label a worker or a provider reports and must
+    take whatever it is handed; this one reads what an author asked for, where
+    a name the platform cannot schedule has no honest reading. `a100` is the
+    one that proves it: it normalises to a real vocabulary member, and no
+    worker ever reports it, because a card is a 40GB or an 80GB one. Accepted
+    quietly it becomes a workload that places nowhere and says `offer_unavailable`
+    at deploy time, hours from the line that caused it.
+
+    Order is the whole point of the sequence form. Earlier entries are
+    preferred, and `any` is only meaningful last, since nothing after "whatever
+    you have" can ever be reached.
+    """
+
+    if value is None:
+        return ()
+    entries = [value] if isinstance(value, str) else list(value)
+    preference: list[str] = []
+    for entry in entries:
+        normalized = normalize_gpu_type(str(entry))
+        if normalized == NO_GPU:
+            continue
+        if normalized != GPU_ANY and normalized not in SUPPORTED_GPU_NAMES:
+            raise ValueError(_unschedulable_gpu_message(entry, normalized))
+        if normalized not in preference:
+            preference.append(normalized)
+    if GPU_ANY in preference and preference[-1] != GPU_ANY:
+        unreachable = ", ".join(preference[preference.index(GPU_ANY) + 1 :])
+        msg = (
+            f"gpu 'any' accepts whatever the platform has, so nothing after it is "
+            f"ever reached: {unreachable}. Put it last, or name the models instead."
+        )
+        raise ValueError(msg)
+    return tuple(preference)
+
+
+def gpu_preference_rank(preference: Sequence[str], candidate: str) -> int | None:
+    """Where a card sits in a request's order, or None if it is not accepted.
+
+    The one place `any` is interpreted, so the path that matches an existing
+    pool and the path that buys a new one cannot disagree about it. They did:
+    one normalised and honoured the wildcard, the other compared raw strings, so
+    `gpu="any"` found a pool that existed and could not create the first one.
+    """
+
+    if not preference:
+        return 0
+    normalized = normalize_gpu_type(candidate)
+    if normalized == NO_GPU:
+        return None
+    # Both sides, not just the candidate. `gpu_preference` canonicalises what it
+    # returns, but this has to hold for any sequence it is handed: comparing a
+    # stored `l4` against a worker's `L4` is the spelling mismatch that let a
+    # request provision an instance and then refuse the worker it registered.
+    for index, entry in enumerate(preference):
+        if entry == GPU_ANY or normalize_gpu_type(entry) == normalized:
+            return index
+    return None
+
+
+def gpu_preference_accepts(preference: Sequence[str], candidate: str) -> bool:
+    return gpu_preference_rank(preference, candidate) is not None
+
+
+def _unschedulable_gpu_message(entry: object, normalized: str) -> str:
+    # A model with sized variants is the common mistake and the one worth
+    # answering directly, rather than making the reader scan the whole list for
+    # the name they nearly wrote.
+    sized = sorted(name for name in SUPPORTED_GPU_NAMES if name.startswith(f"{normalized}-"))
+    if sized:
+        return (
+            f"gpu {entry!r} does not name a card the platform runs: {normalized} comes "
+            f"in more than one size and they are not interchangeable. "
+            f"Name one of {', '.join(sized)}."
+        )
+    supported = ", ".join(sorted(SUPPORTED_GPU_NAMES))
+    return f"gpu {entry!r} is not a GPU this platform schedules. Available: {supported}, any."
+
+
 __all__ = [
     "GPU_ANY",
     "NO_GPU",
     "SUPPORTED_GPU_NAMES",
     "SUPPORTED_GPU_TYPES",
+    "GpuInput",
     "GpuType",
     "compact_gpu_name",
     "concrete_gpu_type",
+    "gpu_preference",
+    "gpu_preference_accepts",
+    "gpu_preference_rank",
     "normalize_gpu_type",
 ]

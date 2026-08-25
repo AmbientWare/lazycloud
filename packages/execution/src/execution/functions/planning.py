@@ -82,7 +82,7 @@ class FunctionContainerStartRequest(ContractModel):
     disk_mib: int = Field(default=0, ge=0)
     requires_gpu: bool = False
     gpu_count: int = Field(default=0, ge=0)
-    gpu_request: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
     image_id: str = ""
     checkpoint_enabled: bool = False
     env: list[str] = Field(default_factory=list)
@@ -100,13 +100,13 @@ class FunctionContainerStartPlan(ContractModel):
     memory_limit_mib: int = 0
     disk_mib: int = 0
     gpu_count: int
-    gpu_request: list[str]
+    gpu: list[str]
     image_id: str
 
     @computed_field
     @property
     def requires_gpu(self) -> bool:
-        return self.gpu_count > 0 or bool(self.gpu_request)
+        return self.gpu_count > 0 or bool(self.gpu)
 
 
 class FunctionMonitorStatus(StrEnum):
@@ -245,7 +245,7 @@ def plan_function_container_start(
         memory_limit_mib=request.memory_limit_mib,
         disk_mib=request.disk_mib,
         gpu_count=normalize_gpu_count(request.requires_gpu, request.gpu_count),
-        gpu_request=request.gpu_request,
+        gpu=request.gpu,
         image_id=request.image_id,
     )
 

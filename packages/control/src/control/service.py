@@ -905,7 +905,7 @@ class ControlPlaneService:
             if overrides.memory is not None:
                 runtime_config["memory"] = overrides.memory
             if overrides.gpu is not None:
-                runtime_config["gpu"] = overrides.gpu
+                runtime_config["gpu"] = list(overrides.gpu)
             if overrides.gpu_count is not None:
                 runtime_config["gpu_count"] = overrides.gpu_count
         copied_objects = self._copy_stub_objects(source, config=config, target=target_workspace)

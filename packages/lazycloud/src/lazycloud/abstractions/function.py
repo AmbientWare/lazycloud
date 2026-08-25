@@ -36,6 +36,7 @@ from shared.function_payloads import (
     FunctionInvocationArguments,
     FunctionInvocationPayload,
 )
+from shared.gpu import GpuInput, gpu_preference
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
@@ -117,7 +118,7 @@ class FunctionOptions(TypedDict, total=False):
     cpu: CpuRequest | None
     memory: MemoryRequest | None
     disk: str | None
-    gpu: str | None
+    gpu: GpuInput
     gpu_count: int
     timeout_seconds: int | None
     concurrency: int
@@ -162,7 +163,7 @@ class Function(Generic[P, R]):
     cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY
     disk: str | None = None
-    gpu: str | None = None
+    gpu: GpuInput = None
     gpu_count: int = 0
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS
     concurrency: int = 1
@@ -241,7 +242,7 @@ class Function(Generic[P, R]):
         cpu: CpuRequest | None = None,
         memory: MemoryRequest | None = None,
         disk: str | None = None,
-        gpu: str | None = None,
+        gpu: GpuInput = None,
         gpu_count: int | None = None,
         env: Mapping[str, str] | None = None,
         secrets: Iterable[str] | None = None,
@@ -287,7 +288,7 @@ class Function(Generic[P, R]):
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
-                gpu=self.gpu,
+                gpu=list(gpu_preference(self.gpu)),
                 gpu_count=self.gpu_count,
                 timeout_seconds=self._effective_timeout_seconds(),
                 concurrency=self.concurrency,
@@ -735,7 +736,7 @@ def _function(
     cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
@@ -782,7 +783,7 @@ def _function(
     cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,
@@ -828,7 +829,7 @@ def _function(
     cpu: CpuRequest | None = DEFAULT_FUNCTION_CPU,
     memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     concurrency: int = 1,

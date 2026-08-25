@@ -162,7 +162,7 @@ class ShellControlService:
                 cpu_millicores=plan.cpu_millicores,
                 memory_mib=plan.memory_mib,
                 disk_mib=plan.disk_mib,
-                gpu_request=list(plan.gpu_request),
+                gpu=list(plan.gpu),
                 gpu_count=plan.gpu_count,
                 mounts=source_code_mounts(
                     context=self.services.context,
@@ -542,7 +542,7 @@ class ShellControlService:
             memory_mib=runtime_config.memory_mib,
             gpu_count=runtime_config.gpu_count,
             requires_gpu=runtime_config.requires_gpu,
-            gpu_request=tuple(runtime_config.gpu_request),
+            gpu=tuple(runtime_config.gpu),
             image_id=runtime_config.image_id or "",
             app_id=stub.app_id or "",
             workspace_id=stub.workspace_id,

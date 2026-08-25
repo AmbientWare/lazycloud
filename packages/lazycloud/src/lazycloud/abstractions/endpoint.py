@@ -34,6 +34,7 @@ from shared.deployment_records import (
     resolve_timeout_seconds,
 )
 from shared.deployments import DeploymentKind
+from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
 from shared.http.gateway import DeployStubResponse
@@ -123,7 +124,7 @@ class EndpointOptions(TypedDict, total=False):
     cpu: CpuRequest | None
     memory: MemoryRequest | None
     disk: str | None
-    gpu: str | None
+    gpu: GpuInput
     gpu_count: int
     timeout_seconds: int | None
     retries: int
@@ -159,7 +160,7 @@ class ASGIOptions(TypedDict, total=False):
     cpu: CpuRequest | None
     memory: MemoryRequest | None
     disk: str | None
-    gpu: str | None
+    gpu: GpuInput
     gpu_count: int
     timeout_seconds: int | None
     workers: int
@@ -206,7 +207,7 @@ class Endpoint(Generic[P, R]):
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
-    gpu: str | None = None
+    gpu: GpuInput = None
     gpu_count: int = 0
     timeout_seconds: int | None = 180
     retries: int = 0
@@ -278,7 +279,7 @@ class Endpoint(Generic[P, R]):
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
-                gpu=self.gpu,
+                gpu=list(gpu_preference(self.gpu)),
                 gpu_count=self.gpu_count,
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
                 concurrency=self.concurrency,
@@ -435,7 +436,7 @@ def _endpoint(
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
     retries: int = 0,
@@ -477,7 +478,7 @@ def _endpoint(
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
     retries: int = 0,
@@ -518,7 +519,7 @@ def _endpoint(
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
     retries: int = 0,
@@ -601,7 +602,7 @@ class ASGI:
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
-    gpu: str | None = None
+    gpu: GpuInput = None
     gpu_count: int = 0
     timeout_seconds: int | None = 180
     workers: int = 1
@@ -663,7 +664,7 @@ class ASGI:
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
-                gpu=self.gpu,
+                gpu=list(gpu_preference(self.gpu)),
                 gpu_count=self.gpu_count,
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
                 concurrency=self.concurrent_requests,
@@ -799,7 +800,7 @@ def _asgi(
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
     workers: int = 1,
@@ -862,7 +863,7 @@ def _realtime(
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
     disk: str | None = None,
-    gpu: str | None = None,
+    gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
     workers: int = 1,

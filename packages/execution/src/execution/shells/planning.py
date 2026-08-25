@@ -106,7 +106,7 @@ class ShellStandaloneRequest(ContractModel):
     cpu_millicores: int = 0
     memory_mib: int = 0
     disk_mib: int = 0
-    gpu_request: tuple[str, ...] = ()
+    gpu: tuple[str, ...] = ()
     gpu_count: int = 0
     requires_gpu: bool = False
     image_id: str = ""
@@ -122,7 +122,7 @@ class ShellStandalonePlan(ContractModel):
     cpu_millicores: int
     memory_mib: int
     disk_mib: int = 0
-    gpu_request: tuple[str, ...]
+    gpu: tuple[str, ...]
     gpu_count: int
     env: tuple[str, ...]
     entrypoint: tuple[str, ...]
@@ -210,7 +210,7 @@ def plan_shell_standalone(request: ShellStandaloneRequest) -> ShellStandalonePla
         cpu_millicores=cpu,
         memory_mib=memory,
         disk_mib=request.disk_mib,
-        gpu_request=request.gpu_request,
+        gpu=request.gpu,
         gpu_count=gpu_count,
         env=env,
         entrypoint=(

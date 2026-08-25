@@ -14,7 +14,6 @@ from shared.contracts import ContractModel
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 
 DEFAULT_PRIVATE_FALLBACK = "internal"
-DEFAULT_PRIVATE_PRIORITY = 1000
 
 
 class ComputeUnitMode(StrEnum):
@@ -57,7 +56,7 @@ class NormalizedUnitConfig(ContractModel):
     mode: ComputeUnitMode = ComputeUnitMode.Private
     transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
-    priority: int = DEFAULT_PRIVATE_PRIORITY
+    priority: int = 0
     gpu: list[str] = Field(default_factory=list)
     providers: list[str] = Field(default_factory=list)
     regions: list[str] = Field(default_factory=list)
@@ -159,7 +158,7 @@ def normalize_unit_config(config: PoolConfig | None) -> NormalizedUnitConfig | N
         mode=ComputeUnitMode.Private,
         transport=normalize_backend_route_transport(str(config.transport)),
         fallback=PrivateUnitFallback(str(config.fallback or DEFAULT_PRIVATE_FALLBACK)),
-        priority=config.priority or DEFAULT_PRIVATE_PRIORITY,
+        priority=config.priority,
         gpu=config.gpu,
         providers=config.providers,
         regions=config.regions,

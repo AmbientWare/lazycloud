@@ -38,13 +38,13 @@ export const deploymentSchema = z.object({
           cpu: cpuRequestSchema.nullish(),
           memory: memoryRequestSchema.nullish(),
           disk: z.string().nullish(),
-          gpu: z.string().nullish(),
+          gpu: z.array(z.string()).default([]),
           gpu_count: z.number().default(0),
           timeout_seconds: z.number().nullish(),
           concurrency: z.number().default(1),
           keep_warm: z.number().nullish(),
         })
-        .default({ gpu_count: 0, concurrency: 1 }),
+        .default({ gpu: [], gpu_count: 0, concurrency: 1 }),
       route: z.string().nullish(),
       methods: z.array(z.string()).default([]),
       cron: z.string().nullish(),
@@ -53,7 +53,7 @@ export const deploymentSchema = z.object({
       pool: z.string().default(""),
     })
     .default({
-      resources: { gpu_count: 0, concurrency: 1 },
+      resources: { gpu: [], gpu_count: 0, concurrency: 1 },
       methods: [],
       command: [],
       ports: {},

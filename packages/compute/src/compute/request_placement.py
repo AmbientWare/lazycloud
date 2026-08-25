@@ -9,7 +9,7 @@ from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord
 from shared.container_requests import capacity_with_overhead
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
-from shared.gpu import GPU_ANY, normalize_gpu_type
+from shared.gpu import gpu_preference_accepts
 
 from compute.context import ComputeContext
 from compute.policy import WorkspaceComputePolicyService
@@ -133,8 +133,7 @@ def _pool_supports(pool: ComputeUnitRecord, requirements: ComputeResourceRequire
         return pool.worker_gpu_count == 0
     if pool.worker_gpu_count < requirements.gpu_count:
         return False
-    requested_gpu = normalize_gpu_type(requirements.gpu or "")
-    return requested_gpu == GPU_ANY or normalize_gpu_type(pool.worker_gpu_type) == requested_gpu
+    return gpu_preference_accepts(requirements.gpu, pool.worker_gpu_type)
 
 
 __all__ = [

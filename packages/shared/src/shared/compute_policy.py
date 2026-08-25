@@ -42,16 +42,16 @@ class ComputeUnitPhase(StringEnum):
 class ComputeResourceRequirements(ContractModel):
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
-    gpu: str | None = Field(default=None, max_length=160)
+    gpu: list[str] = Field(default_factory=list)
     gpu_count: int = Field(default=0, ge=0)
     architecture: str = Field(default="", max_length=64)
     runtime: str = Field(default=OciRuntimeName.Runsc.value, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def validate_gpu(self) -> ComputeResourceRequirements:
-        if (self.gpu is None) != (self.gpu_count == 0):
-            raise ValueError("GPU type and count must be requested together")
-        return self
+        if bool(self.gpu) is (self.gpu_count > 0):
+            return self
+        raise ValueError("GPU models and count must be requested together")
 
 
 class WorkspaceComputePolicy(ContractModel):
@@ -143,6 +143,17 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     scaling_enabled: bool = False
     default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
+    """Preference for this unit over another that could serve the same work.
+
+    Higher is preferred, in the order capacity is acquired and in the choice of
+    which existing worker a request lands on. The polarity is stated because it
+    was once opposite in two sorts ten lines apart, and a number whose direction
+    nobody wrote down is a number the next reader has to guess.
+
+    A tier rather than a weight: work fills the highest tier that fits before any
+    of the next, and inside a tier placement is unchanged. It cannot be tuned to
+    a value that stops capacity packing, which is what lets an idle pool drain.
+    """
     min_free_cpu_millicores: int = Field(default=0, ge=0)
     min_free_memory_mib: int = Field(default=0, ge=0)
     min_free_gpu_count: int = Field(default=0, ge=0)

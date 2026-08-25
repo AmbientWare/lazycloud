@@ -73,7 +73,7 @@ handlers contend for the GIL rather than running in parallel, so it suits work
 that waits on a device, a network call, or a library that releases the lock.
 
 ```python
-@app.function(gpu="A100", concurrency=8, in_process=True, on_start=load_model)
+@app.function(gpu="a100-80", concurrency=8, in_process=True, on_start=load_model)
 def embed(text: str) -> list[float]:
     return MODEL.encode(text).tolist()
 ```

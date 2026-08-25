@@ -82,10 +82,16 @@ class StubRuntimeConfig(ContractModel):
     memory: MemoryRequest | None = None
     disk: str | int | None = None
     memory_mib: int = Field(default=0, ge=0)
-    gpu: str | None = None
-    gpu_type: str | None = None
+    gpu: list[str] = Field(default_factory=list)
+    """Models this workload accepts, best first; empty asks for no GPU.
+
+    One field where there were three. `gpu` and `gpu_type` said the same thing
+    and were reconciled by whichever consumer remembered to, and `gpu_request`
+    was read by two workload kinds out of four, so a preference written on a
+    function was dropped without a word.
+    """
+
     gpu_count: int = Field(default=0, ge=0)
-    gpu_request: list[str] = Field(default_factory=list)
     requires_gpu: bool = False
     image_id: str | None = None
     timeout_seconds: int | float | None = Field(default=None, ge=0)
