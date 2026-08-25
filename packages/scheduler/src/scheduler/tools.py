@@ -234,11 +234,18 @@ def select_worker_for_request(
     ]
     if not candidates:
         return None
+    # The fullest worker that still fits, not the emptiest. Spreading reads as
+    # the safer choice and quietly costs a floor under the pool: work lands on
+    # whichever machine is least busy, so every machine keeps being touched,
+    # none is ever idle long enough to release, and a pool settles at the number
+    # of machines it takes to keep them all warm rather than the number the work
+    # needs. Packing leaves machines genuinely empty, which is the only thing
+    # the idle drain can act on.
     return min(
         candidates,
         key=lambda item: (
             item.pending,
-            *(-value for value in _post_placement_headroom(item, request)),
+            *_post_placement_headroom(item, request),
             item.worker_id,
         ),
     )
