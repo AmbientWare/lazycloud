@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from scheduler.tools import SchedulingRequest, WorkerCapacity
+from scheduler.tools import SchedulingRequest, WorkerCapacity, select_worker_for_request
 from shared.compute_policy import MachinePool
 
 
@@ -111,3 +111,39 @@ def test_the_shared_fleet_serves_an_account_it_does_not_belong_to() -> None:
 def test_a_private_worker_naming_no_account_serves_none() -> None:
     """A record written without the authority to name a tenant cannot serve every tenant."""
     assert not _private_worker("").can_fit(_account_request("account-a"))
+
+
+def test_work_packs_onto_the_fullest_worker_that_fits() -> None:
+    """Placement is what decides whether a pool can ever shrink.
+
+    Sending each request to the emptiest worker keeps every machine warm, so
+    none of them goes idle long enough to be released and the pool holds a
+    floor of machines no amount of quiet removes.
+    """
+
+    busy = WorkerCapacity(
+        worker_id="busy",
+        pool=MachinePool("lazycloud"),
+        total_cpu=4,
+        free_cpu=2,
+        total_memory_mib=8192,
+        free_memory_mib=4096,
+        total_gpu=0,
+        free_gpu=0,
+    )
+    empty = WorkerCapacity(
+        worker_id="empty",
+        pool=MachinePool("lazycloud"),
+        total_cpu=4,
+        free_cpu=4,
+        total_memory_mib=8192,
+        free_memory_mib=8192,
+        total_gpu=0,
+        free_gpu=0,
+    )
+    request = SchedulingRequest(id="c-1", cpu=1, memory_mib=1024)
+
+    chosen = select_worker_for_request(request, [empty, busy])
+
+    assert chosen is not None
+    assert chosen.worker_id == "busy"
