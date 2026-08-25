@@ -21,9 +21,16 @@ and the error names the digest rather than the stale image.
 
 An installation that will charge anybody needs both of these before its first
 customer arrives. Signing in provisions a subscription and fails closed if it
-cannot, and a subscription resolves its prices by lookup key — so an account
-whose catalog is unpublished refuses **every** sign-in it receives, not only the
-ones that would have been billed.
+cannot, and a subscription resolves its prices by lookup key, so an account whose
+catalog is unpublished refuses **every** sign-in it receives, not only the ones
+that would have been billed. Usage is priced as it is recorded, so a window
+metered before the rates exist is written down as unpriced and charged nothing,
+and the deployment says so several times a second in `billing.span.unpriced`.
+
+A cluster deployment runs both from the chart on every sync, as the
+`billing-catalog` and `billing-rates` Jobs in
+`deploy/chart/templates/bootstrap-jobs.yaml`. The commands below are the same
+work for the Compose stack, which has no Argo to run them.
 
 ```bash
 # Which account, and which kind of account. Dry run first: without --confirm
@@ -38,10 +45,24 @@ uv run lazycloud-admin billing publish-rates --effective-at 2026-01-01T00:00:00Z
 ```
 
 Both are additive and idempotent, and both refuse rather than edit when what is
-already published disagrees. There is no un-publish for either: a rate boundary
-is a figure customers are charged either side of. `LAZYCLOUD_STRIPE_WEBHOOK_SECRET`
-must be set before the first card is saved — the endpoint refuses every delivery
-without it, and Stripe disables endpoints that keep failing.
+already published disagrees. Running the rates twice at the same instant writes
+nothing the second time and says `already_published` for each rate, which is what
+lets the Job repeat. There is no un-publish for either, because a rate boundary
+is a figure customers are charged either side of.
+`LAZYCLOUD_STRIPE_WEBHOOK_SECRET` must be set before the first card is saved. The
+endpoint refuses every delivery without it, and Stripe disables endpoints that
+keep failing.
+
+Usage metered before the rates were published stays unpriced. Nothing revisits
+it, so charge it with a window you name:
+
+```bash
+uv run lazycloud-admin billing price-unpriced --from <iso> --to <iso>
+uv run lazycloud-admin billing price-unpriced --from <iso> --to <iso> --confirm
+```
+
+The start cannot be older than the 35 days Stripe accepts meter events for; the
+command refuses beyond that rather than freezing a cost no invoice can carry.
 
 ## Publishing a release
 

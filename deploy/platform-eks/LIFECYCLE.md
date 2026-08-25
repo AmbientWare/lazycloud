@@ -169,9 +169,12 @@ catalog to serve it with, and refuses. That is a half-configured deployment bein
 rejected rather than a fault, and the way out is `ship`.
 
 Argo takes it from there, in wave order: the storage class and service accounts,
-the secrets, then the schema and the billing catalog, then the administrator, and
-the workloads last. Nothing waits on a workload, so one that cannot start fails
-by itself instead of holding up the Job that would fix it.
+the secrets, then the schema and the billing catalog, then the administrator,
+then the rate card, and the workloads last. Nothing waits on a workload, so one
+that cannot start fails by itself instead of holding up the Job that would fix
+it. The three Jobs that open a database are each alone in their wave, because the
+chart's connection budget counts one Job's pool and refuses to render if the
+pools can exceed what the server allows.
 
 The fleet registers itself on the way past too, in the one wave after the
 workloads: it registers through the public API, so the control plane has to be
@@ -186,6 +189,16 @@ would otherwise be found by a person who could not sign in. It is additive: a
 published account gets nothing new, and a price whose amount disagrees with the
 repository fails the Job instead of being edited, because customers are already
 billed against the published one.
+
+The rate card runs the same way, in a wave of its own behind the schema it
+writes into. Its boundary is `billing.ratesEffectiveAt` in `deploy/chart/values.yaml`
+rather than the clock: a rate is a figure customers are charged either side of,
+and one taken from whenever a sync ran would open a new boundary on every sync.
+A card already published at that instant is left alone, and figures that disagree
+with it fail the Job. Without this the deployment meters usage it cannot price
+and fills its event log with `billing.span.unpriced` at ERROR, several a second,
+while nothing is billable. Changing what a customer pays is this value and the
+rate card in `packages/shared` moving together in one commit.
 
 Watch it rather than assume it:
 

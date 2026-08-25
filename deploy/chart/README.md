@@ -4,15 +4,26 @@ The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
 has to run before any of them.
 
 Values come from the platform module rather than being authored here: `images`
-from what the deploy pushed, `runtime` from `runtime_configuration`,
-`secrets.map` from `secret_environment`, and `roles` from `workload_role_arns`.
-Nothing in this chart decides a value the infrastructure already knows.
+from what the deploy pushed, `runtime` from `runtime_configuration`, and
+`secrets.map` from `secret_environment`. Nothing in this chart decides a value
+the infrastructure already knows.
+
+`billing.ratesEffectiveAt` is the exception, and it is authored here on purpose.
+No infrastructure output knows the instant a rate card starts applying, and
+nothing may derive one, because a rate boundary is a figure customers are charged
+either side of. It changes in the same commit as the figures in
+`packages/shared/src/shared/billing_rate_card.py`.
 
 ## The order the bootstrap runs in
 
-Hook weights, not preference. The schema must exist before an administrator can
-be created against it, and the administrator must exist before anything
-authenticates.
+Sync waves, not preference. The schema must exist before an administrator can be
+created against it, and the administrator must exist before anything
+authenticates. The rate card is published into that schema last, so the
+deployment can price usage from the moment it serves any.
+
+Each Job that opens a database is alone in its wave. The chart refuses to render
+when the pools it declares can exceed the server's connection ceiling, and the
+sum it checks counts one Job's pool rather than every Job's.
 
 The administrator credential is the one with a trap in it. `auth bootstrap`
 adopts a configured credential when it finds one and mints its own when it does
