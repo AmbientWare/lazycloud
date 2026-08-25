@@ -1,3 +1,12 @@
+/** How many pages a live list keeps, and therefore refetches on a change.
+
+    A live list shows what is happening now rather than an archive, and every
+    page it holds is a request it re-issues whenever the change stream says
+    something moved. Unbounded, one app view walked twenty pages of a hundred
+    containers and walked them again on each event, which is most of what made
+    the dashboard slow. */
+export const LIVE_LIST_MAX_PAGES = 3;
+
 export type InfiniteListQueryData<TItem> = {
   readonly pages: readonly {
     readonly data: readonly TItem[];

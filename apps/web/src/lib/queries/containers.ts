@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
+import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import {
@@ -43,6 +44,11 @@ export function containersQueryOptions(workspaceId: string, options: ContainerLi
       );
     },
     getNextPageParam: nextContainerCursor,
+    // A live list is a view of what is happening now, not an archive. Without a
+    // bound, every change event refetches every page the list has ever loaded:
+    // one app view walked twenty pages of a hundred containers and re-walked
+    // them on each event, which is most of what made the dashboard slow.
+    maxPages: LIVE_LIST_MAX_PAGES,
     enabled: options.enabled,
     meta: workspaceLiveQueryMeta(true),
   });
