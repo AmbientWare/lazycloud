@@ -43,6 +43,7 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
+    ENDED_UNIT_PHASES,
     ComputeCapacityMode,
     ComputeUnitPhase,
     ComputeUnitRecord,
@@ -441,6 +442,18 @@ class ProviderMachineReconciler:
     ) -> ComputeUnitRecord:
         current_time = _utc(now)
         phase = _compute_pool_phase(snapshot.phase)
+        if phase is ComputeUnitPhase.Deleted and pool.phase not in ENDED_UNIT_PHASES:
+            # An account with no autoscaling group in it is what a torn-down unit
+            # and an unbuilt one both look like, and the provider is asked about
+            # the account. Only the unit knows which it is, so a unit nobody asked
+            # to stop is one the provider has not built yet.
+            #
+            # Getting this wrong is not symmetric. `reconcile_pooled_capacity`
+            # declines to build a deleted unit, so a wrong `Deleted` is the end of
+            # the unit: the warm baseline revives it, the next snapshot buries it
+            # again, and the pool holds a floor it can never fill. A wrong
+            # `Provisioning` costs one pass.
+            phase = ComputeUnitPhase.Provisioning
         # Providers never own the relaunch bookkeeping: carry it from the durable
         # intent so snapshot application cannot silently restore a pool that
         # exhausted its launch attempts, nor discard the baseline that recovery

@@ -39,6 +39,16 @@ class ComputeUnitPhase(StringEnum):
     Failed = "failed"
 
 
+ENDED_UNIT_PHASES = frozenset({ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted})
+"""Phases a unit only reaches because something asked it to stop.
+
+Every other phase describes capacity the unit is still meant to hold, which is
+what makes this the answer to "was this unit torn down, or has it not been built
+yet" — a question a provider cannot answer, because both look like an account
+with no autoscaling group in it.
+"""
+
+
 class ComputeResourceRequirements(ContractModel):
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
