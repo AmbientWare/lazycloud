@@ -96,9 +96,13 @@ class TaskStatusTally(BaseModel):
 
 
 class TaskDeploymentTally(TaskStatusTally):
-    """The same tally, split by the deployment the tasks belong to."""
+    """The same tally, split by the deployment the tasks belong to.
 
-    deployment_id: str
+    Null where no deployment owns the work, as the column stores it. What that
+    group is called belongs to whoever renders it.
+    """
+
+    deployment_id: str | None = None
 
 
 class TaskCreationSample(BaseModel):
@@ -645,19 +649,21 @@ class TaskRepository:
     def status_tallies_by_deployment(self, *, workspace_id: str) -> list[TaskDeploymentTally]:
         """The same counts, split by deployment.
 
-        `deployment_id` is null for work no deployment owns, and the caller
-        reports that group under the empty string, so the coalesce belongs in the
-        grouping rather than in a second pass afterwards.
+        Grouped on the column as it is stored, null included. Work no deployment
+        owns is a real group here and the name it is reported under is the
+        caller's contract rather than the database's, so folding it in would mean
+        coalescing a UUID column with a text stand-in: PostgreSQL refuses that
+        outright while SQLite accepts it, which is a statement that passes on the
+        cheap backend and fails on every request against the real one.
         """
-        deployment = func.coalesce(TaskTable.deployment_id, "")
         statement = (
             select(
-                deployment.label("deployment_id"),
+                TaskTable.deployment_id,
                 TaskTable.status,
                 func.count(TaskTable.id).label("count"),
             )
             .where(TaskTable.workspace_id == workspace_id)
-            .group_by(deployment, TaskTable.status)
+            .group_by(TaskTable.deployment_id, TaskTable.status)
         )
         return [
             TaskDeploymentTally.model_validate(row)

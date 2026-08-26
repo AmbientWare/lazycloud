@@ -1197,7 +1197,7 @@ class ManagementService:
             )
         counts: dict[str, Counter[TaskStatus]] = {}
         for tally in tallies:
-            counts.setdefault(tally.deployment_id, Counter())[tally.status] += tally.count
+            counts.setdefault(tally.deployment_id or "", Counter())[tally.status] += tally.count
         return tuple(
             TaskCountByDeployment(
                 deployment_id=deployment_id,
