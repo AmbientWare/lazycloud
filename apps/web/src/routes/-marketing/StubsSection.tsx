@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { CodeBlock } from "@/components/ui/code-block";
 
-import { SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
+import { MarketingCard, SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
 import {
   GeneratedPackagePanel,
   TypedImportPanel,
@@ -10,12 +10,11 @@ import {
   useTypedClientClock,
 } from "./TypedClientPreview";
 
-/* Three-phase story: define the workload, generate the client package, then
-   import and call it from another codebase. Phase 01 stays a code block
-   because the deployed source really is the contract; phases 02 and 03 are
-   product visuals of the generated package and of the editor that consumes
-   it. Every symbol mirrors what the SDK decorators accept, what `client get`
-   actually writes, and what the generated methods actually return. */
+/* Define the workload, generate the client package, then import and call it
+   from another codebase. The definition stays a code block because the deployed
+   source really is the contract; the other phases show the generated package
+   and the editor that consumes it. Every symbol mirrors what the SDK decorators
+   accept, what `client get` writes, and what the generated methods return. */
 
 const defineExample = `from lazycloud import App
 from pydantic import BaseModel
@@ -39,12 +38,10 @@ const phaseLabel =
 
 /* The active phase brightens so the eye follows the sequence in order. */
 function PhaseHeader({
-  step,
   title,
   caption,
   active,
 }: {
-  step: string;
   title: string;
   caption: string;
   active: boolean;
@@ -52,7 +49,7 @@ function PhaseHeader({
   return (
     <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 sm:mb-3 sm:gap-x-3">
       <h3 className={`${phaseLabel} ${active ? "text-foreground" : "text-muted-foreground"}`}>
-        <span className="text-brand">{step}</span> {title}
+        {title}
       </h3>
       <span className="min-w-0 font-mono text-xs leading-snug text-muted-foreground sm:text-sm">
         {caption}
@@ -71,62 +68,53 @@ function StubsStory({ active }: { active: boolean }) {
         <SectionHeading
           title={
             <>
-              Deployments you can <em>import.</em>
+              Generate a typed client <em>for any deployment.</em>
             </>
           }
-          body="Generate a pinned, typed client for each app, giving developers and agents a stable way to discover, import, and call deployed functions and endpoints without hand-written integration code."
+          body="Create a pinned Python package for any app. Agents can inspect the same methods and return types your editor uses."
         />
       </div>
 
       <div className="grid grid-cols-[1.02fr_0.98fr] gap-4 sm:gap-6 lg:gap-7 max-lg:grid-cols-1">
         <div className="flex min-w-0 flex-col">
-          <PhaseHeader
-            active={phase === "define"}
-            caption="the deployed source of truth"
-            step="01"
-            title="Define"
-          />
-          <CodeBlock
-            className={`flex flex-1 flex-col transition-colors duration-500 motion-reduce:transition-none ${
-              phase === "define" ? "border-brand/45" : "border-border"
-            }`}
-            bodyClassName="flex-1 p-3 text-[10px] leading-[1.6] sm:p-5 sm:text-[11px] sm:leading-[1.7] lg:p-6 lg:text-[11.5px] lg:leading-[1.75]"
-            tone="paper"
-            footer={
-              <div
-                className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                data-marketing-terminal-surface=""
-              >
-                <span className="text-brand">$</span>
-                <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                  lazycloud deploy review_app.py:app
-                </span>
-                <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                  <StatusDot /> 2 resources live
-                </strong>
-              </div>
-            }
-          >
-            {defineExample}
-          </CodeBlock>
+          <PhaseHeader active={phase === "define"} caption="your app" title="Define" />
+          <MarketingCard asChild>
+            <CodeBlock
+              className={`flex flex-1 flex-col transition-colors duration-500 motion-reduce:transition-none ${
+                phase === "define" ? "border-brand/45" : "border-input"
+              }`}
+              bodyClassName="flex-1 p-3 text-[10px] leading-[1.6] sm:p-5 sm:text-[11px] sm:leading-[1.7] lg:p-6 lg:text-[11.5px] lg:leading-[1.75]"
+              tone="paper"
+              footer={
+                <div
+                  className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
+                  data-marketing-terminal-surface=""
+                >
+                  <span className="text-brand">$</span>
+                  <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+                    lazycloud deploy review_app.py:app
+                  </span>
+                  <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
+                    <StatusDot /> 2 resources live
+                  </strong>
+                </div>
+              }
+            >
+              {defineExample}
+            </CodeBlock>
+          </MarketingCard>
         </div>
 
         <div className="flex min-w-0 flex-col gap-4 sm:gap-5 lg:gap-7">
           <div className="flex min-w-0 flex-col">
-            <PhaseHeader
-              active={phase === "generate"}
-              caption="one command, pinned package"
-              step="02"
-              title="Generate"
-            />
+            <PhaseHeader active={phase === "generate"} caption="a pinned client" title="Generate" />
             <GeneratedPackagePanel active={phase === "generate"} clock={clock} />
           </div>
 
           <div className="flex min-w-0 flex-col">
             <PhaseHeader
               active={phase === "import"}
-              caption="call it from any codebase"
-              step="03"
+              caption="from another project"
               title="Import"
             />
             <TypedImportPanel active={phase === "import"} clock={clock} />

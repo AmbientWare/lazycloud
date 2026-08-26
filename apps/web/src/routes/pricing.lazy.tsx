@@ -8,8 +8,9 @@ import { MarketingLayout } from "./-marketing/MarketingLayout";
 import {
   FinalCta,
   Glyph,
-  MarketingButton,
   GetStartedButton,
+  MarketingButton,
+  MarketingCard,
   SectionLabel,
   shell,
 } from "./-marketing/MarketingPrimitives";
@@ -238,50 +239,51 @@ function MarketingPricing() {
             </div>
             <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
               {plans.map((plan) => (
-                <article
-                  className="flex flex-col rounded-2xl border border-border bg-card p-5 sm:p-6"
-                  key={plan.id}
-                >
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                    <h3 className="font-serif text-[24px] leading-none font-normal">{plan.name}</h3>
-                    <p className="flex items-baseline gap-2">
-                      <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
-                        {exactDollars(plan.monthlyNanos)}
-                      </span>
-                      <span className="text-[12px] text-muted-foreground">per month</span>
-                    </p>
-                  </div>
-                  <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
-                    {plan.summary}
-                  </p>
-                  <dl className="mt-4 border-t border-border text-[13px]">
-                    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                      <dt className="text-muted-foreground">Usage included</dt>
-                      <dd className="font-mono font-medium text-brand">
-                        {exactDollars(plan.includedNanos)}{" "}
-                        <span className="text-muted-foreground">/ month</span>
-                      </dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                      <dt className="text-muted-foreground">Concurrent containers</dt>
-                      <dd className="font-mono font-medium">{plan.maxConcurrentContainers}</dd>
-                    </div>
-                  </dl>
-                  <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
-                    {plan.terms.map((term) => (
-                      <li
-                        className="flex items-start gap-2.5 text-[13px] leading-relaxed"
-                        key={term}
-                      >
-                        <span className="mt-0.5 shrink-0 text-brand">
-                          <Glyph>↳</Glyph>
+                <MarketingCard asChild key={plan.id}>
+                  <article className="flex flex-col p-5 sm:p-6">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                      <h3 className="font-serif text-[24px] leading-none font-normal">
+                        {plan.name}
+                      </h3>
+                      <p className="flex items-baseline gap-2">
+                        <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
+                          {exactDollars(plan.monthlyNanos)}
                         </span>
-                        <span>{term}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
-                </article>
+                        <span className="text-[12px] text-muted-foreground">per month</span>
+                      </p>
+                    </div>
+                    <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                      {plan.summary}
+                    </p>
+                    <dl className="mt-4 border-t border-border text-[13px]">
+                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                        <dt className="text-muted-foreground">Usage included</dt>
+                        <dd className="font-mono font-medium text-brand">
+                          {exactDollars(plan.includedNanos)}{" "}
+                          <span className="text-muted-foreground">/ month</span>
+                        </dd>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                        <dt className="text-muted-foreground">Concurrent containers</dt>
+                        <dd className="font-mono font-medium">{plan.maxConcurrentContainers}</dd>
+                      </div>
+                    </dl>
+                    <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
+                      {plan.terms.map((term) => (
+                        <li
+                          className="flex items-start gap-2.5 text-[13px] leading-relaxed"
+                          key={term}
+                        >
+                          <span className="mt-0.5 shrink-0 text-brand">
+                            <Glyph>↳</Glyph>
+                          </span>
+                          <span>{term}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
+                  </article>
+                </MarketingCard>
               ))}
             </div>
 

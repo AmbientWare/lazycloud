@@ -16,11 +16,6 @@
   src: url("./fonts/instrument-serif-basic-400-italic.woff2") format("woff2");
 }
 
-.marketing-product-frame {
-  background: var(--background);
-  color: var(--foreground);
-}
-
 .marketing-site,
 .marketing-site * {
   box-sizing: border-box;
@@ -93,11 +88,6 @@
   justify-content: space-between;
   height: 100%;
   min-height: 362px;
-  overflow: hidden;
-  border: 1px solid var(--input);
-  border-radius: 12px;
-  background: var(--card);
-  box-shadow: 0 12px 30px rgb(25 24 17 / 9%);
   color: var(--muted-foreground);
 }
 

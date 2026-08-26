@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
-import { StatusDot } from "./MarketingPrimitives";
+import { MarketingCard, StatusDot } from "./MarketingPrimitives";
 import { useReducedMotion } from "./useReducedMotion";
 
 /* Typed-client visuals for the "Deployments you can import." section.
@@ -264,9 +264,9 @@ function Caret() {
 }
 
 /* Panels share one sheet; the active phase picks up the brand border. */
-function panelSheet(active: boolean): string {
-  return `marketing-typed-visual flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card font-mono text-card-foreground shadow-[0_10px_24px_rgb(25_24_17/0.07)] transition-colors duration-500 motion-reduce:transition-none ${
-    active ? "border-brand/45" : "border-border"
+function panelState(active: boolean): string {
+  return `marketing-typed-visual flex min-w-0 flex-col font-mono text-card-foreground transition-colors duration-500 motion-reduce:transition-none ${
+    active ? "border-brand/45" : "border-input"
   }`;
 }
 
@@ -354,7 +354,7 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
   const done = clock >= TIMELINE.generateDoneAt;
 
   return (
-    <div className={panelSheet(active)}>
+    <MarketingCard className={panelState(active)}>
       <div
         className="typed-panel-bar flex min-h-9 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3.5 py-1.5 text-[10.5px]"
         data-marketing-terminal-surface=""
@@ -453,7 +453,7 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
           </div>
         </div>
       </div>
-    </div>
+    </MarketingCard>
   );
 }
 
@@ -541,7 +541,7 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
   const settled = clock >= TIMELINE.valueLineDoneAt;
 
   return (
-    <div className={panelSheet(active)} data-marketing-terminal-surface="">
+    <MarketingCard className={panelState(active)} data-marketing-terminal-surface="">
       <div className="typed-editor-tabs flex min-h-9 items-center gap-1 border-b border-border px-2.5 text-[10px]">
         <span className="rounded border border-border bg-background/60 px-2 py-0.5 text-foreground">
           release.py
@@ -670,6 +670,6 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
           <span className="ml-auto shrink-0 truncate">python 3.12 · fully typed</span>
         </div>
       </div>
-    </div>
+    </MarketingCard>
   );
 }
