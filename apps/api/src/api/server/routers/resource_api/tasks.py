@@ -177,6 +177,8 @@ def task_count_by_deployment(
 )
 def aggregate_tasks_by_time_window(
     window_seconds: int = 3600,
+    started_at: int | None = None,
+    ended_at: int | None = None,
     app_id: identifier_filter = None,
     stub_id: identifier_filter = None,
     *,
@@ -189,6 +191,8 @@ def aggregate_tasks_by_time_window(
             for item in _management(services).aggregate_tasks_by_time_window(
                 workspace_id,
                 window_seconds=window_seconds,
+                started_at=_optional_instant(started_at),
+                ended_at=_optional_instant(ended_at),
                 app_id=app_id,
                 stub_id=stub_id,
             )
@@ -309,3 +313,8 @@ def get_task(
             can_write=token_has_scope(token, AuthScope.Write),
         )
     )
+
+
+def _optional_instant(value: int | None) -> datetime | None:
+    """A query parameter's epoch seconds, or nothing when it named none."""
+    return None if value is None else datetime.fromtimestamp(value, UTC)
