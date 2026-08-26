@@ -85,6 +85,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The check below parses the rendered manifests, and the runner's Python
+      # carries no YAML reader.
+      - name: Install the manifest reader
+        run: pip install pyyaml
+
       # Every object carries an image, every environment variable has a source,
       # and every source resolves. All three have shipped absent. An empty image
       # renders a Deployment that fails at the pod with InvalidImageName. An
