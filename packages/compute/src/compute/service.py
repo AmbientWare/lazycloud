@@ -46,6 +46,7 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
+    ENDED_UNIT_PHASES,
     ComputeCapacityMode,
     ComputeResourceRequirements,
     ComputeUnitPhase,
@@ -107,10 +108,6 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
-
-# Phases a unit does not come back from on its own. A request for capacity
-# against a unit in one of these is a new life for the row, not a continuation.
-_ENDED_UNIT_PHASES = frozenset({ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted})
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -1657,12 +1654,12 @@ class ComputeService:
                 # because a deleted pool is exactly what it declines to build.
                 phase=(
                     current.phase
-                    if current is not None and current.phase not in _ENDED_UNIT_PHASES
+                    if current is not None and current.phase not in ENDED_UNIT_PHASES
                     else ComputeUnitPhase.Provisioning
                 ),
                 status=(
                     current.status
-                    if current is not None and current.phase not in _ENDED_UNIT_PHASES
+                    if current is not None and current.phase not in ENDED_UNIT_PHASES
                     else ComputeUnitPhase.Provisioning.value
                 ),
                 provider_state=(
