@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { Slot } from "@radix-ui/react-slot";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,24 @@ export type MarketingRoute = "/" | "/pricing" | "/dashboard";
 /* Shared page rhythm: compact phone gutters that open up with the viewport. */
 export const shell =
   "ml-[max(1rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(1rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] sm:ml-[max(1.5rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] sm:mr-[max(1.5rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] lg:ml-[max(2rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] lg:mr-[max(2rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
+
+export function MarketingCard({
+  asChild = false,
+  className,
+  ...props
+}: ComponentPropsWithoutRef<"div"> & { asChild?: boolean }) {
+  const Component = asChild ? Slot : "div";
+  return (
+    <Component
+      data-marketing-card=""
+      className={cn(
+        "overflow-hidden rounded-2xl border border-input bg-card shadow-[8px_8px_0_0_color-mix(in_oklab,var(--border)_55%,var(--secondary))]",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
 
 export function Glyph({ children }: { children: ReactNode }) {
   return (
@@ -27,15 +46,7 @@ export function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-export function Pill({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex w-max max-w-full items-center gap-2 rounded-full border border-brand/25 bg-brand/8 px-2.5 py-1.5 font-mono text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-      {children}
-    </span>
-  );
-}
-
-/* Live status dot, shared by pills, terminal footers, and product rows. */
+/* Live status dot, shared by terminal footers and product rows. */
 export function StatusDot() {
   return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
 }
@@ -181,8 +192,7 @@ export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
           "marketing-final-inner relative z-[2] flex !min-h-[clamp(32rem,75svh,43.125rem)] flex-col items-center justify-center py-16 text-center sm:py-20 lg:py-30 [@media(max-height:500px)]:!min-h-[27rem] [@media(max-height:500px)]:py-12",
         )}
       >
-        <Pill>Built for AI-speed development</Pill>
-        <h2 className="mt-5 max-w-[950px] font-serif !text-[clamp(2.5rem,10vw,5rem)] leading-[1.01] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+        <h2 className="max-w-[950px] font-serif !text-[clamp(2.5rem,10vw,5rem)] leading-[1.01] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
           {title}
         </h2>
         <p className="mt-5 max-w-[600px] !text-base leading-relaxed text-muted-foreground sm:mt-6 sm:!text-[17px]">

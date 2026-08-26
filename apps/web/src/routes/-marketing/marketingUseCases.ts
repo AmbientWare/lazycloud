@@ -8,32 +8,32 @@ export type MarketingUseCase = {
 export const marketingUseCases = [
   {
     id: "openai-compatible-llm",
-    title: "OpenAI-compatible LLM service",
-    cardSummary: "Serve a drop-in OpenAI API on one GPU.",
+    title: "Serve an OpenAI-compatible model",
+    cardSummary: "Host a model behind the OpenAI API.",
     imageSrc: "/use-cases/openai-compatible-llm.webp",
   },
   {
     id: "train-yolo-object-detector",
-    title: "Train a YOLO object detector",
-    cardSummary: "Train, persist, and reuse a vision checkpoint.",
+    title: "Train a YOLO model",
+    cardSummary: "Train and save a reusable vision model.",
     imageSrc: "/use-cases/train-yolo-object-detector.webp",
   },
   {
     id: "document-processing-asgi",
-    title: "Document processing with FastAPI",
-    cardSummary: "Pair FastAPI uploads with durable OCR Tasks.",
+    title: "Process documents with FastAPI",
+    cardSummary: "Handle uploads and run OCR in background tasks.",
     imageSrc: "/use-cases/document-processing-asgi.webp",
   },
   {
     id: "sandboxed-coding-agent",
-    title: "Run a coding agent in a Sandbox",
-    cardSummary: "Plan safely, then test inside an isolated Sandbox.",
+    title: "Run a coding agent safely",
+    cardSummary: "Test code inside an isolated sandbox.",
     imageSrc: "/use-cases/sandboxed-coding-agent.webp",
   },
   {
     id: "parallel-parquet-s3",
-    title: "Parallel Parquet processing on S3",
-    cardSummary: "Fan out S3 partitions and write one validated result.",
+    title: "Process Parquet files in parallel",
+    cardSummary: "Fan out work over S3 partitions and combine the results.",
     imageSrc: "/use-cases/parallel-parquet-s3.webp",
   },
 ] as const satisfies readonly MarketingUseCase[];

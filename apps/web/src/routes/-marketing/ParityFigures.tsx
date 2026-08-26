@@ -1,16 +1,20 @@
+import { MarketingCard } from "./MarketingPrimitives";
+
 type ParityImageSrc = `/parity/${string}.webp`;
 
 function ParityFigure({ src }: { src: ParityImageSrc }) {
   return (
-    <img
-      alt=""
-      className="aspect-[2/1] w-full rounded-xl border border-border bg-card object-cover"
-      decoding="async"
-      height={836}
-      loading="lazy"
-      src={src}
-      width={1254}
-    />
+    <MarketingCard asChild>
+      <img
+        alt=""
+        className="aspect-[2/1] w-full object-cover"
+        decoding="async"
+        height={836}
+        loading="lazy"
+        src={src}
+        width={1254}
+      />
+    </MarketingCard>
   );
 }
 

@@ -3,11 +3,11 @@ import { createFileRoute } from "@tanstack/react-router";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "LazyCloud — The cloud platform for AI-speed development" },
+      { title: "LazyCloud | The cloud for developers and coding agents" },
       {
         name: "description",
         content:
-          "A complete cloud platform for developers and agents to deploy applications, run jobs and GPU workloads, create sandboxes, and operate everything in one place.",
+          "Run Python APIs, jobs, sandboxes, and GPU workloads through one interface built for developers and coding agents.",
       },
     ],
   }),

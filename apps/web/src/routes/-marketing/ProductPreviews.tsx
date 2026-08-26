@@ -5,6 +5,7 @@ import { LiveEndpointChart } from "./LiveEndpointChart";
 import { LiveQueuePreview } from "./LiveQueuePreview";
 import { LiveSandboxPreview } from "./LiveSandboxPreview";
 import { LiveTaskTimeline } from "./LiveTaskTimeline";
+import { MarketingCard } from "./MarketingPrimitives";
 
 export type StoryVisual = "application" | "jobs" | "background" | "sandbox";
 
@@ -22,7 +23,10 @@ function ProductFrame({
   className?: string;
 }) {
   return (
-    <div className={`marketing-product-frame ${className}`.trim()} data-product-preview="">
+    <MarketingCard
+      className={`marketing-product-frame ${className}`.trim()}
+      data-product-preview=""
+    >
       <div className="marketing-product-bar">
         <div>
           <strong>{title}</strong>
@@ -33,7 +37,7 @@ function ProductFrame({
         </code>
       </div>
       {children}
-    </div>
+    </MarketingCard>
   );
 }
 

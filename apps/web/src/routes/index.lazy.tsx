@@ -13,7 +13,7 @@ import {
   FinalCta,
   Glyph,
   GetStartedButton,
-  Pill,
+  MarketingCard,
   SectionHeading,
   StatusDot,
   shell,
@@ -88,7 +88,7 @@ def nightly_evals() -> dict:
 const heroStories = [
   {
     key: "apps",
-    label: "Apps + APIs",
+    label: "APIs",
     code: endpointExample,
     command: "lazycloud deploy application.py:app",
     status: "deployed",
@@ -128,52 +128,36 @@ type PlatformStory = {
   label: string;
   title: string;
   body: string;
-  notes?: string[];
   visual: StoryVisual;
 };
 
 const platformStories: PlatformStory[] = [
   {
     key: "endpoints",
-    label: "Applications + APIs",
-    title: "Ship an API the minute it is written.",
-    body: "APIs and model endpoints with explicit resources, autoscaling, and scale-to-zero. No load balancer, no image to push.",
-    notes: ["Scales to zero when idle.", "Keep-warm holds capacity when you want it ready."],
+    label: "APIs",
+    title: "Turn a function into an API.",
+    body: "Add a route and resource limits. LazyCloud handles TLS, scaling, and idle shutdown.",
     visual: "application",
   },
   {
     key: "graphs",
-    label: "Jobs + pipelines",
-    title: "Outgrow one machine without rewriting anything.",
-    body: "Tests, evals, data processing, and GPU jobs as dependency-aware tasks with durable results and logs. The same functions you called locally an hour ago.",
-    notes: [
-      "Size CPU, GPU, and memory per Task.",
-      "Mount shared volumes so later stages read earlier output.",
-    ],
+    label: "Jobs and pipelines",
+    title: "Move heavy work off your laptop.",
+    body: "Run tests, evals, data processing, and GPU jobs as tasks with dependencies, logs, and saved results.",
     visual: "jobs",
   },
   {
     key: "background",
-    label: "Background work",
-    title: "Keep the work running after the session ends.",
-    body: "Queue and schedule work with retries, cancellation, and live logs. Nothing depends on a terminal staying open.",
-    notes: [
-      "Workers scale with queue depth, from zero.",
-      "Failed runs retry on your policy.",
-      "Every Task is a handle: wait, subscribe, cancel.",
-    ],
+    label: "Queues and schedules",
+    title: "Keep background work off the request path.",
+    body: "Queue a function or run it on a schedule. Each run has retries, cancellation, and live logs.",
     visual: "background",
   },
   {
     key: "sandboxes",
     label: "Agent sandboxes",
-    title: "Give agents compute with boundaries.",
-    body: "Isolated workspaces with files, processes, ports, Docker, snapshots, and explicit network policy.",
-    notes: [
-      "Run any process, stream its output.",
-      "Block all egress, or pin an allow-list.",
-      "Snapshot filesystem or memory, restore from it.",
-    ],
+    title: "Give coding agents a machine they can safely use.",
+    body: "Start an isolated sandbox with files, processes, ports, Docker, snapshots, and an explicit network policy.",
     visual: "sandbox",
   },
 ];
@@ -186,26 +170,23 @@ const parityModes = [
   {
     key: "local",
     Plate: LocalPlate,
-    stage: "01 · Develop",
-    title: "Run it locally",
+    title: "Debug locally",
     call: "embed.local(rows)",
-    body: "Call it in-process with your debugger, breakpoints, and local data.",
+    body: "Use local data and your usual debugger.",
   },
   {
     key: "gpu",
     Plate: GpuPlate,
-    stage: "02 · Run",
-    title: "Run it in the cloud",
+    title: "Run remotely",
     call: "embed.remote(rows)",
-    body: "Invoke it whenever you need a GPU or more capacity. No deployment required.",
+    body: "Borrow remote CPU or GPU capacity before you deploy.",
   },
   {
     key: "production",
     Plate: ProductionPlate,
-    stage: "03 · Deploy",
-    title: "Deploy it as a service",
+    title: "Deploy a service",
     call: "lazycloud deploy app.py:app",
-    body: "Publish a stable endpoint that stays available while compute scales to zero between calls.",
+    body: "Publish a stable endpoint that scales down when idle.",
   },
 ];
 
@@ -218,33 +199,30 @@ function ParitySection() {
     <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
-          label="Develop · run · deploy"
           title={
             <>
-              One function. <em>From local to live.</em>
+              One function. <em>Three ways to run it.</em>
             </>
           }
-          body="Call it in-process while you build. Run it in the cloud whenever you need a GPU or more capacity, without creating a deployment. When you need a stable endpoint, deploy the same function as a service. No rewrite between steps."
+          body="Call it in-process for local debugging. Run it remotely for more CPU or a GPU. Deploy it when you need a stable endpoint."
         />
 
         <div className="max-w-[820px]">
-          <CodeBlock
-            className="shadow-[8px_8px_0_0_var(--secondary)]"
-            tone="paper"
-            bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-5 sm:text-[12.5px]"
-          >
-            {parityDefinition}
-          </CodeBlock>
+          <MarketingCard asChild>
+            <CodeBlock
+              tone="paper"
+              bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-5 sm:text-[12.5px]"
+            >
+              {parityDefinition}
+            </CodeBlock>
+          </MarketingCard>
         </div>
 
         <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
           {parityModes.map((mode) => (
             <article key={mode.key}>
               <mode.Plate />
-              <p className="mt-5 font-mono text-[10px] font-medium tracking-[0.12em] text-brand uppercase">
-                {mode.stage}
-              </p>
-              <h3 className="mt-2 text-[19px] leading-tight font-medium sm:min-h-12">
+              <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
                 {mode.title}
               </h3>
               <code className="mt-2 block font-mono text-[12px] break-all text-brand">
@@ -272,14 +250,13 @@ function MarketingHome() {
             )}
           >
             <div className="marketing-rise">
-              <Pill>Code got fast. Infrastructure didn&apos;t.</Pill>
-              <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] sm:mt-3 lg:mt-6 lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
-                Deploy as fast as you <em>develop.</em>
+              <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
+                The cloud for developers <em>and coding agents.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Code arrives in seconds, then waits on Dockerfiles, registries, load balancers, IAM.
-                One decorator makes a Python function a deployed API, job, queue, or GPU workload.
-                It still runs on your laptop.
+                Run APIs, jobs, sandboxes, and GPU workloads through a Python SDK and structured
+                CLI. Start locally, add remote compute when you need it, and deploy without slowing
+                down to wire up infrastructure.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
@@ -299,57 +276,59 @@ function MarketingHome() {
               </div>
             </div>
 
-            <Tabs
-              className="marketing-rise relative z-[2] min-w-0 rounded-2xl border border-input bg-card text-foreground shadow-[8px_8px_0_0_var(--secondary)] [animation-delay:100ms]"
-              defaultValue={heroStories[0].key}
-            >
-              <TabsList
-                /* The split hero keeps a stable 3×2 control through compact
-                   desktop widths; only the full-width canvas uses one row. */
-                className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
-                aria-label="Hero code examples"
+            <MarketingCard asChild>
+              <Tabs
+                className="marketing-rise relative z-[2] min-w-0 text-foreground [animation-delay:100ms]"
+                defaultValue={heroStories[0].key}
               >
+                <TabsList
+                  /* The split hero keeps a stable 3×2 control through compact
+                   desktop widths; only the full-width canvas uses one row. */
+                  className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
+                  aria-label="Hero code examples"
+                >
+                  {heroStories.map((story) => (
+                    <TabsTrigger
+                      className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
+                      key={story.key}
+                      value={story.key}
+                    >
+                      {story.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
                 {heroStories.map((story) => (
-                  <TabsTrigger
-                    className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
-                    key={story.key}
-                    value={story.key}
-                  >
-                    {story.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              {heroStories.map((story) => (
-                <TabsContent key={story.key} value={story.key}>
-                  <CodeBlock
-                    className="rounded-none border-0 bg-transparent"
-                    tone="paper"
-                    /* Fixed body height so switching examples never resizes the
+                  <TabsContent key={story.key} value={story.key}>
+                    <CodeBlock
+                      className="rounded-none border-0 bg-transparent"
+                      tone="paper"
+                      /* Fixed body height so switching examples never resizes the
                        panel; sized to the tallest snippet. On narrow screens the
                        type eases down a notch so wrapped lines still fit without
                        a scroll. */
-                    bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
-                    footer={
-                      <div
-                        className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                        data-marketing-terminal-surface=""
-                      >
-                        <span className="text-brand">$</span>
-                        <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                          {story.command}
-                        </span>
-                        <i className="marketing-cursor" aria-hidden="true" />
-                        <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                          <StatusDot /> {story.status}
-                        </strong>
-                      </div>
-                    }
-                  >
-                    {story.code}
-                  </CodeBlock>
-                </TabsContent>
-              ))}
-            </Tabs>
+                      bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
+                      footer={
+                        <div
+                          className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
+                          data-marketing-terminal-surface=""
+                        >
+                          <span className="text-brand">$</span>
+                          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+                            {story.command}
+                          </span>
+                          <i className="marketing-cursor" aria-hidden="true" />
+                          <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
+                            <StatusDot /> {story.status}
+                          </strong>
+                        </div>
+                      }
+                    >
+                      {story.code}
+                    </CodeBlock>
+                  </TabsContent>
+                ))}
+              </Tabs>
+            </MarketingCard>
           </div>
         </section>
 
@@ -422,10 +401,10 @@ function MarketingHome() {
         <FinalCta
           title={
             <>
-              Your cloud should <em>accelerate you</em>, not be the bottleneck.
+              Keep building. <em>Don&apos;t stop for infrastructure.</em>
             </>
           }
-          body="Write the function. Call it locally. Run it on a GPU when it needs one. Apps, jobs, queues, schedules, sandboxes — our compute or yours."
+          body="Test locally, reach for remote compute, and deploy APIs or workers without changing tools or repackaging the workload."
         />
       </main>
     </MarketingLayout>
@@ -433,16 +412,18 @@ function MarketingHome() {
 }
 
 const useCaseCard =
-  "relative block aspect-[3/4] w-full overflow-hidden rounded-xl border border-border bg-card text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
+  "relative block aspect-[3/4] w-full text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
 
 function UseCaseCard({ children }: { children: ReactNode }) {
   if (!EXAMPLES_URL) {
-    return <div className={useCaseCard}>{children}</div>;
+    return <MarketingCard className={useCaseCard}>{children}</MarketingCard>;
   }
   return (
-    <a className={useCaseCard} href={EXAMPLES_URL}>
-      {children}
-    </a>
+    <MarketingCard asChild>
+      <a className={useCaseCard} href={EXAMPLES_URL}>
+        {children}
+      </a>
+    </MarketingCard>
   );
 }
 
@@ -566,13 +547,12 @@ function PlatformStoryRail() {
       >
         <aside className="min-w-0 lg:sticky lg:top-28 lg:self-start lg:py-16">
           <SectionHeading
-            label="SDK · CLI --json · typed clients"
             title={
               <>
-                Every phase. <em>One control plane.</em>
+                The whole platform, <em>available from code.</em>
               </>
             }
-            body="Build, test, deploy, scale, operate — usually five tools and five afternoons. Here it is one SDK, one JSON CLI, and typed clients. Developers and agents reach for the same thing."
+            body="Define APIs, jobs, queues, schedules, and sandboxes in Python. The SDK is typed, and the CLI can return JSON for agent workflows."
           />
           <nav aria-label="Platform use cases" className="border-t border-border">
             <ol className="m-0 list-none p-0">
@@ -590,9 +570,6 @@ function PlatformStoryRail() {
                       onClick={() => moveToStory(index)}
                       type="button"
                     >
-                      <span className="mr-4 font-mono text-[15px] text-brand">
-                        {String(index + 1).padStart(2, "0")}
-                      </span>
                       {story.label}
                     </button>
                   </li>
@@ -613,9 +590,7 @@ function PlatformStoryRail() {
               ref={(node) => registerStory(index, node)}
             >
               <div className="mb-6 sm:mb-8">
-                <p className="font-mono text-[11px] text-brand">
-                  {String(index + 1).padStart(2, "0")} / {story.label}
-                </p>
+                <p className="text-sm font-medium text-brand">{story.label}</p>
                 <h3
                   className="mt-3 text-2xl leading-tight font-medium sm:text-3xl"
                   id={`platform-story-${story.key}-title`}
@@ -625,17 +600,6 @@ function PlatformStoryRail() {
                 <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground sm:text-base">
                   {story.body}
                 </p>
-                <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                  {story.notes?.map((note) => (
-                    <p
-                      className="flex items-start gap-2 font-mono text-[10.5px] leading-relaxed text-brand"
-                      key={note}
-                    >
-                      <Glyph>↳</Glyph>
-                      <span>{note}</span>
-                    </p>
-                  ))}
-                </div>
               </div>
               <div
                 aria-label={`${story.label} preview`}
@@ -656,21 +620,18 @@ function PlatformStoryRail() {
 
 const computePaths = [
   {
-    icon: "◎",
-    title: "Managed serverless",
-    body: "Managed CPU capacity, no setup. Scales down when idle.",
+    title: "Managed compute",
+    body: "Run on LazyCloud CPU capacity. It scales down when idle.",
     command: null,
   },
   {
-    icon: "⇄",
-    title: "Connected AWS",
-    body: "Connect an AWS account. Place CPU or GPU workloads in it.",
+    title: "Your AWS account",
+    body: "Place CPU or GPU workloads in a connected AWS account.",
     command: "lazycloud cloud connect aws",
   },
   {
-    icon: ">_",
-    title: "Any machine",
-    body: "Join a Linux VM, bare-metal box, or on-prem GPU. No definition changes.",
+    title: "Any Linux machine",
+    body: "Join a Linux VM, bare-metal server, or on-premises GPU.",
     command: "lazycloud machine join",
   },
 ];
@@ -682,36 +643,25 @@ function ComputeSection() {
         <SectionHeading
           title={
             <>
-              One workload model. <em>Managed compute or yours.</em>
+              Use our compute, <em>or bring your own.</em>
             </>
           }
-          body="Where it runs is a setting, not a rewrite. Managed capacity, your own AWS account, or a machine under your desk — same definitions, no code changes."
+          body="Start with managed capacity. Connect AWS or join a Linux machine when you want workloads to run in your infrastructure."
         />
         <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
           <div className="flex flex-col gap-4">
             {computePaths.map((path) => (
-              <article
-                className="flex-1 rounded-2xl border border-border bg-card p-5 sm:p-6"
-                key={path.title}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="inline-flex size-9 items-center justify-center rounded-xl border border-brand/25 text-brand">
-                    <Glyph>{path.icon}</Glyph>
-                  </span>
+              <MarketingCard asChild key={path.title}>
+                <article className="flex-1 p-5 sm:p-6">
                   <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
-                </div>
-                <p className="mt-3 text-[13px] text-muted-foreground">{path.body}</p>
-                {path.command ? (
-                  <code className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1.5 font-mono text-[11px] break-all text-foreground">
-                    <span className="text-brand">$</span> {path.command}
-                  </code>
-                ) : (
-                  <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] text-brand">
-                    <Glyph>↳</Glyph>
-                    Default placement, no setup
-                  </p>
-                )}
-              </article>
+                  <p className="mt-3 text-[13px] text-muted-foreground">{path.body}</p>
+                  {path.command ? (
+                    <code className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1.5 font-mono text-[11px] break-all text-foreground">
+                      <span className="text-brand">$</span> {path.command}
+                    </code>
+                  ) : null}
+                </article>
+              </MarketingCard>
             ))}
           </div>
           <div className="flex [&>div]:flex-1">
