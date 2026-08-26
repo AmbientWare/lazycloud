@@ -913,6 +913,11 @@ def plan_nvidia_mounts(driver_files: Mapping[str, str]) -> list[OciMount]:
 
     Read-only: nothing in a container has business writing the driver, and the
     next container start reads the host afresh regardless.
+
+    No mount is needed for the directory itself. gVisor creates a bind
+    destination whose parents are absent from the image, which is the case for
+    every image that is not already a CUDA one, so a tmpfs staged underneath
+    these would be answering a question the runtime has already answered.
     """
     return [
         OciMount(
