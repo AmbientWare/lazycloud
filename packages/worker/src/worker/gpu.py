@@ -14,6 +14,10 @@ from shared.contracts import ContractModel
 
 from worker.events import ContainerRequestContext
 from worker.execution import (
+    NVIDIA_DRIVER_BINARY_DIR,
+    NVIDIA_DRIVER_BINARY_NAMES,
+    NVIDIA_DRIVER_LIBRARY_DIR,
+    NVIDIA_DRIVER_LIBRARY_PREFIXES,
     DeviceNode,
     OciDevice,
     OciMount,
@@ -83,6 +87,71 @@ class HostDeviceNodeProbe:
             minor=os.minor(info.st_rdev),
             file_mode=stat.S_IMODE(info.st_mode),
         )
+
+
+class NvidiaDriverFileProbe(Protocol):
+    def driver_files(self) -> dict[str, str]: ...
+
+
+NVIDIA_DRIVER_SEARCH_LIBRARY_DIRS = (
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib64",
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib",
+)
+NVIDIA_DRIVER_SEARCH_BINARY_DIRS = ("/usr/bin", "/bin")
+
+
+@dataclass(frozen=True, slots=True)
+class HostNvidiaDriverFileProbe:
+    """Finds the driver userspace the NVIDIA runtime injected into this worker.
+
+    The worker container is started with `--gpus`, so the node's driver files are
+    already here, in the ordinary library directories, versioned file and soname
+    symlink alike. Both are kept, because a workload links against
+    `libcuda.so.1` and the file behind that name is `libcuda.so.<driver
+    version>`; mount only the real file and the name nothing answers to is the
+    one every CUDA program asks for.
+
+    Searching this filesystem rather than the node's is what makes the answer
+    right. Which driver the node runs, and whether this worker image can use it,
+    was settled when the runtime injected these files, and reading the node
+    directly would reach past that decision to guess at it again.
+    """
+
+    library_directories: tuple[str, ...] = NVIDIA_DRIVER_SEARCH_LIBRARY_DIRS
+    binary_directories: tuple[str, ...] = NVIDIA_DRIVER_SEARCH_BINARY_DIRS
+
+    def driver_files(self) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for directory in self.library_directories:
+            for name, source in _resolved_directory_files(directory):
+                if name.startswith(NVIDIA_DRIVER_LIBRARY_PREFIXES):
+                    found.setdefault(f"{NVIDIA_DRIVER_LIBRARY_DIR}/{name}", source)
+        for directory in self.binary_directories:
+            for name, source in _resolved_directory_files(directory):
+                if name in NVIDIA_DRIVER_BINARY_NAMES:
+                    found.setdefault(f"{NVIDIA_DRIVER_BINARY_DIR}/{name}", source)
+        return found
+
+
+def _resolved_directory_files(directory: str) -> list[tuple[str, str]]:
+    """Each entry in a directory paired with the real file it names.
+
+    A dangling link is dropped rather than mounted. Mounting one puts a file in
+    the container that cannot be opened, which fails inside the workload as a
+    loader error rather than here as a missing driver.
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    entries: list[tuple[str, str]] = []
+    for name in sorted(names):
+        source = os.path.realpath(os.path.join(directory, name))
+        if os.path.isfile(source):
+            entries.append((name, source))
+    return entries
 
 
 class GpuDeviceIndexProvider(Protocol):
@@ -301,8 +370,8 @@ class DynamicGpuAllocationManager:
 class WorkerGpuRuntimeAssigner:
     allocation: GpuAllocationBackend
     cdi_enabled: bool = True
-    host_paths: set[str] = field(default_factory=set)
     device_probe: DeviceNodeProbe = field(default_factory=HostDeviceNodeProbe)
+    driver_probe: NvidiaDriverFileProbe = field(default_factory=HostNvidiaDriverFileProbe)
 
     def assign_gpus(self, request: ContainerRequestContext) -> ContainerGpuAssignmentResult:
         if request.gpu_count <= 0:
@@ -310,6 +379,23 @@ class WorkerGpuRuntimeAssigner:
                 container_id=request.container_id,
                 requested_count=0,
                 reason="no gpu requested",
+            )
+        # Before the allocation, so a worker with no driver refuses the request
+        # instead of holding devices it cannot make usable. A container that
+        # starts without these gets its GPUs and no way to open them, and says so
+        # as a CUDA error from inside the workload, which names neither the
+        # worker nor the driver.
+        driver_files = self.driver_probe.driver_files()
+        if not driver_files:
+            return ContainerGpuAssignmentResult(
+                container_id=request.container_id,
+                requested_count=request.gpu_count,
+                ok=False,
+                error_message=(
+                    "no NVIDIA driver libraries are present on this worker, so a GPU "
+                    "container would start with devices it cannot open"
+                ),
+                reason="nvidia driver userspace missing",
             )
         result = self.allocation.assign(request.container_id, request.gpu_count)
         if not result.ok:
@@ -327,7 +413,7 @@ class WorkerGpuRuntimeAssigner:
             requested_count=request.gpu_count,
             assigned_devices=assigned,
             env=env_plan.env,
-            oci_mounts=plan_nvidia_mounts(self.host_paths),
+            oci_mounts=plan_nvidia_mounts(driver_files),
             oci_devices=plan_nvidia_devices(
                 [
                     node

@@ -27,6 +27,29 @@ are the only signal, and anything that clears them turns a GPU workload into one
 that runs with `--nvproxy` set over a sandbox gVisor already decided needed no
 GPU. It fails as a CUDA initialisation error naming neither GPUs nor devices.
 
+Devices are half of it. The other half is the driver's userspace, and stripping
+the hooks is exactly what leaves it behind, because the hook is what ordinarily
+puts it there. A CUDA image links against `libcuda.so.1` and never ships it: the
+driver has to match the kernel module on the node, so it can only come from the
+node. This package mounts it instead, one bind per file into
+`/usr/local/nvidia/lib64`, which `LD_LIBRARY_PATH` already names and names first.
+
+Those files are read off the worker's own filesystem, not the node's. The agent
+starts the worker container with `--gpus`, so the NVIDIA runtime has already put
+the node's driver there and already settled whether this worker image can use it;
+reading the node directly would reach past that answer to guess at it again.
+Every name is kept, versioned file and soname symlink alike, because the file is
+`libcuda.so.590.48.01` and the name every CUDA program asks for is
+`libcuda.so.1`. Mounting the directory whole is the wrong shape: it is the
+worker's `/usr/lib`, and it would stack the worker's glibc in front of the
+workload's.
+
+A worker that finds no driver refuses the container rather than allocating GPUs
+it cannot make usable. This failed silently for as long as it existed. The
+planner searched two directories the node image never created, matched neither,
+returned no mounts, and every GPU workload started with its devices, no driver,
+and a loader error that read as the author's bug.
+
 The sandbox couples three pins that would otherwise drift apart: the gVisor
 release, the NVIDIA driver in the node image, and the GPU AMI. nvproxy proxies
 only driver ABIs it was built against, so changing any one alone produces a fleet
