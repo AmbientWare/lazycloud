@@ -725,7 +725,6 @@ def _gpu_assigner(config: WorkerSettings) -> WorkerGpuRuntimeAssigner:
     return WorkerGpuRuntimeAssigner(
         allocation=allocation,
         cdi_enabled=config.nvidia_cdi_enabled,
-        host_paths=_existing_nvidia_host_paths(),
     )
 
 
@@ -736,8 +735,3 @@ def _gpu_device_indices(value: str) -> list[int]:
         if candidate.isdigit():
             indices.append(int(candidate))
     return sorted(dict.fromkeys(indices))
-
-
-def _existing_nvidia_host_paths() -> set[str]:
-    candidates = ("/usr/local/cuda-12.4", "/usr/local/nvidia/lib64")
-    return {path for path in candidates if Path(path).exists()}

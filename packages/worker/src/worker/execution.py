@@ -5,7 +5,7 @@ import ipaddress
 import math
 import posixpath
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from urllib.parse import urlparse
 
@@ -43,6 +43,8 @@ MIB = 1024 * 1024
 DEFAULT_CPU_SHARE_UNIT = 1024
 DEFAULT_CPU_PERIOD_US = 100_000
 DEFAULT_CUDA_VERSION = "12.4"
+NVIDIA_DRIVER_LIBRARY_DIR = "/usr/local/nvidia/lib64"
+NVIDIA_DRIVER_BINARY_DIR = "/usr/local/nvidia/bin"
 DEFAULT_CONTAINER_PATHS = (
     "/usr/local/sbin",
     "/usr/local/bin",
@@ -50,13 +52,39 @@ DEFAULT_CONTAINER_PATHS = (
     "/usr/bin",
     "/sbin",
     "/bin",
+    NVIDIA_DRIVER_BINARY_DIR,
 )
 DEFAULT_CONTAINER_LIBRARY_PATHS = (
+    # First of the three: these are the only files here, they are matched to the
+    # kernel module on the node, and a CUDA image that ships a build-time
+    # `libcuda` stub of its own must not be the one a workload links against.
+    NVIDIA_DRIVER_LIBRARY_DIR,
     "/usr/lib/x86_64-linux-gnu",
     "/usr/lib/worker/x86_64-linux-gnu",
-    "/usr/local/nvidia/lib64",
 )
 NVIDIA_DRIVER_CAPABILITIES = "compute,utility,graphics,ngx,video"
+# The driver's userspace, by the file names libnvidia-container injects. A CUDA
+# image links against the driver and never ships it, because the driver has to
+# match the kernel module on the node, so these files are the whole difference
+# between a container that can open its GPUs and one that cannot.
+NVIDIA_DRIVER_LIBRARY_PREFIXES = (
+    "libcuda.so",
+    "libcudadebugger.so",
+    "libEGL_nvidia.so",
+    "libGLESv1_CM_nvidia.so",
+    "libGLESv2_nvidia.so",
+    "libGLX_nvidia.so",
+    "libnvcuvid.so",
+    "libnvidia-",
+    "libnvoptix.so",
+)
+# What `utility` in NVIDIA_DRIVER_CAPABILITIES promises a container it will find.
+NVIDIA_DRIVER_BINARY_NAMES = (
+    "nvidia-cuda-mps-control",
+    "nvidia-cuda-mps-server",
+    "nvidia-debugdump",
+    "nvidia-smi",
+)
 # Present on every driver install and needed by every GPU container regardless of
 # which cards it was assigned: the control node, the unified-memory nodes, and the
 # modeset node. Per-GPU nodes are added for the assigned indices.
@@ -875,20 +903,24 @@ def inject_nvidia_environment(
     )
 
 
-def plan_nvidia_mounts(
-    existing_host_paths: set[str],
-    *,
-    default_cuda_version: str = DEFAULT_CUDA_VERSION,
-) -> list[OciMount]:
-    candidates = (f"/usr/local/cuda-{default_cuda_version}", "/usr/local/nvidia/lib64")
+def plan_nvidia_mounts(driver_files: Mapping[str, str]) -> list[OciMount]:
+    """Bind the driver's userspace to the paths a workload resolves it by.
+
+    One mount per file rather than one for the directory they came from. That
+    directory is the worker's own `/usr/lib`, where the NVIDIA runtime put them
+    when the worker container started, and binding it whole would stack the
+    worker's glibc in front of the workload's.
+
+    Read-only: nothing in a container has business writing the driver, and the
+    next container start reads the host afresh regardless.
+    """
     return [
         OciMount(
-            source=path,
-            destination=path,
-            options=["rbind", "rprivate", "nosuid", "nodev", "rw"],
+            source=source,
+            destination=destination,
+            options=["rbind", "rprivate", "nosuid", "nodev", "ro"],
         )
-        for path in candidates
-        if path in existing_host_paths
+        for destination, source in sorted(driver_files.items())
     ]
 
 
