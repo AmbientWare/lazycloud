@@ -70,5 +70,23 @@ spec:
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
               mountPath: /run/lazycloud/aws
+          # Every loop's heartbeat, not the process's. The process stays up
+          # while one of its loops is wedged, which is the failure this exists to
+          # catch, so the oldest file decides and a missing one fails outright.
+          # The threshold is sized against the slowest loop: housekeeping waits
+          # on Stripe and S3, so it beats far less often than placement does.
+          livenessProbe:
+            exec:
+              command:
+                - process-liveness
+                - --max-age-seconds
+                - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
+                {{- range .Values.scheduler.loopNames }}
+                - /tmp/lazycloud-scheduler.heartbeat.{{ . }}
+                {{- end }}
+            initialDelaySeconds: {{ .Values.scheduler.livenessInitialDelaySeconds }}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}

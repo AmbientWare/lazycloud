@@ -167,9 +167,11 @@ FROM python-runtime AS scheduler
 COPY --from=scheduler-install /app/.venv /app/.venv
 COPY --from=managed-package-source /packages /app/packages
 VOLUME ["/var/lib/lazycloud"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -m shared.process_liveness /tmp/lazycloud-scheduler.heartbeat --max-age-seconds 120
-CMD ["lazycloud-scheduler", "--interval-seconds", "1.0", "--container-limit", "100"]
+# Every loop, not the process. The process outlives a loop that has stopped
+# beating, which is the failure this is here to notice.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD python -m shared.process_liveness /tmp/lazycloud-scheduler.heartbeat.placement /tmp/lazycloud-scheduler.heartbeat.capacity /tmp/lazycloud-scheduler.heartbeat.housekeeping /tmp/lazycloud-scheduler.heartbeat.dispatch --max-age-seconds 300
+CMD ["lazycloud-scheduler", "--container-limit", "100"]
 
 FROM python-runtime AS cache-server
 COPY --from=cache-server-install /app/.venv /app/.venv
