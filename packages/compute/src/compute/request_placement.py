@@ -5,6 +5,8 @@ from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import ComputeUnitRepository
+from database.repositories.identity import WorkspaceMemberRepository
+from shared.aws_connections import AwsAccountConnection
 from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord, MachinePool
 from shared.container_requests import capacity_with_overhead
 from shared.contracts import ContractModel
@@ -72,6 +74,17 @@ class ComputeCapacityPlacementService:
         if connection is None:
             return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
+        # Capacity belongs to the account that pays for it, not to the account
+        # that asked. A customer on the shared fleet has no connection of their
+        # own, so preparing capacity in their workspace looks up a provider that
+        # is not there and refuses the request outright — which is worse than
+        # the silence it replaced, because it fails work the fleet could have
+        # run. Falling back leaves the pre-existing behaviour: land on whatever
+        # the pool already has.
+        capacity_workspace = self._connection_workspace(connection)
+        if capacity_workspace is None:
+            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
+
         configuration = connection.compute
         machine_limit = (
             configuration.max_gpu_instances
@@ -79,7 +92,7 @@ class ComputeCapacityPlacementService:
             else configuration.max_cpu_instances
         )
         self.compute.prepare_pooled_capacity(
-            workspace=request.workspace_id,
+            workspace=capacity_workspace,
             requirements=request.requirements,
             region=configuration.default_region,
             desired_machines=0,
@@ -89,6 +102,19 @@ class ComputeCapacityPlacementService:
             allowed_instance_types=configuration.allowed_instance_types,
         )
         return ComputeCapacityPlacementResult(pool=MachinePool(pool))
+
+    def _connection_workspace(self, connection: AwsAccountConnection) -> str | None:
+        """A workspace owned by the account this connection belongs to.
+
+        The unit a provisioning run creates has to live in a workspace, and it
+        is the connection's account that is charged for the machine, so it lives
+        in theirs rather than in whoever asked. Which of their workspaces holds
+        it does not decide who the capacity serves: a platform-fleet unit serves
+        every account, and a private one is compared by owner.
+        """
+        with self.context.database.session() as session:
+            owned = WorkspaceMemberRepository(session).owned_workspace_ids(connection.user_id)
+        return min(owned, default=None)
 
     def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
         if request.requested_pool:
