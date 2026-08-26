@@ -60,23 +60,34 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
 
-_HELD_MUTATIONS = local()
-"""Capacity owners this thread already holds the mutation lease for.
 
-The lease says one mutation at a time per capacity owner, and a decision that
-holds it calls services which take it for themselves: the drain surges a
-replacement through `scale_internal_unit`, which locks the owner it was just
-locked for. Without re-entry that is a deadlock against itself, reported as
-contention with another holder, and the pool never rolls.
-"""
+class _HeldMutations(local):
+    """Capacity owners this thread already holds the mutation lease for.
+
+    The lease says one mutation at a time per capacity owner, and a decision that
+    holds it calls services which take it for themselves: the drain surges a
+    replacement through `scale_internal_unit`, which locks the owner it was just
+    locked for. Without re-entry that is a deadlock against itself, reported as
+    contention with another holder, and the pool never rolls.
+
+    Per thread, and the scheduler runs several: re-entry is a property of one
+    call stack, so a lease another loop holds has to read as contention here
+    rather than as this thread's own.
+    """
+
+    owners: set[str]
+
+    def __init__(self) -> None:
+        # `threading.local` runs this once per thread that touches the object,
+        # which is what gives each its own set without a lock or a lookup.
+        self.owners = set()
+
+
+_HELD_MUTATIONS = _HeldMutations()
 
 
 def _reentrant_owners() -> set[str]:
-    owners = getattr(_HELD_MUTATIONS, "owners", None)
-    if owners is None:
-        owners = set()
-        _HELD_MUTATIONS.owners = owners
-    return owners
+    return _HELD_MUTATIONS.owners
 
 
 DEFAULT_CAPACITY_RESERVATION_RETENTION_SECONDS = 86_400
