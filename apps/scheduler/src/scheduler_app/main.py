@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +30,14 @@ from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreSettings
 
+from scheduler_app.loops import (
+    CAPACITY_INTERVAL_SECONDS,
+    LOOP_SHUTDOWN_TIMEOUT_SECONDS,
+    LOOP_SUPERVISOR_POLL_SECONDS,
+    SCHEDULER_LOOP_NAMES,
+    scheduler_shutdown_handlers,
+    start_scheduler_loops,
+)
 from scheduler_app.runtime import SchedulerRuntime
 from scheduler_app.services import (
     SchedulerCapacitySettings,
@@ -39,7 +49,7 @@ from scheduler_app.settings import SchedulerProcessSettings
 
 
 class SchedulerCommandArgs(argparse.Namespace):
-    interval_seconds: float
+    capacity_interval_seconds: float
     container_limit: int
     once: bool
     include_cron_jobs: bool
@@ -145,7 +155,14 @@ class SchedulerProcessResult:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=SCHEDULER_PROCESS_NAME)
-    parser.add_argument("--interval-seconds", type=float, default=1.0)
+    # The capacity loop's cadence. Placement and housekeeping set their own,
+    # because the point of separating them was that one number cannot serve
+    # a loop a caller waits on and a loop that waits on Stripe.
+    parser.add_argument(
+        "--capacity-interval-seconds",
+        type=float,
+        default=CAPACITY_INTERVAL_SECONDS,
+    )
     parser.add_argument("--container-limit", type=int, default=100)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--cron-jobs", dest="include_cron_jobs", action="store_true", default=True)
@@ -170,14 +187,13 @@ def parse_scheduler_args(argv: list[str] | None = None) -> SchedulerCommandArgs:
 def run_scheduler(
     *,
     runtime: SchedulerRuntime,
-    interval_seconds: float = 1.0,
+    capacity_interval_seconds: float = CAPACITY_INTERVAL_SECONDS,
     container_limit: int = 100,
     once: bool = False,
     include_cron_jobs: bool = True,
     include_containers: bool = True,
     heartbeat_file: Path | None = None,
 ) -> SchedulerProcessResult | None:
-    runtime.scheduler.interval_seconds = interval_seconds
     with runtime:
         if once:
             result = runtime.scheduler.run_once(
@@ -246,21 +262,49 @@ def run_scheduler(
                 tailnet_cleanup_completed_count=result.tailnet_cleanup_completed_count,
                 tailnet_cleanup_failure_count=result.tailnet_cleanup_failure_count,
             )
-        heartbeat = None if heartbeat_file is None else HeartbeatFile(heartbeat_file)
-        runtime.scheduler.run_forever(
-            include_cron_jobs=include_cron_jobs,
-            include_containers=include_containers,
-            container_limit=container_limit,
-            beat=None if heartbeat is None else heartbeat.beat,
-        )
+        stop = threading.Event()
+        beats = _loop_heartbeats(heartbeat_file)
+        with scheduler_shutdown_handlers(stop):
+            supervisor = start_scheduler_loops(
+                runtime.scheduler,
+                include_cron_jobs=include_cron_jobs,
+                include_containers=include_containers,
+                container_limit=container_limit,
+                capacity_interval_seconds=capacity_interval_seconds,
+                beats=beats,
+                stop=stop,
+            )
+            try:
+                # The signal handler sets the event; nothing else ends the
+                # process. Waiting on it rather than on the threads keeps the
+                # main thread free to take the signal at all.
+                while not stop.wait(LOOP_SUPERVISOR_POLL_SECONDS):
+                    pass
+            finally:
+                supervisor.shutdown(timeout_seconds=LOOP_SHUTDOWN_TIMEOUT_SECONDS)
     return None
+
+
+def _loop_heartbeats(heartbeat_file: Path | None) -> dict[str, Callable[[], None]]:
+    """One heartbeat file per loop, beside the one the process is named for.
+
+    Separate files because a single one answers the wrong question: it says some
+    loop is alive, and the failure worth catching is one loop wedged while the
+    others carry on. The liveness check reads all of them, so the oldest decides.
+    """
+
+    if heartbeat_file is None:
+        return {}
+    return {
+        name: HeartbeatFile(heartbeat_file.with_name(f"{heartbeat_file.name}.{name}")).beat
+        for name in SCHEDULER_LOOP_NAMES
+    }
 
 
 def build_scheduler_runtime(
     *,
     public_gateway_http_url: str,
     runtime_callback_http_url: str,
-    interval_seconds: float = 1.0,
 ) -> SchedulerRuntime:
     scheduler_settings = SchedulerProcessSettings()
     # The API launches nodes from the same release facts; a scheduler resolving a
@@ -290,7 +334,6 @@ def build_scheduler_runtime(
             agent_binaries=release.agent_binaries,
             reclaim=ComputeReclaimSettings().to_policy(),
         ),
-        interval_seconds=interval_seconds,
         managed_compute_reconcile_interval_seconds=(
             scheduler_settings.managed_compute_reconcile_interval_seconds
         ),
@@ -313,9 +356,8 @@ def main(argv: list[str] | None = None) -> None:
             runtime=build_scheduler_runtime(
                 public_gateway_http_url=gateway_settings.public_http_url,
                 runtime_callback_http_url=gateway_settings.runtime_callback_http_url,
-                interval_seconds=args.interval_seconds,
             ),
-            interval_seconds=args.interval_seconds,
+            capacity_interval_seconds=args.capacity_interval_seconds,
             container_limit=args.container_limit,
             once=args.once,
             include_cron_jobs=args.include_cron_jobs,

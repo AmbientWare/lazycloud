@@ -93,7 +93,6 @@ class SchedulerRuntime:
         storage: SchedulerStorageSettings,
         network: SchedulerNetworkSettings,
         capacity: SchedulerCapacitySettings,
-        interval_seconds: float = 1.0,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
@@ -134,7 +133,6 @@ class SchedulerRuntime:
                 retention=app_services.retention,
                 tailnet_cleanup=app_services.tailnet_cleanup,
                 custom_domains=app_services.custom_domains,
-                interval_seconds=interval_seconds,
                 managed_compute_reconcile_interval_seconds=(
                     managed_compute_reconcile_interval_seconds
                 ),
@@ -172,7 +170,6 @@ class SchedulerRuntime:
         retention: SchedulerRetentionService | None,
         tailnet_cleanup: SchedulerTailnetCleanupService,
         custom_domains: CustomDomainService,
-        interval_seconds: float = 1.0,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
@@ -220,7 +217,6 @@ class SchedulerRuntime:
         )
         scheduler = Scheduler(
             services=scheduler_services,
-            interval_seconds=interval_seconds,
             managed_compute_reconcile_interval_seconds=(managed_compute_reconcile_interval_seconds),
             workloads=SchedulerWorkloadControls(
                 containers=dispatch_requests,

@@ -103,8 +103,25 @@ scheduler:
   initResources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 256Mi }
+  # Each loop stamps its own heartbeat and the probe reads all of them, so a
+  # wedged loop is visible while the process it lives in is still up.
+  loopNames: [placement, capacity, housekeeping, dispatch]
+  # Comfortably above the slowest loop's cadence plus the longest external call
+  # it waits on. Housekeeping is the one that sets this: it drains to Stripe and
+  # meters against S3, and a threshold near its interval would restart a
+  # scheduler for being slow rather than for being stuck.
+  livenessMaxAgeSeconds: 300
+  # The first housekeeping pass has to finish before any heartbeat exists, and
+  # it is the pass that talks to every external service.
+  livenessInitialDelaySeconds: 120
   database:
-    poolSize: 4
+    # One per loop with headroom, not one per loop times what a loop might nest.
+    # Sessions are opened around an operation rather than held for a pass, so
+    # four loops draw four at their peak; the rest is for a pass that opens a
+    # second inside the first. Bounded from above by the server's ceiling, which
+    # `lazycloud.databaseBudget` enforces at render time — this and the control
+    # plane's two replicas are what that 25 is divided between.
+    poolSize: 5
     maxOverflow: 2
 
 # Single-threaded, and they run to completion before anything serves.

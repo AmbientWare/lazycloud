@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from threading import Event, Thread
+from threading import Event
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
@@ -415,7 +414,6 @@ class SchedulerMaintenanceControls:
 @dataclass
 class Scheduler:
     services: SchedulerServices | None = None
-    interval_seconds: float = 1.0
     workloads: SchedulerWorkloadControls = field(default_factory=SchedulerWorkloadControls)
     states: SchedulerStateStores = field(default_factory=SchedulerStateStores)
     capacity: SchedulerCapacityControls = field(default_factory=SchedulerCapacityControls)
@@ -676,25 +674,104 @@ class Scheduler:
         )
         return results
 
-    def run_once(
+    def run_placement_pass(
+        self,
+        *,
+        now: datetime | None = None,
+        include_containers: bool = True,
+        container_limit: int = 100,
+    ) -> SchedulerRunResult:
+        """Decide what needs to run, and nothing else.
+
+        Everything here is Postgres, Redis, and the in-cluster gateway. Nothing
+        may call a service outside the cluster from this pass, because a caller
+        waiting for a container waits for whatever this pass is doing: the
+        autoscalers below are what turn a claimable task into a container row,
+        and they used to sit eleventh in a tick that drained Stripe first.
+        """
+
+        if not include_containers:
+            return SchedulerRunResult()
+        return SchedulerRunResult(
+            function_autoscaling=self._best_effort_reconcile_functions(
+                now=now, limit=container_limit
+            ),
+            endpoint_autoscaling=self._best_effort_reconcile_endpoints(
+                now=now, limit=container_limit
+            ),
+            pod_autoscaling=self._best_effort_reconcile_pods(now=now, limit=container_limit),
+            function_retries=self._best_effort_schedule_function_retries(
+                now=now, limit=container_limit
+            ),
+        )
+
+    def run_capacity_pass(
         self,
         *,
         now: datetime | None = None,
         include_cron_jobs: bool = True,
         include_containers: bool = True,
-        include_container_dispatch: bool = True,
         container_limit: int = 100,
     ) -> SchedulerRunResult:
-        app_lifecycle_reconciliations = (
-            self._best_effort_reconcile_app_lifecycle(limit=container_limit)
-            if include_containers
-            else []
+        """Keep the fleet and its records agreeing with each other.
+
+        Slower than placement and faster than housekeeping, because the work
+        here decides what capacity exists rather than what runs on it. Billing
+        enforcement sits in this pass rather than with the rest of billing: it
+        touches only Postgres, and its interval is denominated in money.
+
+        Cron firing belongs here for the same reason. A schedule that fires late
+        is a schedule that was wrong, and the housekeeping cadence is coarser
+        than the shortest schedule a caller can write.
+        """
+
+        billing_enforcement = self._best_effort_enforce_billing(now=now)
+        cron_job_runs = self.tick(now=now) if include_cron_jobs else []
+        if not include_containers:
+            return SchedulerRunResult(
+                cron_job_runs=cron_job_runs,
+                billing_enforcement_unfunded_count=billing_enforcement.unfunded_count,
+                billing_enforcement_stopped_count=billing_enforcement.stopped_count,
+                billing_enforcement_failure_count=billing_enforcement.failed_count,
+            )
+        return SchedulerRunResult(
+            cron_job_runs=cron_job_runs,
+            app_lifecycle_reconciliations=self._best_effort_reconcile_app_lifecycle(
+                limit=container_limit
+            ),
+            capacity_interruptions=self._best_effort_reconcile_capacity_interruptions(now=now),
+            expired_pods=self._best_effort_expire_pods(now=now),
+            worker_cleanups=self._best_effort_cleanup_workers(now=now),
+            settled_preemptions=self._best_effort_recover_unsettled_preemptions(
+                limit=container_limit
+            ),
+            agent_pool_reconciliations=self._best_effort_reconcile_agent_pools(now=now),
+            managed_compute_reconciliations=self._best_effort_reconcile_managed_compute(now=now),
+            pool_states=self._best_effort_refresh_pool_states(now=now),
+            capacity_reservations=self._best_effort_reconcile_capacity_reservations(now=now),
+            orphaned_containers_failed=self._best_effort_reconcile_orphaned_containers(now=now),
+            worker_pool_drains=self._best_effort_drain_worker_pools(now=now, limit=container_limit),
+            billing_enforcement_unfunded_count=billing_enforcement.unfunded_count,
+            billing_enforcement_stopped_count=billing_enforcement.stopped_count,
+            billing_enforcement_failure_count=billing_enforcement.failed_count,
         )
-        capacity_interruptions = (
-            self._best_effort_reconcile_capacity_interruptions(now=now)
-            if include_containers
-            else []
-        )
+
+    def run_housekeeping_pass(
+        self,
+        *,
+        now: datetime | None = None,
+        include_containers: bool = True,
+        container_limit: int = 100,
+    ) -> SchedulerRunResult:
+        """Everything that talks to somebody else's service.
+
+        Stripe, S3, Tailscale and Cloudflare all answer on their own schedule,
+        and this is the pass that waits for them. Nothing placement needs is
+        produced here: the allowance admission reads is written when usage is
+        priced, so draining the outbox afterwards is downstream of the number
+        that decides whether work may start.
+        """
+
         volume_metering_count, volume_metering_failure_count = self._meter_persistent_volumes(
             now=now,
             limit=container_limit,
@@ -702,63 +779,12 @@ class Scheduler:
         meter_events = self._drain_meter_events(now=now)
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
-        billing_enforcement = self._best_effort_enforce_billing(now=now)
         meter_events_pruned = self._best_effort_prune_meter_events(now=now)
-        expired_pods = self._best_effort_expire_pods(now=now) if include_containers else []
-        worker_cleanups = self._best_effort_cleanup_workers(now=now) if include_containers else []
-        function_autoscaling = (
-            self._best_effort_reconcile_functions(now=now, limit=container_limit)
-            if include_containers
-            else []
-        )
-        endpoint_autoscaling = (
-            self._best_effort_reconcile_endpoints(now=now, limit=container_limit)
-            if include_containers
-            else []
-        )
-        pod_autoscaling = (
-            self._best_effort_reconcile_pods(now=now, limit=container_limit)
-            if include_containers
-            else []
-        )
-        settled_preemptions = (
-            self._best_effort_recover_unsettled_preemptions(limit=container_limit)
-            if include_containers
-            else []
-        )
-        function_retries = (
-            self._best_effort_schedule_function_retries(now=now, limit=container_limit)
-            if include_containers
-            else []
-        )
-        agent_pool_reconciliations = (
-            self._best_effort_reconcile_agent_pools(now=now) if include_containers else []
-        )
-        managed_compute_reconciliations = (
-            self._best_effort_reconcile_managed_compute(now=now) if include_containers else []
-        )
-        pool_states = self._best_effort_refresh_pool_states(now=now) if include_containers else {}
-        capacity_reservations = (
-            self._best_effort_reconcile_capacity_reservations(now=now) if include_containers else []
-        )
-        container_dispatches = (
-            self.dispatch_containers(now=now, limit=container_limit)
-            if include_containers and include_container_dispatch
-            else []
-        )
-        orphaned_containers_failed = (
-            self._best_effort_reconcile_orphaned_containers(now=now) if include_containers else []
-        )
         tailnet_cleanup = self._best_effort_reconcile_tailnet_cleanup(
             now=now,
             limit=container_limit,
         )
         self._best_effort_reconcile_custom_domains(now=now)
-        worker_pool_drains = (
-            self._best_effort_drain_worker_pools(now=now, limit=container_limit)
-            if include_containers
-            else []
-        )
         expired_tokens_pruned = (
             self._best_effort_prune_expired_tokens(now=now) if include_containers else 0
         )
@@ -767,26 +793,9 @@ class Scheduler:
             self._best_effort_retain_artifacts(now=now) if include_containers else (0, 0)
         )
         return SchedulerRunResult(
-            app_lifecycle_reconciliations=app_lifecycle_reconciliations,
-            cron_job_runs=self.tick(now=now) if include_cron_jobs else [],
-            function_retries=function_retries,
-            agent_pool_reconciliations=agent_pool_reconciliations,
-            function_autoscaling=function_autoscaling,
-            endpoint_autoscaling=endpoint_autoscaling,
-            pod_autoscaling=pod_autoscaling,
-            expired_pods=expired_pods,
-            pool_states=pool_states,
-            capacity_reservations=capacity_reservations,
-            capacity_interruptions=capacity_interruptions,
-            managed_compute_reconciliations=managed_compute_reconciliations,
             tailnet_cleanup_processed_count=tailnet_cleanup[0],
             tailnet_cleanup_completed_count=tailnet_cleanup[1],
             tailnet_cleanup_failure_count=tailnet_cleanup[2],
-            worker_pool_drains=worker_pool_drains,
-            container_dispatches=container_dispatches,
-            orphaned_containers_failed=orphaned_containers_failed,
-            settled_preemptions=settled_preemptions,
-            worker_cleanups=worker_cleanups,
             expired_tokens_pruned=expired_tokens_pruned,
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
@@ -805,11 +814,51 @@ class Scheduler:
             billing_reconcile_checked_count=billing_reconciliation.accounts_checked,
             billing_reconcile_divergent_count=billing_reconciliation.divergent_count,
             billing_reconcile_failure_count=billing_reconciliation.unreachable_count,
-            billing_enforcement_unfunded_count=billing_enforcement.unfunded_count,
-            billing_enforcement_stopped_count=billing_enforcement.stopped_count,
-            billing_enforcement_failure_count=billing_enforcement.failed_count,
             objects_removed=objects_removed,
             retention_failure_count=retention_failure_count,
+        )
+
+    def run_once(
+        self,
+        *,
+        now: datetime | None = None,
+        include_cron_jobs: bool = True,
+        include_containers: bool = True,
+        include_container_dispatch: bool = True,
+        container_limit: int = 100,
+    ) -> SchedulerRunResult:
+        """Every pass once, in one call, for a caller that wants a whole sweep.
+
+        The running process does not use this. It runs each pass on its own
+        cadence, which is the point of their being separate. This is what
+        `--once` means, and it is how a test asks for the whole of the
+        scheduler's work without waiting for four loops to coincide.
+        """
+
+        return _merge_run_results(
+            self.run_capacity_pass(
+                now=now,
+                include_cron_jobs=include_cron_jobs,
+                include_containers=include_containers,
+                container_limit=container_limit,
+            ),
+            self.run_placement_pass(
+                now=now,
+                include_containers=include_containers,
+                container_limit=container_limit,
+            ),
+            SchedulerRunResult(
+                container_dispatches=(
+                    self.dispatch_containers(now=now, limit=container_limit)
+                    if include_containers and include_container_dispatch
+                    else []
+                )
+            ),
+            self.run_housekeeping_pass(
+                now=now,
+                include_containers=include_containers,
+                container_limit=container_limit,
+            ),
         )
 
     def _best_effort_reconcile_app_lifecycle(self, *, limit: int) -> list[AppRecord]:
@@ -1447,72 +1496,21 @@ class Scheduler:
             LOGGER.exception("scheduler worker-pool drain failed")
             return []
 
-    def run_forever(
-        self,
-        *,
-        include_cron_jobs: bool = True,
-        include_containers: bool = True,
-        container_limit: int = 100,
-        beat: Callable[[], None] | None = None,
-    ) -> None:
-        dispatch_wake = self.workloads.dispatch_wake
-        if include_containers and dispatch_wake is None:
-            raise RuntimeError("scheduler dispatch wake waiter was not injected")
-        stop_dispatch = Event()
-        dispatch_thread: Thread | None = None
-        if dispatch_wake is not None and include_containers:
-            dispatch_thread = Thread(
-                target=self.run_container_dispatch_loop,
-                kwargs={
-                    "stop": stop_dispatch,
-                    "container_limit": container_limit,
-                },
-                name="scheduler-container-dispatch",
-                daemon=True,
-            )
-            dispatch_thread.start()
-        consecutive_failures = 0
-        try:
-            while True:
-                if beat is not None:
-                    beat()
-                try:
-                    self.run_once(
-                        include_cron_jobs=include_cron_jobs,
-                        include_containers=include_containers,
-                        include_container_dispatch=False,
-                        container_limit=container_limit,
-                    )
-                except Exception:
-                    consecutive_failures += 1
-                    retry_seconds = min(
-                        SCHEDULER_FAILURE_RETRY_MAX_SECONDS,
-                        max(self.interval_seconds, 0.1) * (1 << min(consecutive_failures - 1, 8)),
-                    )
-                    LOGGER.exception(
-                        "scheduler pass failed; retrying",
-                        extra={
-                            "consecutive_failures": consecutive_failures,
-                            "retry_seconds": retry_seconds,
-                        },
-                    )
-                else:
-                    consecutive_failures = 0
-                    retry_seconds = max(self.interval_seconds, 0.0)
-                time.sleep(retry_seconds)
-        finally:
-            stop_dispatch.set()
-            if dispatch_thread is not None:
-                dispatch_thread.join(timeout=CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS + 0.1)
-                if dispatch_thread.is_alive():
-                    LOGGER.warning("scheduler container dispatch loop did not stop promptly")
-
     def run_container_dispatch_loop(
         self,
         *,
         stop: Event,
         container_limit: int = 100,
+        beat: Callable[[], None] | None = None,
     ) -> None:
+        """Place what is ready, woken by arrival rather than by a clock.
+
+        The beat is this loop's own. It waits on Redis rather than on a timer,
+        so a wedge here looks nothing like a wedge in the loops that sleep, and
+        a liveness check reading one file for the whole process would call this
+        alive on the strength of a loop that is not this one.
+        """
+
         dispatch_wake = self.workloads.dispatch_wake
         if dispatch_wake is None:
             raise RuntimeError("scheduler dispatch wake waiter was not injected")
@@ -1531,6 +1529,9 @@ class Scheduler:
                 self.drain_container_dispatches(limit=container_limit)
             except Exception:
                 LOGGER.exception("scheduler container dispatch failed; periodic sweep will retry")
+                continue
+            if beat is not None:
+                beat()
 
     def _run_cron_job(self, cron_job: CronJobRecord, now: datetime) -> CronJobRun:
         try:
@@ -1676,6 +1677,21 @@ class SchedulerRunResult(ContractModel):
     billing_enforcement_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
+
+
+def _merge_run_results(*results: SchedulerRunResult) -> SchedulerRunResult:
+    """One sweep's worth of work, assembled from the passes that did it.
+
+    Each pass fills only its own fields and leaves the rest at their defaults,
+    so merging is taking what was set. That holds because no field is written by
+    two passes: a pass whose real answer happens to equal the default
+    contributes the same value the merged result would carry anyway.
+    """
+
+    merged: dict[str, object] = {}
+    for result in results:
+        merged.update(result.model_dump(exclude_defaults=True))
+    return SchedulerRunResult.model_validate(merged)
 
 
 WORKER_POOL_DRAIN_LOG_INTERVAL_SECONDS = 300.0

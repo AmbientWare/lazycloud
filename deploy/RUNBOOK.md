@@ -314,6 +314,43 @@ kubectl -n argocd get applications
 kubectl -n lazycloud get pods
 ```
 
+### Reading a slow scheduler
+
+The scheduler runs four loops in one process, each on its own cadence, and each
+stamping its own heartbeat at `/tmp/lazycloud-scheduler.heartbeat.<loop>`. The
+liveness probe reads all four, so a restart means one of them stopped finishing
+passes, not that the process died.
+
+Which one is the first thing to establish:
+
+```sh
+kubectl exec -n lazycloud deploy/scheduler -- \
+  sh -c 'for f in /tmp/lazycloud-scheduler.heartbeat.*; do echo "$f $(stat -c %Y "$f")"; done'
+```
+
+The oldest names the wedged loop. `placement` means containers are not being
+decided on and callers are waiting; `capacity` means the fleet and its records
+are drifting; `housekeeping` means an external service is unreachable and the
+meter outbox is filling, which is durable and recoverable; `dispatch` means work
+is decided but not placed.
+
+To see what placement latency actually is, read the gap between a task becoming
+claimable and starting, rather than inferring it from logs:
+
+```sql
+select name,
+       round(avg(extract(epoch from (started_at - claimable_at)))::numeric, 1) as avg_s,
+       round(max(extract(epoch from (started_at - claimable_at)))::numeric, 1) as max_s
+from tasks
+where started_at is not null and claimable_at is not null
+group by name order by avg_s desc;
+```
+
+Before the loops were split this averaged 30s with a 918s worst case, because
+placement ran behind a synchronous Stripe drain in the same tick. A warm
+container answers in about 0.1s; anything in seconds is a cold start, and
+anything in tens of seconds is a loop that is not running.
+
 ### Capacity, and why the cluster holds two nodes
 
 Auto Mode sizes the cluster from what the pods request, and from nothing else.

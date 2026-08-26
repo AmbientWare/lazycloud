@@ -18,7 +18,7 @@ _HEARTBEAT_ROOT = Path("/tmp")
 
 
 class ProcessLivenessArguments(argparse.Namespace):
-    path: Path
+    path: list[Path]
     max_age_seconds: float
 
 
@@ -55,7 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="process-liveness",
         description="Fail when a loop-process heartbeat file is missing or stale.",
     )
-    parser.add_argument("path", type=Path)
+    # Several, because a process may run several loops and the failure worth
+    # catching is one of them wedged while the others carry on. Checking any one
+    # file would report that process as healthy.
+    parser.add_argument("path", type=Path, nargs="+")
     parser.add_argument("--max-age-seconds", type=float, required=True)
     return parser
 
@@ -66,18 +69,19 @@ def main(argv: list[str] | None = None) -> int:
     if max_age_seconds <= 0:
         print("--max-age-seconds must be positive", file=sys.stderr)
         return 2
-    heartbeat = HeartbeatFile(args.path)
-    age = heartbeat.age_seconds()
-    if age is None:
-        print(f"heartbeat missing: {args.path}", file=sys.stderr)
-        return 1
-    if age > max_age_seconds:
-        print(
-            f"heartbeat stale: {age:.0f}s > {max_age_seconds:.0f}s ({args.path})",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    failed = False
+    for path in args.path:
+        age = HeartbeatFile(path).age_seconds()
+        if age is None:
+            print(f"heartbeat missing: {path}", file=sys.stderr)
+            failed = True
+        elif age > max_age_seconds:
+            print(
+                f"heartbeat stale: {age:.0f}s > {max_age_seconds:.0f}s ({path})",
+                file=sys.stderr,
+            )
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -722,8 +722,6 @@ services:
     command:
       [
         "lazycloud-scheduler",
-        "--interval-seconds",
-        "${LAZYCLOUD_COMPOSE_SCHEDULER_INTERVAL_SECONDS:-1.0}",
         "--container-limit",
         "${LAZYCLOUD_COMPOSE_SCHEDULER_CONTAINER_LIMIT:-100}",
       ]
@@ -759,14 +757,17 @@ services:
           "python",
           "-m",
           "shared.process_liveness",
-          "/tmp/lazycloud-scheduler.heartbeat",
+          "/tmp/lazycloud-scheduler.heartbeat.placement",
+          "/tmp/lazycloud-scheduler.heartbeat.capacity",
+          "/tmp/lazycloud-scheduler.heartbeat.housekeeping",
+          "/tmp/lazycloud-scheduler.heartbeat.dispatch",
           "--max-age-seconds",
-          "${LAZYCLOUD_COMPOSE_SCHEDULER_LIVENESS_MAX_AGE_SECONDS:-120}",
+          "${LAZYCLOUD_COMPOSE_SCHEDULER_LIVENESS_MAX_AGE_SECONDS:-300}",
         ]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 120s
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - *platform-aws-config
