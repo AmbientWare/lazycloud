@@ -52,6 +52,12 @@ permissions:
   # other credential is involved -- Argo's App credential exists to read the
   # repository from inside the cluster, which is a different direction.
   contents: write
+  # The deployment branch is the whole tree at the deployed commit, `.github`
+  # included, so a commit that touches a workflow makes this push one that
+  # rewrites a workflow. GitHub refuses that without this scope, and refuses it
+  # at the push, after the images are built and long after anything could act
+  # on the failure.
+  workflows: write
   id-token: write
 
 concurrency:

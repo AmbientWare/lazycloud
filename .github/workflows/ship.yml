@@ -31,6 +31,9 @@ on:
 # starts, with no logs to read.
 permissions:
   contents: write
+  # A caller cannot grant a called workflow less than it asks for, and the
+  # deploy writes the whole tree to the deployment branch.
+  workflows: write
   id-token: write
 
 concurrency:
