@@ -17,7 +17,7 @@ from typing import TypedDict
 
 from lazycloud import App, GpuType, Image
 
-app = App("gpu-probe")
+app = App("gpu_probe")
 
 image = Image(python_version="3.12")
 
