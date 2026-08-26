@@ -180,6 +180,15 @@ class _PooledProvider:
 
 
 @dataclass(slots=True)
+class _EmptyAccountProvider(_PooledProvider):
+    """An account with no autoscaling group in it, however it came to be empty."""
+
+    def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        self.describe_calls.append(request)
+        return self._snapshot(request, phase=ProviderCapacityPhase.Deleted)
+
+
+@dataclass(slots=True)
 class _AsyncScaleDownProvider(_PooledProvider):
     def set_unit_capacity(
         self,
@@ -1885,6 +1894,44 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
     assert revived.min_machines == 1
 
 
+def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(
+    isolated_services: ApiServices,
+) -> None:
+    """The provider cannot tell a torn-down pool from one it has not built.
+
+    Both are an account holding no autoscaling group, and the provider is asked
+    about the account. Reading that as deletion closed the loop the revival above
+    opens: the warm floor revived the row, the next snapshot buried it, and
+    `reconcile_pooled_capacity` declines to build a deleted pool, so the account
+    held a floor of one and no machine for as long as it existed.
+    """
+
+    _seed_connection(isolated_services)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(_EmptyAccountProvider()),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    unit = compute.reconcile_aws_default_capacity(
+        workspace="default",
+        region="us-east-1",
+        instance_type="m7i.xlarge",
+        initial_machines=1,
+        min_machines=1,
+        max_machines=10,
+        min_free_cpu_millicores=1_000,
+        min_free_memory_mib=1_024,
+        root_volume_gib=200,
+        idle_timeout_seconds=300,
+    )
+
+    described, _ = compute.describe_internal_unit(unit.workspace_id, unit.capacity_owner_id)
+
+    assert described.phase is ComputeUnitPhase.Provisioning
+    assert described.desired_machines == 1
+
+
 def _seed_serving_machine(
     isolated_services: ApiServices,
     pool: ComputeUnitRecord,
@@ -1979,7 +2026,7 @@ def _serving_pool(
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
-        **({} if reclaim is None else {"reclaim": reclaim}),
+        reclaim=reclaim if reclaim is not None else ComputeReclaimPolicy(),
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
