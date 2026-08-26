@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
 from database.records.apps import StubRecord
 from database.repositories.apps import StubRepository
+from database.repositories.execution import TaskRepository
 from execution.containers.service import ContainerService
 from execution.endpoints.keys import endpoint_instance_lock_key, endpoint_serve_lock_key
 from execution.pods.planning import pod_instance_lock_key
@@ -14,6 +16,8 @@ from shared.container_requests import ContainerShutdownTarget
 from shared.deployments import StubKind
 
 from operations.container_shutdown import ContainerShutdownService
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +49,20 @@ class ProductionAppExecutionLifecycleEffects:
             stubs = StubRepository(session).list_for_app(
                 workspace_id=workspace_id,
                 app_id=app_id,
+            )
+            # Queued invocations go the way the containers above them just did.
+            # Only deletion retires them: a paused app is also refused by app
+            # admission, and its backlog is meant to be waiting for the resume.
+            cancelled = TaskRepository(session).cancel_queued_for_app(
+                workspace_id=workspace_id,
+                app_id=app_id,
+                error="the app this task belongs to was deleted",
+            )
+        if cancelled:
+            LOGGER.info(
+                "app %s deletion cancelled %d queued task(s)",
+                app_id,
+                len(cancelled),
             )
         self._delete_app_ephemeral_state(workspace_id=workspace_id, stubs=stubs)
 
