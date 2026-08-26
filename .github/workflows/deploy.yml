@@ -212,6 +212,13 @@ jobs:
           # them, so it can never describe a tree the tag was not built from.
           git fetch origin "${DEPLOYMENT_BRANCH}" || true
           git checkout -B "${DEPLOYMENT_BRANCH}" "$GITHUB_SHA"
+          # Argo reads `deploy/chart` from this branch and nothing else, so the
+          # workflows are carried here for no reader. They are not free to
+          # carry: a deploy of any commit that touched one makes this push a
+          # workflow rewrite, which the workflow token is refused — at the push,
+          # after every image is built, and with no way to grant it, because
+          # `workflows` is not a permission a job can ask for.
+          git rm -r --quiet --cached .github
           mv values-prod.yaml deploy/chart/values-prod.yaml
           git add deploy/chart/values-prod.yaml
           git commit -m "Run ${GITHUB_SHA}"
