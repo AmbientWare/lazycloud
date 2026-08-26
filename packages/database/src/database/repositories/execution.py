@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from database.mappers.execution import pod_url_record_from_table
@@ -82,6 +83,31 @@ class TaskDurationSample(BaseModel):
     status: TaskStatus
 
     @field_validator("created_at", "started_at", "finished_at")
+    @classmethod
+    def normalize_timestamp(cls, value: datetime) -> datetime:
+        return _utc_datetime(value)
+
+
+class TaskStatusTally(BaseModel):
+    """How many tasks hold one status, counted by the database."""
+
+    status: TaskStatus
+    count: int
+
+
+class TaskDeploymentTally(TaskStatusTally):
+    """The same tally, split by the deployment the tasks belong to."""
+
+    deployment_id: str
+
+
+class TaskCreationSample(BaseModel):
+    """When a task was created and how it ended, read without the row payload."""
+
+    created_at: datetime
+    status: TaskStatus
+
+    @field_validator("created_at")
     @classmethod
     def normalize_timestamp(cls, value: datetime) -> datetime:
         return _utc_datetime(value)
@@ -552,6 +578,7 @@ class TaskRepository:
         workspace_id: str,
         stub_ids: tuple[str, ...] = (),
         deployment_id: str | None = None,
+        app_id: str | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = DEFAULT_DURATION_SAMPLE_LIMIT,
@@ -576,6 +603,8 @@ class TaskRepository:
             statement = statement.where(TaskTable.stub_id.in_(stub_ids))
         if deployment_id is not None:
             statement = statement.where(TaskTable.deployment_id == deployment_id)
+        if app_id is not None:
+            statement = statement.where(TaskTable.app_id == app_id)
         if start is not None:
             statement = statement.where(TaskTable.created_at >= start)
         if end is not None:
@@ -586,6 +615,130 @@ class TaskRepository:
         rows = list(self.session.execute(statement).mappings())
         rows.reverse()
         return [TaskDurationSample.model_validate(row) for row in rows]
+
+    def status_tallies(
+        self,
+        *,
+        workspace_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        app_id: str | None = None,
+        stub_id: str | None = None,
+    ) -> list[TaskStatusTally]:
+        """Counts per status, answered by the database rather than by rows.
+
+        Counting in Python meant reading every task the filter accepted, and a
+        task row carries its `args`, `kwargs` and `result` inline. A summary of a
+        few integers pulled the whole table across the wire, which is what made a
+        dashboard left open overnight the most expensive thing in the account.
+        """
+        statement = select(TaskTable.status, func.count(TaskTable.id).label("count")).where(
+            TaskTable.workspace_id == workspace_id
+        )
+        statement = _narrowed_tasks(statement, start=start, end=end, app_id=app_id, stub_id=stub_id)
+        statement = statement.group_by(TaskTable.status)
+        return [
+            TaskStatusTally.model_validate(row)
+            for row in self.session.execute(statement).mappings()
+        ]
+
+    def status_tallies_by_deployment(self, *, workspace_id: str) -> list[TaskDeploymentTally]:
+        """The same counts, split by deployment.
+
+        `deployment_id` is null for work no deployment owns, and the caller
+        reports that group under the empty string, so the coalesce belongs in the
+        grouping rather than in a second pass afterwards.
+        """
+        deployment = func.coalesce(TaskTable.deployment_id, "")
+        statement = (
+            select(
+                deployment.label("deployment_id"),
+                TaskTable.status,
+                func.count(TaskTable.id).label("count"),
+            )
+            .where(TaskTable.workspace_id == workspace_id)
+            .group_by(deployment, TaskTable.status)
+        )
+        return [
+            TaskDeploymentTally.model_validate(row)
+            for row in self.session.execute(statement).mappings()
+        ]
+
+    def creation_samples(
+        self,
+        *,
+        workspace_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        app_id: str | None = None,
+        stub_id: str | None = None,
+        limit: int = DEFAULT_DURATION_SAMPLE_LIMIT,
+    ) -> list[TaskCreationSample]:
+        """Creation times and statuses for bucketing, two columns per task.
+
+        The bucket width is the caller's, so the grouping stays out of SQL: the
+        expression that divides a timestamp into windows is written differently
+        by every backend, and this repository is read by both. Two scalar columns
+        per row is already three orders of magnitude below reading the rows.
+        """
+        statement = select(TaskTable.created_at, TaskTable.status).where(
+            TaskTable.workspace_id == workspace_id
+        )
+        statement = _narrowed_tasks(statement, start=start, end=end, app_id=app_id, stub_id=stub_id)
+        statement = statement.order_by(TaskTable.created_at.desc(), TaskTable.id.desc()).limit(
+            max(limit, 1)
+        )
+        rows = list(self.session.execute(statement).mappings())
+        rows.reverse()
+        return [TaskCreationSample.model_validate(row) for row in rows]
+
+    def existing_ids(self, *, workspace_id: str, task_ids: Sequence[str]) -> set[str]:
+        """Which of these ids the workspace holds, asked as one question.
+
+        Anything that is not a UUID cannot name a row, so it is dropped here
+        rather than handed to the database, which would refuse the whole
+        statement over one malformed id a caller supplied.
+        """
+        candidates: list[str] = []
+        for task_id in task_ids:
+            try:
+                candidates.append(str(UUID(task_id)))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        if not candidates:
+            return set()
+        rows = self.session.scalars(
+            select(TaskTable.id).where(
+                TaskTable.workspace_id == workspace_id,
+                TaskTable.id.in_(candidates),
+            )
+        )
+        return {str(value) for value in rows}
+
+
+def _narrowed_tasks[StatementT: Select[Any]](
+    statement: StatementT,
+    *,
+    start: datetime | None,
+    end: datetime | None,
+    app_id: str | None,
+    stub_id: str | None,
+) -> StatementT:
+    """The window and scope every task aggregate shares, applied in SQL.
+
+    One place, because the aggregates have to agree about what they counted: a
+    summary windowed here and a chart windowed in the caller would disagree at
+    the edges and the difference would read as lost work.
+    """
+    if start is not None:
+        statement = statement.where(TaskTable.created_at >= start)
+    if end is not None:
+        statement = statement.where(TaskTable.created_at <= end)
+    if app_id is not None:
+        statement = statement.where(TaskTable.app_id == app_id)
+    if stub_id is not None:
+        statement = statement.where(TaskTable.stub_id == stub_id)
+    return statement
 
 
 def _related_task_statement() -> Select[tuple[dict[str, JsonValue], str, str, str, str, int, str]]:

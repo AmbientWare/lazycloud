@@ -157,6 +157,9 @@ export function taskMetricsQueryOptions(workspaceId: string, hours = 24, appId?:
   });
 }
 
+/** Buckets the activity chart renders; it slices to this and discards the rest. */
+const BUCKETS_DRAWN = 24;
+
 export function taskBucketsQueryOptions(
   workspaceId: string,
   windowSeconds = 3600,
@@ -170,8 +173,16 @@ export function taskBucketsQueryOptions(
       scope.stubId ?? null,
     ),
     queryFn: () => {
+      // The span is computed per fetch and deliberately left out of the query
+      // key: in the key every refetch would be a new key and nothing would ever
+      // be served from cache. Asking for the buckets the chart draws is the
+      // point of sending it at all, since without a span the server reads the
+      // workspace's whole task history to answer for one day of it.
+      const endedAt = Math.floor(Date.now() / 1000);
       const params = new URLSearchParams();
       params.set("window_seconds", String(windowSeconds));
+      params.set("started_at", String(endedAt - windowSeconds * BUCKETS_DRAWN));
+      params.set("ended_at", String(endedAt));
       if (scope.appId) params.set("app_id", scope.appId);
       if (scope.stubId) params.set("stub_id", scope.stubId);
       return apiRequest(

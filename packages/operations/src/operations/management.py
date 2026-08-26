@@ -31,6 +31,7 @@ from database.repositories.execution import (
     DetailedTaskRecord,
     LogRepository,
     RelatedTaskRecord,
+    TaskDurationSample,
     TaskRepository,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -188,6 +189,16 @@ class TaskLatencyTimeseries(ContractModel):
 class TaskStopResult(ContractModel):
     stopped: tuple[str, ...]
     skipped: tuple[str, ...]
+
+
+DEFAULT_TASK_WINDOW_BUCKETS = 48
+"""How far back a task chart reads when its caller names no span.
+
+A bound rather than a preference. Without one the query was the whole workspace's
+task history on every refresh, which a dashboard left open turned into the most
+expensive thing in the account. Forty-eight buckets is two days at the default
+hourly width, and a caller that wants more says so.
+"""
 
 
 MAX_ACTIVITY_BUCKETS = 500
@@ -589,6 +600,14 @@ def _startup_ms(task: Task) -> float | None:
     if task.started_at is None:
         return None
     return (task.started_at - task.created_at).total_seconds() * 1000
+
+
+def _sample_runtime_ms(sample: TaskDurationSample) -> float:
+    return (sample.finished_at - sample.started_at).total_seconds() * 1000
+
+
+def _sample_startup_ms(sample: TaskDurationSample) -> float:
+    return (sample.started_at - sample.created_at).total_seconds() * 1000
 
 
 def _container_expires_at(
@@ -1171,10 +1190,14 @@ class ManagementService:
         return self.task_detail(workspace, task_id).task
 
     def task_counts_by_deployment(self, workspace: str) -> tuple[TaskCountByDeployment, ...]:
+        workspace_record = self.control_plane.get_workspace(workspace)
+        with self.services.context.database.session() as session:
+            tallies = TaskRepository(session).status_tallies_by_deployment(
+                workspace_id=workspace_record.id
+            )
         counts: dict[str, Counter[TaskStatus]] = {}
-        for task in self._tasks_for_workspace(workspace):
-            deployment_id = task.deployment_id or ""
-            counts.setdefault(deployment_id, Counter())[task.status] += 1
+        for tally in tallies:
+            counts.setdefault(tally.deployment_id, Counter())[tally.status] += tally.count
         return tuple(
             TaskCountByDeployment(
                 deployment_id=deployment_id,
@@ -1189,20 +1212,36 @@ class ManagementService:
         workspace: str,
         *,
         window_seconds: int = 3600,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
         app_id: str | None = None,
         stub_id: str | None = None,
     ) -> tuple[TaskTimeWindowBucket, ...]:
+        """Task counts per time bucket, over a bounded span.
+
+        The span is bounded even when the caller names none. A chart draws a
+        fixed number of buckets, so reading further back than it can draw is
+        work nobody sees, and this asked for every task in the workspace on
+        every refresh until it was given an end.
+        """
         if window_seconds <= 0:
             msg = "window_seconds must be greater than zero"
             raise InvalidInputError(msg)
+        end = ended_at or utc_now()
+        start = started_at or end - timedelta(seconds=window_seconds * DEFAULT_TASK_WINDOW_BUCKETS)
+        workspace_record = self.control_plane.get_workspace(workspace)
+        with self.services.context.database.session() as session:
+            samples = TaskRepository(session).creation_samples(
+                workspace_id=workspace_record.id,
+                start=start,
+                end=end,
+                app_id=app_id,
+                stub_id=stub_id,
+            )
         buckets: dict[datetime, Counter[TaskStatus]] = {}
-        for task in self._tasks_for_workspace(workspace):
-            if app_id is not None and task.app_id != app_id:
-                continue
-            if stub_id is not None and task.stub_id != stub_id:
-                continue
-            bucket = _bucket_start(task.created_at, window_seconds)
-            buckets.setdefault(bucket, Counter())[task.status] += 1
+        for sample in samples:
+            bucket = _bucket_start(sample.created_at, window_seconds)
+            buckets.setdefault(bucket, Counter())[sample.status] += 1
         return tuple(
             TaskTimeWindowBucket(
                 timestamp=timestamp,
@@ -1435,7 +1474,12 @@ class ManagementService:
         )
 
     def stop_tasks(self, workspace: str, task_ids: list[str]) -> TaskStopResult:
-        workspace_task_ids = {task.id for task in self._tasks_for_workspace(workspace)}
+        workspace_record = self.control_plane.get_workspace(workspace)
+        with self.services.context.database.session() as session:
+            workspace_task_ids = TaskRepository(session).existing_ids(
+                workspace_id=workspace_record.id,
+                task_ids=task_ids,
+            )
         stopped: list[str] = []
         skipped: list[str] = []
         for task_id in task_ids:
@@ -1487,23 +1531,39 @@ class ManagementService:
         ended_at: datetime,
         app_id: str | None = None,
     ) -> TaskMetricsSummary:
-        tasks = [
-            task
-            for task in self._tasks_for_workspace(workspace)
-            if started_at <= task.created_at <= ended_at
-            and (app_id is None or task.app_id == app_id)
-        ]
-        status_counts = Counter(task.status for task in tasks)
-        runtimes = sorted(value for task in tasks if (value := _runtime_ms(task)) is not None)
-        startups = sorted(value for task in tasks if (value := _startup_ms(task)) is not None)
+        workspace_record = self.control_plane.get_workspace(workspace)
+        with self.services.context.database.session() as session:
+            repository = TaskRepository(session)
+            tallies = repository.status_tallies(
+                workspace_id=workspace_record.id,
+                start=started_at,
+                end=ended_at,
+                app_id=app_id,
+            )
+            # Timings come from the rows that have both ends, which is a smaller
+            # set than the tally counts and the only one percentiles are defined
+            # over. Counting from these instead would drop every task still
+            # running from the total.
+            durations = repository.duration_samples(
+                workspace_id=workspace_record.id,
+                app_id=app_id,
+                start=started_at,
+                end=ended_at,
+            )
+        status_counts = Counter[TaskStatus]()
+        for tally in tallies:
+            status_counts[tally.status] += tally.count
+        total = sum(status_counts.values())
+        runtimes = sorted(_sample_runtime_ms(sample) for sample in durations)
+        startups = sorted(_sample_startup_ms(sample) for sample in durations)
         failed = status_counts[TaskStatus.Failed]
         return TaskMetricsSummary(
-            total=len(tasks),
+            total=total,
             status_counts=dict(status_counts),
             completed=status_counts[TaskStatus.Complete],
             failed=failed,
             cancelled=status_counts[TaskStatus.Cancelled],
-            failure_rate=failed / len(tasks) if tasks else 0.0,
+            failure_rate=failed / total if total else 0.0,
             average_runtime_ms=sum(runtimes) / len(runtimes) if runtimes else None,
             runtime_ms_p50=_percentile(runtimes, 0.50),
             runtime_ms_p95=_percentile(runtimes, 0.95),
@@ -1511,10 +1571,6 @@ class ManagementService:
             startup_ms_p50=_percentile(startups, 0.50),
             startup_ms_p95=_percentile(startups, 0.95),
         )
-
-    def _tasks_for_workspace(self, workspace: str) -> list[Task]:
-        workspace_record = self.control_plane.get_workspace(workspace)
-        return self.services.tasks.list(workspace_id=workspace_record.id)
 
     def iter_containers(
         self,

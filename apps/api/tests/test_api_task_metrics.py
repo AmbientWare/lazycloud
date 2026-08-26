@@ -25,9 +25,11 @@ def _seed_task(
     runtime_ms: float | None = None,
     startup_ms: float = 1_000,
 ) -> Task:
+    # Creation time is the row's own, not a back-dated one. The stored column and
+    # the payload are written together and every aggregate reads the column, so a
+    # task seeded with only the payload moved is a row production cannot produce
+    # and makes startup measure the gap between the two rather than the task's.
     task = services.tasks.create(name, workspace_id=None, app_id=app_id, command=[])
-    now = utc_now()
-    task.created_at = now - timedelta(minutes=5)
     task.status = status
     if runtime_ms is not None:
         task.started_at = task.created_at + timedelta(milliseconds=startup_ms)
@@ -54,7 +56,7 @@ def test_task_metrics_api_exposes_percentiles_and_app_filter(
     headers = {"Authorization": f"Bearer {raw_token}"}
     window = {
         "started_at": int((utc_now() - timedelta(hours=1)).timestamp()),
-        "ended_at": int(utc_now().timestamp()),
+        "ended_at": int((utc_now() + timedelta(minutes=1)).timestamp()),
     }
 
     response = client.get("/api/v1/tasks/metrics", headers=headers, params=window)
