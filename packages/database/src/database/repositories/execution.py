@@ -238,6 +238,48 @@ class TaskRepository:
         task.started_at = None
         return self.upsert(task)
 
+    def cancel_queued_for_app(self, *, workspace_id: str, app_id: str, error: str) -> list[Task]:
+        """Retire the work of an app that is going away.
+
+        Deleting an app stops its containers, and its queued invocations have to
+        go the same way. Left ready they are read by every scheduler pass for as
+        long as the rows exist, refused by app admission each time, and logged as
+        a task that failed to schedule rather than as the deletion that stranded
+        them.
+
+        Queued only, and the status says the whole of it. `Running` is settled
+        against the container holding it, which the same deletion is already
+        stopping, and a finished task is a record of what happened rather than
+        something a later deletion rewrites. Adding `container_id IS NULL`
+        beside this reads like a second way of saying unclaimed and is not: a
+        task in `retry` still names the container its failed attempt ran on, so
+        that predicate would silently spare the retries this exists to retire.
+
+        Cancelled, not failed: nothing went wrong with the invocation, and the
+        caller waiting on it is owed the difference. Cancelled carries no retry,
+        which is the point — a retry would put the row straight back.
+        """
+
+        rows = self.session.scalars(
+            select(TaskTable)
+            .where(
+                TaskTable.app_id == app_id,
+                TaskTable.workspace_id == workspace_id,
+                TaskTable.status.in_(
+                    [TaskStatus.Pending.value, TaskStatus.Retry.value],
+                ),
+            )
+            .with_for_update()
+        )
+        cancelled: list[Task] = []
+        for row in rows:
+            task = Task.model_validate(row.payload)
+            task.status = TaskStatus.Cancelled
+            task.error = error
+            task.finished_at = datetime.now(UTC)
+            cancelled.append(self.upsert(task))
+        return cancelled
+
     def containers_with_inflight_work(self, container_ids: Sequence[str]) -> set[str]:
         """Which of these containers is holding work, as one question.
 
