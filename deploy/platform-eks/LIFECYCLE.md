@@ -219,13 +219,27 @@ cluster rather than by a host.
 Take the fleet's capacity away first, through the control plane that owns it:
 
 ```sh
-WORKSPACE_ID=<platform workspace> lazycloud-admin unit delete <capacity owner id>
+lazycloud-admin fleet destroy
 ```
 
 The pool's autoscaling group and launch template are created at runtime, so
 Terraform has never heard of them. Destroying the cluster first leaves an
 autoscaling group launching instances with nothing left alive to stop it, and
 the bill runs until somebody notices.
+
+Deleting the unit is what removes them, and the command's success is the proof:
+the route answers only once the provider reports the group and the launch
+template both gone. It exits non-zero and names any unit it could not finish, so
+a failure here means stop rather than continue to the destroy.
+
+**A 409 there is expected, and is waited out rather than worked around.** The
+delete contends with a capacity mutation lease held for up to five minutes and
+renewed by whoever holds it, so a scheduler mid-reconcile refuses the first
+attempts and clears on its own; a 503 likewise means the provider is partway
+through, since deleting an autoscaling group returns before the group is gone.
+The command retries both. Deleting the group in AWS instead is what fails: the
+unit survives, and the scheduler rebuilds the group from it minutes later, after
+the check that said the capacity was gone.
 
 Then drop the branch role from state and destroy:
 
