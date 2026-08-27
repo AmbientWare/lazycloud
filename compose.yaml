@@ -456,11 +456,9 @@ services:
       # suffixed device name costs nothing and no caller holds one.
       LAZYCLOUD_TAILNET_HOSTNAME: "${LAZYCLOUD_TAILNET_REPLICA_HOSTNAME:-lazycloud-control-plane-replica}"
       # Container-local, never a shared volume: replicas would otherwise open the
-      # same tailscaled socket and all but the first would fail to start.
+      # same tailscaled socket and all but the first would fail to start. The
+      # runtime logs its durable device out before a graceful shutdown.
       LAZYCLOUD_TAILNET_STATE_DIR: "/run/lazycloud/tailnet"
-      # The device goes away with the replica. Nothing was ever given its
-      # address, and a durable one would leave a dead peer per restart.
-      LAZYCLOUD_TAILNET_EPHEMERAL_DEVICE: "true"
     # One here only because this service publishes fixed host ports, which Compose
     # cannot hand to a second container. Nothing in the process is singular: the
     # tailnet service accepts as many advertisers as start, and the deployment

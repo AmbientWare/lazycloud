@@ -9,6 +9,11 @@ output "agent_oauth_client_secret" {
   sensitive   = true
 }
 
+output "tailnet_id" {
+  description = "Exact Tailnet managed by this state."
+  value       = var.tailnet_id
+}
+
 output "runtime_configuration" {
   description = "Non-secret Tailnet values consumed by Compose."
   value = {

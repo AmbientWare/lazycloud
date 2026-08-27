@@ -156,10 +156,10 @@ Nothing else needs recreating. The control plane runs its own `tailscaled` and n
 service shares its network namespace, so a rebuild cannot leave anything attached
 to a namespace that no longer exists.
 
-It rejoins under the device identity in the `control-plane-tailnet-state` volume,
-minting a fresh tagged key from its OAuth client only when that identity is gone.
-Drop that volume and it registers a new device; the old one lingers in the
-tailnet until it is removed.
+It mints a short-lived, single-use key for a durable device when it starts. A
+graceful shutdown logs that device out before stopping `tailscaled`. A hard kill
+can leave a stale device in the tailnet, which must be removed by its exact
+device identity.
 
 A restarted daemon can hold a stale netmap that lists deleted devices as online
 and omits new ones. If a node is on the tailnet but unreachable from the control
@@ -465,7 +465,7 @@ in `provider_aws/account_connection.py`.
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
-| Tailscale OAuth client | `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Terraform owns this client (`deploy/tailnet/main.tf`). Change its tag list and apply; the replacement re-exports both outputs. Minting one in the admin console instead creates a client Terraform does not know about, and the next apply fights it. |
+| Tailscale OAuth client | Production operator secret or local `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Each Tailnet Terraform state owns a different runtime client. Change its tag list and apply, then transfer both replacement outputs to that environment. Never put production's client in local `.env`. |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
 | Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
 | Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |

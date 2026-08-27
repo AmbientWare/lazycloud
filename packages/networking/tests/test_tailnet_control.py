@@ -22,7 +22,7 @@ API_URL = "https://api.tailscale.test"
 CLIENT_SECRET = "tskey-client-secret"
 
 
-def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> None:
+def test_issues_only_single_use_durable_tagged_keys_and_caches_oauth_tokens() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -53,10 +53,12 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
 
     first = control.issue_auth_key(machine_id="machine-1", hostname="agent-machine-1")
     second = control.issue_auth_key(machine_id="machine-2", hostname="agent-machine-2")
+    runtime_key = control.issue_runtime_auth_key(hostname="control-plane-one")
 
     assert first.key.get_secret_value().startswith("tskey-auth-machine-")
     assert second.id != first.id
-    assert sum(request.url.path == "/api/v2/oauth/token" for request in requests) == 1
+    assert runtime_key.get_secret_value().startswith("tskey-auth-machine-")
+    assert sum(request.url.path == "/api/v2/oauth/token" for request in requests) == 2
     token_request = requests[0]
     token_form = parse_qs(token_request.content.decode())
     assert token_form == {
@@ -81,6 +83,23 @@ def test_issues_single_use_persistent_tagged_key_and_caches_oauth_token() -> Non
         },
         "expirySeconds": 300,
         "description": "machine machine-1 agent-machine-1",
+    }
+    control_plane_token_form = parse_qs(requests[3].content.decode())
+    assert control_plane_token_form["tags"] == ["tag:lazycloud-control-plane"]
+    control_plane_key_request = requests[4]
+    assert json.loads(control_plane_key_request.content) == {
+        "capabilities": {
+            "devices": {
+                "create": {
+                    "reusable": False,
+                    "ephemeral": False,
+                    "preauthorized": True,
+                    "tags": ["tag:lazycloud-control-plane"],
+                }
+            }
+        },
+        "expirySeconds": 300,
+        "description": "control plane control-plane-one",
     }
     assert CLIENT_SECRET not in repr(control)
     assert first.key.get_secret_value() not in repr(first)
