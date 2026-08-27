@@ -61,16 +61,18 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
       className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
       contentClassName="marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto"
       contentRef={scrollportRef}
-      color={[0.4, 0.8, 1]}
-      cover={0.04}
-      density={1.8}
-      layer="behind"
-      opacity={0.14}
-      quality={0.5}
-      scale={1.35}
-      shading={0.12}
+      blur={0.48}
+      color={[0.08, 0.7, 0.95]}
+      cover={0.06}
+      density={1.45}
+      layer="between"
+      opacity={0.12}
+      quality={0.4}
+      scale={1.1}
+      scrollWithContent={false}
+      shading={0.04}
       shadow={0}
-      speed={0.12}
+      speed={0.6}
       wind={0.72}
       windRadius={260}
     >
@@ -82,7 +84,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <header
-        className="sticky top-0 h-[calc(4.5rem+env(safe-area-inset-top))] pt-[max(0.5rem,env(safe-area-inset-top))] [@media(max-height:500px)]:h-[calc(4rem+env(safe-area-inset-top))] [@media(max-height:500px)]:pt-[max(0.25rem,env(safe-area-inset-top))]"
+        className="marketing-header sticky top-0 pt-[max(0.5rem,env(safe-area-inset-top))] [@media(max-height:500px)]:pt-[max(0.25rem,env(safe-area-inset-top))]"
         style={{ zIndex: 100 }}
       >
         <div

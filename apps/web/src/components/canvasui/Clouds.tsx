@@ -22,8 +22,10 @@ declare module "react" {
 export interface CloudsOptions {
   scale?: number;
   speed?: number;
+  scrollWithContent?: boolean;
   cover?: number;
   density?: number;
+  blur?: number;
   shading?: number;
   color?: [number, number, number] | "auto";
   opacity?: number;
@@ -63,8 +65,10 @@ type ElementImageContext = CanvasRenderingContext2D & {
 const DEFAULTS: Required<CloudsOptions> = {
   scale: 1,
   speed: 0.6,
+  scrollWithContent: true,
   cover: 0.1,
   density: 2.5,
+  blur: 0,
   shading: 0.1,
   color: "auto",
   opacity: 0.64,
@@ -216,6 +220,7 @@ uniform sampler2D uWind;
 uniform vec2 uResolution;
 uniform vec2 uContentScale;
 uniform vec3 uBase;
+uniform float uBlur;
 uniform float uShading;
 uniform float uOpacity;
 uniform float uShadow;
@@ -228,7 +233,8 @@ uniform float uHasContent;
 
 void main () {
   vec2 uv = gl_FragCoord.xy / uResolution;
-  vec2 field = texture(uField, uv).rg;
+  float blurLod = uBlur * 5.0;
+  vec2 field = mix(texture(uField, uv).rg, textureLod(uField, uv, blurLod).rg, uBlur);
   float wind = texture(uWind, uv).r * uWindAmt;
   float cov = field.r - wind;
   float mist = smoothstep(0.04, 0.9, cov);
@@ -243,7 +249,7 @@ void main () {
   cloudRGB = clamp(cloudRGB, 0.0, 1.0);
 
   vec2 sUv = uv + uShadowShift;
-  float s = textureLod(uField, sUv, uShadowLod).r
+  float s = textureLod(uField, sUv, max(uShadowLod, blurLod)).r
     - texture(uWind, sUv).r * uWindAmt;
   float shadowA = smoothstep(0.35, 1.0, s) * uShadow * (1.0 - mist);
 
@@ -531,8 +537,8 @@ function createClouds(
     gl!.uniform2f(field.uniforms.uResolution, fieldW, fieldH);
     gl!.uniform2f(
       field.uniforms.uOffset,
-      content.scrollLeft / Math.max(content.clientWidth, 1),
-      -content.scrollTop / Math.max(content.clientHeight, 1),
+      config.scrollWithContent ? content.scrollLeft / Math.max(content.clientWidth, 1) : 0,
+      config.scrollWithContent ? -content.scrollTop / Math.max(content.clientHeight, 1) : 0,
     );
     gl!.uniform1f(field.uniforms.uTime, time);
     gl!.uniform1f(field.uniforms.uScale, Math.max(config.scale, 0.05));
@@ -581,6 +587,7 @@ function createClouds(
     gl!.uniform2f(composite.uniforms.uResolution, output.width, output.height);
     gl!.uniform2f(composite.uniforms.uContentScale, contentScaleX, contentScaleY);
     gl!.uniform3f(composite.uniforms.uBase, baseColor[0], baseColor[1], baseColor[2]);
+    gl!.uniform1f(composite.uniforms.uBlur, Math.min(Math.max(config.blur, 0), 1));
     gl!.uniform1f(composite.uniforms.uOpacity, Math.min(Math.max(config.opacity, 0), 1));
     gl!.uniform1f(composite.uniforms.uShading, Math.max(config.shading, 0));
     gl!.uniform1f(composite.uniforms.uShadow, Math.min(Math.max(config.shadow, 0), 1));
@@ -758,7 +765,7 @@ export interface CloudsProps extends CloudsOptions {
   className?: string;
   contentClassName?: string;
   contentRef?: Ref<HTMLDivElement>;
-  layer?: "over" | "behind";
+  layer?: "over" | "between" | "behind";
   style?: CSSProperties;
 }
 
@@ -858,7 +865,7 @@ export function Clouds({
           width: "100%",
           height: "100%",
           pointerEvents: "none",
-          zIndex: layer === "behind" ? 0 : undefined,
+          zIndex: layer === "behind" ? 0 : layer === "between" ? 1 : undefined,
         }}
       />
     </div>

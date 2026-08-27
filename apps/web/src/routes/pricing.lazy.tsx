@@ -216,7 +216,7 @@ function MarketingPricing() {
               </div>
             </div>
 
-            <div className="min-w-0">
+            <MarketingCard className="min-w-0 p-5 sm:p-6">
               {/* The caption sits under the row rather than beside the heading, so
                   the toggle keeps one position however the line above rewraps. */}
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
@@ -233,7 +233,7 @@ function MarketingPricing() {
                 groups={[...computeGroups(catalog, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
-            </div>
+            </MarketingCard>
           </div>
         </section>
 
