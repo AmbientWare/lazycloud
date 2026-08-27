@@ -11,10 +11,14 @@ from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.usage import UsageBillingOwner
 
 PRICING_VERSION = "2026-08-27.a"
-"""The label frozen onto every ledger segment these numbers price.
+"""The version of the plans, entitlements, and rates exposed to customers."""
 
-Opaque and unparsed. It exists so "which numbers produced this charge" is
-answerable from one column, which means it moves whenever any figure below does.
+METERED_RATE_VERSION = "2026-08-18.a"
+"""The label frozen onto ledger segments priced by the metered rates below.
+
+This changes only when a metered compute, storage, or egress rate changes. Plan
+prices and entitlements use ``PRICING_VERSION`` without rewriting published rate
+boundaries.
 """
 
 FREE_PLAN_MONTHLY_NANOS = 0
@@ -588,6 +592,7 @@ __all__ = [
     "FREE_PLAN_MAX_CONTAINERS",
     "FREE_PLAN_MAX_MEMBERS",
     "FREE_PLAN_MONTHLY_NANOS",
+    "METERED_RATE_VERSION",
     "NO_CARD_INCLUDED_NANOS",
     "NO_CARD_MAX_CONTAINERS",
     "PRICING_VERSION",
