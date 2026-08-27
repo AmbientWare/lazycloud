@@ -26,11 +26,20 @@
   height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--background);
+  background: transparent;
   color: var(--foreground);
   font-family: var(--font-sans);
   line-height: 1.5;
   scroll-behavior: smooth;
+}
+
+.marketing-site main > section.bg-background,
+.marketing-site > footer.bg-background {
+  background-color: color-mix(in oklab, var(--background) 82%, transparent);
+}
+
+.marketing-site main > section.bg-muted {
+  background-color: color-mix(in oklab, var(--muted) 84%, transparent);
 }
 
 .marketing-site :focus-visible {
@@ -944,7 +953,7 @@
 }
 
 .marketing-final-cta {
-  background: var(--background);
+  background: color-mix(in oklab, var(--background) 82%, transparent);
 }
 
 @keyframes marketing-rise {

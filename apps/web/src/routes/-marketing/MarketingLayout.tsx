@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Menu, X } from "lucide-react";
 
+import { Clouds } from "@/components/canvasui/Clouds";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -34,7 +35,7 @@ const navLinkActive = "data-[status=active]:font-semibold data-[status=active]:t
 const footerLink =
   "inline-flex min-h-8 w-max items-center text-xs text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:min-h-11";
 
-/* `light` pins the public routes to paper even when the workspace theme is dark. */
+/* Public routes use the same dark palette as the workspace. */
 export function MarketingLayout({ children }: { children: ReactNode }) {
   const scrollportRef = useRef<HTMLDivElement>(null);
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -56,9 +57,22 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
   }, [hash, pathname]);
 
   return (
-    <div
-      className="light marketing-site h-dvh w-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth bg-background text-foreground motion-reduce:scroll-auto"
-      ref={scrollportRef}
+    <Clouds
+      className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
+      contentClassName="marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto"
+      contentRef={scrollportRef}
+      color={[0.4, 0.8, 1]}
+      cover={0.04}
+      density={1.8}
+      layer="behind"
+      opacity={0.14}
+      quality={0.5}
+      scale={1.35}
+      shading={0.12}
+      shadow={0}
+      speed={0.12}
+      wind={0.72}
+      windRadius={260}
     >
       <a
         className="fixed top-[max(0.75rem,env(safe-area-inset-top))] left-[max(0.75rem,env(safe-area-inset-left))] -translate-y-[160%] rounded-lg bg-foreground px-3.5 py-2.5 text-background focus:translate-y-0"
@@ -174,7 +188,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
           <span>Built for the compute you control.</span>
         </div>
       </footer>
-    </div>
+    </Clouds>
   );
 }
 

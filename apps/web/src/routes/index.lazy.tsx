@@ -251,12 +251,12 @@ function MarketingHome() {
           >
             <div className="marketing-rise">
               <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
-                The cloud for developers <em>and coding agents.</em>
+                Deploy as fast as you <em>develop.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Run APIs, jobs, sandboxes, and GPU workloads through a Python SDK and structured
-                CLI. Start locally, add remote compute when you need it, and deploy without slowing
-                down to wire up infrastructure.
+                Code arrives in seconds, then waits on Dockerfiles, registries, load balancers, IAM.
+                One decorator makes a Python function a deployed API, job, queue, or GPU workload.
+                It still runs on your laptop.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
@@ -276,14 +276,11 @@ function MarketingHome() {
               </div>
             </div>
 
-            <MarketingCard asChild>
-              <Tabs
-                className="marketing-rise relative z-[2] min-w-0 text-foreground [animation-delay:100ms]"
-                defaultValue={heroStories[0].key}
-              >
+            <MarketingCard className="marketing-rise relative z-[2] min-w-0 [animation-delay:100ms]">
+              <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
                 <TabsList
                   /* The split hero keeps a stable 3×2 control through compact
-                   desktop widths; only the full-width canvas uses one row. */
+                     desktop widths; only the full-width canvas uses one row. */
                   className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
                   aria-label="Hero code examples"
                 >
@@ -303,9 +300,9 @@ function MarketingHome() {
                       className="rounded-none border-0 bg-transparent"
                       tone="paper"
                       /* Fixed body height so switching examples never resizes the
-                       panel; sized to the tallest snippet. On narrow screens the
-                       type eases down a notch so wrapped lines still fit without
-                       a scroll. */
+                         panel; sized to the tallest snippet. On narrow screens the
+                         type eases down a notch so wrapped lines still fit without
+                         a scroll. */
                       bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
                       footer={
                         <div
@@ -369,7 +366,7 @@ function MarketingHome() {
                    arrow is the promise. */
                 <UseCaseCard key={useCase.id}>
                   <MarketingExampleImage
-                    className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%] saturate-[0.8] contrast-[0.92] brightness-[1.04] blur-[0.2px]"
+                    className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%]"
                     src={useCase.imageSrc}
                   />
                   <div

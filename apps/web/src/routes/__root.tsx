@@ -12,8 +12,6 @@ import { Toaster } from "sonner";
 
 import { AuthGate } from "@/components/shared/AuthGate";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
-import { ThemeProvider } from "@/components/shared/ThemeProvider";
-import { themeInitScript, useTheme } from "@/components/shared/ThemeProvider/theme";
 import { Button } from "@/components/ui/button";
 
 import "../styles.css";
@@ -38,7 +36,6 @@ export const Route = createRootRoute({
       { title: "LazyCloud" },
     ],
     links: [{ rel: "icon", href: "/favicon.ico" }],
-    scripts: [{ children: themeInitScript }],
   }),
   component: RootComponent,
   errorComponent: RootErrorComponent,
@@ -47,21 +44,14 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <RootDocument>
-      <ThemeProvider>
-        <QueryClientProvider client={queryClient}>
-          <AuthGate>
-            <Outlet />
-          </AuthGate>
-          <ThemedToaster />
-        </QueryClientProvider>
-      </ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthGate>
+          <Outlet />
+        </AuthGate>
+        <Toaster richColors theme="dark" />
+      </QueryClientProvider>
     </RootDocument>
   );
-}
-
-function ThemedToaster() {
-  const { theme } = useTheme();
-  return <Toaster richColors theme={theme} />;
 }
 
 /**
@@ -104,7 +94,7 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html className="dark" lang="en">
       <head>
         <HeadContent />
       </head>

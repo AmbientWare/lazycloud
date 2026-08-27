@@ -16,7 +16,6 @@ import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitche
 import { useSession } from "@/components/shared/AuthGate/session";
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { AccountRail } from "@/components/shared/AppShell/AccountRail";
-import { ThemeToggle } from "@/components/shared/AppShell/ThemeToggle";
 import { SettingsDialog } from "@/components/shared/SettingsDialog";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
 
@@ -370,7 +369,6 @@ function MobileMenu({
               </Link>
             );
           })}
-          <ThemeToggle className="mt-0.5 h-10 gap-3 px-3 text-sm" />
         </nav>
         <div className="mt-auto border-t border-border p-3">
           <button
