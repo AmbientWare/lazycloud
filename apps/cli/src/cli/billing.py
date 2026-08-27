@@ -9,7 +9,7 @@ from database.repositories.billing_rates import ComputeRateRepository, PlatformR
 from lazycloud.cli.components.output import print_payload
 from provider_stripe import METER_EVENT_BACKFILL_DAYS, PublishedCatalog, StripeSettings
 from shared.billing_rate_card import (
-    PRICING_VERSION,
+    METERED_RATE_VERSION,
     PUBLISHED_COMPUTE_RATES,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
@@ -71,7 +71,7 @@ def publish_rates(
     )
     compute_rates: list[dict[str, str | int]] = []
     payload: dict[str, object] = {
-        "pricing_version": PRICING_VERSION,
+        "pricing_version": METERED_RATE_VERSION,
         "effective_at": moment.isoformat(),
         "compute_rates": compute_rates,
         # Both units. The stored rate is what the ledger multiplies, and the
@@ -105,7 +105,7 @@ def publish_rates(
                 publication = compute.publish(
                     billing_owner=rate.billing_owner,
                     gpu_type=rate.gpu_type,
-                    pricing_version=PRICING_VERSION,
+                    pricing_version=METERED_RATE_VERSION,
                     effective_at=moment,
                     nanos_per_container_second=rate.nanos_per_container_second,
                     nanos_per_cpu_core_second=rate.nanos_per_cpu_core_second,
@@ -124,7 +124,7 @@ def publish_rates(
                     }
                 )
             platform = PlatformRateRepository(session).publish(
-                pricing_version=PRICING_VERSION,
+                pricing_version=METERED_RATE_VERSION,
                 effective_at=moment,
                 nanos_per_egress_byte=PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte,
                 nanos_per_volume_byte_second=(PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second),
