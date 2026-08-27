@@ -701,26 +701,17 @@ class TailnetRuntime:
         state_dir = Path(self.options.state_dir)
         _make_private_dir(state_dir)
         auth_key_path = _write_temp_auth_key(state_dir, auth_key)
-        result = TailnetCommandResult(returncode=1, stderr="tailscale up did not run")
-        deadline = time.monotonic() + self.options.login_timeout_seconds
         try:
-            while True:
-                args = self._tailscale_up_args(
+            result = self.runner.run(
+                self._tailscale_up_args(
                     auth_key_path,
                     hostname=hostname,
                     control_url=control_url,
-                )
-                result = self.runner.run(
-                    args,
-                    timeout_seconds=max(min(deadline - time.monotonic(), 5.0), 0.001),
-                )
-                if result.returncode == 0:
-                    return
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(
-                    min(self.options.wait_poll_seconds, max(deadline - time.monotonic(), 0.001))
-                )
+                ),
+                timeout_seconds=self.options.login_timeout_seconds,
+            )
+            if result.returncode == 0:
+                return
         finally:
             Path(auth_key_path).unlink(missing_ok=True)
         raise TailnetRuntimeError(

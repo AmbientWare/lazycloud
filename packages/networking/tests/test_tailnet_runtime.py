@@ -153,15 +153,13 @@ def test_managed_tailnet_runtime_refuses_stopped_identity_without_stable_node_id
     assert not isinstance(exc.value, TailnetAuthenticationRequired)
 
 
-def test_tailnet_runtime_retries_up_and_redacts_auth_key(tmp_path: Path) -> None:
+def test_tailnet_runtime_redeems_auth_key_once_and_redacts_failure(tmp_path: Path) -> None:
     runner = _Runner(
         status_payloads=[
             _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
             _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
             _status_payload(),
         ],
-        up_returncodes=[1, 0],
-        up_stderr="failed with test-tailnet-auth-key",
     )
     launcher = _Launcher()
     runtime = TailnetRuntime(
@@ -178,9 +176,17 @@ def test_tailnet_runtime_retries_up_and_redacts_auth_key(tmp_path: Path) -> None
 
     runtime.start()
 
-    assert len([call for call in runner.calls if "up" in call]) == 2
+    assert len([call for call in runner.calls if "up" in call]) == 1
     assert not list(tmp_path.glob(".tailscale-auth-*"))
 
+    failing_runner = _Runner(
+        status_payloads=[
+            _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
+            _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
+        ],
+        up_returncodes=[1, 0],
+        up_stderr="failed with test-tailnet-auth-key",
+    )
     failing_runtime = TailnetRuntime(
         TailnetRuntimeOptions(
             mode=TailnetRuntimeMode.Managed,
@@ -190,18 +196,12 @@ def test_tailnet_runtime_retries_up_and_redacts_auth_key(tmp_path: Path) -> None
             login_timeout_seconds=0.001,
             wait_poll_seconds=0.001,
         ),
-        runner=_Runner(
-            status_payloads=[
-                _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
-                _status_payload(backend_state="NeedsLogin", self_tailnet_ips=[]),
-            ],
-            up_returncodes=[1] * 100,
-            up_stderr="failed with test-tailnet-auth-key",
-        ),
+        runner=failing_runner,
         launcher=_Launcher(),
     )
     with pytest.raises(RuntimeError) as exc:
         failing_runtime.start()
+    assert len([call for call in failing_runner.calls if "up" in call]) == 1
     assert "test-tailnet-auth-key" not in str(exc.value)
     assert "<redacted-tailnet-key>" in str(exc.value)
 
