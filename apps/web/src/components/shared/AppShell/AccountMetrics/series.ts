@@ -10,45 +10,28 @@ import type { AccountActivitySeries } from "@/lib/api/schemas";
  */
 export const ACTIVITY_SERIES_LIMIT = 4;
 
-type SeriesColor = { light: string; dark: string };
-
 /**
- * The hue each stack is drawn in, per theme.
+ * The hue each stack is drawn in.
  *
- * The two themes deal the same five `--chart-*` tokens in different orders on
- * purpose. Light's `--chart-4` and `--chart-5` are near-identical ambers and
- * light's `--chart-1` is the strongest ink it has, where dark's strongest is
- * `--chart-2`; taking the tokens in their declared order would put the
- * indistinguishable pair side by side in light and the two weakest bands next
- * to each other in dark. These orders keep every adjacent pair separated in the
- * theme it is drawn in, and the weakest slot is the one the smallest app gets.
+ * This order keeps adjacent bands apart under simulated red/green colour
+ * blindness. The weakest slot is reserved for the smallest app.
  */
-const ACTIVITY_COLORS: readonly SeriesColor[] = [
-  { light: "var(--chart-2)", dark: "var(--chart-2)" },
-  { light: "var(--chart-1)", dark: "var(--chart-4)" },
-  { light: "var(--chart-3)", dark: "var(--chart-3)" },
-  { light: "var(--chart-5)", dark: "var(--chart-1)" },
+const ACTIVITY_COLORS: readonly string[] = [
+  "var(--chart-2)",
+  "var(--chart-4)",
+  "var(--chart-3)",
+  "var(--chart-1)",
 ];
 
 /**
  * Not one of the named apps, so not one of the identity hues either.
  *
- * The folded row is always drawn last, which puts it against whichever identity
- * slot the account happened to fill last: slot 3 for an account with four named
- * rows, slot 0 for one with a single app. So it has to clear every hue in its
- * theme, not just the one below it in the common case. Light's muted ink sits at
- * lightness 0.41 with almost no chroma, a hand's breadth from `--chart-3` at
- * 0.40 — measured against it, ΔE 9.2 under normal vision, which is a pair a
- * reader with full colour vision cannot separate. Light's own ink can: it is the
- * same neutral two steps darker, 20.5 from `--chart-3` and further from
- * everything else. Dark's muted ink is already clear of all four.
+ * The folded row is always drawn last, so it must stay clear of every identity
+ * hue rather than only the one beside it in the common case.
  */
-const FOLDED_COLOR: SeriesColor = {
-  light: "var(--foreground)",
-  dark: "var(--muted-foreground)",
-};
+const FOLDED_COLOR = "var(--muted-foreground)";
 
-export function activitySeriesColor(series: AccountActivitySeries, index: number): SeriesColor {
+export function activitySeriesColor(series: AccountActivitySeries, index: number): string {
   if (series.kind === "other") return FOLDED_COLOR;
   return ACTIVITY_COLORS[index] ?? FOLDED_COLOR;
 }

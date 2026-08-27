@@ -23,7 +23,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useTheme } from "@/components/shared/ThemeProvider/theme";
 import type {
   AccountActivity,
   AccountActivityMeasure,
@@ -198,7 +197,7 @@ function ActivityChart({
       Object.fromEntries(
         series.map((entry, index) => [
           activitySeriesKey(index),
-          { label: labels[index], theme: activitySeriesColor(entry, index) },
+          { label: labels[index], color: activitySeriesColor(entry, index) },
         ]),
       ),
     [series, labels],
@@ -471,9 +470,8 @@ function BreakdownRow({
   total: number;
   unit: AccountActivityUnit;
 }) {
-  const { theme } = useTheme();
   const share = total > 0 ? series.total / total : 0;
-  const color = activitySeriesColor(series, index)[theme];
+  const color = activitySeriesColor(series, index);
   return (
     <div role="listitem" className="flex items-center gap-3 border-t border-border/60 px-3 py-2">
       <span

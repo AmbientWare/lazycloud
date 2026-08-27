@@ -19,13 +19,13 @@ function ParityFigure({ src }: { src: ParityImageSrc }) {
 }
 
 export function LocalPlate() {
-  return <ParityFigure src="/parity/local.webp" />;
+  return <ParityFigure src="/parity/local-dark.webp" />;
 }
 
 export function GpuPlate() {
-  return <ParityFigure src="/parity/gpu.webp" />;
+  return <ParityFigure src="/parity/gpu-dark.webp" />;
 }
 
 export function ProductionPlate() {
-  return <ParityFigure src="/parity/production.webp" />;
+  return <ParityFigure src="/parity/production-dark.webp" />;
 }

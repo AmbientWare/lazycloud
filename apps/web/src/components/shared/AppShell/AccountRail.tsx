@@ -4,8 +4,6 @@ import { ChevronUp, LogOut, Settings } from "lucide-react";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { cn } from "@/lib/utils";
 
-import { ThemeToggle } from "./ThemeToggle";
-
 /**
  * The account end of the rail: who is signed in, and everything that acts on
  * them rather than on a workspace.
@@ -74,7 +72,6 @@ export function AccountRail({
               Settings
             </button>
           </nav>
-          <ThemeToggle />
           <button
             type="button"
             onClick={onLogout}
