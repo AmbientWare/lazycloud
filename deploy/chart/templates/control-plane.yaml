@@ -84,9 +84,9 @@ spec:
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
-            # An emptyDir, because the identity here is worth less than the
-            # restart it would delay: the device is ephemeral and re-registers
-            # in seconds, and a PVC would tie a replica to one zone.
+            # The runtime logs its durable device out before a graceful shutdown.
+            # A per-replica PVC would pin a replaceable pod to one zone without
+            # preserving anything callers address directly.
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE

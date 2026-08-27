@@ -56,11 +56,11 @@ That is the whole procedure. The control plane runs its own `tailscaled`, so
 nothing else has to be recreated alongside it and no service borrows its network
 namespace.
 
-It rejoins the tailnet under the device identity persisted in the
-`control-plane-tailnet-state` volume, minting a fresh tagged key from its OAuth
-client only when that identity is missing or expired. Its healthcheck resolves
-the host it advertises to workers, so a control plane that came up unable to
-reach the tailnet reports unhealthy rather than serving nothing quietly.
+It mints a short-lived, single-use key for a durable device when it starts. A
+graceful shutdown logs that device out before stopping `tailscaled`; a hard kill
+can leave a stale device for an operator to remove. Its healthcheck resolves the
+host it advertises to workers, so a control plane that came up unable to reach
+the tailnet reports unhealthy rather than serving nothing quietly.
 
 ### Shared fleet and one customer machine
 

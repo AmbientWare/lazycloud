@@ -599,11 +599,9 @@ def test_managed_tailnet_runtime_waits_for_persisted_identity_to_load(
 class _Issuer:
     key: str = "tskey-minted"
     hostnames: list[str] = field(default_factory=list)
-    ephemeral: list[bool] = field(default_factory=list)
 
-    def issue_runtime_auth_key(self, *, hostname: str, ephemeral: bool = False) -> SecretStr:
+    def issue_runtime_auth_key(self, *, hostname: str) -> SecretStr:
         self.hostnames.append(hostname)
-        self.ephemeral.append(ephemeral)
         return SecretStr(self.key)
 
 

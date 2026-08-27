@@ -43,7 +43,7 @@ variable "agent_tag" {
 }
 
 variable "control_plane_tag" {
-  description = "Tag assigned only to ephemeral control-plane gateway identities."
+  description = "Tag assigned only to durable control-plane gateway identities."
   type        = string
   default     = "tag:lazycloud-control-plane"
 
