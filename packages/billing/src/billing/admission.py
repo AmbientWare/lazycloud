@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from database.repositories.apps import AppRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
+from database.repositories.compute import AwsAccountConnectionRepository
+from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import AccountTerms, account_terms
-from shared.errors import CapacityLimitReachedError, PaymentRequiredError
+from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
@@ -89,10 +94,98 @@ class DatabaseBillingAdmission:
             return None
         owner_user_id, terms = resolved
         live = ContainerRepository(session).count_live_for_owner(owner_user_id=owner_user_id)
-        if live >= terms.max_concurrent_containers:
+        limit = terms.entitlements.max_concurrent_containers
+        if live >= limit:
             raise CapacityLimitReachedError(
                 f"this account already has {live} containers running or queued, "
-                f"which is the most its plan allows ({terms.max_concurrent_containers})"
+                f"which is the most its plan allows ({limit})"
+            )
+
+    def assert_may_create_app(self, session: Session, *, workspace_id: str) -> None:
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            return
+        owner_user_id, terms = resolved
+        self._assert_no_pending_plan_change(session, user_id=owner_user_id)
+        app_count = AppRepository(session).count_for_owner(owner_user_id)
+        limit = terms.entitlements.max_apps
+        if app_count >= limit:
+            raise CapacityLimitReachedError(
+                f"this account already has {app_count} apps, "
+                f"which is the most its plan allows ({limit})"
+            )
+
+    def assert_may_add_workspace_member(
+        self,
+        session: Session,
+        *,
+        workspace_id: str,
+        member_user_id: str,
+    ) -> None:
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            return
+        owner_user_id, terms = resolved
+        self._assert_no_pending_plan_change(session, user_id=owner_user_id)
+        repository = WorkspaceMemberRepository(session)
+        if repository.is_member_for_owner(
+            owner_user_id=owner_user_id,
+            member_user_id=member_user_id,
+        ):
+            return
+        limit = terms.entitlements.max_members
+        member_count = repository.distinct_member_count_for_owner(owner_user_id)
+        if limit != "unlimited" and member_count >= limit:
+            raise CapacityLimitReachedError(
+                f"this account already has {member_count} members, "
+                f"which is the most its plan allows ({limit})"
+            )
+
+    def assert_may_use_connected_cloud(self, session: Session, *, user_id: str) -> None:
+        terms = self._account_terms_for_user(session, user_id=user_id)
+        if not terms.entitlements.connected_cloud:
+            raise PaymentRequiredError("connected cloud accounts require the Team plan")
+
+    def assert_may_use_custom_domains(self, session: Session, *, user_id: str) -> None:
+        terms = self._account_terms_for_user(session, user_id=user_id)
+        if not terms.entitlements.custom_domains:
+            raise PaymentRequiredError("custom domains require the Team plan")
+
+    def assert_plan_change_fits(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        target: BillingPlanId,
+    ) -> None:
+        account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
+        if account is None:
+            raise PaymentRequiredError("this account has not been provisioned for billing")
+        entitlements = account_terms(
+            target,
+            has_payment_method=account.payment_method_attached_at is not None,
+        ).entitlements
+        violations: list[str] = []
+        app_count = AppRepository(session).count_for_owner(user_id)
+        if app_count > entitlements.max_apps:
+            violations.append(f"{app_count} apps (limit {entitlements.max_apps})")
+        member_count = WorkspaceMemberRepository(session).distinct_member_count_for_owner(user_id)
+        if entitlements.max_members != "unlimited" and member_count > entitlements.max_members:
+            violations.append(f"{member_count} members (limit {entitlements.max_members})")
+        connection = AwsAccountConnectionRepository(session).get_for_user(user_id)
+        if (
+            connection is not None
+            and not connection.platform_fleet
+            and not entitlements.connected_cloud
+        ):
+            violations.append("a connected cloud account")
+        domain_count = CustomDomainRepository(session).count_for_user(user_id)
+        if domain_count and not entitlements.custom_domains:
+            violations.append(f"{domain_count} custom domains")
+        if violations:
+            raise ConflictError(
+                "this account cannot move to the requested plan while it has "
+                + ", ".join(violations)
             )
 
     def _billable_account(
@@ -110,7 +203,7 @@ class DatabaseBillingAdmission:
             # A workspace with no owner row is reachable by nobody, so there is
             # no account to judge and nothing this can decide.
             return None
-        account = BillingAccountRepository(session).get_by_user(owner.user_id)
+        account = BillingAccountRepository(session).get_by_user(owner.user_id, for_update=True)
         if account is None or not account.provider_subscription_id or account.plan is None:
             raise PaymentRequiredError(
                 "this account holds no subscription for its usage to be billed on; "
@@ -139,6 +232,29 @@ class DatabaseBillingAdmission:
                     "add a card to keep running work"
                 )
         return owner.user_id, terms
+
+    def _account_terms_for_user(self, session: Session, *, user_id: str) -> AccountTerms:
+        account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
+        if account is None or not account.provider_subscription_id or account.plan is None:
+            raise PaymentRequiredError(
+                "this account holds no subscription; sign in again to finish setting it up"
+            )
+        if account.status is BillingAccountStatus.PastDue:
+            raise PaymentRequiredError(
+                "a payment for this account did not go through; update the card on file"
+            )
+        self._assert_no_pending_plan_change(session, user_id=user_id)
+        return account_terms(
+            account.plan,
+            has_payment_method=account.payment_method_attached_at is not None,
+        )
+
+    @staticmethod
+    def _assert_no_pending_plan_change(session: Session, *, user_id: str) -> None:
+        if BillingPlanChangeIntentRepository(session).has_open(user_id=user_id):
+            raise ConflictError(
+                "this account cannot add plan-limited resources while a plan change is pending"
+            )
 
 
 __all__ = ["DatabaseBillingAdmission"]

@@ -17,6 +17,7 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
 )
+from database.types import DatabaseSession
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -37,6 +38,17 @@ from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 TEMPLATE_SHA256 = "a" * 64
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectedCloudAdmission:
+    def assert_may_use_connected_cloud(
+        self,
+        session: DatabaseSession,
+        *,
+        user_id: str,
+    ) -> None:
+        del session, user_id
 
 
 @dataclass(slots=True)
@@ -202,6 +214,7 @@ def _service(
         validator=validator or _Validator(),
         authorization_lifecycle=lifecycle or _Lifecycle(),
         pool_drainer=_Drainer(),
+        admission=_ConnectedCloudAdmission(),
         bucket_access_reconciler=bucket_access,
         capacity_baseline=capacity_baseline,
     )

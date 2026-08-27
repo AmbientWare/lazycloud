@@ -16,12 +16,14 @@ from shared.billing_rate_card import published_plan
 from shared.errors import InvalidInputError
 from shared.http.billing import (
     BillingAllowanceResponse,
+    BillingEntitlementUsageResponse,
     BillingHostedSessionRequest,
     BillingHostedSessionResponse,
     BillingPlanChangeRequest,
     BillingPlanResponse,
     BillingSummaryResponse,
 )
+from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
     UsageCostBucket,
     UsageCostBucketResponse,
@@ -332,8 +334,25 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
         ),
         portal_available=standing.portal_available,
         payment_method_on_file=standing.payment_method_on_file,
-        max_concurrent_containers=standing.max_concurrent_containers,
-        live_container_count=standing.live_container_count,
+        entitlements=(
+            PlanEntitlementsResponse(
+                max_apps=standing.entitlements.max_apps,
+                max_concurrent_containers=standing.entitlements.max_concurrent_containers,
+                max_members=standing.entitlements.max_members,
+                connected_cloud=standing.entitlements.connected_cloud,
+                custom_domains=standing.entitlements.custom_domains,
+                self_hosted=standing.entitlements.self_hosted,
+            )
+            if standing.entitlements is not None
+            else None
+        ),
+        usage=BillingEntitlementUsageResponse(
+            apps=standing.usage.apps,
+            concurrent_containers=standing.usage.concurrent_containers,
+            members=standing.usage.members,
+            connected_clouds=standing.usage.connected_clouds,
+            custom_domains=standing.usage.custom_domains,
+        ),
         plan_change_pending=standing.plan_change_pending,
     )
 

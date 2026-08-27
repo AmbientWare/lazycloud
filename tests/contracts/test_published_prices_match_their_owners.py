@@ -1,10 +1,8 @@
 """What the pricing page quotes and what the platform bills are one rate card.
 
-`apps/web` compiles the card into the marketing pages, which render without
-calling the API. That copy is generated from `shared.billing_rate_card` rather
-than transcribed from it, so the only way the two can disagree is a generated
-file left behind by a change to the card — which is what the comparison below
-catches, and why it is a byte comparison rather than a reading of TypeScript.
+`apps/web` reads the card through the public pricing contract. The contract is
+derived directly from `shared.billing_rate_card`, so the browser holds no second
+copy of its figures.
 
 The stakes are the same in both directions. A rate on the page the platform does
 not hold is a quote nobody honours; a rate the platform holds that the page omits
@@ -21,7 +19,6 @@ raises from `shared.billing_rate_card` at import — for every consumer, includi
 from __future__ import annotations
 
 from decimal import Decimal
-from pathlib import Path
 
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from shared.billing_quotes import BYTES_PER_GIB
@@ -32,17 +29,8 @@ from shared.billing_rate_card import (
     SECONDS_PER_30_DAY_MONTH,
     STORED_RATE_STEP,
 )
-from shared.billing_rate_card_typescript import REGENERATE_COMMAND, render_pricing_catalog
 from shared.usage import UsageBillingOwner
 from sqlalchemy import Numeric
-
-_CATALOG = Path(__file__).resolve().parents[2] / "apps/web/src/routes/-marketing/pricingCatalog.ts"
-
-
-def test_the_page_is_published_from_the_card_the_platform_bills() -> None:
-    assert _CATALOG.read_text() == render_pricing_catalog(), (
-        f"the published pricing catalog is stale; regenerate it with {REGENERATE_COMMAND}"
-    )
 
 
 def test_the_page_states_every_figure_the_platform_charges() -> None:
@@ -55,9 +43,9 @@ def test_the_page_states_every_figure_the_platform_charges() -> None:
     reader was shown. What a container costs in a customer's own account is the
     one figure the page does state as a share, so it needs no assertion here.
 
-    Asserted against the card rather than inside the generator: the generator
-    runs only when somebody regenerates the catalog, while `publish-rates` writes
-    these figures into the rate tables without it.
+    Asserted against the card rather than the HTTP mapping, because
+    `publish-rates` writes these figures into the rate tables without serving a
+    pricing request.
     """
 
     for shape in PUBLISHED_SHAPE_RATES:

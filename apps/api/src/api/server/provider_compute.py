@@ -10,6 +10,7 @@ from compute.aws_connections import (
     AwsAccountConnectionService,
     AwsAccountPoolDrainer,
     AwsConnectionCapacityBaseline,
+    ConnectedCloudAdmission,
 )
 from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.catalog import ComputeCatalogRegion
@@ -147,6 +148,7 @@ def aws_account_connection_composition_from_settings(
     workspace_changes: WorkspaceChangePublisher,
     capacity_baseline: AwsConnectionCapacityBaseline,
     available_catalog: tuple[ComputeCatalogRegion, ...],
+    admission: ConnectedCloudAdmission,
 ) -> AwsAccountConnectionComposition | None:
     # Connected AWS is an optional deployment shape, but a half-configured one is not:
     # the settings validator already rejected that, so absence here is genuine absence.
@@ -171,6 +173,7 @@ def aws_account_connection_composition_from_settings(
         validator=components.validator,
         authorization_lifecycle=components.authorization_lifecycle,
         pool_drainer=pool_drainer,
+        admission=admission,
         bucket_access_reconciler=bucket_access,
         capacity_baseline=capacity_baseline,
         workspace_changes=workspace_changes,

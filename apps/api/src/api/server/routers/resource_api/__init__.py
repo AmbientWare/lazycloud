@@ -8,12 +8,14 @@ from api.server.routers.resource_api import (
     deployments,
     observability,
     operations,
+    pricing,
     secrets,
     tasks,
 )
 
 router = APIRouter()
 router.include_router(billing.router)
+router.include_router(pricing.router)
 router.include_router(deployments.router)
 router.include_router(tasks.router)
 router.include_router(secrets.router)

@@ -1,7 +1,10 @@
 import { useId, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
 
+import type { PricingCatalog } from "@/lib/api/schemas";
 import { exactDollars } from "@/lib/money";
+import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./-marketing/MarketingLayout";
@@ -14,20 +17,6 @@ import {
   SectionLabel,
   shell,
 } from "./-marketing/MarketingPrimitives";
-import {
-  EGRESS_NANOS_PER_GIB,
-  VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
-  CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT,
-  planIds,
-  publishedGpuRates,
-  NO_CARD_INCLUDED_NANOS,
-  NO_CARD_MAX_CONTAINERS,
-  publishedPlans,
-  publishedShapeRates,
-  type PublishedGpuRate,
-  type PlanId,
-  type PublishedPlan,
-} from "./-marketing/pricingCatalog";
 
 export const Route = createLazyFileRoute("/pricing")({
   component: MarketingPricing,
@@ -78,22 +67,23 @@ function perLabel(meter: Meter): string {
 /* Dearest first, ranked once. The page lists cards for one capacity now — what a
    container costs elsewhere is a percentage of these, stated as one line — and
    nothing in the ranking reads the meter, so the toggle cannot change an answer
-   fixed when the catalog was generated. */
-const fleetGpuRates: readonly PublishedGpuRate[] = [...publishedGpuRates].sort(
-  (left, right) => right.nanosPerCardHour.platform_fleet - left.nanosPerCardHour.platform_fleet,
-);
-
+   fixed by the catalog. */
 /* What a container costs on one kind of capacity: the figures that change with
    where it runs, in the order somebody sizing one asks in. */
-function computeGroups(meter: Meter): readonly RateGroup[] {
-  const shape = publishedShapeRates.platform_fleet;
+function computeGroups(catalog: PricingCatalog, meter: Meter): readonly RateGroup[] {
+  const shape = catalog.shape_rates.find((rate) => rate.billing_owner === "platform_fleet");
+  if (!shape) throw new Error("the pricing catalog has no platform fleet rate");
+  const fleetGpuRates = [...catalog.gpu_rates].sort(
+    (left, right) =>
+      right.nanos_per_card_hour.platform_fleet - left.nanos_per_card_hour.platform_fleet,
+  );
   const per = perLabel(meter);
   return [
     {
       heading: "GPU",
       lines: fleetGpuRates.map((rate) => ({
-        label: rate.gpuType,
-        figure: metered(rate.nanosPerCardHour.platform_fleet, meter),
+        label: rate.gpu_type,
+        figure: metered(rate.nanos_per_card_hour.platform_fleet, meter),
         unit: `/ ${per}`,
       })),
     },
@@ -102,7 +92,7 @@ function computeGroups(meter: Meter): readonly RateGroup[] {
       lines: [
         {
           label: "Every core a container holds",
-          figure: metered(shape.nanosPerCpuCoreHour, meter),
+          figure: metered(shape.nanos_per_cpu_core_hour, meter),
           unit: `/ core / ${per}`,
         },
       ],
@@ -112,7 +102,7 @@ function computeGroups(meter: Meter): readonly RateGroup[] {
       lines: [
         {
           label: "Reserved and resident alike",
-          figure: metered(shape.nanosPerMemoryGibHour, meter),
+          figure: metered(shape.nanos_per_memory_gib_hour, meter),
           unit: `/ GiB / ${per}`,
         },
       ],
@@ -124,54 +114,53 @@ function computeGroups(meter: Meter): readonly RateGroup[] {
    rather than per capacity. Egress is published at a stated zero rather than
    left off, so a reader can tell the traffic is measured and free rather than
    unmeasured. */
-const platformGroups: readonly RateGroup[] = [
-  {
-    heading: "Volumes",
-    lines: [
-      {
-        label: "Kept between runs",
-        figure: VOLUME_STORAGE_NANOS_PER_GIB_MONTH,
-        /* Thirty days, said rather than implied. Storage meters by the second,
+function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
+  return [
+    {
+      heading: "Volumes",
+      lines: [
+        {
+          label: "Kept between runs",
+          figure: catalog.platform_rate.nanos_per_volume_gib_month,
+          /* Thirty days, said rather than implied. Storage meters by the second,
            so a calendar month is charged for the days it actually has — and a
            reader who took "mo" for January would find 31 days on the invoice
            against a figure that quoted 30. */
-        unit: "/ GiB / 30 days",
-      },
-    ],
-  },
-  {
-    heading: "Egress",
-    lines: [
-      {
-        label: "Traffic leaving the platform",
-        figure: EGRESS_NANOS_PER_GIB,
-        unit: "/ GiB",
-      },
-    ],
-  },
-  {
-    heading: "Bring your own cloud",
-    lines: [
-      {
-        /* The compute rates, not every rate above it: volumes and egress are this
+          unit: "/ GiB / 30 days",
+        },
+      ],
+    },
+    {
+      heading: "Egress",
+      lines: [
+        {
+          label: "Traffic leaving the platform",
+          figure: catalog.platform_rate.nanos_per_egress_gib,
+          unit: "/ GiB",
+        },
+      ],
+    },
+    {
+      heading: "Bring your own cloud",
+      lines: [
+        {
+          /* The compute rates, not every rate above it: volumes and egress are this
            platform's own infrastructure and are charged whole wherever a container
            ran. Saying "the rates above" would quietly include them. */
-        label: "Management fee on the compute rates above. Your provider bills the machine.",
-        figure: `${CONNECTED_CLOUD_MANAGEMENT_FEE_PERCENT}%`,
-        unit: "",
-      },
-    ],
-  },
-];
-
-const plans: readonly (PublishedPlan & { id: PlanId })[] = planIds.map((id) => ({
-  id,
-  ...publishedPlans[id],
-}));
+          label: "Management fee on the compute rates above. Your provider bills the machine.",
+          figure: `${catalog.connected_cloud_management_fee_percent}%`,
+          unit: "",
+        },
+      ],
+    },
+  ];
+}
 
 /* The one account-wide fact a reader needs before choosing a plan: what they get
    before they have paid for anything. The rest is disclosure, not pricing. */
-const accountTerm = `Without a card, any plan runs on ${exactDollars(NO_CARD_INCLUDED_NANOS)} of usage and ${NO_CARD_MAX_CONTAINERS} containers. When that is spent, containers stop and new volumes are refused. Volumes you already have stay readable, and keep billing.`;
+function accountTerm(catalog: PricingCatalog): string {
+  return `Without a card, any plan runs on ${exactDollars(catalog.no_payment_method.included_nanos)} of usage and ${catalog.no_payment_method.max_concurrent_containers} containers. When that is spent, containers stop and new volumes are refused. Volumes you already have stay readable, and keep billing.`;
+}
 
 const sectionTitle =
   "font-serif text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.05] font-normal tracking-[-0.005em] text-balance [&_em]:text-brand [&_em]:italic";
@@ -181,6 +170,20 @@ const sectionTitle =
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
   const fleetRatesId = useId();
+  const pricing = useQuery(pricingCatalogQueryOptions());
+  const catalog = pricing.data;
+
+  if (!catalog) {
+    return (
+      <MarketingLayout>
+        <main className={cn(shell, "py-24")} id="marketing-main">
+          <p className={pricing.error ? "text-destructive" : "text-muted-foreground"}>
+            {pricing.error?.message ?? "Loading current pricing…"}
+          </p>
+        </main>
+      </MarketingLayout>
+    );
+  }
 
   return (
     <MarketingLayout>
@@ -226,7 +229,10 @@ function MarketingPricing() {
                 On LazyCloud capacity — machines we buy, run, and price whole.
               </p>
 
-              <RateList groups={[...computeGroups(meter), ...platformGroups]} id={fleetRatesId} />
+              <RateList
+                groups={[...computeGroups(catalog, meter), ...platformGroups(catalog)]}
+                id={fleetRatesId}
+              />
             </div>
           </div>
         </section>
@@ -238,7 +244,7 @@ function MarketingPricing() {
               <h2 className={sectionTitle}>Pricing plans</h2>
             </div>
             <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-              {plans.map((plan) => (
+              {catalog.plans.map((plan) => (
                 <MarketingCard asChild key={plan.id}>
                   <article className="flex flex-col p-5 sm:p-6">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -247,7 +253,7 @@ function MarketingPricing() {
                       </h3>
                       <p className="flex items-baseline gap-2">
                         <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
-                          {exactDollars(plan.monthlyNanos)}
+                          {exactDollars(plan.monthly_nanos)}
                         </span>
                         <span className="text-[12px] text-muted-foreground">per month</span>
                       </p>
@@ -259,26 +265,41 @@ function MarketingPricing() {
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
                         <dt className="text-muted-foreground">Usage included</dt>
                         <dd className="font-mono font-medium text-brand">
-                          {exactDollars(plan.includedNanos)}{" "}
+                          {exactDollars(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>
                         </dd>
                       </div>
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
                         <dt className="text-muted-foreground">Concurrent containers</dt>
-                        <dd className="font-mono font-medium">{plan.maxConcurrentContainers}</dd>
+                        <dd className="font-mono font-medium">
+                          {plan.entitlements.max_concurrent_containers}
+                        </dd>
                       </div>
+                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                        <dt className="text-muted-foreground">Apps</dt>
+                        <dd className="font-mono font-medium">{plan.entitlements.max_apps}</dd>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                        <dt className="text-muted-foreground">Members</dt>
+                        <dd className="font-mono font-medium">
+                          {plan.entitlements.max_members === "unlimited"
+                            ? "Unlimited"
+                            : plan.entitlements.max_members}
+                        </dd>
+                      </div>
+                      <PlanFeature
+                        label="Connected cloud"
+                        included={plan.entitlements.connected_cloud}
+                      />
+                      <PlanFeature
+                        label="Custom domains"
+                        included={plan.entitlements.custom_domains}
+                      />
+                      <PlanFeature label="Self-hosted" included={plan.entitlements.self_hosted} />
                     </dl>
                     <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
                       {plan.terms.map((term) => (
-                        <li
-                          className="flex items-start gap-2.5 text-[13px] leading-relaxed"
-                          key={term}
-                        >
-                          <span className="mt-0.5 shrink-0 text-brand">
-                            <Glyph>↳</Glyph>
-                          </span>
-                          <span>{term}</span>
-                        </li>
+                        <PlanTerm key={term}>{term}</PlanTerm>
                       ))}
                     </ul>
                     <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
@@ -291,7 +312,7 @@ function MarketingPricing() {
               <span className="mt-0.5 shrink-0 text-brand">
                 <Glyph>↳</Glyph>
               </span>
-              <span>{accountTerm}</span>
+              <span>{accountTerm(catalog)}</span>
             </p>
           </div>
         </section>
@@ -306,6 +327,26 @@ function MarketingPricing() {
         />
       </main>
     </MarketingLayout>
+  );
+}
+
+function PlanFeature({ label, included }: { label: string; included: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-mono font-medium">{included ? "Included" : "—"}</dd>
+    </div>
+  );
+}
+
+function PlanTerm({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2.5 text-[13px] leading-relaxed">
+      <span className="mt-0.5 shrink-0 text-brand">
+        <Glyph>↳</Glyph>
+      </span>
+      <span>{children}</span>
+    </li>
   );
 }
 

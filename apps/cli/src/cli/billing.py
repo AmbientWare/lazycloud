@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -15,7 +14,6 @@ from shared.billing_rate_card import (
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
 )
-from shared.billing_rate_card_typescript import render_pricing_catalog
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
 
@@ -240,32 +238,6 @@ def _catalog_payload(catalog: PublishedCatalog, *, written: bool) -> dict[str, o
             for entry in catalog.missing
         ],
     }
-
-
-@billing_app.command("write-pricing-catalog")
-def write_pricing_catalog(
-    ctx: typer.Context,
-    output: Annotated[
-        Path,
-        typer.Option("--output", help="The TypeScript module to write the published card into."),
-    ],
-) -> None:
-    """Render the published rate card as the module the pricing page compiles.
-
-    The pricing page renders without calling the API, so the card has to reach
-    the browser bundle as source. Generated rather than transcribed, because a
-    hand-kept copy of a price drifts and a customer finds out by being charged
-    something the page did not say.
-
-    `--output` has no default: this command is run from a checkout against a path
-    in it, and an installed CLI has no repository to guess one from.
-    """
-
-    rendered = render_pricing_catalog()
-    changed = not output.exists() or output.read_text() != rendered
-    if changed:
-        output.write_text(rendered)
-    print_payload(ctx, {"output": str(output), "changed": changed})
 
 
 @billing_app.command("price-unpriced")

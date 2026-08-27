@@ -35,6 +35,7 @@ from api.server.dependencies import (
     require_user_principal,
 )
 from api.server.services import ApiServices
+from billing import DatabaseBillingAdmission
 
 router = APIRouter()
 
@@ -229,6 +230,7 @@ def add_workspace_member(
         workspace_id=workspace_id,
         user_id=user.id,
         role=request.role,
+        admission=DatabaseBillingAdmission(),
     )
     return _member_response(user, membership)
 

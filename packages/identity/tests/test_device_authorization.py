@@ -8,7 +8,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.identity import DeviceAuthorizationRepository
+from database.repositories.identity import DeviceAuthorizationRepository, WorkspaceMemberRepository
 from database.tables.identity import DeviceAuthorizationTable
 from database.types import DatabaseSession
 from fastapi.testclient import TestClient
@@ -39,7 +39,10 @@ def _signed_in_user(
     user = users.create(display_name=display_name)
     with services.context.database.session() as session:
         workspace_id = services.context.workspace(session, workspace).id
-    users.add_member(workspace_id=workspace_id, user_id=user.id)
+        WorkspaceMemberRepository(session).add(
+            workspace_id=workspace_id,
+            user_id=user.id,
+        )
     issuer = TokenIssuer(services.context)
     with services.context.database.session() as session:
         raw_token, _ = issuer.issue_for_user(session, display_name, user_id=user.id)

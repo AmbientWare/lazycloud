@@ -24,6 +24,7 @@ from shared.timestamps import to_utc, utc_now
 from sqlalchemy.orm import Session
 
 from billing.accounts import BillingAccountService, owned_workspace_id
+from billing.admission import DatabaseBillingAdmission
 from billing.periods import carry_plan_into_cycle
 from billing.sweeps import BillingEventSink, next_attempt_at
 from billing.webhooks import ENDED_SUBSCRIPTION_STATUSES
@@ -198,6 +199,11 @@ class BillingPlanChangeService:
             )
             if account.plan is target:
                 return account
+            DatabaseBillingAdmission().assert_plan_change_fits(
+                session,
+                user_id=user_id,
+                target=target,
+            )
             if (
                 published_plan(target).monthly_nanos > 0
                 and account.payment_method_attached_at is None

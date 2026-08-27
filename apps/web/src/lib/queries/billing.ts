@@ -73,9 +73,9 @@ export function openBillingPortal(): Promise<void> {
 /**
  * Move this account onto a published plan, in either direction.
  *
- * The body names a plan id and never a price: the browser renders the same
- * generated card the server prices from, so quoting a figure back would be two
- * copies of one number able to disagree. Moving down is this same call — the
+ * The body names a plan id and never a price: the browser reads the catalog the
+ * server derives from its rate card, so quoting a figure back would create a
+ * second source of truth. Moving down is this same call — the
  * subscription is never cancelled, because ending it would take the metered
  * prices with it and leave this account's usage reaching no invoice.
  *

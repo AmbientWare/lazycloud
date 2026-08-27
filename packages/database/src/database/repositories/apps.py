@@ -32,6 +32,7 @@ from database.tables.apps import (
     StubTable,
 )
 from database.tables.execution import TaskTable
+from database.tables.identity import WorkspaceMemberTable
 from database.tables.images import CheckpointTable
 from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel, JsonValue
@@ -45,7 +46,7 @@ from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.enums import StringEnum
 from shared.errors import ConflictError
-from shared.identity import WorkspaceStatus
+from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.tasks import TaskStatus
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -117,6 +118,25 @@ class AppExecutionSummary(BaseModel):
 @dataclass(slots=True)
 class AppRepository:
     session: Session
+
+    def count_for_owner(self, owner_user_id: str) -> int:
+        """Non-deleted apps across every workspace this account owns."""
+
+        return int(
+            self.session.scalar(
+                select(func.count(AppTable.id))
+                .join(
+                    WorkspaceMemberTable,
+                    WorkspaceMemberTable.workspace_id == AppTable.workspace_id,
+                )
+                .where(
+                    WorkspaceMemberTable.user_id == owner_user_id,
+                    WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    AppTable.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
 
     def upsert(self, app: AppRecord) -> AppRecord:
         row = self.session.get(AppTable, app.id)

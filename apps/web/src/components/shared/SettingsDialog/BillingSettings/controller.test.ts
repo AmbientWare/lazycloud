@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { BillingSummary } from "@/lib/api/schemas";
+import type { BillingSummary, PricingCatalog } from "@/lib/api/schemas";
 
 import { useBillingSettingsController } from "./controller";
 
@@ -74,9 +74,12 @@ describe("billing settings controller", () => {
 });
 
 async function mountedController(queryClient: QueryClient = testQueryClient()) {
-  const rendered = renderHook(() => useBillingSettingsController(), {
-    wrapper: wrapper(queryClient),
-  });
+  const rendered = renderHook(
+    () => useBillingSettingsController({ planOpen: true, onPlanOpenChange: vi.fn() }),
+    {
+      wrapper: wrapper(queryClient),
+    },
+  );
   await waitFor(() => expect(rendered.result.current.summary).toBeDefined());
   return rendered;
 }
@@ -106,6 +109,7 @@ function recordRequests(initial: BillingSummary, afterChange: BillingSummary = i
     if (path === "/api/v1/billing/card-session") {
       return jsonResponse({ url: "https://provider.example/card" }, 201);
     }
+    if (path === "/api/v1/pricing") return jsonResponse(pricingCatalog());
     if (method === "POST") return jsonResponse(afterChange);
     return jsonResponse(initial);
   });
@@ -147,10 +151,70 @@ function summary(overrides: Partial<BillingSummary> = {}): BillingSummary {
     plan: plan("free", "Free"),
     portal_available: true,
     payment_method_on_file: false,
-    max_concurrent_containers: 200,
-    live_container_count: 0,
+    entitlements: entitlements(),
+    usage: {
+      apps: 0,
+      concurrent_containers: 0,
+      members: 1,
+      connected_clouds: 0,
+      custom_domains: 0,
+    },
     plan_change_pending: false,
     ...overrides,
+  };
+}
+
+function entitlements() {
+  return {
+    max_apps: 200,
+    max_concurrent_containers: 100,
+    max_members: 3 as const,
+    connected_cloud: false,
+    custom_domains: false,
+    self_hosted: true,
+  };
+}
+
+function pricingCatalog(): PricingCatalog {
+  return {
+    pricing_version: "test",
+    currency: "USD",
+    connected_cloud_management_fee_percent: 8,
+    no_payment_method: { included_nanos: 1_000_000_000, max_concurrent_containers: 10 },
+    plans: [
+      {
+        id: "free",
+        name: "Free",
+        summary: "Free plan",
+        monthly_nanos: 0,
+        included_nanos: 5_000_000_000,
+        entitlements: entitlements(),
+        terms: [],
+      },
+      {
+        id: "team",
+        name: "Team",
+        summary: "Team plan",
+        monthly_nanos: 200_000_000_000,
+        included_nanos: 100_000_000_000,
+        entitlements: {
+          ...entitlements(),
+          max_apps: 1_000,
+          max_concurrent_containers: 5_000,
+          max_members: "unlimited",
+          connected_cloud: true,
+          custom_domains: true,
+        },
+        terms: [],
+      },
+    ],
+    shape_rates: [],
+    gpu_rates: [],
+    platform_rate: {
+      nanos_per_egress_gib: 0,
+      nanos_per_volume_gib_month: 50_000_000,
+      storage_month_seconds: 2_592_000,
+    },
   };
 }
 

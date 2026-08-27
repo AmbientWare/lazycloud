@@ -45,3 +45,21 @@ export const currentSessionSchema = z
   })
   .strict();
 export type CurrentSession = z.infer<typeof currentSessionSchema>;
+
+export const workspaceMemberSchema = z
+  .object({
+    user_id: z.string(),
+    display_name: z.string(),
+    email: z.string(),
+    role: z.enum(["owner", "administrator", "member"]),
+    created_at: timestampSchema,
+  })
+  .strict();
+export type WorkspaceMember = z.infer<typeof workspaceMemberSchema>;
+
+export const workspaceMemberListSchema = z
+  .object({
+    data: z.array(workspaceMemberSchema),
+    next: z.string(),
+  })
+  .strict();

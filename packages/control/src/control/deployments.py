@@ -92,6 +92,15 @@ class DeploymentScheduleWriter(Protocol):
     ) -> CronJobRecord | None: ...
 
 
+class CustomDomainUseAdmission(Protocol):
+    def assert_may_use_custom_domains(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentService:
     context: ControlContext
@@ -99,6 +108,7 @@ class DeploymentService:
     pool_resolver: DeploymentPoolResolver
     registrar: DeploymentRegistrar
     schedules: DeploymentScheduleWriter
+    custom_domain_admission: CustomDomainUseAdmission
     workspace_changes: WorkspaceChangePublisher | None = None
     placement_resources: DeploymentPlacementResourceManager | None = None
 
@@ -157,6 +167,7 @@ class DeploymentService:
                 session,
                 normalized_spec.domain,
                 workspace_id=workspace_record.id,
+                admission=self.custom_domain_admission,
             )
             deployment = repository.records.create(
                 {
@@ -366,6 +377,7 @@ def _claimed_hostname(
     domain: str | None,
     *,
     workspace_id: str,
+    admission: CustomDomainUseAdmission,
 ) -> str | None:
     """Resolve the hostname a spec claims, refusing one the deployer cannot serve.
 
@@ -380,6 +392,8 @@ def _claimed_hostname(
     if domain is None:
         return None
     owner = WorkspaceMemberRepository(session).owner(workspace_id)
+    if owner is not None:
+        admission.assert_may_use_custom_domains(session, user_id=owner.user_id)
     covering = (
         CustomDomainRepository(session).covering(domain, user_id=owner.user_id)
         if owner is not None

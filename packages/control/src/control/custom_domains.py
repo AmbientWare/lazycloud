@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Protocol
 from uuid import uuid4
 
 from database.repositories.apps import DeploymentResourceRepository
@@ -21,13 +22,19 @@ from shared.errors import (
     ConflictError,
     InvalidInputError,
     NotFoundError,
+    PaymentRequiredError,
     UpstreamUnavailableError,
 )
 from shared.timestamps import utc_now
+from sqlalchemy.orm import Session
 
 from control.context import ControlContext
 
 RECHECK_INTERVAL = timedelta(minutes=5)
+
+
+class CustomDomainAdmission(Protocol):
+    def assert_may_use_custom_domains(self, session: Session, *, user_id: str) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +62,7 @@ class CustomDomainService:
     """
 
     platform_base_domain: str
+    admission: CustomDomainAdmission
 
     @property
     def provider(self) -> CustomDomainProvider:
@@ -70,6 +78,7 @@ class CustomDomainService:
             raise InvalidInputError(str(exc)) from exc
         self._reject_platform_domain(hostname)
         with self.context.database.session() as session:
+            self.admission.assert_may_use_custom_domains(session, user_id=user_id)
             existing = CustomDomainRepository(session).get_by_hostname(
                 hostname,
                 user_id=user_id,
@@ -96,8 +105,9 @@ class CustomDomainService:
         )
         with self.context.database.session() as session:
             try:
+                self.admission.assert_may_use_custom_domains(session, user_id=user_id)
                 return CustomDomainRepository(session).create(record, user_id=user_id)
-            except ConflictError:
+            except (ConflictError, PaymentRequiredError):
                 # Another account won the name between the check and the write. The
                 # provider hostname we just made is ours to clean up, not theirs.
                 self.provider.delete_hostname(state.provider_hostname_id)
@@ -241,4 +251,4 @@ class CustomDomainService:
             )
 
 
-__all__ = ["RECHECK_INTERVAL", "CustomDomainService"]
+__all__ = ["RECHECK_INTERVAL", "CustomDomainAdmission", "CustomDomainService"]

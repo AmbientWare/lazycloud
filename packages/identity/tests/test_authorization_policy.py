@@ -7,7 +7,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.identity import TokenRepository
+from database.repositories.identity import TokenRepository, WorkspaceMemberRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthError, AuthService, AuthTokenCache
 from identity.authz import (
@@ -292,7 +292,12 @@ def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
         ),
     ).allowed
 
-    users.add_member(workspace_id=theirs.id, user_id=me.id, role=WorkspaceRole.Member)
+    with isolated_services.context.database.session() as session:
+        WorkspaceMemberRepository(session).add(
+            workspace_id=theirs.id,
+            user_id=me.id,
+            role=WorkspaceRole.Member,
+        )
     membership = users.membership(workspace_id=theirs.id, user_id=me.id)
     assert decide_authorization(
         my_token,

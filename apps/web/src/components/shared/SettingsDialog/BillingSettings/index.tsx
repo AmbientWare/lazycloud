@@ -7,10 +7,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingPlan, BillingSummary } from "@/lib/api/schemas";
 import { relativeTime } from "@/lib/format";
 import { exactDollars, formatCostNanos } from "@/lib/money";
-import { publishedPlans } from "@/routes/-marketing/pricingCatalog";
 import { cn } from "@/lib/utils";
 
-import { useBillingSettingsController } from "./controller";
+import { useBillingSettingsController, type PlanOffer } from "./controller";
 import { PlanDialog } from "./PlanDialog";
 
 /**
@@ -20,8 +19,14 @@ import { PlanDialog } from "./PlanDialog";
  * under `/w/<workspace>/`: the provider invoices a person, and somebody holding
  * three workspaces holds one payment relationship.
  */
-export function BillingSettings() {
-  const controller = useBillingSettingsController();
+export function BillingSettings({
+  planOpen,
+  onPlanOpenChange,
+}: {
+  planOpen: boolean;
+  onPlanOpenChange: (open: boolean) => void;
+}) {
+  const controller = useBillingSettingsController({ planOpen, onPlanOpenChange });
   const summary = controller.summary;
 
   return (
@@ -34,7 +39,7 @@ export function BillingSettings() {
               <Skeleton className="h-2 w-full" />
               <Skeleton className="h-4 w-72" />
             </div>
-          ) : !summary ? (
+          ) : controller.loadError || !summary ? (
             <p className="text-sm text-destructive" role="alert">
               {controller.loadError?.message ?? "The plan for this account could not be read."}
             </p>
@@ -55,11 +60,12 @@ export function BillingSettings() {
               )}
               {summary.plan ? (
                 <ConcurrencyLine
-                  running={summary.live_container_count}
-                  limit={summary.max_concurrent_containers}
+                  running={summary.usage.concurrent_containers}
+                  limit={summary.entitlements?.max_concurrent_containers ?? 0}
                 />
               ) : null}
-              <RetainedTermsLine summary={summary} />
+              <EntitlementUsage summary={summary} />
+              <RetainedTermsLine summary={summary} offers={controller.offers} />
               {controller.settling ? (
                 <p className="text-sm text-warning">
                   A change of plan is being settled with the payment provider. It finishes on its
@@ -158,16 +164,36 @@ function ConcurrencyLine({ running, limit }: { running: number; limit: number })
  * keeps what they bought and the smaller plan starts at the next cycle. False
  * for an account with no card, whose stamped figure is below every plan's.
  */
-function RetainedTermsLine({ summary }: { summary: BillingSummary }) {
+function EntitlementUsage({ summary }: { summary: BillingSummary }) {
+  const entitlements = summary.entitlements;
+  if (!entitlements) return null;
+  const members =
+    entitlements.max_members === "unlimited"
+      ? `${summary.usage.members} members`
+      : `${summary.usage.members} of ${entitlements.max_members} members`;
+  return (
+    <p className="text-sm text-muted-foreground">
+      {summary.usage.apps} of {entitlements.max_apps} apps · {members}
+    </p>
+  );
+}
+
+function RetainedTermsLine({
+  summary,
+  offers,
+}: {
+  summary: BillingSummary;
+  offers: readonly PlanOffer[];
+}) {
   const plan = summary.plan;
   const allowance = plan?.allowance;
   if (!plan || !allowance) return null;
-  const published = publishedPlans[plan.id];
-  if (allowance.allowance_nanos <= published.includedNanos) return null;
+  const published = offers.find((offer) => offer.id === plan.id);
+  if (!published || allowance.allowance_nanos <= published.included_nanos) return null;
   return (
     <p className="text-sm text-muted-foreground">
       This period keeps the allowance it opened with. The {published.name} plan&apos;s{" "}
-      {exactDollars(published.includedNanos)} applies when it ends,{" "}
+      {exactDollars(published.included_nanos)} applies when it ends,{" "}
       <time dateTime={allowance.period_ended_at}>{relativeTime(allowance.period_ended_at)}</time>.
     </p>
   );
