@@ -11,7 +11,7 @@ from database.tables.custom_domains import CustomDomainTable
 from shared.custom_domains import CustomDomain, CustomDomainPhase
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,17 @@ from sqlalchemy.orm import Session
 @dataclass(slots=True)
 class CustomDomainRepository:
     session: Session
+
+    def count_for_user(self, user_id: str) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count(CustomDomainTable.id)).where(
+                    CustomDomainTable.user_id == user_id,
+                    CustomDomainTable.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
 
     @property
     def records(self) -> UserTableRepository[CustomDomain]:

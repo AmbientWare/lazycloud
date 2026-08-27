@@ -7,6 +7,7 @@ from pydantic import Field
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.http.base import HttpModel
+from shared.http.pricing import PlanEntitlementsResponse
 
 
 class BillingHostedSessionRequest(HttpModel):
@@ -99,9 +100,8 @@ class BillingPlanResponse(HttpModel):
     name: str
     """What to call this plan on screen, from the same card the pricing page uses.
 
-    Sent rather than mapped in the browser, because the browser already renders
-    this name on the marketing page from the compiled-in card — a second map kept
-    by hand in the dashboard is the copy that goes stale."""
+    Sent rather than mapped in the browser, so the account summary needs no local
+    plan-name map beside the catalog it fetches."""
 
     allowance: BillingAllowanceResponse | None = None
     """`None` between a cycle ending and the renewal that opens the next one.
@@ -111,6 +111,14 @@ class BillingPlanResponse(HttpModel):
     empty period reported as a zero allowance would read as terms the customer is
     held to, when it is the absence of any.
     """
+
+
+class BillingEntitlementUsageResponse(HttpModel):
+    apps: int = Field(ge=0)
+    concurrent_containers: int = Field(ge=0)
+    members: int = Field(ge=0)
+    connected_clouds: int = Field(ge=0)
+    custom_domains: int = Field(ge=0)
 
 
 class BillingSummaryResponse(HttpModel):
@@ -151,20 +159,11 @@ class BillingSummaryResponse(HttpModel):
     which state they are in and what changes if they attach one.
     """
 
-    max_concurrent_containers: int = Field(ge=0)
-    """How much this account may have running at once on its current terms.
+    entitlements: PlanEntitlementsResponse | None = None
+    """What the current plan grants, absent when the account has no plan."""
 
-    Zero for an account on no plan, which may run nothing until it is
-    provisioned. A default here would read as headroom that does not exist.
-    """
-
-    live_container_count: int = Field(ge=0)
-    """How much it has running or queued now, across every workspace it owns.
-
-    Reported beside the ceiling because the ceiling is the account's, not the
-    workspace's: someone looking at one workspace cannot otherwise tell why they
-    were refused, since the containers using up the limit may be in another.
-    """
+    usage: BillingEntitlementUsageResponse
+    """Current account-wide consumption of every measured entitlement."""
 
     plan_change_pending: bool
     """Whether a change of plan is still waiting on an outcome.
@@ -179,6 +178,7 @@ class BillingSummaryResponse(HttpModel):
 
 __all__ = [
     "BillingAllowanceResponse",
+    "BillingEntitlementUsageResponse",
     "BillingHostedSessionRequest",
     "BillingHostedSessionResponse",
     "BillingPlanChangeRequest",

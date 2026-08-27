@@ -114,14 +114,27 @@ function PlanCard({
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium">{offer.name}</h3>
         <p className="font-mono text-sm">
-          {exactDollars(offer.monthlyNanos)}
+          {exactDollars(offer.monthly_nanos)}
           <span className="text-xs text-muted-foreground"> / month</span>
         </p>
       </div>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
       <ul className="mt-3 space-y-1.5 text-xs leading-5">
-        <PlanPoint>{exactDollars(offer.includedNanos)} of compute included each period</PlanPoint>
-        <PlanPoint>{offer.maxConcurrentContainers} containers running at once</PlanPoint>
+        <PlanPoint>{exactDollars(offer.included_nanos)} of compute included each period</PlanPoint>
+        <PlanPoint>{offer.entitlements.max_apps} apps</PlanPoint>
+        <PlanPoint>
+          {offer.entitlements.max_concurrent_containers} containers running at once
+        </PlanPoint>
+        <PlanPoint>
+          {offer.entitlements.max_members === "unlimited"
+            ? "Unlimited members"
+            : `${offer.entitlements.max_members} members`}
+        </PlanPoint>
+        {offer.entitlements.connected_cloud ? (
+          <PlanPoint>Connected cloud accounts</PlanPoint>
+        ) : null}
+        {offer.entitlements.custom_domains ? <PlanPoint>Custom domains</PlanPoint> : null}
+        {offer.entitlements.self_hosted ? <PlanPoint>Self-hosted compute</PlanPoint> : null}
         {offer.terms.map((term) => (
           <PlanPoint key={term}>{term}</PlanPoint>
         ))}
@@ -145,7 +158,7 @@ function PlanCard({
             {offer.action === "card"
               ? `Add a card to switch to ${offer.name}`
               : offer.action === "cancel"
-                ? `Cancel subscription and move to ${offer.name}`
+                ? `Move to ${offer.name}`
                 : `Switch to ${offer.name}`}
           </Button>
         )}
@@ -230,8 +243,8 @@ function ChangeConfirmation({
           )}
           {summary ? (
             <li>
-              New containers are limited to {summary.max_concurrent_containers} at once until this
-              period ends.
+              New containers are limited to {offer.entitlements.max_concurrent_containers} at once
+              as soon as the plan changes.
             </li>
           ) : null}
           <li>Your work keeps running and keeps being invoiced.</li>

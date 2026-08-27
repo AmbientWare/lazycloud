@@ -452,6 +452,50 @@ class UserIdentityRepository:
 class WorkspaceMemberRepository:
     session: Session
 
+    def is_member_for_owner(self, *, owner_user_id: str, member_user_id: str) -> bool:
+        owned = WorkspaceMemberTable.__table__.alias("owned_workspace_members")
+        members = WorkspaceMemberTable.__table__.alias("account_workspace_members")
+        return (
+            self.session.scalar(
+                select(members.c.id)
+                .select_from(
+                    owned.join(
+                        members,
+                        members.c.workspace_id == owned.c.workspace_id,
+                    )
+                )
+                .where(
+                    owned.c.user_id == owner_user_id,
+                    owned.c.role == WorkspaceRole.Owner.value,
+                    members.c.user_id == member_user_id,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    def distinct_member_count_for_owner(self, owner_user_id: str) -> int:
+        """Distinct people reaching any workspace this account owns."""
+
+        owned = WorkspaceMemberTable.__table__.alias("owned_workspace_members")
+        members = WorkspaceMemberTable.__table__.alias("account_workspace_members")
+        return int(
+            self.session.scalar(
+                select(func.count(func.distinct(members.c.user_id)))
+                .select_from(
+                    owned.join(
+                        members,
+                        members.c.workspace_id == owned.c.workspace_id,
+                    )
+                )
+                .where(
+                    owned.c.user_id == owner_user_id,
+                    owned.c.role == WorkspaceRole.Owner.value,
+                )
+            )
+            or 0
+        )
+
     def add(
         self,
         *,

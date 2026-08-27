@@ -1,22 +1,121 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from database.records.apps import AppRecord
+from database.repositories.apps import AppRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.custom_domains import CustomDomainRepository
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.errors import PaymentRequiredError
+from shared.custom_domains import CustomDomain
+from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
 from tests.service_fixtures import workspace_owner_user_id
 
+from billing import DatabaseBillingAdmission
+
 FUNCTION_IMAGE = "python:3.12-slim"
+
+
+def test_free_plan_refuses_paid_capabilities(isolated_services: ApiServices) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    admission = DatabaseBillingAdmission()
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError, match="connected cloud accounts require"),
+    ):
+        admission.assert_may_use_connected_cloud(session, user_id=user_id)
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError, match="custom domains require"),
+    ):
+        admission.assert_may_use_custom_domains(session, user_id=user_id)
+
+
+def test_free_plan_refuses_an_app_beyond_its_account_limit(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        repository = AppRepository(session)
+        for index in range(200):
+            repository.upsert(
+                AppRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace_id,
+                    name=f"quota-app-{index}",
+                )
+            )
+
+    with pytest.raises(CapacityLimitReachedError, match="200 apps"):
+        isolated_services.apps.create("one_more_app", workspace="default")
+
+
+def test_free_plan_counts_distinct_members_across_owned_workspaces(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    admission = DatabaseBillingAdmission()
+    first = isolated_services.users.create(display_name="member-one")
+    second = isolated_services.users.create(display_name="member-two")
+    refused = isolated_services.users.create(display_name="member-three")
+    isolated_services.users.add_member(
+        workspace_id=workspace_id,
+        user_id=first.id,
+        admission=admission,
+    )
+    isolated_services.users.add_member(
+        workspace_id=workspace_id,
+        user_id=second.id,
+        admission=admission,
+    )
+
+    with pytest.raises(CapacityLimitReachedError, match="3 members"):
+        isolated_services.users.add_member(
+            workspace_id=workspace_id,
+            user_id=refused.id,
+            admission=admission,
+        )
+
+
+def test_plan_change_refuses_to_drop_a_capability_still_in_use(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
+        CustomDomainRepository(session).create(
+            CustomDomain(
+                id=str(uuid4()),
+                user_id=user_id,
+                hostname="quota.example",
+            ),
+            user_id=user_id,
+        )
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(ConflictError, match="1 custom domains"),
+    ):
+        DatabaseBillingAdmission().assert_plan_change_fits(
+            session,
+            user_id=user_id,
+            target=BillingPlanId.Free,
+        )
 
 
 def test_an_account_behind_on_payment_cannot_start_work_and_leaves_no_container(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Protocol
 
 from database.repositories.identity import (
     TokenRepository,
@@ -20,8 +21,19 @@ from shared.identity import (
     WorkspaceRole,
 )
 from shared.timestamps import utc_now
+from sqlalchemy.orm import Session
 
 from identity.auth import IdentityContext
+
+
+class WorkspaceMembershipAdmission(Protocol):
+    def assert_may_add_workspace_member(
+        self,
+        session: Session,
+        *,
+        workspace_id: str,
+        member_user_id: str,
+    ) -> None: ...
 
 
 class UserService:
@@ -131,10 +143,16 @@ class UserService:
         workspace_id: str,
         user_id: str,
         role: WorkspaceRole = WorkspaceRole.Member,
+        admission: WorkspaceMembershipAdmission,
     ) -> WorkspaceMemberRecord:
         with self.context.database.session() as session:
             if UserRepository(session).get(user_id) is None:
                 raise NotFoundError(f"user not found: {user_id}")
+            admission.assert_may_add_workspace_member(
+                session,
+                workspace_id=workspace_id,
+                member_user_id=user_id,
+            )
             return WorkspaceMemberRepository(session).add(
                 workspace_id=workspace_id,
                 user_id=user_id,
@@ -187,4 +205,4 @@ class UserService:
             return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
 
 
-__all__ = ["UserService"]
+__all__ = ["UserService", "WorkspaceMembershipAdmission"]

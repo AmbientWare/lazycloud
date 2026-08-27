@@ -48,6 +48,7 @@ export const workspaceQueryKeys = {
     deploymentUrl: (workspaceId: string, deploymentId: string) =>
       [...workspaceRoot(workspaceId), "apps", "deployment-url", deploymentId] as const,
   },
+  members: (workspaceId: string) => [...workspaceRoot(workspaceId), "members"] as const,
   deployments: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "deployments"] as const,
     list: (

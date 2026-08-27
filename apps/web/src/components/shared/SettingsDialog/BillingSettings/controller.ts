@@ -2,7 +2,12 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import type { BillingSummary } from "@/lib/api/schemas";
+import type {
+  BillingPlanId,
+  BillingSummary,
+  PricingCatalog,
+  PublishedPlan,
+} from "@/lib/api/schemas";
 import {
   billingSummaryQueryOptions,
   changeBillingPlan,
@@ -10,12 +15,7 @@ import {
   startCardSetup,
 } from "@/lib/queries/billing";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
-import {
-  planIds,
-  publishedPlans,
-  type PlanId,
-  type PublishedPlan,
-} from "@/routes/-marketing/pricingCatalog";
+import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
 /**
  * What pressing the button beside one plan does.
@@ -27,26 +27,28 @@ import {
 type PlanOfferAction = "current" | "card" | "switch" | "cancel";
 
 /** One published plan as it is offered to this account. */
-export type PlanOffer = PublishedPlan & { id: PlanId; action: PlanOfferAction };
+export type PlanOffer = PublishedPlan & { action: PlanOfferAction };
 
 /**
  * Every plan the platform publishes, cheapest first, with what it offers here.
  *
- * The figures and the words are the generated card's — the same source the
- * pricing page compiles in — so a plan added there is offered here without this
- * file being edited, and no price appears twice. Which plan the account is
- * actually on comes from the server, never from the card.
+ * The figures and words come from the pricing endpoint, so a plan added there is
+ * offered here without this file being edited. The account's current plan comes
+ * from its billing summary.
  */
-function planOffers(summary: BillingSummary | undefined): readonly PlanOffer[] {
+function planOffers(
+  summary: BillingSummary | undefined,
+  catalog: PricingCatalog | undefined,
+): readonly PlanOffer[] {
+  if (!catalog) return [];
   const currentId = summary?.plan?.id;
-  const currentMonthlyNanos = currentId ? publishedPlans[currentId].monthlyNanos : 0;
+  const currentMonthlyNanos =
+    catalog.plans.find((plan) => plan.id === currentId)?.monthly_nanos ?? 0;
   const cardOnFile = summary?.payment_method_on_file ?? false;
-  return planIds.map((id) => {
-    const published = publishedPlans[id];
+  return catalog.plans.map((published) => {
     return {
       ...published,
-      id,
-      action: offerAction(published, { id, currentId, currentMonthlyNanos, cardOnFile }),
+      action: offerAction(published, { currentId, currentMonthlyNanos, cardOnFile }),
     };
   });
 }
@@ -54,29 +56,27 @@ function planOffers(summary: BillingSummary | undefined): readonly PlanOffer[] {
 function offerAction(
   published: PublishedPlan,
   {
-    id,
     currentId,
     currentMonthlyNanos,
     cardOnFile,
   }: {
-    id: PlanId;
-    currentId: PlanId | undefined;
+    currentId: BillingPlanId | undefined;
     currentMonthlyNanos: number;
     cardOnFile: boolean;
   },
 ): PlanOfferAction {
-  if (id === currentId) return "current";
+  if (published.id === currentId) return "current";
   // A monthly plan with nobody to charge is a card first and a plan change
   // afterwards, and the two stay separate presses. The server refuses this
   // combination outright, so starting the change here would spend the account's
   // one open-change slot on a request that was never going to work — and
   // returning from the hosted card page must never be what authorises a monthly
   // charge nobody pressed a second time for.
-  if (published.monthlyNanos > 0 && !cardOnFile) return "card";
+  if (published.monthly_nanos > 0 && !cardOnFile) return "card";
   // Read off the published prices rather than off which plan is which: moving
   // down takes nothing back and stops the next charge, which is a different
   // promise from moving up and is confirmed before it happens.
-  return published.monthlyNanos < currentMonthlyNanos ? "cancel" : "switch";
+  return published.monthly_nanos < currentMonthlyNanos ? "cancel" : "switch";
 }
 
 export type BillingSettingsController = {
@@ -89,7 +89,7 @@ export type BillingSettingsController = {
   openPlan: () => void;
   closePlan: () => void;
   choose: (offer: PlanOffer) => void;
-  changingTo: PlanId | null;
+  changingTo: BillingPlanId | null;
   changeError: Error | null;
   confirmingChangeTo: PlanOffer | null;
   confirmChange: () => void;
@@ -107,10 +107,16 @@ export type BillingSettingsController = {
  * settings section: the payment relationship belongs to the signed-in person,
  * not to the workspace in the address bar, so there is no workspace to plumb.
  */
-export function useBillingSettingsController(): BillingSettingsController {
+export function useBillingSettingsController({
+  planOpen,
+  onPlanOpenChange,
+}: {
+  planOpen: boolean;
+  onPlanOpenChange: (open: boolean) => void;
+}): BillingSettingsController {
   const queryClient = useQueryClient();
   const query = useQuery(billingSummaryQueryOptions());
-  const [planOpen, setPlanOpen] = useState(false);
+  const catalog = useQuery(pricingCatalogQueryOptions());
   const [confirmingChangeTo, setConfirmingChangeTo] = useState<PlanOffer | null>(null);
   const [leaving, setLeaving] = useState<"card" | "portal" | null>(null);
 
@@ -121,7 +127,7 @@ export function useBillingSettingsController(): BillingSettingsController {
       // straight into the cache the section reads rather than refetched.
       queryClient.setQueryData(accountQueryKeys.billing(), summary);
       setConfirmingChangeTo(null);
-      setPlanOpen(false);
+      onPlanOpenChange(false);
     },
   });
 
@@ -157,15 +163,15 @@ export function useBillingSettingsController(): BillingSettingsController {
 
   return {
     summary: query.data,
-    isLoading: query.isPending,
-    loadError: query.error,
-    offers: planOffers(query.data),
+    isLoading: query.isPending || catalog.isPending,
+    loadError: query.error ?? catalog.error,
+    offers: planOffers(query.data, catalog.data),
     settling,
     planOpen,
-    openPlan: () => setPlanOpen(true),
+    openPlan: () => onPlanOpenChange(true),
     closePlan: () => {
       if (change.isPending) return;
-      setPlanOpen(false);
+      onPlanOpenChange(false);
       setConfirmingChangeTo(null);
       change.reset();
     },

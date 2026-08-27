@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_DOWN, Decimal
+from typing import Literal, TypeAlias
 
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-08-18.a"
+PRICING_VERSION = "2026-08-27.a"
 """The label frozen onto every ledger segment these numbers price.
 
 Opaque and unparsed. It exists so "which numbers produced this charge" is
@@ -27,7 +28,7 @@ all would have nowhere for its usage to land.
 FREE_PLAN_INCLUDED_NANOS = 5 * NANOS_PER_USD
 """What the free plan comes with, issued as a credit grant each period."""
 
-FREE_PLAN_MAX_CONTAINERS = 200
+FREE_PLAN_MAX_CONTAINERS = 100
 """How much the free plan may run at once, across every workspace it owns.
 
 A term of the plan rather than a scheduler setting, because it is part of what an
@@ -36,7 +37,14 @@ workspace: making a workspace is self-serve, so a per-workspace ceiling is one
 anybody raises by clicking new workspace.
 """
 
-TEAM_PLAN_MAX_CONTAINERS = 1_000
+TEAM_PLAN_MAX_CONTAINERS = 5_000
+
+FREE_PLAN_MAX_APPS = 200
+TEAM_PLAN_MAX_APPS = 1_000
+FREE_PLAN_MAX_MEMBERS = 3
+
+UnlimitedEntitlement: TypeAlias = Literal["unlimited"]
+EntitlementLimit: TypeAlias = int | UnlimitedEntitlement
 
 NO_CARD_INCLUDED_NANOS = 1 * NANOS_PER_USD
 """What an account with no card on file may spend before it is stopped.
@@ -342,7 +350,7 @@ class PublishedPlan:
 
     monthly_nanos: int
     included_nanos: int
-    max_concurrent_containers: int
+    entitlements: PlanEntitlements
     terms: tuple[str, ...]
     """What this plan promises beyond its figures, one clause each.
 
@@ -357,6 +365,26 @@ class PublishedPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanEntitlements:
+    """The limits and capabilities one plan grants to its account."""
+
+    max_apps: int
+    max_concurrent_containers: int
+    max_members: EntitlementLimit
+    connected_cloud: bool
+    custom_domains: bool
+    self_hosted: bool
+
+    def __post_init__(self) -> None:
+        if self.max_apps <= 0:
+            raise ValueError("a plan must allow at least one app")
+        if self.max_concurrent_containers <= 0:
+            raise ValueError("a plan must allow at least one concurrent container")
+        if isinstance(self.max_members, int) and self.max_members <= 0:
+            raise ValueError("a bounded member limit must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class AccountTerms:
     """What one account may spend and run for a cycle.
 
@@ -368,7 +396,7 @@ class AccountTerms:
     """
 
     included_nanos: int
-    max_concurrent_containers: int
+    entitlements: PlanEntitlements
 
 
 def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTerms:
@@ -384,15 +412,18 @@ def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTe
     a paid plan is ever meant to be in.
     """
 
+    published = published_plan(plan)
     if not has_payment_method:
         return AccountTerms(
             included_nanos=NO_CARD_INCLUDED_NANOS,
-            max_concurrent_containers=NO_CARD_MAX_CONTAINERS,
+            entitlements=replace(
+                published.entitlements,
+                max_concurrent_containers=NO_CARD_MAX_CONTAINERS,
+            ),
         )
-    published = published_plan(plan)
     return AccountTerms(
         included_nanos=published.included_nanos,
-        max_concurrent_containers=published.max_concurrent_containers,
+        entitlements=published.entitlements,
     )
 
 
@@ -454,7 +485,14 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         summary="What an account costs before it has agreed to anything.",
         monthly_nanos=FREE_PLAN_MONTHLY_NANOS,
         included_nanos=FREE_PLAN_INCLUDED_NANOS,
-        max_concurrent_containers=FREE_PLAN_MAX_CONTAINERS,
+        entitlements=PlanEntitlements(
+            max_apps=FREE_PLAN_MAX_APPS,
+            max_concurrent_containers=FREE_PLAN_MAX_CONTAINERS,
+            max_members=FREE_PLAN_MAX_MEMBERS,
+            connected_cloud=False,
+            custom_domains=False,
+            self_hosted=True,
+        ),
         terms=(
             "Every workload the platform runs: applications, APIs, functions, jobs, "
             "queues, schedules, and sandboxes.",
@@ -467,11 +505,17 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         summary="A monthly subscription that comes with compute included.",
         monthly_nanos=TEAM_PLAN_MONTHLY_NANOS,
         included_nanos=TEAM_PLAN_INCLUDED_NANOS,
-        max_concurrent_containers=TEAM_PLAN_MAX_CONTAINERS,
+        entitlements=PlanEntitlements(
+            max_apps=TEAM_PLAN_MAX_APPS,
+            max_concurrent_containers=TEAM_PLAN_MAX_CONTAINERS,
+            max_members="unlimited",
+            connected_cloud=True,
+            custom_domains=True,
+            self_hosted=True,
+        ),
         terms=(
-            "The same workloads at the same rates. A plan changes what you pay, not "
-            "what you can run.",
-            "Room for a team to run more at once on one account and one invoice.",
+            "The same workloads at the same metered rates, with higher account limits.",
+            "One account and invoice for every workspace it owns.",
         ),
     ),
 )
@@ -540,7 +584,9 @@ if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
 __all__ = [
     "CONNECTED_CLOUD_MANAGEMENT_FEE",
     "FREE_PLAN_INCLUDED_NANOS",
+    "FREE_PLAN_MAX_APPS",
     "FREE_PLAN_MAX_CONTAINERS",
+    "FREE_PLAN_MAX_MEMBERS",
     "FREE_PLAN_MONTHLY_NANOS",
     "NO_CARD_INCLUDED_NANOS",
     "NO_CARD_MAX_CONTAINERS",
@@ -553,9 +599,12 @@ __all__ = [
     "SECONDS_PER_30_DAY_MONTH",
     "STORED_RATE_STEP",
     "TEAM_PLAN_INCLUDED_NANOS",
+    "TEAM_PLAN_MAX_APPS",
     "TEAM_PLAN_MAX_CONTAINERS",
     "TEAM_PLAN_MONTHLY_NANOS",
     "AccountTerms",
+    "EntitlementLimit",
+    "PlanEntitlements",
     "PublishedComputeRate",
     "PublishedGpuRate",
     "PublishedPlan",

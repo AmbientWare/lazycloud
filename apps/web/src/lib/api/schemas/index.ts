@@ -11,6 +11,7 @@ export * from "./functions";
 export * from "./json";
 export * from "./observability";
 export * from "./pods";
+export * from "./pricing";
 export * from "./shells";
 export * from "./artifacts";
 export * from "./storage";

@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { useSession } from "@/components/shared/AuthGate/session";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -29,6 +31,11 @@ export function SettingsDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
+  const [planOpen, setPlanOpen] = useState(false);
+  const openUpgrade = () => {
+    setPlanOpen(true);
+    onViewChange("general");
+  };
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
@@ -60,7 +67,7 @@ export function SettingsDialog({
           <TabsContent value="general" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             <div className="space-y-5">
               <AccountSettings />
-              <BillingSettings />
+              <BillingSettings planOpen={planOpen} onPlanOpenChange={setPlanOpen} />
             </div>
           </TabsContent>
 
@@ -74,11 +81,11 @@ export function SettingsDialog({
           </TabsContent>
 
           <TabsContent value="compute" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <ComputeSettings />
+            <ComputeSettings onUpgrade={openUpgrade} />
           </TabsContent>
 
           <TabsContent value="domains" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <DomainSettings />
+            <DomainSettings onUpgrade={openUpgrade} />
           </TabsContent>
         </Tabs>
       </DialogContent>

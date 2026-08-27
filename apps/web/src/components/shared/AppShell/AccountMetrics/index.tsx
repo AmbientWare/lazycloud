@@ -73,8 +73,8 @@ function ReadingStrip() {
   const billing = useQuery(billingSummaryQueryOptions());
   const tasks = useQuery(taskMetricsQueryOptions(workspace.id, TASK_METRICS_HOURS));
 
-  const ceiling = billing.data?.max_concurrent_containers ?? 0;
-  const accountLive = billing.data?.live_container_count ?? 0;
+  const ceiling = billing.data?.entitlements?.max_concurrent_containers ?? 0;
+  const accountLive = billing.data?.usage.concurrent_containers ?? 0;
 
   return (
     <section

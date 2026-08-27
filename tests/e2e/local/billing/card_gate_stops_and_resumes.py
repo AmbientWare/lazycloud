@@ -206,7 +206,7 @@ def _register(gate: BillingGate, run: _Run) -> dict[str, Any]:
     return {
         "payment_method_on_file": summary.payment_method_on_file,
         "allowance_nanos": allowance.allowance_nanos,
-        "max_concurrent_containers": summary.max_concurrent_containers,
+        "max_concurrent_containers": _container_limit(summary),
     }
 
 
@@ -372,7 +372,7 @@ def _attach_a_card(gate: BillingGate, run: _Run) -> dict[str, Any]:
             "card": run.card,
             "payment_method_on_file": summary.payment_method_on_file,
             "allowance_nanos": allowance.allowance_nanos if allowance else None,
-            "max_concurrent_containers": summary.max_concurrent_containers,
+            "max_concurrent_containers": _container_limit(summary),
         }
         print(json.dumps(cycle, sort_keys=True), flush=True)
         if (
@@ -386,7 +386,7 @@ def _attach_a_card(gate: BillingGate, run: _Run) -> dict[str, Any]:
             return {
                 "payment_method_on_file": True,
                 "allowance_nanos": allowance.allowance_nanos,
-                "max_concurrent_containers": summary.max_concurrent_containers,
+                "max_concurrent_containers": _container_limit(summary),
                 "credit_grant_id": run.provider_credit_grant_id,
             }
         if time.monotonic() >= deadline:
@@ -399,6 +399,12 @@ def _attach_a_card(gate: BillingGate, run: _Run) -> dict[str, Any]:
 
 def _summary(gate: BillingGate, run: _Run) -> BillingSummaryResponse:
     return BillingSummaryResponse.model_validate(run.account.channel(gate).get(SUMMARY_ROUTE))
+
+
+def _container_limit(summary: BillingSummaryResponse) -> int:
+    if summary.entitlements is None:
+        raise RuntimeError("the subscribed account summary has no plan entitlements")
+    return summary.entitlements.max_concurrent_containers
 
 
 def _cleanup(gate: BillingGate, run: _Run) -> dict[str, Any]:

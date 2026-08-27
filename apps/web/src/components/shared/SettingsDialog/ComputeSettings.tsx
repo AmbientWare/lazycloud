@@ -46,6 +46,7 @@ import {
   computeInstancesQueryOptions,
   machinesQueryOptions,
 } from "@/lib/queries/compute";
+import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { cn } from "@/lib/utils";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
@@ -53,8 +54,9 @@ import { JoinMachineDialog } from "./JoinMachineDialog";
 import { useAwsComputeController } from "./AwsComputeForm/controller";
 import { regionOptions, toggleAllowedRegion } from "./region-selection";
 
-export function ComputeSettings() {
+export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const connection = useQuery(awsConnectionQueryOptions());
+  const billing = useQuery(billingSummaryQueryOptions());
   const instances = useQuery(computeInstancesQueryOptions());
   const machines = useQuery(machinesQueryOptions());
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
@@ -63,7 +65,7 @@ export function ComputeSettings() {
   const catalog = useQuery(computeCatalogQueryOptions(expandedProvider === "aws"));
   const loadError = connection.error ?? instances.error;
 
-  if (connection.isPending || instances.isPending) {
+  if (connection.isPending || instances.isPending || billing.isPending) {
     return <SettingsSkeleton />;
   }
 
@@ -91,6 +93,9 @@ export function ComputeSettings() {
         catalogError={catalog.error}
         onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
+        connectedCloudEnabled={billing.data?.entitlements?.connected_cloud ?? false}
+        billingError={billing.error}
+        onUpgrade={onUpgrade}
       />
       <SelfHostedPanel
         machines={selfHostedMachines}
@@ -117,6 +122,9 @@ function ConnectedCloudsPanel({
   catalogError,
   onToggle,
   onManageAws,
+  connectedCloudEnabled,
+  billingError,
+  onUpgrade,
 }: {
   connection: AwsConnection | null;
   instances: CustomerComputeInstance[];
@@ -126,13 +134,24 @@ function ConnectedCloudsPanel({
   catalogError: Error | null;
   onToggle: () => void;
   onManageAws: () => void;
+  connectedCloudEnabled: boolean;
+  billingError: Error | null;
+  onUpgrade: () => void;
 }) {
   const usable = connection ? awsConnectionIsUsable(connection) : false;
   return (
     <Panel
       title="Connected clouds"
       description="Connected once for your account, and reachable from every workspace in it"
-      action={<AddCloudMenu connection={connection} onSelectAws={onManageAws} />}
+      action={
+        <AddCloudMenu
+          connection={connection}
+          connectedCloudEnabled={connectedCloudEnabled}
+          billingError={billingError}
+          onSelectAws={onManageAws}
+          onUpgrade={onUpgrade}
+        />
+      }
       className="min-h-[18rem]"
       contentClassName="overflow-y-auto"
     >
@@ -140,7 +159,13 @@ function ConnectedCloudsPanel({
         <PanelEmpty
           icon={CloudCog}
           message="No connected clouds"
-          detail="Connect an AWS account once. Capacity is then provisioned there only when a workload requests AWS placement."
+          detail={
+            billingError
+              ? billingError.message
+              : connectedCloudEnabled
+                ? "Connect an AWS account once. Capacity is provisioned there only when a workload requests AWS placement."
+                : "Connected cloud accounts are available on the Team plan."
+          }
           className="min-h-64 px-6"
         />
       ) : (
@@ -188,11 +213,25 @@ function ConnectedCloudsPanel({
 
 function AddCloudMenu({
   connection,
+  connectedCloudEnabled,
+  billingError,
   onSelectAws,
+  onUpgrade,
 }: {
   connection: AwsConnection | null;
+  connectedCloudEnabled: boolean;
+  billingError: Error | null;
   onSelectAws: () => void;
+  onUpgrade: () => void;
 }) {
+  if (!connection && billingError) return null;
+  if (!connection && !connectedCloudEnabled) {
+    return (
+      <Button size="sm" onClick={onUpgrade}>
+        Upgrade to Team
+      </Button>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

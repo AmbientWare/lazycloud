@@ -52,11 +52,9 @@ broad barrel, and delete the old re-export path.
   switching workspace does not invalidate them.
 - Validate every JSON response against the hand-maintained Zod schemas that
   mirror the server contracts. A contract change updates both halves together.
-- The published rate card is the exception, and is generated into
-  `routes/-marketing/pricingCatalog.ts` from `shared.billing_rate_card` so the
-  pricing page renders without an API call. Change the card and regenerate; an
-  edit made in the browser copy is lost at the next regeneration and would have
-  quoted a price the platform never held.
+- Pricing and plan entitlements come from `/api/v1/pricing`, validated by one
+  hand-written Zod boundary schema. Marketing and account surfaces read that
+  query and keep no local catalog, plan interface, or duplicated figures.
 - TanStack Query is authoritative for server records: option builders live in
   `lib/queries` with typed workspace keys, and one provider owns the resumable
   authenticated change stream. Do not copy server records into client stores or

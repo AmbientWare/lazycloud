@@ -850,6 +850,7 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
             capacity_baseline=compute_policies,
             available_catalog=aws_compute_catalog,
+            admission=DatabaseBillingAdmission(),
         )
         placement_resources = (
             aws_composition.deployment_bucket_access if aws_composition is not None else None
@@ -913,6 +914,7 @@ class ApiServices(ApiServiceCore):
                 container_shutdowns,
             ),
             DatabaseAppImageAvailability(),
+            payment_admission,
             workspace_changes=workspace_changes,
         )
         cron_jobs = CronJobService(
@@ -925,6 +927,7 @@ class ApiServices(ApiServiceCore):
             compute_policies,
             DeploymentRegistrationService(apps, control_plane),
             cron_jobs,
+            payment_admission,
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
         )
@@ -968,6 +971,7 @@ class ApiServices(ApiServiceCore):
             context=context,
             provider_factory=CloudflareSettings().provider,
             platform_base_domain=gateway_config.public_base_domain,
+            admission=DatabaseBillingAdmission(),
         )
         collections = CollectionService(context)
         volumes = VolumeService(context, workspace_changes=workspace_changes)

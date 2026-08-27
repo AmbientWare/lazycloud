@@ -15,6 +15,7 @@ from compute.aws_connections import (
     AwsAccountRevocationAction,
     AwsAuthorizationCleanupResult,
 )
+from database.types import DatabaseSession
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.aws_connections import (
@@ -37,6 +38,17 @@ from tests.service_fixtures import workspace_owner_user_id
 ACCOUNT_ID = "123456789012"
 VALIDATED_AT = datetime(2026, 7, 15, 12, tzinfo=UTC)
 TEMPLATE_SHA256 = "a" * 64
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectedCloudAdmission:
+    def assert_may_use_connected_cloud(
+        self,
+        session: DatabaseSession,
+        *,
+        user_id: str,
+    ) -> None:
+        del session, user_id
 
 
 @dataclass(slots=True)
@@ -206,6 +218,7 @@ def _client(
         validator=validator or _ConnectionValidator(),
         authorization_lifecycle=authorization_lifecycle or _AuthorizationLifecycle(),
         pool_drainer=pool_drainer or _PoolDrainer(),
+        admission=_ConnectedCloudAdmission(),
         workspace_changes=isolated_services.workspace_changes,
         provider_poll_seconds=0,
     )

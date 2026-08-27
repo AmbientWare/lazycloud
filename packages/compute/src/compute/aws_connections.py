@@ -149,6 +149,10 @@ class AwsConnectionCapacityBaseline(Protocol):
     def reconcile_workspace_baseline(self, workspace_id: str) -> None: ...
 
 
+class ConnectedCloudAdmission(Protocol):
+    def assert_may_use_connected_cloud(self, session: DatabaseSession, *, user_id: str) -> None: ...
+
+
 @dataclass(slots=True)
 class AwsAccountConnectionService:
     context: ComputeContext
@@ -156,6 +160,7 @@ class AwsAccountConnectionService:
     validator: AwsAccountConnectionValidator
     authorization_lifecycle: AwsAccountAuthorizationLifecycle
     pool_drainer: AwsAccountPoolDrainer
+    admission: ConnectedCloudAdmission
     bucket_access_reconciler: AwsConnectionBucketAccessReconciler | None = None
     capacity_baseline: AwsConnectionCapacityBaseline | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
@@ -185,6 +190,8 @@ class AwsAccountConnectionService:
         hardware to be ours. Only the administrator route passes it.
         """
         with self.context.database.session() as session:
+            if not platform_fleet:
+                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             existing = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if existing is not None:
                 if self._matches_existing_draft(existing, request):
@@ -237,6 +244,8 @@ class AwsAccountConnectionService:
         )
         with self.context.database.session() as session:
             repository = AwsAccountConnectionRepository(session)
+            if not platform_fleet:
+                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             if repository.get_for_user(user_id, for_update=True) is not None:
                 raise ConflictError("this account already has an AWS account connection")
             connection = repository.create(connection)
@@ -308,6 +317,8 @@ class AwsAccountConnectionService:
             current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
+            if not current.platform_fleet:
+                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             if current.compute.revision != expected_revision:
                 raise ConflictError("AWS compute configuration revision was superseded")
             updated = current.model_copy(
@@ -331,6 +342,8 @@ class AwsAccountConnectionService:
             current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
+            if not current.platform_fleet:
+                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             target = self._validation_target(current)
             validating = self._begin_validation(current, target, started_at)
             repository.save(validating)
@@ -373,6 +386,8 @@ class AwsAccountConnectionService:
             current = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
+            if not current.platform_fleet:
+                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             if current.phase is AwsAccountConnectionPhase.ReconnectPending:
                 pending = current.pending_authorization
                 if pending is None:
@@ -578,6 +593,8 @@ class AwsAccountConnectionService:
                 else:
                     raise ConflictError("AWS cleanup state has no authorization")
             elif current.phase is AwsAccountConnectionPhase.Degraded:
+                if not current.platform_fleet:
+                    self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
                 phase = AwsAccountConnectionPhase.Degraded
             else:
                 return current

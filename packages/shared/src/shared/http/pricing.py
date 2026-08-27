@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+from pydantic import Field
+
+from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import (
+    CONNECTED_CLOUD_MANAGEMENT_FEE,
+    NO_CARD_INCLUDED_NANOS,
+    NO_CARD_MAX_CONTAINERS,
+    PRICING_VERSION,
+    PUBLISHED_GPU_RATES,
+    PUBLISHED_PLANS,
+    PUBLISHED_PLATFORM_RATE,
+    PUBLISHED_SHAPE_RATES,
+    SECONDS_PER_30_DAY_MONTH,
+    EntitlementLimit,
+    PlanEntitlements,
+)
+from shared.http.base import HttpModel
+from shared.payments import BILLING_CURRENCY
+from shared.usage import UsageBillingOwner
+
+
+class PlanEntitlementsResponse(HttpModel):
+    max_apps: int = Field(gt=0)
+    max_concurrent_containers: int = Field(gt=0)
+    max_members: EntitlementLimit
+    connected_cloud: bool
+    custom_domains: bool
+    self_hosted: bool
+
+
+class PublishedPlanResponse(HttpModel):
+    id: BillingPlanId
+    name: str
+    summary: str
+    monthly_nanos: int = Field(ge=0)
+    included_nanos: int = Field(ge=0)
+    entitlements: PlanEntitlementsResponse
+    terms: list[str] = Field(default_factory=list)
+
+
+class NoPaymentMethodTermsResponse(HttpModel):
+    included_nanos: int = Field(ge=0)
+    max_concurrent_containers: int = Field(gt=0)
+
+
+class PublishedShapeRateResponse(HttpModel):
+    billing_owner: UsageBillingOwner
+    nanos_per_container_hour: int = Field(ge=0)
+    nanos_per_cpu_core_hour: int = Field(ge=0)
+    nanos_per_memory_gib_hour: int = Field(ge=0)
+
+
+class PublishedGpuRateResponse(HttpModel):
+    gpu_type: str
+    nanos_per_card_hour: dict[UsageBillingOwner, int]
+
+
+class PublishedPlatformRateResponse(HttpModel):
+    nanos_per_egress_gib: int = Field(ge=0)
+    nanos_per_volume_gib_month: int = Field(ge=0)
+    storage_month_seconds: int = Field(gt=0)
+
+
+class PricingCatalogResponse(HttpModel):
+    pricing_version: str
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    connected_cloud_management_fee_percent: int = Field(ge=0, le=100)
+    no_payment_method: NoPaymentMethodTermsResponse
+    plans: list[PublishedPlanResponse]
+    shape_rates: list[PublishedShapeRateResponse]
+    gpu_rates: list[PublishedGpuRateResponse]
+    platform_rate: PublishedPlatformRateResponse
+
+
+def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
+    return PlanEntitlementsResponse(
+        max_apps=entitlements.max_apps,
+        max_concurrent_containers=entitlements.max_concurrent_containers,
+        max_members=entitlements.max_members,
+        connected_cloud=entitlements.connected_cloud,
+        custom_domains=entitlements.custom_domains,
+        self_hosted=entitlements.self_hosted,
+    )
+
+
+def pricing_catalog_response() -> PricingCatalogResponse:
+    fee_percent = CONNECTED_CLOUD_MANAGEMENT_FEE * 100
+    if fee_percent != fee_percent.to_integral_value():
+        raise ValueError("the connected-cloud fee is not a whole percentage")
+    return PricingCatalogResponse(
+        pricing_version=PRICING_VERSION,
+        currency=BILLING_CURRENCY,
+        connected_cloud_management_fee_percent=int(fee_percent),
+        no_payment_method=NoPaymentMethodTermsResponse(
+            included_nanos=NO_CARD_INCLUDED_NANOS,
+            max_concurrent_containers=NO_CARD_MAX_CONTAINERS,
+        ),
+        plans=[
+            PublishedPlanResponse(
+                id=plan.id,
+                name=plan.name,
+                summary=plan.summary,
+                monthly_nanos=plan.monthly_nanos,
+                included_nanos=plan.included_nanos,
+                entitlements=_entitlements_response(plan.entitlements),
+                terms=list(plan.terms),
+            )
+            for plan in PUBLISHED_PLANS
+        ],
+        shape_rates=[
+            PublishedShapeRateResponse(
+                billing_owner=rate.billing_owner,
+                nanos_per_container_hour=rate.nanos_per_container_hour,
+                nanos_per_cpu_core_hour=rate.nanos_per_cpu_core_hour,
+                nanos_per_memory_gib_hour=rate.nanos_per_memory_gib_hour,
+            )
+            for rate in PUBLISHED_SHAPE_RATES
+        ],
+        gpu_rates=[
+            PublishedGpuRateResponse(
+                gpu_type=rate.gpu_type,
+                nanos_per_card_hour={
+                    owner: rate.nanos_per_card_hour(owner) for owner in UsageBillingOwner
+                },
+            )
+            for rate in PUBLISHED_GPU_RATES
+        ],
+        platform_rate=PublishedPlatformRateResponse(
+            nanos_per_egress_gib=PUBLISHED_PLATFORM_RATE.nanos_per_egress_gib,
+            nanos_per_volume_gib_month=PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month,
+            storage_month_seconds=SECONDS_PER_30_DAY_MONTH,
+        ),
+    )
+
+
+__all__ = [
+    "NoPaymentMethodTermsResponse",
+    "PlanEntitlementsResponse",
+    "PricingCatalogResponse",
+    "PublishedGpuRateResponse",
+    "PublishedPlanResponse",
+    "PublishedPlatformRateResponse",
+    "PublishedShapeRateResponse",
+    "pricing_catalog_response",
+]

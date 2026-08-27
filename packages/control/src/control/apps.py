@@ -75,6 +75,10 @@ class AppImageAvailability(Protocol):
     def assert_available(self, session: Session, stub_id: str) -> None: ...
 
 
+class AppCreationAdmission(Protocol):
+    def assert_may_create_app(self, session: Session, *, workspace_id: str) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DatabaseAppImageAvailability:
     def assert_available(self, session: Session, stub_id: str) -> None:
@@ -115,6 +119,7 @@ class AppService:
     deployment_lifecycle: AppDeploymentLifecycleService
     execution_effects: AppExecutionLifecycleEffects
     artifact_availability: AppImageAvailability
+    creation_admission: AppCreationAdmission
     workspace_changes: WorkspaceChangePublisher | None = None
 
     def create(
@@ -149,6 +154,10 @@ class AppService:
             )
             now = utc_now()
             if existing is None:
+                self.creation_admission.assert_may_create_app(
+                    session,
+                    workspace_id=workspace_record.id,
+                )
                 record = AppRecord(
                     id=str(uuid4()),
                     workspace_id=workspace_record.id,

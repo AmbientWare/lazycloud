@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { Check, ChevronDown, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, MoreHorizontal, Pencil, Plus, Trash2, Users } from "lucide-react";
 
 import { workspaceLandingPath } from "@/components/shared/AppShell/navigation";
 import { CreateWorkspaceSheet } from "@/components/shared/AppShell/CreateWorkspaceSheet";
@@ -21,6 +21,8 @@ import type { Workspace } from "@/lib/api/schemas";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
+import { WorkspaceMembersDialog } from "./WorkspaceMembersDialog";
+
 export function WorkspaceSwitcher({
   className,
   compact = false,
@@ -32,6 +34,7 @@ export function WorkspaceSwitcher({
   const { user } = useSession();
   const [renaming, setRenaming] = useState<Workspace | null>(null);
   const [creating, setCreating] = useState(false);
+  const [viewingMembers, setViewingMembers] = useState<Workspace | null>(null);
   const router = useRouter();
   const deletion = useWorkspaceDeletion();
   const path = useRouterState({ select: (state) => state.location.pathname });
@@ -119,6 +122,10 @@ export function WorkspaceSwitcher({
                     <MoreHorizontal />
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
+                    <DropdownMenuItem onSelect={() => setViewingMembers(item)}>
+                      <Users />
+                      Members
+                    </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => setRenaming(item)}>
                       <Pencil />
                       Rename
@@ -145,6 +152,12 @@ export function WorkspaceSwitcher({
         <WorkspaceRenameDialog workspace={renaming} onClose={() => setRenaming(null)} />
       ) : null}
       {creating ? <CreateWorkspaceSheet onClose={() => setCreating(false)} /> : null}
+      {viewingMembers ? (
+        <WorkspaceMembersDialog
+          workspace={viewingMembers}
+          onClose={() => setViewingMembers(null)}
+        />
+      ) : null}
     </>
   );
 }

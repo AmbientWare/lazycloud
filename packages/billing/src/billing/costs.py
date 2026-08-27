@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from database.repositories.apps import AppRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import (
     BillingAllowanceRepository,
@@ -18,11 +19,14 @@ from database.repositories.billing_costs import (
     LedgerCostScope,
 )
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
+from database.repositories.compute import AwsAccountConnectionRepository
+from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BilledDimension
-from shared.billing_rate_card import account_terms
+from shared.billing_rate_card import PlanEntitlements, account_terms
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostBucket, UsageCostGroupKey
@@ -55,6 +59,17 @@ _BUCKET_WIDTHS: dict[UsageCostBucket, timedelta] = {
 
 
 @dataclass(frozen=True, slots=True)
+class BillingEntitlementUsage:
+    """Account-wide usage measured against plan entitlements."""
+
+    apps: int
+    concurrent_containers: int
+    members: int
+    connected_clouds: int
+    custom_domains: int
+
+
+@dataclass(frozen=True, slots=True)
 class BillingStanding:
     """What an account is on and where it stands.
 
@@ -79,13 +94,11 @@ class BillingStanding:
     which of the two states they are in.
     """
 
-    max_concurrent_containers: int
-    """How much this account may have running at once, on its current terms."""
+    entitlements: PlanEntitlements | None
+    """What the current plan grants, absent when the account has no plan."""
 
-    live_container_count: int
-    """How much it has running or queued right now, across every workspace it
-    owns — the same figure the limit is compared against, so a customer reading
-    both sees why they were refused rather than a ceiling and no position."""
+    usage: BillingEntitlementUsage
+    """What the account currently consumes across every workspace it owns."""
 
     plan_change_pending: bool
     """Whether a change of plan for this account is still being settled.
@@ -177,6 +190,7 @@ class BillingStandingService:
     session: Session
 
     def standing(self, *, user_id: str, at: datetime) -> BillingStanding:
+        usage = self._entitlement_usage(user_id=user_id)
         account = BillingAccountRepository(self.session).get_by_user(user_id)
         if account is None:
             return BillingStanding(
@@ -185,8 +199,8 @@ class BillingStandingService:
                 portal_available=False,
                 allowance=None,
                 payment_method_on_file=False,
-                max_concurrent_containers=0,
-                live_container_count=0,
+                entitlements=None,
+                usage=usage,
                 plan_change_pending=False,
             )
         has_card = account.payment_method_attached_at is not None
@@ -207,13 +221,25 @@ class BillingStandingService:
                 at=at,
             ),
             payment_method_on_file=has_card,
-            max_concurrent_containers=terms.max_concurrent_containers if terms else 0,
-            live_container_count=ContainerRepository(self.session).count_live_for_owner(
-                owner_user_id=user_id
-            ),
+            entitlements=terms.entitlements if terms else None,
+            usage=usage,
             plan_change_pending=BillingPlanChangeIntentRepository(self.session).has_open(
                 user_id=user_id
             ),
+        )
+
+    def _entitlement_usage(self, *, user_id: str) -> BillingEntitlementUsage:
+        connection = AwsAccountConnectionRepository(self.session).get_for_user(user_id)
+        return BillingEntitlementUsage(
+            apps=AppRepository(self.session).count_for_owner(user_id),
+            concurrent_containers=ContainerRepository(self.session).count_live_for_owner(
+                owner_user_id=user_id
+            ),
+            members=WorkspaceMemberRepository(self.session).distinct_member_count_for_owner(
+                user_id
+            ),
+            connected_clouds=int(connection is not None and not connection.platform_fleet),
+            custom_domains=CustomDomainRepository(self.session).count_for_user(user_id),
         )
 
 

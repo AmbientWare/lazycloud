@@ -344,6 +344,7 @@ class SchedulerAppServices:
                 container_shutdowns,
             ),
             DatabaseAppImageAvailability(),
+            DatabaseBillingAdmission(),
             workspace_changes=workspace_changes,
         )
         cron_jobs = CronJobService(
@@ -356,6 +357,7 @@ class SchedulerAppServices:
             compute_policies,
             DeploymentRegistrationService(apps, control_plane),
             cron_jobs,
+            DatabaseBillingAdmission(),
             workspace_changes=workspace_changes,
         )
         _, tailnet_cleanup = scheduler_tailnet_services(
@@ -382,6 +384,7 @@ class SchedulerAppServices:
                 context=context,
                 provider_factory=CloudflareSettings().provider,
                 platform_base_domain=GatewaySettings().public_base_domain,
+                admission=DatabaseBillingAdmission(),
             ),
             tasks=tasks,
             usage=usage,

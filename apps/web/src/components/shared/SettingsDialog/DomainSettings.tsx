@@ -14,13 +14,15 @@ import {
   registerCustomDomain,
   removeCustomDomain,
 } from "@/lib/queries/domains";
+import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-export function DomainSettings() {
+export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const queryClient = useQueryClient();
   const [hostname, setHostname] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
   const domains = useQuery(customDomainsQueryOptions());
+  const billing = useQuery(billingSummaryQueryOptions());
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
 
@@ -45,48 +47,60 @@ export function DomainSettings() {
 
   const pending = register.isPending || remove.isPending;
   const rows = domains.data?.data ?? [];
+  const customDomainsEnabled = billing.data?.entitlements?.custom_domains ?? false;
 
   return (
     <Panel
       title="Domains"
       description="Registered for your account; any workspace in it can serve from them"
       action={
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (hostname.trim()) register.mutate(hostname);
-          }}
-        >
-          <Input
-            value={hostname}
-            onChange={(event) => setHostname(event.target.value)}
-            placeholder="acme.com or *.acme.com"
-            aria-label="Domain to register"
-            className="h-8 w-56"
-            disabled={pending}
-          />
-          <Button size="sm" type="submit" disabled={pending || !hostname.trim()}>
-            {register.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
-            Add
+        billing.isPending || billing.error ? null : customDomainsEnabled ? (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (hostname.trim()) register.mutate(hostname);
+            }}
+          >
+            <Input
+              value={hostname}
+              onChange={(event) => setHostname(event.target.value)}
+              placeholder="acme.com or *.acme.com"
+              aria-label="Domain to register"
+              className="h-8 w-56"
+              disabled={pending}
+            />
+            <Button size="sm" type="submit" disabled={pending || !hostname.trim()}>
+              {register.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
+              Add
+            </Button>
+          </form>
+        ) : (
+          <Button size="sm" onClick={onUpgrade} disabled={billing.isPending}>
+            Upgrade to Team
           </Button>
-        </form>
+        )
       }
     >
-      {failure ? (
+      {billing.error || domains.error ? (
+        <p className="border-b border-border/80 px-4 py-2 text-sm text-destructive" role="alert">
+          {(billing.error ?? domains.error)?.message}
+        </p>
+      ) : failure ? (
         <p className="border-b border-border/80 px-4 py-2 text-[11px] text-destructive">
           {failure}
         </p>
       ) : null}
-      {domains.isPending ? (
+      {domains.isPending || billing.isPending ? (
         <div className="space-y-2 p-4">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
         </div>
       ) : rows.length === 0 ? (
         <p className="p-4 text-[11px] text-muted-foreground">
-          No domains yet. Every deployment already has a hostname on this platform — add a domain
-          here to serve one from a name you own.
+          {customDomainsEnabled
+            ? "No domains yet. Add one here to serve a deployment from a name you own."
+            : "Custom domains are available on the Team plan. Every deployment still has a platform hostname."}
         </p>
       ) : (
         <ul className="divide-y divide-border/80">

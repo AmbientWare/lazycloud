@@ -31,13 +31,13 @@ export function AccountCeilingLine() {
       </p>
     );
   }
-  const atLimit = data.live_container_count >= data.max_concurrent_containers;
+  const limit = data.entitlements?.max_concurrent_containers ?? 0;
+  const atLimit = data.usage.concurrent_containers >= limit;
   const overspent = (data.plan.allowance?.remaining_nanos ?? 0) < 0;
 
   return (
     <p className={cn("text-xs", atLimit || overspent ? "text-warning" : "text-muted-foreground")}>
-      {data.live_container_count} of {data.max_concurrent_containers} containers running or queued
-      across this account
+      {data.usage.concurrent_containers} of {limit} containers running or queued across this account
       {overspent && data.plan.allowance
         ? ` — ${formatCostNanos(-data.plan.allowance.remaining_nanos, data.currency)} of usage beyond the included amount this period`
         : null}

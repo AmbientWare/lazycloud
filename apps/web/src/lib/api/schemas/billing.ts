@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { billingPlanIdSchema, planEntitlementsSchema } from "./pricing";
+
 /**
  * The page to send the customer to.
  *
@@ -7,16 +9,15 @@ import { z } from "zod";
  * provider and never reach this platform, so there is nothing else here to
  * render — the flow is a redirect, not a form.
  */
-export const billingHostedSessionResponseSchema = z.object({
-  url: z.string().min(1),
-});
+export const billingHostedSessionResponseSchema = z
+  .object({
+    url: z.string().min(1),
+  })
+  .strict();
 export type BillingHostedSessionResponse = z.infer<typeof billingHostedSessionResponseSchema>;
 
 export const billingAccountStatuses = ["active", "past_due"] as const;
 export type BillingAccountStatus = (typeof billingAccountStatuses)[number];
-
-export const billingPlanIds = ["free", "team"] as const;
-export type BillingPlanId = (typeof billingPlanIds)[number];
 
 /**
  * What this account may spend before the period costs it anything.
@@ -33,13 +34,15 @@ export type BillingPlanId = (typeof billingPlanIds)[number];
  * provider's minimum charge, a proration, tax — so nothing rendered from these
  * should be worded as what the invoice will say.
  */
-export const billingAllowanceSchema = z.object({
-  period_started_at: z.string(),
-  period_ended_at: z.string(),
-  allowance_nanos: z.number().int().nonnegative(),
-  spent_nanos: z.number().int().nonnegative(),
-  remaining_nanos: z.number().int(),
-});
+export const billingAllowanceSchema = z
+  .object({
+    period_started_at: z.string(),
+    period_ended_at: z.string(),
+    allowance_nanos: z.number().int().nonnegative(),
+    spent_nanos: z.number().int().nonnegative(),
+    remaining_nanos: z.number().int(),
+  })
+  .strict();
 export type BillingAllowance = z.infer<typeof billingAllowanceSchema>;
 
 /**
@@ -49,43 +52,55 @@ export type BillingAllowance = z.infer<typeof billingAllowanceSchema>;
  * next, which is a few minutes once a cycle — distinct from an allowance that is
  * spent, and from being on no plan at all.
  */
-export const billingPlanSchema = z.object({
-  id: z.enum(billingPlanIds),
-  // Sent by the server from the same rate card the pricing page compiles in,
-  // so the dashboard and the marketing page cannot disagree about a name.
-  name: z.string(),
-  allowance: billingAllowanceSchema.nullable(),
-});
+export const billingPlanSchema = z
+  .object({
+    id: billingPlanIdSchema,
+    // Sent by the server from the same rate card as the pricing endpoint, so the
+    // dashboard needs no local map for a plan name.
+    name: z.string(),
+    allowance: billingAllowanceSchema.nullable(),
+  })
+  .strict();
 export type BillingPlan = z.infer<typeof billingPlanSchema>;
 
-export const billingSummarySchema = z.object({
-  status: z.enum(billingAccountStatuses),
-  currency: z.string().regex(/^[A-Z]{3}$/),
-  // Null for an account on no subscription. Signing in puts an account on the
-  // free plan, so anyone who did has one; what is left is an account reaching
-  // the dashboard on a token an administrator minted for it, and one whose
-  // subscription the provider says has ended. Neither has terms to be shown, and
-  // both need the same thing next, which is a plan.
-  plan: billingPlanSchema.nullable(),
-  // Whether there is anything at the provider to manage. Signing in registers
-  // the customer, so this is true for anyone who did; an account reaching the
-  // dashboard on a token an administrator minted for it has no customer record,
-  // and the management page would have nobody to show.
-  portal_available: z.boolean(),
-  // A different question from the one above, which is true from the moment a
-  // customer record exists and so cannot tell an account that has saved a card
-  // from one that has not. How much the account is given, and whether its
-  // running work is stopped when that is spent, both turn on this one.
-  payment_method_on_file: z.boolean(),
-  // What the account may have running at once, and what it has running now.
-  // Both are the account's rather than this workspace's: the containers using
-  // up the ceiling may be in a workspace the person is not currently looking at.
-  max_concurrent_containers: z.number().int().nonnegative(),
-  live_container_count: z.number().int().nonnegative(),
-  // Whether a change of plan is still waiting on an outcome. `plan` above says
-  // what the account holds, which is not what somebody who has just pressed a
-  // button is asking; a change nobody could settle is retried for hours, and
-  // without this the surface offers a button that answers 409.
-  plan_change_pending: z.boolean(),
-});
+export const billingEntitlementUsageSchema = z
+  .object({
+    apps: z.number().int().nonnegative(),
+    concurrent_containers: z.number().int().nonnegative(),
+    members: z.number().int().nonnegative(),
+    connected_clouds: z.number().int().nonnegative(),
+    custom_domains: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const billingSummarySchema = z
+  .object({
+    status: z.enum(billingAccountStatuses),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    // Null for an account on no subscription. Signing in puts an account on the
+    // free plan, so anyone who did has one; what is left is an account reaching
+    // the dashboard on a token an administrator minted for it, and one whose
+    // subscription the provider says has ended. Neither has terms to be shown, and
+    // both need the same thing next, which is a plan.
+    plan: billingPlanSchema.nullable(),
+    // Whether there is anything at the provider to manage. Signing in registers
+    // the customer, so this is true for anyone who did; an account reaching the
+    // dashboard on a token an administrator minted for it has no customer record,
+    // and the management page would have nobody to show.
+    portal_available: z.boolean(),
+    // A different question from the one above, which is true from the moment a
+    // customer record exists and so cannot tell an account that has saved a card
+    // from one that has not. How much the account is given, and whether its
+    // running work is stopped when that is spent, both turn on this one.
+    payment_method_on_file: z.boolean(),
+    entitlements: planEntitlementsSchema.nullable(),
+    usage: billingEntitlementUsageSchema,
+    // Whether a change of plan is still waiting on an outcome. `plan` above says
+    // what the account holds, which is not what somebody who has just pressed a
+    // button is asking; a change nobody could settle is retried for hours, and
+    // without this the surface offers a button that answers 409.
+    plan_change_pending: z.boolean(),
+  })
+  .strict();
 export type BillingSummary = z.infer<typeof billingSummarySchema>;
+export type { BillingPlanId } from "./pricing";
