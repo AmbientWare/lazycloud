@@ -240,8 +240,8 @@ function ParitySection() {
 function MarketingHome() {
   return (
     <MarketingLayout>
-      <main id="marketing-main">
-        <section className="relative min-h-[680px] overflow-hidden border-b border-border bg-background sm:min-h-[720px] lg:min-h-[760px]">
+      <main className="marketing-home" id="marketing-main">
+        <section className="marketing-hero relative overflow-hidden border-b border-border bg-background">
           <div className="marketing-grid-field" aria-hidden="true" />
           <div
             className={cn(

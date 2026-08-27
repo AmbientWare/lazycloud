@@ -21,10 +21,7 @@ export function MarketingCard({
   return (
     <Component
       data-marketing-card=""
-      className={cn(
-        "overflow-hidden rounded-2xl border border-input bg-card shadow-[8px_8px_0_0_color-mix(in_oklab,var(--border)_55%,var(--secondary))]",
-        className,
-      )}
+      className={cn("overflow-hidden rounded-2xl border border-input bg-card", className)}
       {...props}
     />
   );
