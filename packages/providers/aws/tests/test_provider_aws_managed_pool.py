@@ -348,7 +348,6 @@ def test_managed_pool_ensure_is_idempotent_and_launches_into_the_stack_network()
     assert "shutdown -h" not in user_data
     assert "--join-token" not in user_data
     assert "--cloud-" not in user_data
-    assert "tailscale-auth" not in user_data
 
 
 def test_managed_pool_storage_destruction_requires_exact_volume_absence() -> None:

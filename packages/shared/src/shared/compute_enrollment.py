@@ -26,11 +26,11 @@ class AgentCapacityState(StringEnum):
     Cordoned = "cordoned"
 
 
-class TailnetEnrollmentPhase(StringEnum):
+class PrivateNetworkEnrollmentPhase(StringEnum):
     Unconfigured = "unconfigured"
-    Rotating = "rotating"
-    AwaitingDevice = "awaiting_device"
-    Bound = "bound"
+    Provisioning = "provisioning"
+    AwaitingConnection = "awaiting_connection"
+    Connected = "connected"
     Failed = "failed"
     Revoked = "revoked"
 
@@ -97,14 +97,13 @@ class MachineBootstrapFailureReason(StringEnum):
     Unknown = "unknown"
 
 
-class TailnetCleanupTombstone(ContractModel):
+class PrivateNetworkCleanupTombstone(ContractModel):
     id: str
     workspace_id: str
     pool: MachinePool
     machine_id: str
-    generations: list[int] = Field(default_factory=list)
-    auth_key_ids: list[str] = Field(default_factory=list)
-    device_ids: list[str] = Field(default_factory=list)
+    resource_ids: list[str] = Field(default_factory=list)
+    site_ids: list[str] = Field(default_factory=list)
     not_before: datetime
     next_attempt_at: datetime
     revision: int = Field(default=1, ge=1)
@@ -143,6 +142,6 @@ __all__ = [
     "MachineBootstrapPhase",
     "MachineReadinessPhase",
     "PreflightSeverity",
-    "TailnetCleanupTombstone",
-    "TailnetEnrollmentPhase",
+    "PrivateNetworkCleanupTombstone",
+    "PrivateNetworkEnrollmentPhase",
 ]

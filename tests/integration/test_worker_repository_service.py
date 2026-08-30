@@ -19,10 +19,7 @@ from api.server.worker_repository_service import (
     WorkerRepositoryObjectStorage,
     WorkerRepositoryService,
 )
-from compute.agent_control import (
-    TailnetConfig,
-    agent_machine_worker_id,
-)
+from compute.agent_control import agent_machine_worker_id
 from compute.state import (
     RedisComputeStateRepository,
 )
@@ -50,13 +47,17 @@ from fastapi.testclient import TestClient
 from foundation.network import worker_network_prefix
 from gateway.http import (
     JoinAgentRequest,
-    RegisterAgentTailnetDeviceRequest,
+    RegisterAgentPrivateNetworkRequest,
     RequestAgentTransportCredentialRequest,
     UpdateAgentRouteStatusRequest,
 )
 from gateway.service import GatewayControlService
 from identity.auth import AuthorizationDeniedError, AuthService
-from networking.tailnet_control import TailnetAuthKey, TailnetDevice
+from networking.private_network_control import (
+    PrivateNetworkActiveSite,
+    PrivateNetworkCredential,
+    PrivateNetworkSite,
+)
 from operations.container_shutdown import ContainerShutdownService
 from pydantic import JsonValue, SecretStr, TypeAdapter
 from scheduler.containers import SchedulerContainerDispatchStatus
@@ -165,33 +166,49 @@ def client_stack() -> Iterator[ExitStack]:
         yield stack
 
 
-class _WorkerRepositoryTailnetControl:
-    def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey:
-        return TailnetAuthKey(
-            id=f"key-{machine_id}",
-            key=SecretStr(f"secret-{hostname}"),
-            expires_at=utc_now() + timedelta(minutes=5),
+class _WorkerRepositoryPrivateNetworkControl:
+    def __init__(self) -> None:
+        self.sites: dict[str, PrivateNetworkSite] = {}
+
+    def create_site(self, *, name: str) -> PrivateNetworkCredential:
+        site_id = str(len(self.sites) + 1)
+        site = PrivateNetworkSite(
+            site_id=site_id,
+            name=name,
+            online=True,
+        )
+        self.sites[site_id] = site
+        return PrivateNetworkCredential(
+            name=name,
+            endpoint="https://pangolin.example",
+            site_id=site_id,
+            connector_id=name,
+            secret=SecretStr(f"site-{site_id}.secret"),
         )
 
-    def revoke_auth_key(self, key_id: str) -> None:
-        del key_id
+    def find_site(
+        self,
+        *,
+        site_id: str,
+        name: str,
+        connector_id: str,
+    ) -> PrivateNetworkSite | None:
+        site = self.sites.get(site_id)
+        return site if site is not None and site.name == name and connector_id == name else None
 
-    def verify_device(self, node_id: str, *, expected_hostname: str) -> TailnetDevice:
-        return TailnetDevice(
-            id=f"rest-{node_id}",
-            node_id=node_id,
-            hostname=expected_hostname,
-            addresses=("100.64.0.10",),
-            tags=("tag:lazycloud-agent",),
-            authorized=True,
+    def activate_site(self, site_id: str) -> PrivateNetworkActiveSite:
+        site = self.sites[site_id]
+        return PrivateNetworkActiveSite(
+            **site.model_dump(),
+            resource_id=f"resource-{site_id}",
+            address=f"10.0.0.{site_id}",
         )
 
-    def find_devices(self, *, hostname: str) -> tuple[TailnetDevice, ...]:
-        del hostname
-        return ()
+    def delete_resource(self, resource_id: str) -> None:
+        del resource_id
 
-    def remove_device(self, device_id: str) -> None:
-        del device_id
+    def delete_site(self, site_id: str) -> None:
+        self.sites.pop(site_id, None)
 
 
 def test_image_build_credentials_reject_wrong_assigned_worker(
@@ -2344,8 +2361,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=containers,
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(),
-        tailnet_control=_WorkerRepositoryTailnetControl(),
+        private_network_control=_WorkerRepositoryPrivateNetworkControl(),
     )
     workspace_id, machine_id, agent_token = _join_gateway_agent(
         isolated_services,
@@ -2382,7 +2398,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         worker_id=worker_id,
         container_id="container-1",
         port=8001,
-        transport=BackendRouteTransport.TsnetRestricted,
+        transport=BackendRouteTransport.PrivateNetwork,
         local_target="192.168.0.4:8001",
         state=BackendRouteState.Opening,
     )
@@ -2399,7 +2415,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
             agent_token=agent_token,
             route_id=route.route_id,
             state=BackendRouteState.Ready,
-            proxy_target="tailnet-host:34399",
+            proxy_target="agent.private:34399",
         )
     )
     resolved = SchedulerBackendRouteResolver(
@@ -2410,7 +2426,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     assert response.route_id == route.route_id
     assert resolved is not None
     assert resolved.state == BackendRouteState.Ready.value
-    assert resolved.proxy_target == "tailnet-host:34399"
+    assert resolved.proxy_target == "agent.private:34399"
 
 
 def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
@@ -2432,8 +2448,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(),
-        tailnet_control=_WorkerRepositoryTailnetControl(),
+        private_network_control=_WorkerRepositoryPrivateNetworkControl(),
     )
     workspace_id, machine_id, _agent_token = _join_gateway_agent(
         isolated_services,
@@ -2523,16 +2538,17 @@ def _join_gateway_agent(
             ],
         )
     )
-    gateway.request_agent_transport_credential(
+    credential = gateway.request_agent_transport_credential(
         RequestAgentTransportCredentialRequest(
             agent_token=joined.agent_token,
-            transport=BackendRouteTransport.TsnetRestricted,
+            transport=BackendRouteTransport.PrivateNetwork,
         )
     )
-    gateway.register_agent_tailnet_device(
-        RegisterAgentTailnetDeviceRequest(
+    gateway.register_agent_private_network(
+        RegisterAgentPrivateNetworkRequest(
             agent_token=joined.agent_token,
-            node_id=f"node-{joined.machine_id}",
+            site_name=credential.site_name,
+            connector_id=credential.site_name,
         )
     )
     return workspace_id, joined.machine_id, joined.agent_token

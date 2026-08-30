@@ -122,7 +122,7 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     registration_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     workspace_machine_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     root_volume_gib: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
-    transport: Mapped[str] = mapped_column(String(32), nullable=False, default="tsnet_restricted")
+    transport: Mapped[str] = mapped_column(String(32), nullable=False, default="private_network")
     fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
 
 
@@ -377,12 +377,12 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class TailnetCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "tailnet_cleanup_tombstones"
+class PrivateNetworkCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
+    __tablename__ = "private_network_cleanup_tombstones"
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("machine_id", name="uq_tailnet_cleanup_tombstones_machine"),
+        UniqueConstraint("machine_id", name="uq_private_network_cleanup_tombstones_machine"),
         Index(
-            "ix_tailnet_cleanup_tombstones_due",
+            "ix_private_network_cleanup_tombstones_due",
             "next_attempt_at",
             "claimed_until",
         ),

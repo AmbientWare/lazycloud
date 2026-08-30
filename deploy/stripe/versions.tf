@@ -7,7 +7,7 @@ terraform {
     stripe = {
       source = "stripe/stripe"
       # Stripe's own provider, generated from their internal tooling, and pinned
-      # exactly the way the tailnet module pins Tailscale. The version is a
+      # exactly the way the platform modules pin providers. The version is a
       # pre-release because that is what Stripe publishes today; its own README
       # asks for an exact pin in production, and a floating constraint on a
       # pre-release would let a generator run change this account's shape.

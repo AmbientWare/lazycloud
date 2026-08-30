@@ -11,7 +11,7 @@ live marker work, delete the exact app, and prove the public pool, cost, and
 tag-scoped AWS inventory returned to the pre-submit warm baseline. Reusing
 the same ``--run-id`` recovers the one matching durable task instead of
 submitting a duplicate; ``--cleanup-only`` restores the baseline without
-submitting work. Tailnet device corroboration remains owned by the tailnet
+submitting work. Private-network corroboration remains owned by the network
 stages.
 
 Run from the repository root:

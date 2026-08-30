@@ -10,13 +10,14 @@ import pytest
 from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.agent_control import TailnetPeerView, agent_machine_worker_id
+from compute.agent_control import agent_machine_worker_id
 from compute.policy import WorkspaceComputePolicyService
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
 from control.service import ControlPlaneService
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeMachineEnrollmentCreate,
@@ -29,14 +30,10 @@ from database.repositories.orchestration import MachineRepository, WorkerReposit
 from fastapi.testclient import TestClient
 from gateway.settings import GatewaySettings
 from identity.auth import AuthService, TokenIssuer
-from networking.settings import (
-    BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-)
-from networking.tailnet import TailnetRuntimeMode
+from networking.settings import BackendRouteSettings
 from provider_aws import aws_account_connection_template_identity
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_pangolin import PangolinSettings
 from pydantic import SecretStr
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.state import RedisSchedulerWorkerRepository
@@ -48,6 +45,8 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_enrollment import (
     MachineBootstrapPhase,
@@ -154,42 +153,11 @@ def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
     )
 
 
-class _StubTailnetRuntime:
-    def start(self) -> None:
-        return None
-
-    def close(self) -> None:
-        return None
-
-    def self_dns_name(self) -> str:
-        return ""
-
-    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str:
-        _ = service, ports
-        return ""
-
-    def wait_for_peer(self, host: str, timeout_seconds: float) -> None:
-        _ = host, timeout_seconds
-
-    def resolve_peer_host(self, host: str) -> str:
-        return host
-
-    def peers(self) -> list[TailnetPeerView]:
-        return []
-
-
 def _configured_aws_services(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> ApiServices:
     configuration = _aws_catalog_configuration()
-    tailnet_runtime_settings = TailnetRuntimeSettings(
-        mode=TailnetRuntimeMode.Managed,
-    )
-    tailnet_control_settings = TailnetControlSettings(
-        oauth_client_id=str(uuid4()),
-        oauth_client_secret=SecretStr(uuid4().hex),
-    )
     backend_route_settings = BackendRouteSettings(auth_key=SecretStr(uuid4().hex))
     services = ApiServices.create(
         isolated_services.database,
@@ -203,12 +171,12 @@ def _configured_aws_services(
         agent_binary_settings=configuration.agent_binaries,
         aws_account_connection_settings=configuration.connection,
         aws_capacity_settings=configuration.capacity,
-        tailnet_runtime_settings=tailnet_runtime_settings,
-        # Connected AWS is only composed for a deployment whose tailnet is
-        # managed, but this test has no daemon to run: the runtime is the
-        # process boundary here, not the behaviour under test.
-        tailnet_runtime=_StubTailnetRuntime(),
-        tailnet_control_settings=tailnet_control_settings,
+        pangolin_settings=PangolinSettings(
+            api_url="https://pangolin.example.test/v1",
+            api_key=SecretStr("integration-key"),
+            organization_id="organization-one",
+            endpoint="https://pangolin.example.test",
+        ),
         backend_route_settings=backend_route_settings,
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=isolated_services.redis_client,
@@ -669,6 +637,14 @@ def _seed_ready_aws_connection(
     )
     owner_id = _workspace_owner_id(isolated_services)
     with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=owner_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_fixture_{owner_id}",
+            provider_subscription_id=f"sub_fixture_{owner_id}",
+            provider_credit_grant_id=f"credgr_fixture_{owner_id}",
+            plan=BillingPlanId.Team,
+        )
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=str(uuid4()),

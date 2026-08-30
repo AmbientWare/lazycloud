@@ -14,11 +14,18 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Protocol, TextIO, runtime_checkable
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 
 _LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
+
+
+@runtime_checkable
+class _TextStreamHandler(Protocol):
+    @property
+    def stream(self) -> TextIO: ...
 
 
 class ProcessLogSettings(BaseSettings):
@@ -53,7 +60,7 @@ def configure_process_logging(settings: ProcessLogSettings | None = None) -> int
     root = logging.getLogger()
     root.setLevel(resolved)
     if not any(
-        isinstance(handler, logging.StreamHandler) and handler.stream is sys.stderr
+        isinstance(handler, _TextStreamHandler) and handler.stream is sys.stderr
         for handler in root.handlers
     ):
         handler = logging.StreamHandler(sys.stderr)

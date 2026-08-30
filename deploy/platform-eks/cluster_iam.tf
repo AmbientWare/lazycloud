@@ -105,6 +105,42 @@ resource "aws_iam_role_policy" "external_secrets" {
   policy = data.aws_iam_policy_document.external_secrets.json
 }
 
+# Creates and reconciles only the Pangolin identities LazyCloud itself owns.
+# The operator credential reaches the pod through a Kubernetes Secret; this AWS
+# role can neither read the operator document nor write any other deployment
+# secret.
+resource "aws_iam_role" "pangolin_bootstrap" {
+  name        = "${var.deployment}-pangolin-bootstrap"
+  description = "Pangolin bootstrap: writes generated platform identities."
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "pangolin_bootstrap" {
+  statement {
+    sid = "ManagePangolinRuntimeIdentity"
+    actions = [
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue",
+    ]
+    resources = [aws_secretsmanager_secret.pangolin_runtime.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "pangolin_bootstrap" {
+  name   = "pangolin-runtime-secret"
+  role   = aws_iam_role.pangolin_bootstrap.id
+  policy = data.aws_iam_policy_document.pangolin_bootstrap.json
+}
+
 # Who may act inside the cluster. The deploy role runs `helm upgrade`, so it
 # needs to reach the Kubernetes API as an administrator; nothing else does.
 resource "aws_eks_access_entry" "deploy" {
@@ -142,4 +178,11 @@ resource "aws_eks_pod_identity_association" "external_secrets" {
   namespace       = var.kubernetes_namespace
   service_account = var.external_secrets_service_account
   role_arn        = aws_iam_role.external_secrets.arn
+}
+
+resource "aws_eks_pod_identity_association" "pangolin_bootstrap" {
+  cluster_name    = aws_eks_cluster.control_plane.name
+  namespace       = var.kubernetes_namespace
+  service_account = var.pangolin_bootstrap_service_account
+  role_arn        = aws_iam_role.pangolin_bootstrap.arn
 }

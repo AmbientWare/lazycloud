@@ -67,14 +67,28 @@ jobs:
             --set runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME=us-east-1 \
             --set runtime.LAZYCLOUD_STRIPE_ACCOUNT_ID=acct_0000000000 \
             --set runtime.LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN=arn:aws:iam::000000000000:role/control \
-            --set cloudflared.tunnelId=00000000-0000-0000-0000-000000000000 \
-            --set cloudflared.apex=example.invalid \
+            --set runtime.LAZYCLOUD_PANGOLIN_API_URL=https://pangolin.invalid/v1 \
+            --set runtime.LAZYCLOUD_PANGOLIN_ENDPOINT=https://pangolin.invalid \
+            --set runtime.LAZYCLOUD_PANGOLIN_ORGANIZATION_ID=org-invalid \
+            --set pangolin.publicHostname=api.invalid \
             --set secrets.map.LAZYCLOUD_DATABASE_URL=deployment/database-url \
             --set secrets.map.LAZYCLOUD_TOKEN=deployment/administrator-token \
-            --set secrets.files.LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS=deployment/tunnel \
+            --set secrets.pangolinControl.map.LAZYCLOUD_PANGOLIN_API_KEY=deployment/operator \
+            --set secrets.pangolinRuntime.secretId=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.provider.map.LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.provider.map.LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.clients.map.LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_0_ID=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.clients.map.LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_0_SECRET=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.clients.map.LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_1_ID=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.clients.map.LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_1_SECRET=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.sites.map.LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_0_ID=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.sites.map.LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_0_SECRET=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.sites.map.LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_1_ID=deployment/pangolin-runtime \
+            --set secrets.pangolinRuntime.sites.map.LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_1_SECRET=deployment/pangolin-runtime \
             --set fleet.account_id=000000000000 \
             --set fleet.role_arn=arn:aws:iam::000000000000:role/connection \
             --set fleet.vpc_id=vpc-0 \
+            --set fleet.security_group_id=sg-0 \
             --set "fleet.subnet_ids={subnet-a,subnet-b}" \
             --set fleet.security_group_id=sg-0 \
             >rendered.yaml
@@ -98,8 +112,8 @@ jobs:
       # not hold has a source, passes both earlier checks, and stops the pod:
       # at CreateContainerConfigError when an env var names it, and at
       # ContainerCreating with `references non-existent secret key` when a
-      # volume does. Volumes are checked because only env was, and the tunnel
-      # credential went missing through the half that was not looked at.
+      # volume does. Volumes are checked because checking only env once missed a
+      # mounted credential.
       #
       # The map above is why this renders with one at all: an empty
       # `secrets.map` produces an ExternalSecret with no entries and containers

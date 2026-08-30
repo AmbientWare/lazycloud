@@ -34,7 +34,7 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    TailnetCleanupTombstoneTable,
+    PrivateNetworkCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.custom_domains import CustomDomainTable
@@ -134,12 +134,12 @@ __all__ = [
     "PlatformRateTable",
     "PodProcessTable",
     "PodUrlTable",
+    "PrivateNetworkCleanupTombstoneTable",
     "QueueMessageTable",
     "RouteTable",
     "SecretTable",
     "SourceCacheCleanupTargetTable",
     "StubTable",
-    "TailnetCleanupTombstoneTable",
     "TaskAttemptTable",
     "TaskDependencyTable",
     "TaskTable",

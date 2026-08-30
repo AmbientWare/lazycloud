@@ -29,8 +29,6 @@ from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
     DEFAULT_CONTAINER_IPV6_SUBNET,
     DEFAULT_CONTAINER_SUBNET,
-    TAILNET_IPV6_SUBNET,
-    TAILNET_SUBNET,
     ContainerNetworkIdentity,
     NetworkAddressMode,
     PortBinding,
@@ -917,13 +915,6 @@ class AgentBridgeNetworkBackend:
                 egress_interface=capabilities.ipv4_interface,
             )
         )
-        commands.extend(
-            self._ensure_internal_egress_rules(
-                binary=self.config.iptables_binary,
-                container_subnet=self.config.subnet,
-                internal_subnet=TAILNET_SUBNET,
-            )
-        )
         if capabilities.ipv6_enabled:
             commands.extend(
                 self._ensure_firewall_rule(
@@ -945,64 +936,6 @@ class AgentBridgeNetworkBackend:
                 self._ensure_forwarding_rules(
                     binary=self.config.ip6tables_binary,
                     egress_interface=capabilities.ipv6_interface,
-                )
-            )
-            commands.extend(
-                self._ensure_internal_egress_rules(
-                    binary=self.config.ip6tables_binary,
-                    container_subnet=self.config.ipv6_subnet,
-                    internal_subnet=TAILNET_IPV6_SUBNET,
-                )
-            )
-        return commands
-
-    def _ensure_internal_egress_rules(
-        self,
-        *,
-        binary: str,
-        container_subnet: str,
-        internal_subnet: str,
-    ) -> list[NetworkCommand]:
-        """Let container traffic reach the tailnet as well as the default route.
-
-        The base rules name the default-route interface, and the tailnet is not
-        on it, so without these a container resolves an internal origin and then
-        times out connecting to it. What a container may then reach over the
-        tailnet is bounded by the tailnet policy, not by these rules.
-        """
-        commands: list[NetworkCommand] = []
-        commands.extend(
-            self._ensure_firewall_rule(
-                binary=binary,
-                table="nat",
-                chain="POSTROUTING",
-                rule=["-s", container_subnet, "-d", internal_subnet, "-j", "MASQUERADE"],
-                operation=AgentBridgeNetworkOperation.EnableMasquerade,
-            )
-        )
-        for rule in (
-            ["-i", self.config.bridge_name, "-d", internal_subnet, "-j", "ACCEPT"],
-            [
-                "-s",
-                internal_subnet,
-                "-o",
-                self.config.bridge_name,
-                "-m",
-                "conntrack",
-                "--ctstate",
-                "RELATED,ESTABLISHED",
-                "-j",
-                "ACCEPT",
-            ],
-        ):
-            commands.extend(
-                self._ensure_firewall_rule(
-                    binary=binary,
-                    table="filter",
-                    chain="FORWARD",
-                    rule=rule,
-                    operation=AgentBridgeNetworkOperation.AllowForwarding,
-                    insert=True,
                 )
             )
         return commands

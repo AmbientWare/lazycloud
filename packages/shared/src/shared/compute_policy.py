@@ -179,7 +179,7 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
     workspace_machine_limit: int = Field(default=0, ge=0)
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     created_at: datetime = Field(default_factory=utc_now)
 

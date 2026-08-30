@@ -12,7 +12,7 @@ authorization or prerequisites return exit code `77`.
 ## Boundaries
 
 - `local/` targets an already-healthy root Compose stack.
-- `external/` targets an explicitly authorized provider, cluster, Tailnet, or
+- `external/` targets an explicitly authorized provider, cluster, private network, or
   GPU environment.
 - Release publication, deployment, migration, connection administration,
   credential creation, and broad infrastructure teardown belong to deployment
@@ -36,7 +36,7 @@ does not arrange on its own:
   identically for the agent process and the daemon: keep it on daemon-local
   storage rather than a remote or virtualised mount.
 
-The remaining local, Tailnet, GPU, and browser scenarios document their own
+The remaining local, private-network, GPU, and browser scenarios document their own
 additional prerequisites in their modules.
 
 ## Connected AWS
@@ -99,5 +99,5 @@ uv run python -m tests.e2e.external.aws.cleanup \
 
 The cleanup scenario fails closed if AWS reports capacity for the workspace or
 if the public connection requires a customer action that the product did not
-make automatable. It never inventories or changes unrelated Tailnet or AWS
+make automatable. It never inventories or changes unrelated private-network or AWS
 resources.

@@ -1,48 +1,30 @@
 {{- include "lazycloud.databaseBudget" . -}}
-{{/*
-The API, and the tailnet device it holds.
-
-It runs its own tailscaled rather than borrowing a proxy's, and the reason is
-outbound rather than inbound. Userspace networking forwards incoming connections
-to localhost, so a worker reaching this process by tailnet name would be served
-without a kernel device; what userspace cannot do is dial out, which needs a
-SOCKS5 or HTTP proxy. This process dials every agent's route proxy by name, so it
-holds a real device. An operator exposing it as a Service answers the half that
-was never the problem.
-
-That is what NET_ADMIN, NET_RAW and /dev/net/tun below are for. Which hardware it
-runs on stays Auto Mode's decision: the device is a property of the node image
-rather than of one instance type, and pinning a pool would be choosing hardware
-to obtain something every node already has.
-
-How many nodes is a different question, and the spread constraint answers it.
-Two replicas are here to survive losing a node, which they do not do while both
-are on the same one.
-*/}}
+{{- $root := . -}}
+{{- range $ordinal := until (int $root.Values.controlPlane.replicas) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: control-plane
+  name: control-plane-{{ $ordinal }}
 spec:
-  replicas: {{ .Values.controlPlane.replicas }}
+  replicas: 1
   selector:
     matchLabels:
       app: control-plane
+      lazycloud.dev/ordinal: {{ $ordinal | quote }}
   template:
     metadata:
       labels:
         app: control-plane
+        lazycloud.dev/ordinal: {{ $ordinal | quote }}
     spec:
-      serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      serviceAccountName: {{ $root.Values.serviceAccounts.controlPlane }}
       topologySpreadConstraints:
-        {{- include "lazycloud.spreadAcrossNodes" "control-plane" | nindent 8 }}
+        {{- include "lazycloud.spreadOrdinalSetAcrossNodes" "control-plane" | nindent 8 }}
       volumes:
         - name: tun
           hostPath:
             path: /dev/net/tun
             type: CharDevice
-        - name: state
-          emptyDir: {}
         # Per pod, because the artifact is immutable and 48MB: a shared volume
         # would tie replicas to one zone to save a fetch that costs seconds.
         - name: agent-binarys
@@ -50,6 +32,14 @@ spec:
         - name: aws-chain
           configMap:
             name: aws-chain
+        - name: pangolin-client-credentials
+          secret:
+            secretName: {{ $root.Values.secrets.pangolinRuntime.clients.name }}
+            items:
+              - key: LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_{{ $ordinal }}_ID
+                path: id
+              - key: LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_{{ $ordinal }}_SECRET
+                path: secret
       initContainers:
         # The release publishes the agent binary; the deployment says where it
         # keeps one. Neither holds the whole path, so it is assembled here, and
@@ -57,7 +47,7 @@ spec:
         # `AgentBinarySettings` refuses to build without a directory, so a
         # download after startup would be after the refusal.
         - name: agent-artifact
-          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
+          image: {{ include "lazycloud.image" (list $root "database-bootstrap") }}
           command:
             - lazycloud-admin
             - --json
@@ -66,27 +56,25 @@ spec:
             - --into
             - /var/lib/lazycloud/agent-binarys
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" $root | nindent 12 }}
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
           resources:
-            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
+            {{- toYaml $root.Values.controlPlane.initResources | nindent 12 }}
       containers:
         - name: control-plane
-          image: {{ include "lazycloud.image" (list . "api") }}
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN", "NET_RAW"]
+          image: {{ include "lazycloud.image" (list $root "api") }}
           ports:
             - name: http
               containerPort: 9000
+            - name: tcp-ingress
+              containerPort: 1995
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
-            {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
-            # The runtime logs its durable device out before a graceful shutdown.
-            # A per-replica PVC would pin a replaceable pod to one zone without
-            # preserving anything callers address directly.
+            {{- include "lazycloud.env" $root | nindent 12 }}
+            {{- include "lazycloud.pangolinControlEnv" $root | nindent 12 }}
+            {{- include "lazycloud.pangolinRuntimeProviderEnv" $root | nindent 12 }}
+            {{- include "lazycloud.databaseEnv" $root.Values.controlPlane.database | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: AWS_CONFIG_FILE
@@ -96,27 +84,17 @@ spec:
             # control principal.
             - name: LAZYCLOUD_AWS_CONNECTION_PROFILE
               value: {{ include "lazycloud.awsProfile" . | quote }}
-            - name: LAZYCLOUD_TAILNET_STATE_DIR
-              value: /run/lazycloud/tailnet
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
               mountPath: /run/lazycloud/aws
-            - name: tun
-              mountPath: /dev/net/tun
-            - name: state
-              mountPath: /run/lazycloud/tailnet
           resources:
-            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
-          # Loopback rather than the advertised address: a replica has to prove
-          # it serves before it can be one of the things that address resolves
-          # to, so a check going out through the tailnet could never pass cold.
-          #
+            {{- toYaml $root.Values.controlPlane.resources | nindent 12 }}
           # Startup is a phase, not a delay. uvicorn binds nothing until the
           # lifespan finishes, so a passing /livez is proof composition ended,
-          # and five minutes of it covers a slow release fetch and tailnet join
-          # without the other two probes judging a process that has not started.
+          # and five minutes covers a slow release fetch without the other two
+          # probes judging a process that has not started.
           startupProbe:
             httpGet:
               path: /livez
@@ -146,7 +124,68 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6
+        - name: pangolin-client
+          image: {{ $root.Values.pangolin.client.image }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              test -s /run/lazycloud/pangolin-client/id
+              test -s /run/lazycloud/pangolin-client/secret
+              export CLIENT_ID="$(cat /run/lazycloud/pangolin-client/id)"
+              export CLIENT_SECRET="$(cat /run/lazycloud/pangolin-client/secret)"
+              exec /entrypoint.sh
+          env:
+            - name: PANGOLIN_ENDPOINT
+              value: {{ required "runtime.LAZYCLOUD_PANGOLIN_ENDPOINT is required" $root.Values.runtime.LAZYCLOUD_PANGOLIN_ENDPOINT | quote }}
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
+            - name: pangolin-client-credentials
+              mountPath: /run/lazycloud/pangolin-client
+              readOnly: true
+          resources:
+            {{- toYaml $root.Values.pangolin.client.resources | nindent 12 }}
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  status="$(pangolin-cli status client --json)"
+                  printf '%s\n' "$status" | grep -q '"connected": true'
+                  printf '%s\n' "$status" | grep -q '"registered": true'
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  status="$(pangolin-cli status client --json)"
+                  printf '%s\n' "$status" | grep -q '"connected": true'
+                  printf '%s\n' "$status" | grep -q '"registered": true'
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  status="$(pangolin-cli status client --json)"
+                  printf '%s\n' "$status" | grep -q '"connected": true'
+                  printf '%s\n' "$status" | grep -q '"registered": true'
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -158,3 +197,6 @@ spec:
     - name: http
       port: 9000
       targetPort: http
+    - name: tcp-ingress
+      port: 1995
+      targetPort: tcp-ingress

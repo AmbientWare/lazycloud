@@ -31,6 +31,7 @@ from cli.identity import (
 )
 from cli.offline_auth import auth_app
 from cli.operations import cron_app, image_app, scheduler_app
+from cli.pangolin import pangolin_app
 from cli.release import release_app
 from cli.resources import (
     container_app,
@@ -94,6 +95,7 @@ _ADMIN_GROUP_ORDER = (
     "client",
     "usage",
     "billing",
+    "pangolin",
     "example",
 )
 
@@ -143,6 +145,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("stub", stub_app)
     registry.add_group("concurrency", concurrency_app)
     registry.add_group("billing", billing_app)
+    registry.add_group("pangolin", pangolin_app)
     registry.add_group("database", database_app)
     registry.add_group("release", release_app)
     registry.add_group("auth", auth_app)

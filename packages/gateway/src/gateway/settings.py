@@ -17,9 +17,8 @@ class GatewaySettings(BaseSettings):
     # account, and the address a node enrols against. A localhost default would
     # be accepted everywhere and correct nowhere.
     public_http_url: str = Field(default="", validation_alias=PUBLIC_HTTP_URL_VARIABLE)
-    # Only the scheme and port survive. The control plane replaces the host with
-    # the tailnet device it registered before publishing the origin, so this is
-    # how it is reached on that device rather than where it is.
+    # The worker process uses this loopback listener after authenticating through
+    # the public control-plane origin.
     runtime_callback_http_url: str = Field(
         default="http://127.0.0.1:9000",
         validation_alias="LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",

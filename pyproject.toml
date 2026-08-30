@@ -38,7 +38,7 @@ workspace = [
     "scheduler-app",
     "worker-bootstrap-app",
     "provider-aws",
-    "provider-cloudflare",
+    "provider-pangolin",
     "provider-github",
     "provider-stripe",
 ]
@@ -90,7 +90,7 @@ members = [
     "apps/worker-bootstrap",
     "packages/billing",
     "packages/providers/aws",
-    "packages/providers/cloudflare",
+    "packages/providers/pangolin",
     "packages/providers/github",
     "packages/providers/stripe",
 ]
@@ -118,7 +118,7 @@ networking = { workspace = true }
 observability = { workspace = true }
 operations = { workspace = true }
 provider-clients = { workspace = true }
-provider-cloudflare = { workspace = true }
+provider-pangolin = { workspace = true }
 provider-github = { workspace = true }
 provider-stripe = { workspace = true }
 scheduler-app = { workspace = true }

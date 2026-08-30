@@ -23,7 +23,7 @@ _ASSIGNABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
 
 class CustomDomainPhase(StringEnum):
     AwaitingVerification = "awaiting_verification"
-    """Provider hostname created; the customer still has to publish the CNAME."""
+    """Provider hostname created; the customer still has to publish DNS records."""
 
     Validating = "validating"
     Ready = "ready"
@@ -35,6 +35,11 @@ class CustomDomainErrorCode(StringEnum):
     CertificateFailed = "certificate_failed"
     HostnameRejected = "hostname_rejected"
     UpstreamUnavailable = "upstream_unavailable"
+
+
+class CustomDomainDnsMode(StringEnum):
+    Cname = "cname"
+    Delegation = "delegation"
 
 
 class DnsRecord(ContractModel):
@@ -61,10 +66,11 @@ class CustomDomain(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     user_id: str = Field(pattern=_UUID_PATTERN)
     hostname: str = Field(min_length=3, max_length=MAX_HOSTNAME_LENGTH)
+    dns_mode: CustomDomainDnsMode
     phase: CustomDomainPhase = CustomDomainPhase.AwaitingVerification
     provider_hostname_id: str | None = Field(default=None, min_length=1, max_length=128)
     required_records: tuple[DnsRecord, ...] = ()
-    """Records the provider is still waiting on, beyond the routing CNAME."""
+    """Records the provider is still waiting on."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -87,9 +93,11 @@ class CustomDomain(ContractModel):
         """
 
         candidate = hostname.strip().rstrip(".").lower()
-        if not self.is_wildcard:
+        if self.dns_mode is CustomDomainDnsMode.Cname:
             return candidate == self.hostname
-        suffix = self.hostname.removeprefix("*")
+        if candidate == self.hostname:
+            return True
+        suffix = f".{self.hostname}"
         if not candidate.endswith(suffix):
             return False
         label = candidate[: -len(suffix)]
@@ -102,7 +110,7 @@ class ProviderCustomHostname(ContractModel):
     provider_hostname_id: str = Field(min_length=1, max_length=128)
     phase: CustomDomainPhase
     required_records: tuple[DnsRecord, ...] = ()
-    """Records the provider is still waiting on, beyond the routing CNAME."""
+    """Records the provider is still waiting on."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -115,8 +123,13 @@ class CustomDomainProvider(Protocol):
     should exist and what its absence means, and an adapter only carries that out.
     """
 
-    def create_hostname(self, hostname: str) -> ProviderCustomHostname:
-        """Ask the provider to serve `hostname`, including a one-level wildcard."""
+    def create_hostname(
+        self,
+        hostname: str,
+        *,
+        dns_mode: CustomDomainDnsMode,
+    ) -> ProviderCustomHostname:
+        """Ask the provider to serve one hostname or one delegated DNS zone."""
         ...
 
     def get_hostname(self, provider_hostname_id: str) -> ProviderCustomHostname | None:
@@ -157,6 +170,7 @@ __all__ = [
     "MAX_HOSTNAME_LENGTH",
     "WILDCARD_PREFIX",
     "CustomDomain",
+    "CustomDomainDnsMode",
     "CustomDomainErrorCode",
     "CustomDomainPhase",
     "CustomDomainProvider",

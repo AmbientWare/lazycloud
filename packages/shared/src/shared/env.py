@@ -39,10 +39,6 @@ TASK_ID_ENV = "TASK_ID"
 WORKSPACE_ID_ENV = "WORKSPACE_ID"
 WORKSPACE_NAME_ENV = "WORKSPACE_NAME"
 WORKER_REPOSITORY_URL_ENV = "WORKER_REPOSITORY_URL"
-# Where a worker asks the agent to resolve a tailnet peer. Set only when the
-# node runs a tailnet, since a worker without it simply dials names directly.
-WORKER_PEER_RESOLVER_ADDRESS_ENV = "WORKER_PEER_RESOLVER_ADDRESS"
-WORKER_TAILNET_DNS_SUFFIX_ENV = "WORKER_TAILNET_DNS_SUFFIX"
 
 
 class ExecutionEnvVar(StringEnum):
@@ -160,9 +156,7 @@ __all__ = [
     "STUB_TYPE_ENV",
     "TASK_ID_ENV",
     "TRUTHY_ENV_VALUES",
-    "WORKER_PEER_RESOLVER_ADDRESS_ENV",
     "WORKER_REPOSITORY_URL_ENV",
-    "WORKER_TAILNET_DNS_SUFFIX_ENV",
     "WORKSPACE_ID_ENV",
     "WORKSPACE_NAME_ENV",
     "ExecutionEnvVar",

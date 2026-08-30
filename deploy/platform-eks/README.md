@@ -1,132 +1,83 @@
-# Platform AWS
+# Platform EKS
 
-Everything this platform runs on, declared. The control plane host and its
-identity, the control principal, the shared fleet's network and connection role,
-the registries and buckets, and the containers the credentials live in.
+This module owns LazyCloud's AWS infrastructure: EKS, Redis, IAM, ECR, S3,
+Secrets Manager containers, the PlanetScale branch, Argo CD, and the platform
+account's connected-AWS fleet identity. Customer accounts remain owned by the
+CloudFormation connection flow.
 
-## Two deployment models
+Pangolin is an external prerequisite. This module does not install or manage the
+Pangolin server. It publishes the supplied endpoint, Integration API URL,
+and organization ID to the chart.
 
-**Ours.** This module. Declared, repeatable, and overwritten on apply. There is
-nothing to import and nothing to adopt: an apply against an empty account
-produces the whole deployment, and an apply against an existing one converges it.
+## Pangolin prerequisites
 
-**A customer's.** `deploy/connected-aws` — a CloudFormation template the customer
-deploys in their own account, from a console link, with no credentials shared and
-no tooling required on their side. It is CloudFormation for exactly one reason:
-we hold no credentials for that account, so we cannot run Terraform there.
+Complete these Pangolin steps before the first deployment:
 
-The line is ownership, not provider. Nothing about our account is CloudFormation
-any more.
+- an activated Enterprise license on the Pangolin server;
+- an Integration API key scoped to the LazyCloud organization;
+- a load-balancer route to Pangolin's Integration API listener (port 3003 by
+  default), separate from the dashboard and tunnel API listeners;
+- a verified domain covering the hostname in `gateway_public_http_url`.
 
-## One definition of the permission set
+`pangolin_api_url` includes `/v1`. Before deployment,
+`<pangolin_api_url>/openapi.json` must return Pangolin's Integration API
+document without authentication. A dashboard URL or tunnel API URL returns 404
+and the bootstrap correctly refuses to create any platform identity.
 
-Three consumers need the same list of what the control plane may do inside a
-connected account: the customer's template, our own connection role, and the
-document a customer needs when bringing their own role.
+For Pangolin 1.21.1, grant the key these actions:
+`createSite`, `deleteSite`, `getSite`, `listSites`, `createClient`,
+`deleteClient`, `getClient`, `listClients`, `createSiteResource`,
+`deleteSiteResource`, `listSiteResources`, `listResourceUsers`, `setResourceUsers`,
+`createResource`, `deleteResource`, `listResources`, `updateResource`,
+`createTarget`, `getTarget`, `listTargets`, `updateTarget`,
+`createOrgDomain`, `deleteOrgDomain`, `getDomain`, `listOrgDomains`, and
+`getDNSRecords`.
 
-`provider_aws/connection_policy.py` owns it. The customer template renders it at
-request time. Terraform cannot run Python, so `connection-role-policy.json` is
-rendered by `deploy/render_connection_policy.py` and committed, and CI runs that
-script with `--check` so a stale file fails the build.
+The in-cluster bootstrap creates one Newt site per `pangolin_site_replicas`, one
+machine client per `control_plane_replicas`, the public resource, and
+health-checked targets. Both counts default to two. It stores their credentials
+in the Terraform-created `<deployment>/pangolin-runtime` Secrets Manager entry.
+A repeat deploy validates and reuses the same identities; increasing either
+count creates only the missing ordinals.
 
-That check is not ceremony. A second copy of a permission set drifts into a role
-missing an action the control plane started calling, and that surfaces as a
-launch denial naming an API call rather than the policy behind it.
+Do not reduce either fixed platform replica count. The bootstrap refuses a
+reduction rather than leave a stored connector or machine client with
+privileged access. Workload nodes and customer agents still scale without
+operator configuration.
 
-## What this module still does not own
+Set these non-secret values in `terraform.tfvars`:
 
-**Secret values.** It declares the containers and who may read them. Values are
-written by an operator or by bootstrap. A secret whose value is in Terraform is a
-secret in the state file. The one exception is the fleet connection's external
-ID, which both sides must agree on and nothing else can create consistently;
-`fleet.tf` says why that is acceptable.
+- `gateway_public_http_url`
+- `github_redirect_uri`
+- `pangolin_api_url`
+- `pangolin_endpoint`
+- `pangolin_organization_id`
 
-There is no second exception for the database. Terraform creates the branch and
-the role it connects as, so that role's password is in state. State lives in an
-encrypted bucket and should be treated as holding a database credential, because
-it does.
+Write the Pangolin API key to the operator Secrets Manager document.
+`secrets.tf` owns the exact key list. Terraform never receives the value, and no
+operator copies connector credentials.
 
-## Bring-up
+The Pangolin installation must use the vendor-supported production topology for
+the purchased Enterprise edition. Pangolin's
+[clustering guidance](https://docs.pangolin.net/self-host/advanced/clustering)
+requires vendor engagement, a shared PostgreSQL database and Valkey, redundant
+Pangolin, DNS, Traefik, and Gerbil instances, and an operator-supplied HA load
+balancer. This repository treats the resulting API and tunnel endpoint as an
+external service boundary instead of maintaining a second implementation of
+that cluster.
 
-`LIFECYCLE.md` covers standing a deployment up and taking one down in full,
-including what a teardown cannot remove on its own. This is the short form.
+## Ownership rules
 
+`provider_aws.connection_policy` owns the connected-account permission set.
+Terraform consumes its rendered policy; do not maintain another list here.
 
-```sh
-DEPLOYMENT=lazycloud-prod
-terraform -chdir=deploy/platform-aws init \
-  -backend-config="bucket=<state-bucket>" \
-  -backend-config="key=platform-aws/$DEPLOYMENT.tfstate" \
-  -backend-config="region=us-east-1"
-terraform -chdir=deploy/platform-aws apply -var="deployment=$DEPLOYMENT"
-```
+`control_role_name` is a public contract after a customer connects. Customer
+trust policies name its ARN, and recreating the same IAM name does not restore
+the old role identity.
 
-The state key carries the deployment name. Two deployments sharing one key share
-one state, and the second apply destroys the first.
+Every global AWS name carries `var.deployment` except that control role. The
+deployment name also prefixes Pangolin sites and clients. Two deployments in
+one account therefore need distinct `control_role_name` values, public
+hostnames, deployment names, and Stripe test or live accounts.
 
-## Two deployments in one AWS account
-
-Supported. Every globally-named resource carries `var.deployment`: buckets, ECR
-repositories, secret paths, IAM roles, and the workspace bucket prefix that
-scopes the control plane's S3 grant.
-
-Three values need attention:
-
-- `control_role_name` is the one name without the prefix, because a customer's
-  trust policy embeds it. Give a non-production deployment a different value; the
-  contract only binds where customers already connected.
-- The Tailscale hostname carries the deployment name, from `runtime_configuration`.
-  A tailnet is shared across AWS accounts, so this would collide even if the
-  accounts did not.
-- `deploy/cloudflare` and `deploy/stripe` are separate modules with their own
-  state. A second deployment needs its own tunnel, its own hostnames, and test
-  mode for billing.
-
-The S3 bucket quota is per-account, defaults to 10,000, and every workspace
-consumes one. Two deployments share that ceiling.
-
-Every remaining secret has a container but no value. Write the ones the
-deployment needs — the GitHub App pair, Stripe, Cloudflare, Tailscale, telemetry
-— then:
-
-1. **Publish a release.** `deploy/release.py` builds every source-bearing image in
-   one invocation, then `deploy/bundle.py` publishes what the host converges onto.
-   Do not perform the steps by hand: a release assembled from two source states is
-   rejected at container start as a package-digest mismatch naming a digest rather
-   than the stale artifact.
-
-2. **Register the platform account's own capacity.** The fleet is a connection in
-   existing-role mode, using the `fleet_connection` output and the
-   `fleet-external-id` secret. That output is exactly two subnets in
-   two zones, which is what `AwsAccountNetwork` accepts.
-
-## Redeploying
-
-Nothing changes what the host runs except the bundle in the deploy bucket.
-
-```sh
-aws ssm send-command \
-  --document-name AWS-RunShellScript \
-  --instance-ids "$(terraform -chdir=deploy/platform-aws output -raw control_plane_instance_id)" \
-  --parameters 'commands=["/usr/local/bin/lazycloud-deploy"]'
-```
-
-No SSH key exists and no inbound rule is open. Operator access is SSM Session
-Manager, which the host dials outbound.
-
-## The control principal's name
-
-`control_role_name` is pinned and must stay pinned. A customer's authorization
-template writes this role's ARN into every connection role's trust policy, so the
-name is a durable external contract. `prevent_destroy` guards the role for the
-same reason: AWS rewrites a role-ARN principal to the role's unique ID, so
-recreating the same name does not restore trust that already exists.
-
-That guard matters once customers exist. Before then an apply is free.
-
-## One host
-
-The API is replica-safe and advertises a Tailscale Service, so a second host is a
-second advertiser rather than a load balancer. Redis has to move to ElastiCache
-first: it lives on this host and holds the leases the scheduler serialises
-capacity work on.
+See `LIFECYCLE.md` for creation and teardown.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import http.client as http_client
 import json
 import logging
@@ -61,7 +60,6 @@ from agent.service_manager import (
     machine_fingerprint,
     plan_agent_preflight,
 )
-from compute.projection import normalize_backend_route_transport
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -70,22 +68,14 @@ from gateway.http import (
     JoinAgentResponse,
     LeaveAgentRequest,
     LeaveAgentResponse,
-    RegisterAgentTailnetDeviceRequest,
-    RegisterAgentTailnetDeviceResponse,
+    RegisterAgentPrivateNetworkRequest,
+    RegisterAgentPrivateNetworkResponse,
     RequestAgentTransportCredentialRequest,
     RequestAgentTransportCredentialResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
-)
-from networking.dialer import TailnetPeerRuntime
-from networking.tailnet import (
-    TailnetAuthenticationRequired,
-    TailnetRuntime,
-    TailnetRuntimeMode,
-    TailnetRuntimeOptions,
-    TailnetStatus,
 )
 from provider_aws import (
     AwsEc2SpotInterruptionMonitor,
@@ -96,8 +86,9 @@ from provider_clients import (
     ProviderNodeIdentityEvidenceProvider,
     provider_node_identity_evidence_provider,
 )
-from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
-from shared.app_identity import AGENT_NAME, AGENT_TAILNET_DIR_NAME
+from provider_pangolin import NewtConnection, NewtRuntime, NewtRuntimeStatus
+from pydantic import Field, JsonValue, SecretStr, TypeAdapter, field_validator, model_validator
+from shared.app_identity import AGENT_NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
@@ -147,15 +138,13 @@ NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 JOIN_MAX_ATTEMPTS = 6
 JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
+PRIVATE_NETWORK_CONNECT_ATTEMPTS = 30
+PRIVATE_NETWORK_POLL_SECONDS = 2.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
-# The control plane rejects a device registration with this when its enrollment
-# carries no issued identity yet. It means the agent's local session and the
-# control plane have diverged — recoverable by re-enrolling, unlike a revoked
-# authority — so it is named rather than matched inline.
-TAILNET_ENROLLMENT_NOT_AWAITING_DETAIL = "tailnet enrollment is not awaiting this device"
+PRIVATE_NETWORK_NOT_ONLINE_DETAIL = "private-network site is not online"
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
     {
         "invalid agent token",
@@ -214,12 +203,7 @@ class AgentDaemonOptions(ContractModel):
     once: bool = False
     capacity: AgentCapacityOptions = Field(default_factory=AgentCapacityOptions)
     route_proxy: AgentRouteProxyConfig = Field(default_factory=AgentRouteProxyConfig)
-    tailnet_mode: TailnetRuntimeMode = TailnetRuntimeMode.Managed
-    tailnet_state_dir: str = ""
-    tailnet_socket_path: str = ""
-    tailnet_tailscale_binary: str = "tailscale"
-    tailnet_tailscaled_binary: str = "tailscaled"
-    tailnet_userspace_networking: bool = False
+    newt_binary: str = "newt"
 
     @field_validator(
         "stream_interval_seconds",
@@ -261,8 +245,8 @@ class AgentDaemonRunResult(ContractModel):
     desired_worker_count: int = 0
     slot_action_count: int = 0
     telemetry_sent: bool = False
-    tailnet_started: bool = False
-    tailnet_hostname: str = ""
+    private_network_started: bool = False
+    private_network_address: str = ""
     authority_revoked: bool = False
     capacity_state: AgentCapacityState = AgentCapacityState.Available
     capacity_interrupted: bool = False
@@ -315,10 +299,10 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
         request: RequestAgentTransportCredentialRequest,
     ) -> RequestAgentTransportCredentialResponse: ...
 
-    def register_agent_tailnet_device(
+    def register_agent_private_network(
         self,
-        request: RegisterAgentTailnetDeviceRequest,
-    ) -> RegisterAgentTailnetDeviceResponse: ...
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse: ...
 
     def stream_agent_telemetry(
         self,
@@ -326,26 +310,17 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
     ) -> AgentTelemetryResponse: ...
 
 
-class AgentTailnetRuntime(TailnetPeerRuntime, Protocol):
-    """The agent's view of its tailnet runtime.
+class AgentPrivateNetworkRuntime(Protocol):
+    @property
+    def configured(self) -> bool: ...
 
-    Extends the shared peer runtime rather than narrowing it. The agent is the
-    only process on a node holding a tailnet client, so declaring less than the
-    runtime implements left peer resolution unreachable — including to the
-    worker, which has no client of its own and must not be handed the tailscaled
-    socket, since that grants tailnet control rather than lookup.
-    """
+    def start(self, connection: NewtConnection | None = None) -> NewtRuntimeStatus: ...
 
-    def authenticate(
-        self,
-        *,
-        auth_key: str,
-        hostname: str,
-        control_url: str = "",
-        force: bool = False,
-    ) -> TailnetStatus: ...
+    def status(self) -> NewtRuntimeStatus: ...
 
-    def status(self) -> TailnetStatus: ...
+    def close(self) -> None: ...
+
+    def discard(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -424,12 +399,12 @@ class HttpAgentGatewayClient:
             self.channel.post("/gateway/agents/transport-credential", _payload(request))
         )
 
-    def register_agent_tailnet_device(
+    def register_agent_private_network(
         self,
-        request: RegisterAgentTailnetDeviceRequest,
-    ) -> RegisterAgentTailnetDeviceResponse:
-        return RegisterAgentTailnetDeviceResponse.model_validate(
-            self.channel.post("/gateway/agents/tailnet-device", _payload(request))
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse:
+        return RegisterAgentPrivateNetworkResponse.model_validate(
+            self.channel.post("/gateway/agents/private-network", _payload(request))
         )
 
     def stream_agent_telemetry(
@@ -595,8 +570,6 @@ class DockerAgentWorkerController:
     runner: CommandRunner = field(default_factory=SubprocessCommandRunner)
     host_aliases: list[str] = field(default_factory=list)
     platform: str = ""
-    peer_resolver_address: str = ""
-    tailnet_dns_suffix: str = ""
     telemetry: AgentTelemetryBuffer | None = None
 
     @property
@@ -687,8 +660,6 @@ class DockerAgentWorkerController:
             platform=self.platform,
             host_aliases=self.host_aliases,
             network=self.worker_network,
-            peer_resolver_address=self.peer_resolver_address,
-            tailnet_dns_suffix=self.tailnet_dns_suffix,
         )
         for path in plan.dirs.all_paths():
             Path(path).mkdir(parents=True, exist_ok=True)
@@ -805,34 +776,6 @@ class DockerAgentWorkerController:
 
 
 @dataclass(slots=True)
-class WorkerTailnetPeerResolver:
-    """Resolves tailnet peers for the workers this agent launched.
-
-    A worker holds no tailnet client and is deliberately not given the
-    tailscaled socket, which grants control rather than lookup. It presents the
-    token this agent issued it, so the check is against slots the agent already
-    tracks and no additional secret exists to distribute or rotate.
-    """
-
-    runtime: AgentTailnetRuntime
-    worker_controller: DockerAgentWorkerController
-    wait_seconds: float = 10.0
-
-    def resolve_for_worker(self, host: str, worker_token: str) -> str:
-        if not worker_token or not self._token_is_current(worker_token):
-            msg = "worker token is not recognised on this node"
-            raise PermissionError(msg)
-        self.runtime.wait_for_peer(host, self.wait_seconds)
-        return self.runtime.resolve_peer_host(host)
-
-    def _token_is_current(self, worker_token: str) -> bool:
-        return any(
-            slot.worker_token and hmac.compare_digest(slot.worker_token, worker_token)
-            for slot in self.worker_controller.active_slots()
-        )
-
-
-@dataclass(slots=True)
 class AgentDaemonService:
     options: AgentDaemonOptions
     client: AgentGatewayClient
@@ -841,7 +784,7 @@ class AgentDaemonService:
     resource_detector: AgentResourceDetector | None = None
     interruption_detector: AgentCapacityInterruptionDetector | None = None
     telemetry: AgentTelemetryBuffer = field(default_factory=AgentTelemetryBuffer)
-    tailnet_runtime: AgentTailnetRuntime | None = None
+    private_network_runtime: AgentPrivateNetworkRuntime | None = None
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
     _bootstrap_failure_reported: bool = False
 
@@ -899,17 +842,14 @@ class AgentDaemonService:
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
         self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
-        # Enrolment travels over the tailnet on a pool node, and the node's own
-        # tailnet service already brought it up before this process started.
-        # Nothing to attach here.
         try:
             state = self._join_step("identity.resolve", self.resolve_identity)
         except Exception:
             self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
             raise
         self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
-        tailnet_runtime: AgentTailnetRuntime | None = None
-        tailnet_hostname = ""
+        private_network_runtime: AgentPrivateNetworkRuntime | None = None
+        private_network_address = ""
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -920,27 +860,25 @@ class AgentDaemonService:
         runtime_ready = False
         try:
             try:
-                tailnet_runtime, tailnet_hostname = self._join_step(
-                    "tailnet.start",
-                    lambda: self._start_tailnet(state),
+                private_network_runtime, private_network_address = self._join_step(
+                    "private-network.start",
+                    lambda: self._start_private_network(state),
                 )
             except Exception:
                 self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
                 raise
             last_result = last_result.model_copy(
                 update={
-                    "tailnet_started": tailnet_runtime is not None,
-                    "tailnet_hostname": tailnet_hostname,
+                    "private_network_started": private_network_runtime is not None,
+                    "private_network_address": private_network_address,
                 }
             )
             route_proxy = self._build_route_proxy(
                 state,
-                tailnet_hostname=tailnet_hostname,
-                tailnet_runtime=tailnet_runtime,
+                private_network_address=private_network_address,
             )
             if route_proxy is not None:
                 route_proxy.start()
-                self._publish_peer_resolver(route_proxy, tailnet_runtime)
             while True:
                 next_iteration = iterations + 1
                 try:
@@ -950,16 +888,16 @@ class AgentDaemonService:
                             state,
                             notice,
                             current_iterations=next_iteration,
-                            tailnet_started=tailnet_runtime is not None,
-                            tailnet_hostname=tailnet_hostname,
+                            private_network_started=private_network_runtime is not None,
+                            private_network_address=private_network_address,
                         )
                     else:
                         last_result = self.run_stream_iteration(
                             state,
                             current_iterations=next_iteration,
                             route_proxy=route_proxy,
-                            tailnet_started=tailnet_runtime is not None,
-                            tailnet_hostname=tailnet_hostname,
+                            private_network_started=private_network_runtime is not None,
+                            private_network_address=private_network_address,
                         )
                 except Exception as exc:
                     if agent_authority_was_revoked(exc):
@@ -1001,8 +939,8 @@ class AgentDaemonService:
         finally:
             if route_proxy is not None:
                 route_proxy.close()
-            if tailnet_runtime is not None:
-                tailnet_runtime.close()
+            if private_network_runtime is not None:
+                private_network_runtime.close()
 
     def resolve_identity(self) -> AgentState:
         revoked = self.state_store.authority_revoked()
@@ -1046,8 +984,8 @@ class AgentDaemonService:
         *,
         current_iterations: int = 1,
         route_proxy: AgentRouteProxyService | None = None,
-        tailnet_started: bool = False,
-        tailnet_hostname: str = "",
+        private_network_started: bool = False,
+        private_network_address: str = "",
     ) -> AgentDaemonRunResult:
         stream = self.client.stream_agent(StreamAgentRequest(agent_token=state.agent_token))
         if not stream.ok:
@@ -1059,8 +997,8 @@ class AgentDaemonService:
             return self._resume_capacity_interruption(
                 state,
                 current_iterations=current_iterations,
-                tailnet_started=tailnet_started,
-                tailnet_hostname=tailnet_hostname,
+                private_network_started=private_network_started,
+                private_network_address=private_network_address,
             )
         desired_slots = [_agent_slot_from_gateway(slot) for slot in stream.slots]
         active_slots = self.worker_controller.active_slots()
@@ -1087,8 +1025,8 @@ class AgentDaemonService:
             desired_worker_count=len(desired_slots),
             slot_action_count=len(applied),
             telemetry_sent=telemetry_sent,
-            tailnet_started=tailnet_started,
-            tailnet_hostname=tailnet_hostname,
+            private_network_started=private_network_started,
+            private_network_address=private_network_address,
         )
 
     def _poll_capacity_interruption(self) -> AgentCapacityInterruptionNotice | None:
@@ -1113,8 +1051,8 @@ class AgentDaemonService:
         notice: AgentCapacityInterruptionNotice,
         *,
         current_iterations: int,
-        tailnet_started: bool,
-        tailnet_hostname: str,
+        private_network_started: bool,
+        private_network_address: str,
     ) -> AgentDaemonRunResult:
         preempting = self._record_capacity_interruption(
             state,
@@ -1128,8 +1066,8 @@ class AgentDaemonService:
             reason=notice.reason,
             notice_at=notice.notice_at,
             current_iterations=current_iterations,
-            tailnet_started=tailnet_started,
-            tailnet_hostname=tailnet_hostname,
+            private_network_started=private_network_started,
+            private_network_address=private_network_address,
         )
 
     def _resume_capacity_interruption(
@@ -1137,8 +1075,8 @@ class AgentDaemonService:
         state: AgentState,
         *,
         current_iterations: int,
-        tailnet_started: bool,
-        tailnet_hostname: str,
+        private_network_started: bool,
+        private_network_address: str,
     ) -> AgentDaemonRunResult:
         if state.capacity_state is AgentCapacityState.Cordoned:
             self.worker_controller.gracefully_stop_all(
@@ -1147,8 +1085,8 @@ class AgentDaemonService:
             return _capacity_interruption_result(
                 state,
                 current_iterations=current_iterations,
-                tailnet_started=tailnet_started,
-                tailnet_hostname=tailnet_hostname,
+                private_network_started=private_network_started,
+                private_network_address=private_network_address,
             )
         reason = state.capacity_reason or "agent capacity interruption resumed"
         return self._cordon_and_stop_capacity(
@@ -1156,8 +1094,8 @@ class AgentDaemonService:
             reason=reason,
             notice_at=state.capacity_notice_at,
             current_iterations=current_iterations,
-            tailnet_started=tailnet_started,
-            tailnet_hostname=tailnet_hostname,
+            private_network_started=private_network_started,
+            private_network_address=private_network_address,
         )
 
     def _cordon_and_stop_capacity(
@@ -1167,8 +1105,8 @@ class AgentDaemonService:
         reason: str,
         notice_at: datetime | None,
         current_iterations: int,
-        tailnet_started: bool,
-        tailnet_hostname: str,
+        private_network_started: bool,
+        private_network_address: str,
     ) -> AgentDaemonRunResult:
         cordoned = state
         try:
@@ -1193,8 +1131,8 @@ class AgentDaemonService:
         return _capacity_interruption_result(
             cordoned,
             current_iterations=current_iterations,
-            tailnet_started=tailnet_started,
-            tailnet_hostname=tailnet_hostname,
+            private_network_started=private_network_started,
+            private_network_address=private_network_address,
         )
 
     def _record_capacity_interruption(
@@ -1440,148 +1378,115 @@ class AgentDaemonService:
                 )
                 time.sleep(delay)
 
-    def _start_tailnet(self, state: AgentState) -> tuple[AgentTailnetRuntime | None, str]:
-        if not _agent_uses_tailnet(state.bootstrap.transport):
+    def _start_private_network(
+        self,
+        state: AgentState,
+    ) -> tuple[AgentPrivateNetworkRuntime | None, str]:
+        if not _agent_uses_private_network(state.bootstrap.transport):
             return (None, "")
-        runtime = self.tailnet_runtime or TailnetRuntime(_tailnet_runtime_options(self.options))
+        runtime = self.private_network_runtime or NewtRuntime(
+            Path(self.options.state_dir) / "private-network",
+            binary=self.options.newt_binary,
+        )
         try:
-            try:
-                # On a pool node this is a sidecar: the node's tailnet service
-                # already holds the session, so starting is a status read.
+            if runtime.configured:
                 runtime.start()
+            else:
+                runtime.start(self._issue_private_network_connection(state))
+            replaced_saved_site = False
+            for attempt in range(1, PRIVATE_NETWORK_CONNECT_ATTEMPTS + 1):
                 status = runtime.status()
-            except TailnetAuthenticationRequired:
-                credential = self.client.request_agent_transport_credential(
-                    RequestAgentTransportCredentialRequest(
-                        agent_token=state.agent_token,
-                        transport=BackendRouteTransport.TsnetRestricted,
+                if not status.running:
+                    raise RuntimeError(
+                        f"Newt exited before connecting to Pangolin (exit code {status.exit_code})"
                     )
+                pangolin_online = False
+                binding = None
+                if status.connection.connector_id:
+                    try:
+                        binding = self._register_private_network_site(
+                            state,
+                            site_name=status.connection.site_name,
+                            connector_id=status.connection.connector_id,
+                        )
+                        pangolin_online = True
+                    except HttpApiError as exc:
+                        if _private_network_registration_is_pending(exc):
+                            binding = None
+                        elif not replaced_saved_site and _private_network_site_is_stale(exc):
+                            runtime.discard()
+                            runtime.start(self._issue_private_network_connection(state))
+                            replaced_saved_site = True
+                            LOGGER.info("discarded stale Pangolin site and requested a new one")
+                            continue
+                        else:
+                            raise
+                LOGGER.info(
+                    "private-network poll attempt=%s newt_running=%s "
+                    "newt_healthy=%s pangolin_online=%s site_name=%s",
+                    attempt,
+                    status.running,
+                    status.healthy,
+                    pangolin_online,
+                    status.connection.site_name,
                 )
-                status = runtime.authenticate(
-                    auth_key=credential.auth_key,
-                    hostname=credential.hostname,
-                    control_url=credential.control_url,
-                )
-            _require_authenticated_tailnet_status(status)
-            if not _tailnet_identity_is_this_machine(status, state.machine_id):
-                # The session belongs to something other than this machine —
-                # on a managed-pool node, the pool-scoped identity its bootstrap
-                # used. Trade it for the single-use, machine-scoped key the
-                # control plane issues now that enrolment has given this node an
-                # identity, so the pool key stops being what holds it on the
-                # tailnet.
-                status = self._reissue_tailnet_identity(state, runtime)
-            try:
-                binding = self._register_tailnet_device(state, status)
-            except HttpApiError as exc:
-                if not _tailnet_enrollment_needs_reissue(exc):
-                    raise
-                # The daemon is authenticated but the control plane holds no
-                # identity for it, so the two have diverged — most often because
-                # the local session outlived the enrollment record. Re-enrol into
-                # the identity the control plane issues and register that.
-                status = self._reissue_tailnet_identity(state, runtime)
-                binding = self._register_tailnet_device(state, status)
-            if binding.node_id != status.self_node_id:
-                raise RuntimeError("control plane returned a different tailnet node binding")
-            advertise_host = _tailnet_advertise_host(status)
-            return (runtime, advertise_host)
+                if binding is not None and status.healthy:
+                    return (runtime, _private_network_host(binding.address))
+                time.sleep(PRIVATE_NETWORK_POLL_SECONDS)
+            raise RuntimeError("Newt did not establish a healthy Pangolin private network")
         except Exception:
-            # A sidecar runtime owns no daemon, so this releases a handle rather
-            # than stopping the node's tailnet.
             runtime.close()
             raise
 
-    def _register_tailnet_device(
-        self,
-        state: AgentState,
-        status: TailnetStatus,
-    ) -> RegisterAgentTailnetDeviceResponse:
-        return self.client.register_agent_tailnet_device(
-            RegisterAgentTailnetDeviceRequest(
-                agent_token=state.agent_token,
-                node_id=status.self_node_id,
-            )
-        )
-
-    def _reissue_tailnet_identity(
-        self,
-        state: AgentState,
-        runtime: AgentTailnetRuntime,
-    ) -> TailnetStatus:
-        """Take a fresh identity from the control plane and adopt it locally.
-
-        Forced, because the daemon already holds a session; without replacing it
-        the agent would re-register the same device the control plane just
-        rejected.
-        """
+    def _issue_private_network_connection(self, state: AgentState) -> NewtConnection:
         credential = self.client.request_agent_transport_credential(
             RequestAgentTransportCredentialRequest(
                 agent_token=state.agent_token,
-                transport=BackendRouteTransport.TsnetRestricted,
+                transport=BackendRouteTransport.PrivateNetwork,
             )
         )
-        status = runtime.authenticate(
-            auth_key=credential.auth_key,
-            hostname=credential.hostname,
-            control_url=credential.control_url,
-            force=True,
+        return NewtConnection(
+            site_name=credential.site_name,
+            endpoint=credential.endpoint,
+            connector_id=credential.connector_id,
+            secret=SecretStr(credential.secret),
         )
-        _require_authenticated_tailnet_status(status)
-        return status
 
-    def _publish_peer_resolver(
+    def _register_private_network_site(
         self,
-        route_proxy: AgentRouteProxyService,
-        tailnet_runtime: AgentTailnetRuntime | None,
-    ) -> None:
-        """Tell workers where to ask for peers, once there is somewhere to ask.
-
-        Both values travel together: an address without a suffix resolves
-        nothing, and a suffix without an address names peers a worker cannot
-        look up. Absent either, the worker dials names as written.
-        """
-        if tailnet_runtime is None:
-            return
-        try:
-            suffix = _tailnet_dns_suffix(tailnet_runtime.status())
-        except Exception:
-            LOGGER.debug("tailnet status unavailable; peers stay dialled by name", exc_info=True)
-            return
-        if not suffix or not route_proxy.proxy_target:
-            return
-        self.worker_controller.peer_resolver_address = route_proxy.proxy_target
-        self.worker_controller.tailnet_dns_suffix = suffix
+        state: AgentState,
+        *,
+        site_name: str,
+        connector_id: str,
+    ) -> RegisterAgentPrivateNetworkResponse:
+        return self.client.register_agent_private_network(
+            RegisterAgentPrivateNetworkRequest(
+                agent_token=state.agent_token,
+                site_name=site_name,
+                connector_id=connector_id,
+            )
+        )
 
     def _build_route_proxy(
         self,
         state: AgentState,
         *,
-        tailnet_hostname: str = "",
-        tailnet_runtime: AgentTailnetRuntime | None = None,
+        private_network_address: str = "",
     ) -> AgentRouteProxyService | None:
         if not self.options.route_proxy.enabled:
             return None
         config = self.options.route_proxy
-        if tailnet_hostname and _agent_uses_tailnet(state.bootstrap.transport):
+        if private_network_address and _agent_uses_private_network(state.bootstrap.transport):
             update: dict[str, str] = {}
             if not config.advertise_host:
-                update["advertise_host"] = tailnet_hostname
-            if config.bind_host == "127.0.0.1":
-                update["bind_host"] = tailnet_hostname
+                update["advertise_host"] = private_network_address
             if update:
                 config = config.model_copy(update=update)
-        resolver = (
-            WorkerTailnetPeerResolver(tailnet_runtime, self.worker_controller)
-            if tailnet_runtime is not None
-            else None
-        )
         return AgentRouteProxyService(
             config,
             self.client,
             state.agent_token,
             telemetry=self.telemetry,
-            peer_resolver=resolver,
         )
 
 
@@ -1592,7 +1497,7 @@ def build_agent_daemon_service(
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: AgentResourceDetector | None = None,
     interruption_detector: AgentCapacityInterruptionDetector | None = None,
-    tailnet_runtime: AgentTailnetRuntime | None = None,
+    private_network_runtime: AgentPrivateNetworkRuntime | None = None,
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
 ) -> AgentDaemonService:
     state_dir = Path(options.state_dir)
@@ -1621,7 +1526,7 @@ def build_agent_daemon_service(
         interruption_detector=(
             interruption_detector or _provider_capacity_interruption_detector(options)
         ),
-        tailnet_runtime=tailnet_runtime,
+        private_network_runtime=private_network_runtime,
         provider_identity=provider_identity,
     )
 
@@ -1651,75 +1556,15 @@ def _provider_capacity_interruption_detector(
     return detect
 
 
-def _tailnet_runtime_options(
-    options: AgentDaemonOptions,
-) -> TailnetRuntimeOptions:
-    state_dir = options.tailnet_state_dir or str(Path(options.state_dir) / AGENT_TAILNET_DIR_NAME)
-    return TailnetRuntimeOptions(
-        mode=options.tailnet_mode,
-        state_dir=state_dir,
-        socket_path=options.tailnet_socket_path,
-        tailscale_binary=options.tailnet_tailscale_binary,
-        tailscaled_binary=options.tailnet_tailscaled_binary,
-        userspace_networking=options.tailnet_userspace_networking,
-    )
+def _agent_uses_private_network(transport: BackendRouteTransport) -> bool:
+    return transport is BackendRouteTransport.PrivateNetwork
 
 
-def _tailnet_advertise_host(status: TailnetStatus) -> str:
-    for tailnet_ip in status.tailnet_ips:
-        if "." in tailnet_ip:
-            return tailnet_ip
-    if status.tailnet_ips:
-        return status.tailnet_ips[0]
-    return status.self_dns_name.strip().rstrip(".") or status.self_host_name.strip().rstrip(".")
-
-
-def _tailnet_dns_suffix(status: TailnetStatus) -> str:
-    """The tailnet's DNS suffix, taken from this node's own name.
-
-    Derived rather than configured: the node already knows which tailnet it
-    joined, and a separately stated suffix is one more value that can disagree
-    with reality.
-    """
-    dns_name = status.self_dns_name.strip().rstrip(".")
-    _host, _, suffix = dns_name.partition(".")
-    return suffix
-
-
-def _tailnet_device_hostname(status: TailnetStatus) -> str:
-    return status.self_host_name.strip().rstrip(".") or status.self_dns_name.strip().rstrip(".")
-
-
-def _tailnet_identity_is_this_machine(status: TailnetStatus, machine_id: str) -> bool:
-    """Whether the local session is one the control plane issued to this machine.
-
-    The generation is deliberately not matched: the agent does not know which
-    generation the control plane last handed out, and demanding an exact name
-    would rotate the identity on every restart. The prefix is enough to tell
-    this machine's session from another machine's, which is the distinction
-    that decides whether a rotation is owed.
-    """
-    machine = machine_id.strip()
-    if not machine:
-        return False
-    return _tailnet_device_hostname(status).startswith(f"{AGENT_NAME}-{machine}-g")
-
-
-def _require_authenticated_tailnet_status(status: TailnetStatus) -> None:
-    if not status.self_node_id.strip():
-        raise RuntimeError("authenticated tailnet status is missing the stable node ID")
-    if not _tailnet_device_hostname(status):
-        raise RuntimeError("authenticated tailnet status is missing the device hostname")
-    if not status.tailnet_ips:
-        raise RuntimeError("authenticated tailnet status is missing a tailnet IP")
-
-
-def _agent_uses_tailnet(transport: str) -> bool:
-    try:
-        return normalize_backend_route_transport(transport) is BackendRouteTransport.TsnetRestricted
-    except ValueError:
-        normalized = transport.strip().lower().replace("-", "_")
-        return normalized in {"tailnet", "tsnet", "tailscale", "tsnet_restricted"}
+def _private_network_host(address: str) -> str:
+    host = address.strip().split("/", 1)[0]
+    if not host:
+        raise RuntimeError("Pangolin site address is empty")
+    return host
 
 
 def _worker_host_aliases(options: AgentDaemonOptions) -> list[str]:
@@ -1908,7 +1753,7 @@ def _agent_bootstrap(
         gateway_grpc_host=config.gateway_grpc_host,
         gateway_grpc_port=config.gateway_grpc_port,
         gateway_grpc_tls=config.gateway_grpc_tls,
-        transport=config.transport.value,
+        transport=config.transport,
         image_local_cache_enabled=config.image_local_cache_enabled,
         image_registry_store=config.image_registry_store,
         image_clip_version=config.image_clip_version,
@@ -1974,16 +1819,16 @@ def _capacity_interruption_result(
     state: AgentState,
     *,
     current_iterations: int,
-    tailnet_started: bool,
-    tailnet_hostname: str,
+    private_network_started: bool,
+    private_network_address: str,
 ) -> AgentDaemonRunResult:
     return AgentDaemonRunResult(
         workspace_id=state.workspace_id,
         pool=state.pool,
         machine_id=state.machine_id,
         stream_iterations=current_iterations,
-        tailnet_started=tailnet_started,
-        tailnet_hostname=tailnet_hostname,
+        private_network_started=private_network_started,
+        private_network_address=private_network_address,
         capacity_state=state.capacity_state,
         capacity_interrupted=True,
     )
@@ -2022,18 +1867,21 @@ def _agent_lock_pid(contents: str) -> int:
     return 0
 
 
-def _tailnet_enrollment_needs_reissue(exc: HttpApiError) -> bool:
+def _private_network_registration_is_pending(exc: HttpApiError) -> bool:
     return (
         400 <= exc.status_code < 500
-        and (exc.detail or "").strip() == TAILNET_ENROLLMENT_NOT_AWAITING_DETAIL
+        and (exc.detail or "").strip() == PRIVATE_NETWORK_NOT_ONLINE_DETAIL
     )
 
 
+def _private_network_site_is_stale(exc: HttpApiError) -> bool:
+    return 400 <= exc.status_code < 500 and (exc.detail or "").strip() in {
+        "private-network enrollment is not awaiting this site",
+        "private-network site could not be verified",
+    }
+
+
 def _recoverable_stream_error(exc: Exception) -> bool:
-    # A diverged enrollment is a state mismatch rather than a rejection of the
-    # agent's authority, so it must not end the process; the next join re-enrols.
-    if isinstance(exc, HttpApiError) and _tailnet_enrollment_needs_reissue(exc):
-        return True
     if isinstance(exc, HttpApiError):
         return exc.status_code >= 500
     # A transport error means the request never reached a response, so the

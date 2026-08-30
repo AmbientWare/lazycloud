@@ -23,7 +23,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    TailnetCleanupTombstoneRepository,
+    PrivateNetworkCleanupTombstoneRepository,
 )
 from database.repositories.orchestration import (
     MachineRepository,
@@ -39,7 +39,7 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    TailnetEnrollmentPhase,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
@@ -692,7 +692,7 @@ class ProviderMachineReconciler:
                                 "heartbeat_confirmed": False,
                                 "schedulable": False,
                                 "readiness_phase": MachineReadinessPhase.Revoked,
-                                "tailnet_phase": TailnetEnrollmentPhase.Revoked,
+                                "network_phase": PrivateNetworkEnrollmentPhase.Revoked,
                                 "last_disconnect_at": now,
                                 "revoked_at": enrollment.revoked_at or now,
                                 "updated_at": now,
@@ -998,26 +998,21 @@ class ProviderMachineReconciler:
         *,
         now: datetime,
     ) -> None:
-        auth_key_ids = _unique_nonempty(
-            [enrollment.tailnet_auth_key_id, *enrollment.tailnet_cleanup_auth_key_ids]
+        resource_ids = _unique_nonempty(
+            [enrollment.network_resource_id, *enrollment.network_cleanup_resource_ids]
         )
-        device_ids = _unique_nonempty(
-            [enrollment.tailnet_device_id, *enrollment.tailnet_cleanup_device_ids]
+        site_ids = _unique_nonempty(
+            [enrollment.network_site_id, *enrollment.network_cleanup_site_ids]
         )
-        generations = list(range(1, enrollment.tailnet_generation + 1))
-        if not generations and not auth_key_ids and not device_ids:
+        if not resource_ids and not site_ids:
             return
-        identity_expiry = enrollment.tailnet_auth_key_expires_at or now
-        not_before = max(now, _utc(identity_expiry)) + timedelta(
-            seconds=PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS
-        )
-        TailnetCleanupTombstoneRepository(session).schedule(
+        not_before = now + timedelta(seconds=PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS)
+        PrivateNetworkCleanupTombstoneRepository(session).schedule(
             workspace_id=enrollment.workspace_id,
             pool=enrollment.pool,
             machine_id=enrollment.machine_id,
-            generations=generations,
-            auth_key_ids=auth_key_ids,
-            device_ids=device_ids,
+            resource_ids=resource_ids,
+            site_ids=site_ids,
             not_before=not_before,
             now=now,
         )

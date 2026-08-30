@@ -83,7 +83,7 @@ spec:
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
             # The cluster-local Service rather than the public origin. This call
-            # never leaves the cluster, so routing it out through the tunnel and
+            # never leaves the cluster, so routing it out through Pangolin and
             # back would make the fleet depend on DNS and an edge that have
             # nothing to do with it.
             - name: LAZYCLOUD_ENDPOINT

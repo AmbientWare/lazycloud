@@ -28,7 +28,7 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from database.tailnet_cleanup import DatabaseTailnetCleanupStore
+from database.private_network_cleanup import DatabasePrivateNetworkCleanupStore
 from execution.collections.service import CollectionService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
@@ -36,13 +36,9 @@ from execution.containers.service import ContainerService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.settings import GatewaySettings
-from networking.settings import (
-    BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-)
-from networking.tailnet_cleanup import TailnetCleanupCoordinator
-from networking.tailnet_control import TailscaleTailnetControl
+from networking.private_network_cleanup import PrivateNetworkCleanupCoordinator
+from networking.private_network_control import PrivateNetworkControl
+from networking.settings import BackendRouteSettings
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
@@ -61,7 +57,7 @@ from provider_clients import (
     workspace_compute_provider_resolver,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from provider_cloudflare import CloudflareSettings
+from provider_pangolin import PangolinPrivateNetworkControl, PangolinSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
@@ -72,8 +68,8 @@ from scheduler.containers import (
     SchedulerContainerRequestService,
 )
 from scheduler.service import (
-    SchedulerTailnetCleanupService,
-    UnavailableTailnetCleanupService,
+    SchedulerPrivateNetworkCleanupService,
+    UnavailablePrivateNetworkCleanupService,
 )
 from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
@@ -122,8 +118,6 @@ class SchedulerStorageSettings:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerNetworkSettings:
-    tailnet_runtime: TailnetRuntimeSettings
-    tailnet_control: TailnetControlSettings
     backend_routes: BackendRouteSettings
 
 
@@ -150,7 +144,7 @@ class SchedulerAppServices:
     container_shutdowns: ContainerShutdownService
     scheduler_workloads: SchedulerWorkloadDirectory
     compute: ComputeService
-    tailnet_cleanup: SchedulerTailnetCleanupService
+    private_network_cleanup: SchedulerPrivateNetworkCleanupService
     custom_domains: CustomDomainService
     tasks: TaskService
     usage: UsageService
@@ -172,7 +166,6 @@ class SchedulerAppServices:
         create_schema: bool = True,
         redis_client: RedisClient,
         gateway_origin: str,
-        runtime_callback_origin: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
         network: SchedulerNetworkSettings,
@@ -237,10 +230,7 @@ class SchedulerAppServices:
                 capacity.agent_binaries,
                 connections=AwsAccountConnectionDirectory(context).list_for_workspace,
                 gateway_origin=gateway_origin,
-                internal_origin=runtime_callback_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",
-                tailnet_runtime=network.tailnet_runtime,
-                tailnet_control=network.tailnet_control,
                 backend_route=network.backend_routes,
             )
             if capacity.aws_connections.configured
@@ -252,18 +242,11 @@ class SchedulerAppServices:
 
         pool_bootstrap = (
             pool_bootstrap_provisioner(
-                context,
-                # A node in a customer VPC holds no tailnet session when it
-                # first reports, so this is the public origin. The runtime
-                # callback origin stays worker-facing and is not interchangeable
-                # here. The API must pass the same one: a disagreement shows up
-                # as launch templates alternating between versions.
                 control_plane_url=gateway_origin,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=capacity.aws_capacity.agent_binary_url,
                 worker_image_digest=capacity.aws_capacity.worker_image_digest,
-                tailnet_control=network.tailnet_control,
             )
             if provider_resolver is not None
             else None
@@ -360,11 +343,7 @@ class SchedulerAppServices:
             DatabaseBillingAdmission(),
             workspace_changes=workspace_changes,
         )
-        _, tailnet_cleanup = scheduler_tailnet_services(
-            context=context,
-            runtime_settings=network.tailnet_runtime,
-            control_settings=network.tailnet_control,
-        )
+        _, private_network_cleanup = scheduler_private_network_services(context=context)
         return cls(
             context=context,
             events=events,
@@ -379,10 +358,10 @@ class SchedulerAppServices:
             container_shutdowns=container_shutdowns,
             scheduler_workloads=scheduler_workloads,
             compute=compute,
-            tailnet_cleanup=tailnet_cleanup,
+            private_network_cleanup=private_network_cleanup,
             custom_domains=CustomDomainService(
                 context=context,
-                provider_factory=CloudflareSettings().provider,
+                provider_factory=PangolinSettings().client,
                 platform_base_domain=GatewaySettings().public_base_domain,
                 admission=DatabaseBillingAdmission(),
             ),
@@ -529,18 +508,19 @@ def scheduler_retention(
     )
 
 
-def scheduler_tailnet_services(
+def scheduler_private_network_services(
     *,
     context: ServiceContext,
-    runtime_settings: TailnetRuntimeSettings,
-    control_settings: TailnetControlSettings,
-) -> tuple[TailscaleTailnetControl | None, SchedulerTailnetCleanupService]:
-    active_control = TailscaleTailnetControl(control_settings.to_control_config())
+) -> tuple[PrivateNetworkControl | None, SchedulerPrivateNetworkCleanupService]:
+    pangolin = PangolinSettings()
+    active_control = (
+        PangolinPrivateNetworkControl(pangolin.client()) if pangolin.configured else None
+    )
     cleanup_control = active_control
-    cleanup_store = DatabaseTailnetCleanupStore(context)
+    cleanup_store = DatabasePrivateNetworkCleanupStore(context)
     cleanup = (
-        TailnetCleanupCoordinator(cleanup_store, cleanup_control)
+        PrivateNetworkCleanupCoordinator(cleanup_store, cleanup_control)
         if cleanup_control is not None
-        else UnavailableTailnetCleanupService(cleanup_store)
+        else UnavailablePrivateNetworkCleanupService(cleanup_store)
     )
     return active_control, cleanup

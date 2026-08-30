@@ -58,6 +58,10 @@ def test_connected_object_store_does_not_retarget_local_garage_bootstrap(
     env_file.write_text(
         "\n".join(
             (
+                "LAZYCLOUD_PANGOLIN_SERVER_SECRET=compose-test-server-secret",
+                "LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD=compose-test-postgres-password",
+                "LAZYCLOUD_PANGOLIN_API_URL=https://pangolin-api.example.test/v1",
+                "LAZYCLOUD_PANGOLIN_ENDPOINT=https://pangolin.example.test",
                 "LAZYCLOUD_OBJECT_STORE_BUCKET=connected-control-bucket",
                 "LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL=https://s3.us-east-1.amazonaws.com",
                 "LAZYCLOUD_OBJECT_STORE_REGION_NAME=us-east-1",

@@ -54,7 +54,7 @@ class NormalizedUnitConfig(ContractModel):
     name: str
     selector: str = ""
     mode: ComputeUnitMode = ComputeUnitMode.Private
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     priority: int = 0
     gpu: list[str] = Field(default_factory=list)
@@ -142,7 +142,7 @@ class PrivateUnitState(CapacityOwnerIdentity):
 def normalize_backend_route_transport(value: str) -> BackendRouteTransport:
     normalized = value.strip()
     if normalized == "":
-        return BackendRouteTransport.TsnetRestricted
+        return BackendRouteTransport.PrivateNetwork
     return BackendRouteTransport(normalized)
 
 
@@ -183,7 +183,7 @@ def compute_unit_from_config(
     if normalized is None:
         msg = "pool config is required"
         raise ValueError(msg)
-    if normalized.transport is not BackendRouteTransport.TsnetRestricted:
+    if normalized.transport is not BackendRouteTransport.PrivateNetwork:
         msg = f"unsupported agent transport {normalized.transport.value!r}"
         raise ValueError(msg)
     if normalized.fallback not in set(PrivateUnitFallback):

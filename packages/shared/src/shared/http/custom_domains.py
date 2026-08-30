@@ -7,6 +7,7 @@ from pydantic import Field
 from shared.custom_domains import (
     MAX_HOSTNAME_LENGTH,
     CustomDomain,
+    CustomDomainDnsMode,
     CustomDomainErrorCode,
     CustomDomainPhase,
     DnsRecord,
@@ -16,18 +17,17 @@ from shared.http.base import HttpModel
 
 class CustomDomainRegisterRequest(HttpModel):
     domain: str = Field(min_length=3, max_length=MAX_HOSTNAME_LENGTH)
-    """An apex such as `acme.com`, or a single-level wildcard such as `*.acme.com`."""
+    dns_mode: CustomDomainDnsMode
 
 
 class CustomDomainResponse(HttpModel):
     id: str
     hostname: str
+    dns_mode: CustomDomainDnsMode
     phase: CustomDomainPhase
-    cname_target: str = ""
-    """Hostname the customer points their DNS at. The platform's own public host."""
 
     required_records: tuple[DnsRecord, ...] = ()
-    """Anything the edge is still waiting on beyond the CNAME, ready to be created."""
+    """The exact DNS records Pangolin is waiting for."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -42,12 +42,12 @@ class CustomDomainListResponse(HttpModel):
     next: str = ""
 
 
-def custom_domain_response(domain: CustomDomain, *, cname_target: str) -> CustomDomainResponse:
+def custom_domain_response(domain: CustomDomain) -> CustomDomainResponse:
     return CustomDomainResponse(
         id=domain.id,
         hostname=domain.hostname,
+        dns_mode=domain.dns_mode,
         phase=domain.phase,
-        cname_target=cname_target,
         required_records=domain.required_records,
         error_code=domain.error_code,
         error_message=domain.error_message,

@@ -6,7 +6,9 @@ ARG PYTHON_IMAGE=python:3.12.11-slim-bullseye@sha256:411fa4dcfdce7e7a3057c45662b
 ARG AMAZON_LINUX_IMAGE=amazonlinux:2023@sha256:f590f33787c76bee9c42cc6826ee887bc1f3b60ba5ed137af450a6c0a79cdb57
 ARG AGENT_RUNTIME_IMAGE=debian:bookworm-slim
 ARG DOCKER_CLI_IMAGE=docker:27.5.1-cli
-ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.98.8
+ARG NEWT_VERSION=1.16.0
+ARG NEWT_AMD64_SHA256=edb2e3d68549e009efdd461939db80c8ae43915fae89de8a332f8a29e00c92a8
+ARG NEWT_ARM64_SHA256=2be3a8122478330471d531fcc5668519d20654550a9e6a9fa2f76b89e15de965
 FROM ${PYTHON_IMAGE} AS agent-artifact-build
 
 ARG TARGETARCH
@@ -64,28 +66,39 @@ FROM scratch AS agent-artifact
 COPY --from=agent-artifact-amazon-linux-test /out/ /
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
-FROM ${TAILSCALE_IMAGE} AS tailscale
 
 FROM ${AGENT_RUNTIME_IMAGE} AS agent-runtime
 ARG TARGETARCH
+ARG NEWT_VERSION
+ARG NEWT_AMD64_SHA256
+ARG NEWT_ARM64_SHA256
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         fuse3 \
         iproute2 \
         iptables \
+    && case "${TARGETARCH}" in \
+        amd64) NEWT_SHA256="${NEWT_AMD64_SHA256}" ;; \
+        arm64) NEWT_SHA256="${NEWT_ARM64_SHA256}" ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 2 ;; \
+    esac \
+    && curl -fsSL \
+        "https://github.com/fosrl/newt/releases/download/${NEWT_VERSION}/newt_linux_${TARGETARCH}" \
+        -o /usr/local/bin/newt \
+    && echo "${NEWT_SHA256}  /usr/local/bin/newt" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/newt \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
-COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 COPY --from=agent-artifact-amazon-linux-test \
     "/out/lazycloud-agent-linux-${TARGETARCH}" \
     /usr/local/bin/lazycloud-agent
 
 RUN docker --version \
-    && tailscale version \
+    && newt --version \
     && lazycloud-agent --help >/dev/null
 
 ENTRYPOINT ["lazycloud-agent"]

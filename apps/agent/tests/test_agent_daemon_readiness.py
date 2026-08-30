@@ -27,8 +27,8 @@ from gateway.http import (
     JoinAgentResponse,
     LeaveAgentRequest,
     LeaveAgentResponse,
-    RegisterAgentTailnetDeviceRequest,
-    RegisterAgentTailnetDeviceResponse,
+    RegisterAgentPrivateNetworkRequest,
+    RegisterAgentPrivateNetworkResponse,
     RequestAgentTransportCredentialRequest,
     RequestAgentTransportCredentialResponse,
     StreamAgentRequest,
@@ -109,14 +109,14 @@ class _Gateway:
         request: RequestAgentTransportCredentialRequest,
     ) -> RequestAgentTransportCredentialResponse:
         del request
-        raise AssertionError("direct transport should not request tailnet credentials")
+        raise AssertionError("direct transport should not request private-network credentials")
 
-    def register_agent_tailnet_device(
+    def register_agent_private_network(
         self,
-        request: RegisterAgentTailnetDeviceRequest,
-    ) -> RegisterAgentTailnetDeviceResponse:
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse:
         del request
-        raise AssertionError("direct transport should not register a tailnet device")
+        raise AssertionError("direct transport should not register a private-network site")
 
     def stream_agent_telemetry(
         self,
@@ -265,7 +265,7 @@ def test_transport_failures_are_recoverable_so_a_machine_keeps_rejoining() -> No
     """
     transport_failure = HttpTransportError(
         "POST",
-        "https://gateway.example.ts.net/gateway/agents/tailnet-device",
+        "https://gateway.example.com/gateway/agents/private-network",
         "EOF occurred in violation of protocol (_ssl.c:1010)",
     )
     assert _recoverable_stream_error(transport_failure)

@@ -68,7 +68,7 @@ from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.pod_proxy import PodProxyHttpClient, RedisPodProxyConnectionRepository
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from gateway.route_prewarm import RoutePrewarmService, TailnetPeerStatusProvider
+from gateway.route_prewarm import RoutePrewarmService
 from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from gateway.shell_proxy import connect_shell_backend
@@ -94,20 +94,11 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
-from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
-    TailnetPeerResolver,
-    TailnetPeerWaiter,
 )
-from networking.settings import (
-    BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-)
-from networking.tailnet import TailnetRuntime
-from networking.tailnet_control import TailscaleTailnetControl
+from networking.settings import BackendRouteSettings
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
@@ -134,8 +125,8 @@ from provider_clients.settings import (
     AwsCapacityReconciliationSettings,
     AwsCapacitySettings,
 )
-from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
+from provider_pangolin import PangolinPrivateNetworkControl, PangolinSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
@@ -250,21 +241,6 @@ from api.settings import (
 )
 from billing import BillingAccountService, DatabaseBillingAdmission
 from database import DatabaseClient
-
-
-class ApiTailnetRuntime(
-    TailnetPeerWaiter,
-    TailnetPeerResolver,
-    TailnetPeerStatusProvider,
-    Protocol,
-):
-    def start(self) -> None: ...
-
-    def close(self) -> None: ...
-
-    def self_dns_name(self) -> str: ...
-
-    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,8 +429,7 @@ class ApiServiceCore:
     aws_account_connection_settings: AwsAccountConnectionSettings
     aws_capacity_settings: AwsCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
-    tailnet_runtime_settings: TailnetRuntimeSettings
-    tailnet_control_settings: TailnetControlSettings
+    pangolin_settings: PangolinSettings
     backend_route_settings: BackendRouteSettings
     object_store_settings: S3ObjectStoreSettings
     workspace_storage_issuer: WorkspaceStorageIssuer
@@ -503,7 +478,6 @@ class ApiServiceCore:
     aws_connections: AwsAccountConnectionService | None
     owns_redis_client: bool
     owns_binary_redis_client: bool
-    tailnet_runtime: ApiTailnetRuntime | None
     owned_resources: tuple[ApiOwnedResource, ...]
 
     @property
@@ -560,8 +534,7 @@ class ApiServices(ApiServiceCore):
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
         aws_capacity_settings: AwsCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
-        tailnet_runtime_settings: TailnetRuntimeSettings | None = None,
-        tailnet_control_settings: TailnetControlSettings | None = None,
+        pangolin_settings: PangolinSettings | None = None,
         backend_route_settings: BackendRouteSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
         workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
@@ -583,13 +556,10 @@ class ApiServices(ApiServiceCore):
         create_schema: bool = True,
         image_build_executor: ImageBuildExecutor | None = None,
         image_build_container_transport_factory: ContainerServiceTransportFactory | None = None,
-        tailnet_peer_waiter: TailnetPeerWaiter | None = None,
-        tailnet_peer_resolver: TailnetPeerResolver | None = None,
         redis_client: RedisClient,
         binary_redis_client: RedisClient,
         owns_redis_client: bool = False,
         owns_binary_redis_client: bool = False,
-        tailnet_runtime: ApiTailnetRuntime | None = None,
         signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
@@ -628,8 +598,9 @@ class ApiServices(ApiServiceCore):
         aws_capacity_reconciliation_config = (
             aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
         )
-        resolved_tailnet_runtime_settings = tailnet_runtime_settings or TailnetRuntimeSettings()
-        resolved_tailnet_control_settings = tailnet_control_settings or TailnetControlSettings()
+        pangolin_config = pangolin_settings or PangolinSettings()
+        if aws_account_connection_config.configured and not pangolin_config.configured:
+            raise ValueError("connected AWS capacity requires Pangolin configuration")
         resolved_backend_route_settings = backend_route_settings or BackendRouteSettings()
         object_store_config = object_store_settings or S3ObjectStoreSettings()
         image_archive_config = (image_archive_settings or ImageArchiveSettings()).resolve(
@@ -768,8 +739,6 @@ class ApiServices(ApiServiceCore):
                     container_repository,
                 ),
                 route_dialer_config=resolved_backend_route_settings.to_dialer_config(),
-                tailnet_peer_waiter=tailnet_peer_waiter,
-                tailnet_peer_resolver=tailnet_peer_resolver,
             )
         )
         usage = UsageService(
@@ -794,10 +763,7 @@ class ApiServices(ApiServiceCore):
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
                 gateway_origin=gateway_config.public_http_url,
-                internal_origin=gateway_config.runtime_callback_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",
-                tailnet_runtime=resolved_tailnet_runtime_settings,
-                tailnet_control=resolved_tailnet_control_settings,
                 backend_route=resolved_backend_route_settings,
             )
             if aws_account_connection_config.configured
@@ -808,18 +774,11 @@ class ApiServices(ApiServiceCore):
         if provider_resolver is not None:
             agent_version, agent_sha256 = agent_artifact_config.require_amd64()
             pool_bootstrap = pool_bootstrap_provisioner(
-                context,
-                # A node in a customer VPC holds no tailnet session when it
-                # first reports, so this is the public origin. The runtime
-                # callback origin stays worker-facing and is not interchangeable
-                # here. The scheduler must pass the same one: a disagreement
-                # shows up as launch templates alternating between versions.
                 control_plane_url=gateway_config.public_http_url,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=aws_capacity_config.agent_binary_url,
                 worker_image_digest=aws_capacity_config.worker_image_digest,
-                tailnet_control=resolved_tailnet_control_settings,
             )
 
         scheduler_hooks = SchedulerComputeHooks(
@@ -843,9 +802,6 @@ class ApiServices(ApiServiceCore):
             connection_settings=aws_account_connection_config,
             capacity_settings=aws_capacity_config,
             gateway_origin=gateway_config.public_http_url,
-            internal_origin=gateway_config.runtime_callback_http_url,
-            tailnet_runtime=resolved_tailnet_runtime_settings,
-            tailnet_control=resolved_tailnet_control_settings,
             backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
             capacity_baseline=compute_policies,
@@ -969,7 +925,7 @@ class ApiServices(ApiServiceCore):
         deployment_resources = DeploymentResourceService(context)
         custom_domains = CustomDomainService(
             context=context,
-            provider_factory=CloudflareSettings().provider,
+            provider_factory=pangolin_config.client,
             platform_base_domain=gateway_config.public_base_domain,
             admission=DatabaseBillingAdmission(),
         )
@@ -984,9 +940,6 @@ class ApiServices(ApiServiceCore):
             retention_seconds=retention_config.checkpoint_seconds,
         )
         autoscaler_states = AutoscalerStateService(context)
-        resolved_tailnet_runtime = tailnet_runtime or TailnetRuntime(
-            resolved_tailnet_runtime_settings
-        )
         core = ApiServiceCore(
             context=context,
             auth=auth,
@@ -1004,8 +957,7 @@ class ApiServices(ApiServiceCore):
             aws_account_connection_settings=aws_account_connection_config,
             aws_capacity_settings=aws_capacity_config,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
-            tailnet_runtime_settings=resolved_tailnet_runtime_settings,
-            tailnet_control_settings=resolved_tailnet_control_settings,
+            pangolin_settings=pangolin_config,
             backend_route_settings=resolved_backend_route_settings,
             object_store_settings=object_store_config,
             workspace_storage_issuer=workspace_storage_issuer,
@@ -1054,7 +1006,6 @@ class ApiServices(ApiServiceCore):
             binary_redis_client=binary_redis_client,
             owns_redis_client=owns_redis_client,
             owns_binary_redis_client=owns_binary_redis_client,
-            tailnet_runtime=resolved_tailnet_runtime,
             owned_resources=tuple(owned_runtime_resources),
         )
         return _compose_api_services(
@@ -1145,11 +1096,6 @@ class ApiServices(ApiServiceCore):
                     resource.close()
                 except Exception as exc:
                     failures.append(exc)
-            if self.tailnet_runtime is not None:
-                try:
-                    self.tailnet_runtime.close()
-                except Exception as exc:
-                    failures.append(exc)
             if self.owns_redis_client:
                 try:
                     self.redis_client.close()
@@ -1186,7 +1132,6 @@ def _compose_api_services(
 ) -> ApiServices:
     redis = core.redis()
     scheduler_workers = core.scheduler_workers
-    tailnet_runtime = core.tailnet_runtime
     scheduler_containers = core.scheduler_containers
     scheduler_pool_states = core.scheduler_pool_states
     route_resolver = SchedulerBackendRouteResolver(core.routes, scheduler_containers)
@@ -1194,8 +1139,6 @@ def _compose_api_services(
     transport_factory = HttpContainerServiceTransportFactory(
         route_resolver=route_resolver,
         route_dialer_config=route_dialer_config,
-        tailnet_peer_waiter=tailnet_runtime,
-        tailnet_peer_resolver=tailnet_runtime,
     )
     container_clients = SchedulerContainerClientFactory(
         scheduler_containers=scheduler_containers,
@@ -1205,8 +1148,6 @@ def _compose_api_services(
     proxy_client = PodProxyHttpClient(
         route_resolver=route_resolver,
         route_dialer_config=route_dialer_config,
-        tailnet_peer_waiter=tailnet_runtime,
-        tailnet_peer_resolver=tailnet_runtime,
     )
     container_readiness = RedisContainerReadiness(redis, proxy_client, proxy_client)
     endpoint = endpoint_service or EndpointControlService(
@@ -1215,15 +1156,13 @@ def _compose_api_services(
             scheduler_containers,
             route_resolver=route_resolver,
             route_dialer_config=route_dialer_config,
-            tailnet_peer_waiter=tailnet_runtime,
-            tailnet_peer_resolver=tailnet_runtime,
             readiness_probe=container_readiness,
         ),
-        gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
+        gateway_http_url=lambda: core.gateway_settings.public_http_url,
     )
     function = function_service or FunctionControlService(
         core,
-        gateway_http_url=RedisControlPlaneOriginRepository(core.redis_client).resolve,
+        gateway_http_url=lambda: core.gateway_settings.public_http_url,
     )
     gateway = gateway_service or _gateway_control_service(
         core,
@@ -1253,8 +1192,6 @@ def _compose_api_services(
             connect_shell_backend,
             route_resolver=route_resolver,
             route_dialer_config=route_dialer_config,
-            tailnet_peer_waiter=tailnet_runtime,
-            tailnet_peer_resolver=tailnet_runtime,
         ),
     )
     worker_repository = worker_repository_service or _worker_repository_service(
@@ -1338,8 +1275,7 @@ def _compose_api_services(
         aws_account_connection_settings=core.aws_account_connection_settings,
         aws_capacity_settings=core.aws_capacity_settings,
         aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
-        tailnet_runtime_settings=core.tailnet_runtime_settings,
-        tailnet_control_settings=core.tailnet_control_settings,
+        pangolin_settings=core.pangolin_settings,
         backend_route_settings=core.backend_route_settings,
         object_store_settings=core.object_store_settings,
         workspace_storage_issuer=core.workspace_storage_issuer,
@@ -1388,7 +1324,6 @@ def _compose_api_services(
         aws_connections=core.aws_connections,
         owns_redis_client=core.owns_redis_client,
         owns_binary_redis_client=core.owns_binary_redis_client,
-        tailnet_runtime=core.tailnet_runtime,
         owned_resources=core.owned_resources,
         signal_service=signal_service or RedisSignalService(RedisSignalRepository(redis)),
         map_service=map_service or RedisMapService(core.binary_redis()),
@@ -1435,10 +1370,7 @@ def _gateway_control_service(
     compute_states = RedisComputeStateRepository(core.redis())
     route_dialer = BackendRouteDialer(
         config=core.backend_route_settings.to_dialer_config(),
-        tailnet_peer_waiter=core.tailnet_runtime,
-        tailnet_peer_resolver=core.tailnet_runtime,
     )
-    tailnet_control_config = core.tailnet_control_settings.to_control_config()
     return GatewayControlService(
         core,
         control_plane=core.control_plane_service,
@@ -1454,24 +1386,19 @@ def _gateway_control_service(
         object_storage=core.object_storage,
         agent_image=AgentImageConfig(),
         event_streams=RedisEventStreamRepository(core.redis()),
-        route_prewarmer=RoutePrewarmService(
-            route_dialer,
-            core.events,
-            peer_provider=core.tailnet_runtime,
-        ),
+        route_prewarmer=RoutePrewarmService(route_dialer, core.events),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
         container_client_factory=container_clients,
-        tailnet=core.tailnet_runtime_settings.to_agent_config(),
-        tailnet_control=(
-            TailscaleTailnetControl(tailnet_control_config)
-            if tailnet_control_config is not None
+        private_network_control=(
+            PangolinPrivateNetworkControl(core.pangolin_settings.client())
+            if core.pangolin_settings.configured
             else None
         ),
         route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
-        runtime_origin=RedisControlPlaneOriginRepository(core.redis_client).resolve,
+        runtime_origin=lambda: core.gateway_settings.public_http_url,
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(
                 SchedulerWorkerPreemptionService(

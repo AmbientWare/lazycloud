@@ -28,8 +28,8 @@ members = [
     "operations",
     "provider-aws",
     "provider-clients",
-    "provider-cloudflare",
     "provider-github",
+    "provider-pangolin",
     "provider-stripe",
     "runner",
     "scheduler",
@@ -83,6 +83,7 @@ dependencies = [
     { name = "networking" },
     { name = "provider-aws" },
     { name = "provider-clients" },
+    { name = "provider-pangolin" },
     { name = "worker" },
 ]
 
@@ -95,6 +96,7 @@ requires-dist = [
     { name = "networking", editable = "packages/networking" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
+    { name = "provider-pangolin", editable = "packages/providers/pangolin" },
     { name = "worker", editable = "packages/worker" },
 ]
 
@@ -168,8 +170,8 @@ dependencies = [
     { name = "observability" },
     { name = "operations" },
     { name = "provider-clients" },
-    { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-pangolin" },
     { name = "provider-stripe" },
     { name = "pydantic-settings" },
     { name = "scheduler" },
@@ -203,8 +205,8 @@ requires-dist = [
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-pangolin", editable = "packages/providers/pangolin" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "scheduler", editable = "packages/scheduler" },
@@ -505,13 +507,16 @@ version = "0.1.0"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "agent" },
+    { name = "boto3" },
     { name = "control" },
     { name = "database" },
     { name = "foundation" },
+    { name = "httpx" },
     { name = "identity" },
     { name = "lazycloud" },
     { name = "lazycloud-shared" },
     { name = "provider-clients" },
+    { name = "provider-pangolin" },
     { name = "provider-stripe" },
     { name = "pydantic" },
     { name = "rich" },
@@ -522,13 +527,16 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
+    { name = "boto3", specifier = ">=1.35,<2" },
     { name = "control", editable = "packages/control" },
     { name = "database", editable = "packages/database" },
     { name = "foundation", editable = "packages/foundation" },
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "identity", editable = "packages/identity" },
     { name = "lazycloud", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "provider-clients", editable = "packages/provider-clients" },
+    { name = "provider-pangolin", editable = "packages/providers/pangolin" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "rich", specifier = ">=15,<16" },
@@ -1587,9 +1595,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "provider-cloudflare"
+name = "provider-github"
 version = "0.1.0"
-source = { editable = "packages/providers/cloudflare" }
+source = { editable = "packages/providers/github" }
 dependencies = [
     { name = "httpx" },
     { name = "lazycloud-shared" },
@@ -1604,12 +1612,14 @@ requires-dist = [
 ]
 
 [[package]]
-name = "provider-github"
+name = "provider-pangolin"
 version = "0.1.0"
-source = { editable = "packages/providers/github" }
+source = { editable = "packages/providers/pangolin" }
 dependencies = [
     { name = "httpx" },
     { name = "lazycloud-shared" },
+    { name = "networking" },
+    { name = "pydantic" },
     { name = "pydantic-settings" },
 ]
 
@@ -1617,6 +1627,8 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
+    { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.5,<3" },
 ]
 
@@ -2047,7 +2059,7 @@ dependencies = [
     { name = "observability" },
     { name = "operations" },
     { name = "provider-clients" },
-    { name = "provider-cloudflare" },
+    { name = "provider-pangolin" },
     { name = "provider-stripe" },
     { name = "scheduler" },
     { name = "storage" },
@@ -2072,7 +2084,7 @@ requires-dist = [
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-pangolin", editable = "packages/providers/pangolin" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage", editable = "packages/storage" },
@@ -2489,8 +2501,8 @@ dev = [
     { name = "operations" },
     { name = "provider-aws" },
     { name = "provider-clients" },
-    { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-pangolin" },
     { name = "provider-stripe" },
     { name = "pytest" },
     { name = "ruff" },
@@ -2528,8 +2540,8 @@ workspace = [
     { name = "operations" },
     { name = "provider-aws" },
     { name = "provider-clients" },
-    { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-pangolin" },
     { name = "provider-stripe" },
     { name = "runner" },
     { name = "scheduler" },
@@ -2573,8 +2585,8 @@ dev = [
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-pangolin", editable = "packages/providers/pangolin" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pytest", specifier = ">=9,<10" },
     { name = "ruff", specifier = ">=0.6" },
@@ -2612,8 +2624,8 @@ workspace = [
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
-    { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-pangolin", editable = "packages/providers/pangolin" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "runner", editable = "packages/runner" },
     { name = "scheduler", editable = "packages/scheduler" },

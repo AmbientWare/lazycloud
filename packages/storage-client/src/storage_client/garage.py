@@ -6,9 +6,9 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Protocol
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.identity import WorkspaceStorageConfig
@@ -38,6 +38,30 @@ class WorkspaceStorageStateStore(Protocol):
 
 class GarageAdminError(RuntimeError):
     """The Garage admin API refused or could not answer a request."""
+
+
+class _GarageCreatedKey(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    access_key_id: str = Field(alias="accessKeyId", min_length=1)
+    secret_access_key: str = Field(alias="secretAccessKey", min_length=1)
+
+
+class _GarageLocalAlias(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    alias: str = Field(min_length=1)
+
+
+class _GarageBucket(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    id: str = Field(min_length=1)
+    global_aliases: tuple[str, ...] = Field(default=(), alias="globalAliases")
+    local_aliases: tuple[_GarageLocalAlias, ...] = Field(default=(), alias="localAliases")
+
+
+_GARAGE_BUCKETS = TypeAdapter(tuple[_GarageBucket, ...])
 
 
 class GarageAdminSettings(BaseSettings):
@@ -75,12 +99,11 @@ class GarageAdminClient:
     timeout_seconds: float = 20.0
 
     def create_key(self, name: str) -> tuple[str, str]:
-        created = self._call("/v2/CreateKey", {"name": name})
-        access_key = str(created.get("accessKeyId") or "")
-        secret_key = str(created.get("secretAccessKey") or "")
-        if not access_key or not secret_key:
-            raise GarageAdminError(f"Garage returned no key material for {name!r}")
-        return (access_key, secret_key)
+        try:
+            created = _GarageCreatedKey.model_validate(self._call("/v2/CreateKey", {"name": name}))
+        except ValidationError as exc:
+            raise GarageAdminError(f"Garage returned no key material for {name!r}") from exc
+        return (created.access_key_id, created.secret_access_key)
 
     def delete_key(self, access_key: str) -> None:
         self._call(f"/v2/DeleteKey?id={access_key}", body=None)
@@ -93,12 +116,17 @@ class GarageAdminClient:
         while creating through the S3 API makes an alias local to the key that
         created it. A workspace bucket is made the second way.
         """
-        for bucket in self._call("/v2/ListBuckets", body=None, method="GET"):
-            if alias in (bucket.get("globalAliases") or []):
-                return str(bucket["id"])
-            local = bucket.get("localAliases") or []
-            if any(entry.get("alias") == alias for entry in local):
-                return str(bucket["id"])
+        try:
+            buckets = _GARAGE_BUCKETS.validate_python(
+                self._call("/v2/ListBuckets", body=None, method="GET")
+            )
+        except ValidationError as exc:
+            raise GarageAdminError("Garage returned an invalid bucket list") from exc
+        for bucket in buckets:
+            if alias in bucket.global_aliases:
+                return bucket.id
+            if any(entry.alias == alias for entry in bucket.local_aliases):
+                return bucket.id
         raise GarageAdminError(f"Garage holds no bucket aliased {alias!r}")
 
     def ensure_global_alias(self, *, bucket_id: str, alias: str) -> None:
@@ -109,8 +137,15 @@ class GarageAdminClient:
         request. The name is already unique to one workspace, so promoting it to
         a global alias collides with nothing.
         """
-        info = self._call(f"/v2/GetBucketInfo?id={bucket_id}", body=None, method="GET")
-        if alias in (info.get("globalAliases") or []):
+        try:
+            info = _GarageBucket.model_validate(
+                self._call(f"/v2/GetBucketInfo?id={bucket_id}", body=None, method="GET")
+            )
+        except ValidationError as exc:
+            raise GarageAdminError(
+                f"Garage returned invalid bucket information for {bucket_id}"
+            ) from exc
+        if alias in info.global_aliases:
             return
         self._call("/v2/AddBucketAlias", {"bucketId": bucket_id, "globalAlias": alias})
 
@@ -139,10 +174,10 @@ class GarageAdminClient:
     def _call(
         self,
         path: str,
-        body: dict[str, Any] | None = None,
+        body: JsonValue = None,
         *,
         method: str = "POST",
-    ) -> Any:
+    ) -> object:
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
             self.endpoint_url.rstrip("/") + path,
@@ -161,7 +196,13 @@ class GarageAdminClient:
             raise GarageAdminError(f"Garage admin {path} failed: {exc.code} {detail}") from exc
         except OSError as exc:
             raise GarageAdminError(f"Garage admin {path} is unreachable: {exc}") from exc
-        return json.loads(raw) if raw else {}
+        if not raw:
+            return {}
+        try:
+            decoded: object = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise GarageAdminError(f"Garage admin {path} returned invalid JSON") from exc
+        return decoded
 
 
 @dataclass(frozen=True, slots=True)

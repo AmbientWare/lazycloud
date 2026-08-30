@@ -34,17 +34,15 @@ from shared.env import (
     GATEWAY_HTTP_PORT_ENV,
     GATEWAY_HTTP_TLS_ENV,
     GATEWAY_HTTP_URL_ENV,
-    WORKER_PEER_RESOLVER_ADDRESS_ENV,
     WORKER_REPOSITORY_URL_ENV,
-    WORKER_TAILNET_DNS_SUFFIX_ENV,
 )
 from shared.gpu import normalize_gpu_type
-from shared.routing import BackendRouteTransport
-from shared.tailscale_install import (
-    TAILSCALE_AMD64_SHA256,
-    TAILSCALE_ARM64_SHA256,
-    TAILSCALE_INSTALL_VERSION,
+from shared.newt_install import (
+    NEWT_AMD64_SHA256,
+    NEWT_ARM64_SHA256,
+    NEWT_INSTALL_VERSION,
 )
+from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from worker.configuration import (
@@ -203,7 +201,7 @@ SERVICE_MANAGER="${LAZYCLOUD_AGENT_SERVICE_MANAGER:-auto}"
 SERVICE_NAME="${LAZYCLOUD_AGENT_SERVICE_NAME:-__AGENT_NAME__}"
 STATE_DIR="${LAZYCLOUD_AGENT_STATE_DIR:-}"
 INSTALL_DOCKER="${LAZYCLOUD_AGENT_INSTALL_DOCKER:-auto}"
-INSTALL_TAILSCALE="${LAZYCLOUD_AGENT_INSTALL_TAILSCALE:-auto}"
+INSTALL_NEWT="${LAZYCLOUD_AGENT_INSTALL_NEWT:-auto}"
 READY_TIMEOUT_SECONDS="${LAZYCLOUD_AGENT_READY_TIMEOUT_SECONDS:-__READY_TIMEOUT_SECONDS__}"
 DOCKER_BINARY="${LAZYCLOUD_AGENT_DOCKER_BINARY:-docker}"
 EXECUTOR=""
@@ -230,7 +228,7 @@ main() {
     require_systemd
   fi
   ensure_docker
-  ensure_tailscale
+  ensure_newt
   install_agent
   if [ "$INSTALL_ONLY" = "1" ]; then
     say "Installed __AGENT_NAME__ runtime without enrolling"
@@ -284,8 +282,8 @@ parse_args() {
       --state-dir) require_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
       --install-docker) require_value "$1" "${2:-}"; INSTALL_DOCKER="$2"; shift 2 ;;
       --no-install-docker) INSTALL_DOCKER="never"; shift ;;
-      --install-tailscale) require_value "$1" "${2:-}"; INSTALL_TAILSCALE="$2"; shift 2 ;;
-      --no-install-tailscale) INSTALL_TAILSCALE="never"; shift ;;
+      --install-newt) require_value "$1" "${2:-}"; INSTALL_NEWT="$2"; shift 2 ;;
+      --no-install-newt) INSTALL_NEWT="never"; shift ;;
       --docker-binary) require_value "$1" "${2:-}"; DOCKER_BINARY="$2"; shift 2 ;;
       --executor) require_value "$1" "${2:-}"; EXECUTOR="$2"; shift 2 ;;
       --worker-image) require_value "$1" "${2:-}"; WORKER_IMAGE="$2"; shift 2 ;;
@@ -417,9 +415,9 @@ validate_input() {
     auto|1|true|yes|0|false|no|never) ;;
     *) fail "--install-docker must be auto, true, or never" 2 ;;
   esac
-  case "$INSTALL_TAILSCALE" in
+  case "$INSTALL_NEWT" in
     auto|1|true|yes|0|false|no|never) ;;
-    *) fail "--install-tailscale must be auto, true, or never" 2 ;;
+    *) fail "--install-newt must be auto, true, or never" 2 ;;
   esac
   case "$READY_TIMEOUT_SECONDS" in
     ""|*[!0-9]*) fail "LAZYCLOUD_AGENT_READY_TIMEOUT_SECONDS must be a positive integer" 2 ;;
@@ -557,62 +555,46 @@ install_docker() {
   rm -f "$docker_installer"
 }
 
-tailscale_ready() {
-  command -v tailscale >/dev/null 2>&1 && \
-    command -v tailscaled >/dev/null 2>&1 && \
-    [ "$(tailscale version 2>/dev/null | sed -n '1p')" = "__TAILSCALE_VERSION__" ] && \
-    [ "$(tailscaled --version 2>/dev/null | sed -n '1p')" = "__TAILSCALE_VERSION__" ]
+newt_ready() {
+  command -v newt >/dev/null 2>&1 && \
+    [ "$(newt --version 2>/dev/null | sed -n '1p')" = "Newt version __NEWT_VERSION__" ]
 }
 
-tailscale_install_allowed() {
-  case "$INSTALL_TAILSCALE" in
+newt_install_allowed() {
+  case "$INSTALL_NEWT" in
     auto|1|true|yes) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-ensure_tailscale() {
-  if tailscale_ready; then
+ensure_newt() {
+  if newt_ready; then
     return
   fi
-  if ! tailscale_install_allowed; then
-    fail "Tailscale __TAILSCALE_VERSION__ is required; use --install-tailscale auto" 1
+  if ! newt_install_allowed; then
+    fail "Newt __NEWT_VERSION__ is required; use --install-newt auto" 1
   fi
   if [ "$(id -u)" -ne 0 ]; then
-    fail "automatic Tailscale installation requires root; rerun with sudo" 1
-  fi
-  if ! command -v tar >/dev/null 2>&1; then
-    fail "tar is required to install Tailscale" 1
+    fail "automatic Newt installation requires root; rerun with sudo" 1
   fi
 
   case "$ARCH_NAME" in
-    amd64) tailscale_sha="__TAILSCALE_AMD64_SHA256__" ;;
-    arm64) tailscale_sha="__TAILSCALE_ARM64_SHA256__" ;;
-    *) fail "unsupported Tailscale architecture: $ARCH_NAME" 1 ;;
+    amd64) newt_sha="__NEWT_AMD64_SHA256__" ;;
+    arm64) newt_sha="__NEWT_ARM64_SHA256__" ;;
+    *) fail "unsupported Newt architecture: $ARCH_NAME" 1 ;;
   esac
-  archive="$(mktemp)"
-  extracted="$(mktemp -d)"
-  archive_url="https://pkgs.tailscale.com/stable/tailscale___TAILSCALE_VERSION___${ARCH_NAME}.tgz"
-  say "Installing Tailscale __TAILSCALE_VERSION__"
-  if ! download_file "$archive_url" "$archive"; then
-    rm -rf "$archive" "$extracted"
-    fail "unable to download the pinned official Tailscale archive" 1
+  binary="$(mktemp)"
+  binary_url="https://github.com/fosrl/newt/releases/download/__NEWT_VERSION__/newt_linux_${ARCH_NAME}"
+  say "Installing Newt __NEWT_VERSION__"
+  if ! download_file "$binary_url" "$binary"; then
+    rm -f "$binary"
+    fail "unable to download the pinned official Newt binary" 1
   fi
-  verify_sha256 "$archive" "$tailscale_sha" "Tailscale archive"
-  if ! tar -xzf "$archive" -C "$extracted"; then
-    rm -rf "$archive" "$extracted"
-    fail "unable to extract the Tailscale archive" 1
-  fi
-  release_dir="$extracted/tailscale___TAILSCALE_VERSION___${ARCH_NAME}"
-  if [ ! -x "$release_dir/tailscale" ] || [ ! -x "$release_dir/tailscaled" ]; then
-    rm -rf "$archive" "$extracted"
-    fail "Tailscale archive does not contain the expected client and daemon" 1
-  fi
-  install -m 0755 "$release_dir/tailscale" /usr/local/bin/tailscale
-  install -m 0755 "$release_dir/tailscaled" /usr/local/bin/tailscaled
-  rm -rf "$archive" "$extracted"
-  if ! tailscale_ready; then
-    fail "Tailscale __TAILSCALE_VERSION__ was installed but failed its version readiness check" 1
+  verify_sha256 "$binary" "$newt_sha" "Newt binary"
+  install -m 0755 "$binary" /usr/local/bin/newt
+  rm -f "$binary"
+  if ! newt_ready; then
+    fail "Newt __NEWT_VERSION__ was installed but failed its version readiness check" 1
   fi
 }
 
@@ -801,9 +783,9 @@ main "$@"
     return (
         script.replace("__AGENT_NAME__", name)
         .replace("__HOME_DIR__", HOME_DIR)
-        .replace("__TAILSCALE_VERSION__", TAILSCALE_INSTALL_VERSION)
-        .replace("__TAILSCALE_AMD64_SHA256__", TAILSCALE_AMD64_SHA256)
-        .replace("__TAILSCALE_ARM64_SHA256__", TAILSCALE_ARM64_SHA256)
+        .replace("__NEWT_VERSION__", NEWT_INSTALL_VERSION)
+        .replace("__NEWT_AMD64_SHA256__", NEWT_AMD64_SHA256)
+        .replace("__NEWT_ARM64_SHA256__", NEWT_ARM64_SHA256)
         .replace("__DEFAULT_AGENT_STATE_DIR__", DEFAULT_AGENT_STATE_DIR)
         .replace("__AGENT_RUNTIME_READY_FILE__", AGENT_RUNTIME_READY_FILE)
         .replace("__READY_TIMEOUT_SECONDS__", str(AGENT_SERVICE_READY_TIMEOUT_SECONDS))
@@ -916,7 +898,7 @@ class AgentBootstrap(ContractModel):
     gateway_grpc_host: str = ""
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
-    transport: str = "http"
+    transport: BackendRouteTransport = BackendRouteTransport.Direct
     image_local_cache_enabled: bool = True
     image_registry_store: str = "local"
     image_clip_version: int = 2
@@ -1400,7 +1382,7 @@ def build_agent_worker_config(
             agent_worker=True,
         ),
         network=WorkerNetworkConfiguration(
-            route_transport=_agent_worker_route_transport(bootstrap.transport),
+            route_transport=bootstrap.transport,
             agent_bridge_network=bool(slot.network_prefix),
             bridge_name=selected_network.bridge_name,
             bridge_subnet=selected_network.bridge_subnet,
@@ -1421,15 +1403,6 @@ def build_agent_worker_config(
     )
 
 
-def _agent_worker_route_transport(value: str) -> BackendRouteTransport:
-    normalized = value.strip().lower().replace("-", "_")
-    if normalized in {"tailnet", "tailscale", "tsnet", "tsnet_restricted"}:
-        return BackendRouteTransport.TsnetRestricted
-    if normalized in {"", "http", "direct"}:
-        return BackendRouteTransport.Direct
-    return BackendRouteTransport(normalized)
-
-
 def plan_worker_container(
     bootstrap: AgentBootstrap,
     slot: AgentWorkerSlot,
@@ -1441,8 +1414,6 @@ def plan_worker_container(
     platform: str = "",
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
-    peer_resolver_address: str = "",
-    tailnet_dns_suffix: str = "",
 ) -> AgentWorkerContainerPlan:
     selected_network = network or AgentWorkerNetwork()
     dirs = build_agent_worker_dirs(state_dir, slot.worker_id)
@@ -1483,11 +1454,6 @@ def plan_worker_container(
         assignment = slot.gpu_assignment or "all"
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
         env["WORKER_GPU_DEVICES"] = assignment
-    if peer_resolver_address and tailnet_dns_suffix:
-        # Both or neither: an address without a suffix resolves nothing, and a
-        # suffix without an address names peers the worker cannot look up.
-        env[WORKER_PEER_RESOLVER_ADDRESS_ENV] = peer_resolver_address
-        env[WORKER_TAILNET_DNS_SUFFIX_ENV] = tailnet_dns_suffix
     env.update(gateway_env)
     volumes = [
         f"{dirs.images}:/images",

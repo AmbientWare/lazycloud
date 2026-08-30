@@ -31,7 +31,7 @@ from gateway.http import LeaveAgentRequest, LeaveAgentResponse
 from shared.app_identity import AGENT_NAME
 from shared.compute_policy import MachinePool
 from shared.http.errors import ErrorResponse, HttpApiError
-from shared.tailscale_install import TAILSCALE_AMD64_SHA256, TAILSCALE_INSTALL_VERSION
+from shared.newt_install import NEWT_AMD64_SHA256, NEWT_INSTALL_VERSION
 from shared.usage import UsageBillingOwner
 from tests.url_constants import EXAMPLE_URL
 from worker.source_cache_cleanup import (
@@ -146,7 +146,7 @@ def test_install_script_forwards_provider_identity_without_join_token(tmp_path: 
             "0",
             "--install-docker",
             "auto",
-            "--install-tailscale",
+            "--install-newt",
             "auto",
             "--background",
             "--agent-bin",
@@ -331,16 +331,16 @@ def test_install_script_refuses_missing_docker_when_install_is_disabled(tmp_path
     assert "test-join-token" not in completed.stderr
 
 
-def test_install_script_installs_pinned_tailscale_client_and_daemon(tmp_path: Path) -> None:
+def test_install_script_installs_pinned_newt_binary(tmp_path: Path) -> None:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     _fake_uname(fake_bin)
-    (fake_bin / "tailscale").unlink()
-    (fake_bin / "tailscaled").unlink()
+    (fake_bin / "newt").unlink()
     _executable(fake_bin / "id", "#!/bin/sh\nprintf '0\\n'\n")
     _executable(
         fake_bin / "curl",
-        """#!/bin/sh
+        (
+            """#!/bin/sh
 set -eu
 out=""
 url=""
@@ -351,30 +351,15 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-printf 'archive' > "$out"
-printf '%s\n' "$url" > "$TAILSCALE_URL_FILE"
-""",
+printf '#!/bin/sh\nprintf "Newt version __NEWT_VERSION__\\n"\n' > "$out"
+chmod 0755 "$out"
+printf '%s\n' "$url" > "$NEWT_URL_FILE"
+"""
+        ).replace("__NEWT_VERSION__", NEWT_INSTALL_VERSION),
     )
     _executable(
         fake_bin / "sha256sum",
-        f"#!/bin/sh\nprintf '{TAILSCALE_AMD64_SHA256}  %s\\n' \"$1\"\n",
-    )
-    _executable(
-        fake_bin / "tar",
-        f"""#!/bin/sh
-set -eu
-destination=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-C" ]; then shift; destination="$1"; fi
-  shift
-done
-release="$destination/tailscale_{TAILSCALE_INSTALL_VERSION}_amd64"
-mkdir -p "$release"
-for name in tailscale tailscaled; do
-  printf '#!/bin/sh\nprintf "{TAILSCALE_INSTALL_VERSION}\\n"\n' > "$release/$name"
-  chmod 0755 "$release/$name"
-done
-""",
+        f"#!/bin/sh\nprintf '{NEWT_AMD64_SHA256}  %s\\n' \"$1\"\n",
     )
     _executable(
         fake_bin / "install",
@@ -388,7 +373,7 @@ chmod 0755 "$target"
 """,
     )
     args_file = tmp_path / "agent-args"
-    tailscale_url_file = tmp_path / "tailscale-url"
+    newt_url_file = tmp_path / "newt-url"
     agent_binary = _executable(
         tmp_path / AGENT_NAME,
         '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$AGENT_ARGS_FILE"\n',
@@ -410,7 +395,7 @@ chmod 0755 "$target"
         {
             "FAKE_BIN": str(fake_bin),
             "AGENT_ARGS_FILE": str(args_file),
-            "TAILSCALE_URL_FILE": str(tailscale_url_file),
+            "NEWT_URL_FILE": str(newt_url_file),
         }
     )
 
@@ -431,14 +416,13 @@ chmod 0755 "$target"
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert "Installing Tailscale" in completed.stderr
+    assert f"Installing Newt {NEWT_INSTALL_VERSION}" in completed.stderr
     assert (
-        tailscale_url_file.read_text(encoding="utf-8")
+        newt_url_file.read_text(encoding="utf-8")
         .strip()
-        .endswith(f"tailscale_{TAILSCALE_INSTALL_VERSION}_amd64.tgz")
+        .endswith(f"/{NEWT_INSTALL_VERSION}/newt_linux_amd64")
     )
-    assert (fake_bin / "tailscale").is_file()
-    assert (fake_bin / "tailscaled").is_file()
+    assert (fake_bin / "newt").is_file()
 
 
 def test_install_script_fails_before_changes_when_background_is_not_root(tmp_path: Path) -> None:
@@ -1020,7 +1004,7 @@ def _linux_environment(tmp_path: Path) -> dict[str, str]:
 def _hermetic_environment(fake_bin: Path, *host_utilities: str) -> dict[str, str]:
     """Installer environment whose PATH resolves only fakes and the named host tools.
 
-    The installer probes the host for Docker and Tailscale, so a PATH that still
+    The installer probes the host for Docker and Newt, so a PATH that still
     reaches /usr/bin makes the result depend on what the developer happens to
     have installed. Naming every real utility keeps the probe outcome under the
     test's control.
@@ -1041,9 +1025,8 @@ def _fake_uname(fake_bin: Path) -> None:
 if [ "${1:-}" = "-s" ]; then printf 'Linux\\n'; else printf 'x86_64\\n'; fi
 """,
     )
-    version_script = f"#!/bin/sh\nprintf '{TAILSCALE_INSTALL_VERSION}\\n'\n"
-    _executable(fake_bin / "tailscale", version_script)
-    _executable(fake_bin / "tailscaled", version_script)
+    version_script = f"#!/bin/sh\nprintf 'Newt version {NEWT_INSTALL_VERSION}\\n'\n"
+    _executable(fake_bin / "newt", version_script)
 
 
 def _executable(path: Path, contents: str) -> Path:

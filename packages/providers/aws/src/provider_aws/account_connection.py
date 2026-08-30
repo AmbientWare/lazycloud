@@ -435,8 +435,8 @@ class AwsConnectionStsClient(Protocol):
         RoleArn: str,
         RoleSessionName: str,
         DurationSeconds: int,
-        ExternalId: str | None = None,
-        Policy: str | None = None,
+        ExternalId: str = ...,
+        Policy: str = ...,
     ) -> Mapping[str, object]: ...
 
     def get_caller_identity(self) -> Mapping[str, object]: ...
@@ -2233,6 +2233,11 @@ def default_connection_session(
         aws_secret_access_key=aws_secret_access_key,
         aws_session_token=aws_session_token,
     )
+
+
+def ambient_connection_session(*, region_name: str) -> AwsConnectionSession:
+    """An AWS session using only the workload's ambient credential chain."""
+    return _Boto3ConnectionSession(Session(region_name=region_name))
 
 
 def connection_profile_name() -> str:

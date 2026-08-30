@@ -100,10 +100,29 @@ variable "destroy_buckets_with_contents" {
   default     = true
 }
 
-variable "cloudflare_state_key" {
-  description = "State key of the deploy/cloudflare module, read for the tunnel credentials."
+variable "gateway_public_http_url" {
+  description = "Public LazyCloud origin routed to the control plane by Pangolin."
   type        = string
-  default     = "cloudflare/production.tfstate"
+}
+
+variable "github_redirect_uri" {
+  description = "GitHub App callback on the Pangolin-served LazyCloud origin."
+  type        = string
+}
+
+variable "pangolin_api_url" {
+  description = "Pangolin Integration API base URL reachable from the control plane."
+  type        = string
+}
+
+variable "pangolin_endpoint" {
+  description = "Pangolin endpoint Newt connectors and platform clients reach."
+  type        = string
+}
+
+variable "pangolin_organization_id" {
+  description = "Pangolin organization that owns LazyCloud sites and resources."
+  type        = string
 }
 
 variable "control_role_name" {
@@ -220,6 +239,42 @@ variable "external_secrets_service_account" {
   default     = "external-secrets"
 }
 
+variable "pangolin_bootstrap_service_account" {
+  description = "Service account allowed to write this deployment's Pangolin runtime identity secret."
+  type        = string
+  default     = "pangolin-bootstrap"
+}
+
+variable "control_plane_replicas" {
+  description = "Control-plane replicas and Pangolin machine clients the deployment maintains."
+  type        = number
+  default     = 2
+
+  validation {
+    condition = (
+      var.control_plane_replicas >= 2 &&
+      var.control_plane_replicas <= 20 &&
+      floor(var.control_plane_replicas) == var.control_plane_replicas
+    )
+    error_message = "control_plane_replicas must be an integer from 2 through 20."
+  }
+}
+
+variable "pangolin_site_replicas" {
+  description = "Newt connector replicas and Pangolin sites the deployment maintains."
+  type        = number
+  default     = 2
+
+  validation {
+    condition = (
+      var.pangolin_site_replicas >= 2 &&
+      var.pangolin_site_replicas <= 20 &&
+      floor(var.pangolin_site_replicas) == var.pangolin_site_replicas
+    )
+    error_message = "pangolin_site_replicas must be an integer from 2 through 20."
+  }
+}
+
 variable "redis_node_type" {
   description = "ElastiCache node type for the coordination Redis."
   type        = string
@@ -292,7 +347,7 @@ variable "github_app_private_key" {
     PEM for the organisation's GitHub App, which is how Argo reads the repository.
 
     Supplied from the operator environment as `TF_VAR_github_app_private_key`,
-    beside the PlanetScale and Cloudflare credentials, because Terraform declares
+    beside the PlanetScale and Pangolin credentials, because Terraform declares
     this deployment's secret containers and cannot read a value out of one it has
     only just created.
 

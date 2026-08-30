@@ -2,7 +2,7 @@
 
 One process, several cadences. Placement answers in milliseconds because a
 caller is waiting for it; capacity keeps the fleet and its records agreeing;
-housekeeping waits on Stripe, S3, Tailscale and Cloudflare, which answer on
+housekeeping waits on Stripe, S3, and Pangolin, which answer on
 their own schedule. Running all of it on one thread meant placement waited for
 the slowest of them, and a task took fifty-five seconds to start behind a
 Stripe drain.

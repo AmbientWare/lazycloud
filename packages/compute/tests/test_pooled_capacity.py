@@ -35,7 +35,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    TailnetCleanupTombstoneRepository,
+    PrivateNetworkCleanupTombstoneRepository,
 )
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -62,7 +62,7 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    TailnetEnrollmentPhase,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -1267,9 +1267,9 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
                 heartbeat_confirmed=True,
                 schedulable=True,
                 readiness_phase=MachineReadinessPhase.Ready,
-                tailnet_generation=1,
-                tailnet_phase=TailnetEnrollmentPhase.Bound,
-                tailnet_device_id="device-1",
+                network_generation=1,
+                network_phase=PrivateNetworkEnrollmentPhase.Connected,
+                network_site_id="site-1",
                 last_join_at=now,
                 last_heartbeat_at=now,
             )
@@ -1299,7 +1299,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         machine = MachineRepository(session).get(machine_id, workspace_id=pool.workspace_id)
         worker = WorkerRepository(session).get(worker_id, workspace_id=pool.workspace_id)
         durable_credential = ComputeJoinCredentialRepository(session).get(credential.id)
-        tombstone = TailnetCleanupTombstoneRepository(session).get_by_machine(machine_id)
+        tombstone = PrivateNetworkCleanupTombstoneRepository(session).get_by_machine(machine_id)
     assert enrollment is not None
     assert enrollment.status is ComputeMachineEnrollmentStatus.Deleted
     assert enrollment.schedulable is False
@@ -1310,8 +1310,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     assert durable_credential is not None
     assert durable_credential.status is ComputeCredentialStatus.Revoked
     assert tombstone is not None
-    assert tombstone.generations == [1]
-    assert tombstone.device_ids == ["device-1"]
+    assert tombstone.site_ids == ["site-1"]
     assert {item[1] for item in hooks.retired} == {machine_id}
     assert set(hooks.revoked_join_tokens) == {credential.token_hash}
 
@@ -1646,7 +1645,7 @@ def _offer() -> ComputeOffer:
 
 
 class _Bootstrap:
-    """A pool bootstrap provisioner with no tailnet behind it."""
+    """A pool bootstrap provisioner with no external network dependency."""
 
     def __init__(self) -> None:
         self.released: list[str] = []
@@ -1990,9 +1989,9 @@ def _seed_serving_machine(
                 heartbeat_confirmed=True,
                 schedulable=True,
                 readiness_phase=MachineReadinessPhase.Ready,
-                tailnet_generation=1,
-                tailnet_phase=TailnetEnrollmentPhase.Bound,
-                tailnet_device_id=f"device-{machine_id[:4]}",
+                network_generation=1,
+                network_phase=PrivateNetworkEnrollmentPhase.Connected,
+                network_site_id=f"site-{machine_id[:4]}",
                 last_join_at=now,
                 last_heartbeat_at=now,
             )

@@ -8,15 +8,8 @@ proof. So the script lives here and the provider supplies a shell fragment. The
 alternative was a copy per cloud, which is how the script would drift.
 
 Everything after identity belongs to the published agent installer, which this
-script downloads and runs. It installs the container runtime, installs
-Tailscale, verifies and installs the agent, and writes the agent's systemd unit.
-This script owning copies of those steps is what let them disagree with the
-installer in production.
-
-The node reports to the public origin, because it holds no tailnet identity
-until it enrols. Enrolment vends it a single-use machine key, and the agent
-joins the tailnet with that; there is no pool-scoped key in user-data and no
-tailnet session before the agent exists.
+script downloads and runs. It installs the container runtime, Newt, the agent,
+and the agent's systemd unit.
 """
 
 from __future__ import annotations
@@ -31,34 +24,12 @@ from pydantic import Field, field_validator
 from shared.app_identity import (
     AGENT_NAME,
     AGENT_STATE_DIR,
-    AGENT_TAILNET_DIR_NAME,
-    NAME,
-    TAILSCALED_SOCKET_NAME,
-    TAILSCALED_STATE_NAME,
 )
 from shared.contracts import ContractModel
 from shared.urls import normalize_http_origin
 
-# The socket the unit serves is the socket the agent is told to dial. Every
-# component of both is named once, in `shared.app_identity`, so the daemon and
-# the process attaching to it cannot disagree about where it lives.
 AGENT_BIN_PATH = f"/usr/local/bin/{AGENT_NAME}"
-TAILNET_STATE_DIR = f"{AGENT_STATE_DIR}/{AGENT_TAILNET_DIR_NAME}"
-TAILNET_SOCKET_PATH = f"{TAILNET_STATE_DIR}/{TAILSCALED_SOCKET_NAME}"
-TAILNET_STATE_FILE = f"{TAILNET_STATE_DIR}/{TAILSCALED_STATE_NAME}"
-
-# Not `tailscaled.service`: that name belongs to the upstream Tailscale package,
-# and a node that ever installs it would end up with two units for one daemon.
 AGENT_SERVICE_NAME = f"{AGENT_NAME}.service"
-TAILNET_SERVICE_NAME = f"{NAME}-tailscaled.service"
-TAILNET_SERVICE_PATH = f"/etc/systemd/system/{TAILNET_SERVICE_NAME}"
-
-# Resolved through PATH, matching the agent's own defaults, so a node that
-# passes `tailscale_ready` is running the binaries the agent will later find.
-# The unit resolves `tailscaled` to an absolute path before writing ExecStart,
-# which systemd requires.
-TAILSCALE_BINARY = "tailscale"
-TAILSCALED_BINARY = "tailscaled"
 
 _PROVIDER_IDENTITY_MARKER = "# __PROVIDER_IDENTITY__"
 _SENTINEL_PATTERN = re.compile(r"__[A-Z0-9_]+__")
@@ -106,9 +77,8 @@ def validate_agent_binary_url(value: str) -> str:
 class NodeBootstrapSettings(ContractModel):
     """Everything a booting node needs that no provider owns.
 
-    `control_plane_url` is the public origin: a node in a customer VPC holds no
-    tailnet session when it reports, and joins the tailnet only once the agent
-    has enrolled and been vended a credential.
+    `control_plane_url` is the public origin a node uses before and after
+    private-network enrollment.
     """
 
     control_plane_url: str
@@ -209,9 +179,9 @@ bootstrap_main() {
   STEP=identity
   resolve_node_identity
 
-  # Docker, Tailscale, the agent binary, and the systemd unit are the published
+  # Docker, Newt, the agent binary, and the systemd unit are the published
   # installer's job. This script duplicated all four, and the copies drifted:
-  # it wrote a unit the agent also writes, and pinned a Tailscale version the
+  # it wrote a unit the agent also writes, and pinned a connector version the
   # installer pins per-architecture.
   STEP=install
   installer=/tmp/lazycloud-agent-install.sh
@@ -282,13 +252,6 @@ def node_bootstrap_script(
 
 __all__ = [
     "AGENT_BIN_PATH",
-    "TAILNET_SERVICE_NAME",
-    "TAILNET_SERVICE_PATH",
-    "TAILNET_SOCKET_PATH",
-    "TAILNET_STATE_DIR",
-    "TAILNET_STATE_FILE",
-    "TAILSCALED_BINARY",
-    "TAILSCALE_BINARY",
     "NodeBootstrapError",
     "NodeBootstrapProfile",
     "NodeBootstrapSettings",

@@ -21,10 +21,23 @@ secrets:
   # platform module's `secret_environment`. Every workload gets all of these as
   # environment.
   map: {}
-  # Entries materialised into the same Secret but mounted as files by the one
-  # workload that reads them, from `secret_files`. Kept apart from `map` so a
-  # credential one pod needs is not in the environment of every pod.
-  files: {}
+  pangolinControl:
+    name: lazycloud-pangolin-control
+    # Operator-supplied Pangolin credentials. Only the API, scheduler and
+    # Pangolin bootstrap reference this Secret.
+    map: {}
+  pangolinRuntime:
+    # Secrets Manager entry written by the Pangolin bootstrap Job.
+    secretId: ""
+    provider:
+      name: lazycloud-pangolin-provider
+      map: {}
+    sites:
+      name: lazycloud-pangolin-sites
+      map: {}
+    clients:
+      name: lazycloud-pangolin-clients
+      map: {}
   refreshInterval: 1h
 
 # Named here and in the Pod Identity associations the platform module declares.
@@ -32,6 +45,7 @@ secrets:
 serviceAccounts:
   controlPlane: control-plane
   scheduler: scheduler
+  pangolinBootstrap: pangolin-bootstrap
   externalSecrets: external-secrets
 
 # The server's own ceiling, divided below. Every process holds its own pool, so
@@ -41,6 +55,20 @@ database:
   maxConnections: 25
   # Kept back for an operator's psql and the database's own sessions.
   reserved: 3
+
+pangolin:
+  publicHostname: ""
+  client:
+    image: docker.io/fosrl/pangolin-cli:0.16.0@sha256:a25a6d81b1f6c20f9f4c47fda4c82e61ec5a7cf72f6465174db552b0fe616434
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+  site:
+    replicas: 2
+    image: docker.io/fosrl/newt:1.16.0@sha256:345fdeb369be6608d82c41d70637636c78b2c04a6112ff6ec20fc21c48afc899
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
 
 # Every workload below states a CPU and a memory request, and the reason is that
 # Karpenter sizes the cluster from exactly this. A pod that requests nothing is
@@ -166,32 +194,6 @@ cacheServer:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
-
-cloudflared:
-  # More than one connector, which is how a tunnel is meant to be run and what a
-  # single host could not offer.
-  replicas: 2
-  image: cloudflare/cloudflared:2026.7.3
-  tunnelId: ""
-  # The zone this deployment answers for, which the ingress rules are written
-  # against and the public origin is built from.
-  apex: ""
-  # Deliberately far above what it measures at rest, which is 7m and 26Mi.
-  #
-  # This process is the whole product's ingress and its failure mode is
-  # scheduling latency rather than throughput. A QUIC connection is declared
-  # dead when its keepalive stops arriving, so a connector that cannot run for a
-  # few seconds does not serve slowly. It drops every connection it holds and
-  # every stream on them, and Cloudflare answers 502 while the origin behind it
-  # is idle and healthy. A request is what apportions a contended CPU, so this
-  # one is sized for the contention rather than for the average.
-  resources:
-    requests: { cpu: 150m, memory: 96Mi }
-    limits: { memory: 256Mi }
-
-tunnel:
-  # The tunnel credentials arrive in the same Secret as everything else.
-  credentialsKey: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS
 
 # The platform's own AWS account as capacity, from the module's
 # `fleet_connection` output. Registering it is one call with these five values.

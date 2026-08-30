@@ -11,16 +11,12 @@ runbook and states the two deployment models.
 - This is greenfield and stays greenfield. An apply produces the deployment; it
   does not adopt one. Do not add import blocks or reconciliation against
   hand-built resources.
-- A deployment's credentials are two JSON documents, split by who can produce
-  the value. `<deployment>/platform` is written here and rewritten on every
-  apply; `<deployment>/operator` is declared here and written by a person.
-  Secrets Manager bills per entry, and one entry cannot hold both: a document is
-  written atomically, so a single one would have this configuration dropping
-  every field an operator added. `ignore_changes` does not rescue it, because
-  the database URL carries a password that rotates.
-- Never put a value only a person can obtain into the platform document. That is
-  the line the split exists to hold, and it is what keeps operator credentials
-  out of the state file.
+- A deployment's credentials are three single-writer JSON documents.
+  `<deployment>/platform` is written here, `<deployment>/operator` is written by
+  a person, and `<deployment>/pangolin-runtime` is written by the Pangolin
+  bootstrap Job. A document is atomic, so never mix those writers.
+- Never put a value only a person can obtain into the platform document, or a
+  generated Pangolin credential into the operator document.
 - Name every variable in the chart rather than extracting a document wholesale.
   `dataFrom` copies whatever the document happens to contain, so a variable
   nobody wrote is first reported by a pod that will not start.
@@ -36,9 +32,10 @@ runbook and states the two deployment models.
   declared here and no workload names a node: Karpenter sizes from what the pods
   request, so a hand-declared pool would be choosing hardware on its behalf and
   paying for it whether or not anything lands there.
-  The control plane does need `NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`
-  for the tailnet device it holds. Those are properties of a pod and of the node
-  image every node already runs, not reasons to pick an instance type.
+  The Pangolin client sidecar needs `NET_ADMIN` and a real `/dev/net/tun`.
+  Those are properties of the control-plane pod and of the node image every node
+  already runs, not reasons to pick an instance type. The API container receives
+  neither.
 - A workload's AWS identity is its own, assumed through the cluster's OIDC
   provider, and never the node's. The subject names service accounts exactly: a
   wildcard would let any pod in the namespace hold the role that reaches every

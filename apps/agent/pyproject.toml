@@ -11,6 +11,7 @@ dependencies = [
     "networking",
     "provider-clients",
     "provider-aws",
+    "provider-pangolin",
     "worker",
 ]
 

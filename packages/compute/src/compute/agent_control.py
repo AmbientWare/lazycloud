@@ -207,14 +207,10 @@ class AgentImageConfig(ContractModel):
     local_cache_enabled: bool = True
 
 
-class TailnetConfig(ContractModel):
-    control_url: str = ""
-
-
 class TransportValidationPlan(ContractModel):
     decision: TransportCredentialDecision
     accepted: bool
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     err_msg: str = ""
 
 
@@ -226,7 +222,7 @@ class AgentBootstrapConfig(ContractModel):
     gateway_grpc_tls: bool = True
     workspace_id: str
     pool: MachinePool
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     executor: str = DEFAULT_PRIVATE_EXECUTOR
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     image_registry_store: str = ""
@@ -282,17 +278,6 @@ class RoutePrewarmAttemptPlan(ContractModel):
     proxy_target: str = ""
     next_attempts: dict[str, datetime] = Field(default_factory=dict)
     timeout_seconds: float = ROUTE_PREWARM_TIMEOUT_SECONDS
-
-
-class TailnetPeerView(ContractModel):
-    host_name: str = ""
-    dns_name: str = ""
-    tailnet_ips: list[str] = Field(default_factory=list)
-    online: bool = False
-    active: bool = False
-    current_address: str = ""
-    relay: str = ""
-    last_handshake_at: datetime | None = None
 
 
 class RoutePrewarmResultPlan(ContractModel):
@@ -905,7 +890,6 @@ def agent_install_command(
 
 def validate_agent_transport_config(
     transport: BackendRouteTransport | str,
-    tailnet: TailnetConfig,
 ) -> TransportValidationPlan:
     try:
         normalized = normalize_backend_route_transport(str(transport))
@@ -915,7 +899,7 @@ def validate_agent_transport_config(
             accepted=False,
             err_msg=f"unsupported agent transport {transport!r}",
         )
-    if normalized is not BackendRouteTransport.TsnetRestricted:
+    if normalized is not BackendRouteTransport.PrivateNetwork:
         return TransportValidationPlan(
             decision=TransportCredentialDecision.Unsupported,
             accepted=False,
@@ -930,18 +914,6 @@ def validate_agent_transport_config(
 
 
 _LOCAL_RUNTIME_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
-# Tailscale addresses a remote machine genuinely reaches. IPv4 uses the CGNAT
-# range, which `ipaddress` already reports as non-private; IPv6 uses a ULA
-# prefix, which it reports as private, so the prefix is named here rather than
-# leaving a working tailnet configuration to be refused as unroutable.
-_TAILNET_NETWORKS = (
-    ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
-)
-
-
-def _is_tailnet_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return any(address in network for network in _TAILNET_NETWORKS)
 
 
 def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
@@ -957,11 +929,7 @@ def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
         address = ipaddress.ip_address(host)
     except ValueError:
         return "." not in host
-    if _is_tailnet_address(address):
-        return False
-    return (
-        address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified
-    )
+    return not address.is_global
 
 
 def _reject_unroutable_runtime_url(
@@ -978,7 +946,7 @@ def _reject_unroutable_runtime_url(
     forever on `Name or service not known`. Failing here names the cause instead
     of producing a machine that looks ready and can never run work.
     """
-    if transport is not BackendRouteTransport.TsnetRestricted:
+    if transport is not BackendRouteTransport.PrivateNetwork:
         return
     host = urlparse(url).hostname or ""
     if not host:
@@ -998,14 +966,13 @@ def build_agent_bootstrap_config(
     image: AgentImageConfig,
     *,
     gateway_runtime_http_url: str,
-    tailnet: TailnetConfig,
     executor: str = DEFAULT_PRIVATE_EXECUTOR,
 ) -> AgentBootstrapConfig:
     normalized = normalize_unit_config(pool_state.config or PoolConfig(name=pool_state.name))
     if normalized is None:
         msg = "pool config is required"
         raise ValueError(msg)
-    transport_plan = validate_agent_transport_config(normalized.transport, tailnet)
+    transport_plan = validate_agent_transport_config(normalized.transport)
     if not transport_plan.accepted:
         raise ValueError(transport_plan.err_msg)
     _reject_unroutable_runtime_url(
@@ -1195,7 +1162,7 @@ def plan_route_prewarm_attempt(
         transport = _transport(route.transport)
     except ValueError:
         transport = BackendRouteTransport.Direct
-    if transport is not BackendRouteTransport.TsnetRestricted:
+    if transport is not BackendRouteTransport.PrivateNetwork:
         return RoutePrewarmAttemptPlan(
             decision=RoutePrewarmDecision.UnsupportedTransport,
             should_attempt=False,
@@ -1227,59 +1194,16 @@ def plan_route_prewarm_attempt(
     )
 
 
-def route_peer_attrs(
-    proxy_target: str,
-    peers: list[TailnetPeerView],
-    *,
-    now: datetime | None = None,
-    status_error: str = "",
-) -> dict[str, str]:
-    if status_error:
-        return {"peer_status_error": status_error}
-    host = _proxy_target_host(proxy_target)
-    if host == "":
-        return {}
-    current_time = _utc(now)
-    for peer in peers:
-        if not peer_matches_host(peer.host_name, peer.dns_name, host):
-            continue
-        attrs = {
-            "peer_online": str(peer.online).lower(),
-            "peer_active": str(peer.active).lower(),
-            "peer_direct": str(bool(peer.current_address)).lower(),
-        }
-        if peer.relay:
-            attrs["peer_relay"] = peer.relay
-        if peer.tailnet_ips:
-            attrs["peer_tailnet_ips"] = ",".join(peer.tailnet_ips)
-        if peer.last_handshake_at is not None:
-            age = max(current_time - _utc(peer.last_handshake_at), timedelta())
-            attrs["peer_last_handshake_age_ms"] = str(int(age.total_seconds() * 1000))
-        return attrs
-    return {"peer_status": "not_found"}
-
-
-def peer_matches_host(host_name: str, dns_name: str, target: str) -> bool:
-    normalized_target = target.strip().rstrip(".")
-    normalized_host = host_name.strip().rstrip(".")
-    normalized_dns = dns_name.strip().rstrip(".")
-    return normalized_target in (normalized_host, normalized_dns) or normalized_dns.startswith(
-        f"{normalized_target}."
-    )
-
-
 def plan_route_prewarm_result(
     route: AgentBackendRoute,
     *,
     dial_latency_ms: int,
     error: str = "",
-    peer_attrs: dict[str, str] | None = None,
 ) -> RoutePrewarmResultPlan:
     attrs = {
         "proxy_target": route.proxy_target,
         "dial_ms": str(max(dial_latency_ms, 0)),
     }
-    attrs.update(peer_attrs or {})
     if error:
         attrs["reason"] = error
         return RoutePrewarmResultPlan(status="error", message=error, attrs=attrs)

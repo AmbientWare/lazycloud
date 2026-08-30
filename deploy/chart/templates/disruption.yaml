@@ -13,10 +13,10 @@ eviction at all, so a node holding one blocks its own drain indefinitely and the
 cluster stops being able to replace nodes. `maxUnavailable: 1` degrades to
 "evict it, one at a time" instead of to a deadlock.
 
-Only the two workloads on the request path. The scheduler tolerates overlapping
-ticks and the cache server is a local directory behind a ReadWriteOnce volume;
-neither gains anything from a budget, and a budget on a workload that cannot use
-one is a drain that fails for no benefit.
+Only workloads on the request path. The scheduler tolerates overlapping ticks
+and the cache server is a local directory behind a ReadWriteOnce volume; neither
+gains anything from a budget, and a budget on a workload that cannot use one is
+a drain that fails for no benefit.
 */}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -31,9 +31,9 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: cloudflared
+  name: pangolin-site
 spec:
   maxUnavailable: 1
   selector:
     matchLabels:
-      app: cloudflared
+      app: pangolin-site

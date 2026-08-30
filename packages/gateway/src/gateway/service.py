@@ -17,7 +17,6 @@ from compute.agent_control import (
     AgentWorkerTokenPlan,
     GatewayEndpointConfig,
     JoinTokenCreationPlan,
-    TailnetConfig,
     WorkerTokenKind,
     WorkerTokenRecord,
     agent_install_command,
@@ -63,6 +62,7 @@ from control.deployment_resources import DeploymentResourceService, client_manif
 from control.deployments import DeploymentService
 from control.service import ControlPlaneService, StubKind
 from database.context import ServiceContext
+from database.private_network_cleanup import DatabasePrivateNetworkCleanupStore
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -74,23 +74,22 @@ from database.repositories.compute import (
 from database.repositories.execution import EventRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
-from database.tailnet_cleanup import DatabaseTailnetCleanupStore
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
 from identity.auth import AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
-from networking.routing import BackendRouteAuthenticator
-from networking.tailnet_cleanup import TailnetCleanupCoordinator
-from networking.tailnet_control import (
-    TailnetAuthKey,
-    TailnetControl,
-    TailnetControlError,
-    TailnetControlErrorCode,
-    TailnetMachineIdentityReconciler,
-    tailnet_machine_hostname,
+from networking.private_network_cleanup import PrivateNetworkCleanupCoordinator
+from networking.private_network_control import (
+    PrivateNetworkControl,
+    PrivateNetworkControlError,
+    PrivateNetworkControlErrorCode,
+    PrivateNetworkCredential,
+    PrivateNetworkMachineIdentityReconciler,
+    private_network_machine_name,
 )
+from networking.routing import BackendRouteAuthenticator
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.stream_state import RedisEventStreamRepository
@@ -113,7 +112,7 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineReadinessPhase,
-    TailnetEnrollmentPhase,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -217,8 +216,8 @@ from gateway.http import (
     LeaveAgentResponse,
     ListAgentRoutesRequest,
     ListAgentRoutesResponse,
-    RegisterAgentTailnetDeviceRequest,
-    RegisterAgentTailnetDeviceResponse,
+    RegisterAgentPrivateNetworkRequest,
+    RegisterAgentPrivateNetworkResponse,
     RequestAgentTransportCredentialRequest,
     RequestAgentTransportCredentialResponse,
     SignPayloadRequest,
@@ -361,7 +360,6 @@ class GatewayControlService:
     object_storage: ObjectStorage
     gateway_endpoint: GatewayEndpointConfig
     agent_image: AgentImageConfig
-    tailnet: TailnetConfig
     event_streams: RedisEventStreamRepository
     route_prewarmer: RoutePrewarmService
     container_stopper: GatewayContainerStopper
@@ -371,7 +369,7 @@ class GatewayControlService:
     # device rename that every agent picks up on its next poll.
     runtime_origin: Callable[[], str]
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
-    tailnet_control: TailnetControl | None = None
+    private_network_control: PrivateNetworkControl | None = None
     route_authenticator: BackendRouteAuthenticator | None = None
     agent_cluster_name: str = AGENT_NAME
     agent_worker_image_registry: str = ""
@@ -1405,7 +1403,7 @@ class GatewayControlService:
             with suppress(NotFoundError):
                 admin.delete_worker(worker_id)
         revoked = self._revoke_enrollment_authority(enrollment)
-        self._remove_enrollment_tailnet_identity(revoked)
+        self._remove_enrollment_private_network_identity(revoked)
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             current = enrollments.by_machine(
@@ -1461,7 +1459,7 @@ class GatewayControlService:
             for enrollment in enrollment_records
         ]
         for enrollment in revoked_enrollments:
-            self._remove_enrollment_tailnet_identity(enrollment)
+            self._remove_enrollment_private_network_identity(enrollment)
         for enrollment in enrollment_records:
             self.compute_states.delete_agent_token_state(enrollment.credential_hash)
             self.compute_states.delete_agent_machine_state_for_machine(
@@ -1507,8 +1505,8 @@ class GatewayControlService:
                 revoked = current.model_copy(
                     update={
                         "status": ComputeMachineEnrollmentStatus.Revoked,
-                        "tailnet_generation": current.tailnet_generation + 1,
-                        "tailnet_phase": TailnetEnrollmentPhase.Revoked,
+                        "network_generation": current.network_generation + 1,
+                        "network_phase": PrivateNetworkEnrollmentPhase.Revoked,
                         "schedulable": False,
                         "readiness_phase": MachineReadinessPhase.Revoked,
                         "revoked_at": current_time,
@@ -1668,7 +1666,6 @@ class GatewayControlService:
                     self.gateway_endpoint,
                     self.agent_image,
                     gateway_runtime_http_url=self.runtime_origin(),
-                    tailnet=self.tailnet,
                     executor=agent_state.executor,
                 )
                 consumes_use = existing is None
@@ -1872,61 +1869,73 @@ class GatewayControlService:
         request: RequestAgentTransportCredentialRequest,
     ) -> RequestAgentTransportCredentialResponse:
         state = self._require_agent_state(request.agent_token)
-        validation = validate_agent_transport_config(request.transport, self.tailnet)
+        validation = validate_agent_transport_config(request.transport)
         if not validation.accepted:
             raise InvalidInputError(validation.err_msg or "agent transport credential rejected")
-        control = self._require_tailnet_control()
-        enrollment = self._reserve_tailnet_rotation(state)
-        generation = enrollment.tailnet_generation
-        expected_hostname = enrollment.tailnet_hostname
+        control = self._require_private_network_control()
+        enrollment = self._reserve_private_network_rotation(state)
+        generation = enrollment.network_generation
+        site_name = private_network_machine_name(state.machine_id, generation)
         try:
-            self._cleanup_tailnet_rotation_resources(state, enrollment, control)
-            self._require_current_tailnet_rotation(state, generation)
-            issued = control.issue_auth_key(
-                machine_id=state.machine_id,
-                hostname=expected_hostname,
-            )
-        except TailnetControlError as exc:
-            self._fail_tailnet_rotation(state, generation)
-            raise UpstreamUnavailableError("tailnet machine enrollment is unavailable") from exc
+            self._cleanup_private_network_rotation_resources(state, enrollment, control)
+            self._require_current_private_network_rotation(state, generation)
+            issued = control.create_site(name=site_name)
+        except PrivateNetworkControlError as exc:
+            self._fail_private_network_rotation(state, generation)
+            raise UpstreamUnavailableError(
+                "private-network machine enrollment is unavailable"
+            ) from exc
         except Exception:
-            self._fail_tailnet_rotation(state, generation)
+            self._fail_private_network_rotation(state, generation)
             raise
         try:
-            self._save_tailnet_auth_key(state, generation, issued)
+            self._save_private_network_credential(state, generation, issued)
         except Exception:
-            self._cleanup_unclaimed_tailnet_auth_key(state, issued, control)
-            self._fail_tailnet_rotation(state, generation)
+            self._cleanup_unclaimed_private_network_site(state, issued.site_id, control)
+            self._fail_private_network_rotation(state, generation)
             raise
         return RequestAgentTransportCredentialResponse(
-            auth_key=issued.key.get_secret_value(),
-            control_url=self.tailnet.control_url,
-            hostname=expected_hostname,
+            site_name=issued.name,
+            endpoint=issued.endpoint,
+            connector_id=issued.connector_id,
+            secret=issued.secret.get_secret_value(),
         )
 
-    def register_agent_tailnet_device(
+    def register_agent_private_network(
         self,
-        request: RegisterAgentTailnetDeviceRequest,
-    ) -> RegisterAgentTailnetDeviceResponse:
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse:
         state = self._require_agent_state(request.agent_token)
-        control = self._require_tailnet_control()
-        snapshot = self._tailnet_registration_snapshot(state)
+        control = self._require_private_network_control()
+        snapshot = self._private_network_registration_snapshot(state)
+        if request.site_name != snapshot.network_site_name:
+            raise InvalidInputError("private-network site could not be verified")
         try:
-            device = control.verify_device(
-                request.node_id,
-                expected_hostname=snapshot.tailnet_hostname,
+            site = control.find_site(
+                site_id=snapshot.network_site_id,
+                name=request.site_name,
+                connector_id=request.connector_id,
             )
-        except TailnetControlError as exc:
+        except PrivateNetworkControlError as exc:
             if exc.code in {
-                TailnetControlErrorCode.NotFound,
-                TailnetControlErrorCode.VerificationFailed,
+                PrivateNetworkControlErrorCode.NotFound,
+                PrivateNetworkControlErrorCode.VerificationFailed,
             }:
-                raise InvalidInputError("tailnet device could not be verified") from exc
-            raise UpstreamUnavailableError("tailnet device verification is unavailable") from exc
-        if device.node_id != request.node_id:
-            raise InvalidInputError("tailnet device could not be verified")
+                raise InvalidInputError("private-network site could not be verified") from exc
+            raise UpstreamUnavailableError(
+                "private-network site verification is unavailable"
+            ) from exc
+        if site is None or site.name != snapshot.network_site_name:
+            raise InvalidInputError("private-network site could not be verified")
+        if not site.online:
+            raise InvalidInputError("private-network site is not online")
+        try:
+            active_site = control.activate_site(site.site_id)
+        except PrivateNetworkControlError as exc:
+            raise UpstreamUnavailableError(
+                "private-network resource activation is unavailable"
+            ) from exc
         stale_registration = False
-        conflicting_device = False
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrollment = enrollments.by_machine(
@@ -1939,54 +1948,46 @@ class GatewayControlService:
                 enrollment is None
                 or enrollment.status is not ComputeMachineEnrollmentStatus.Active
                 or enrollment.credential_hash != state.token_hash
-                or enrollment.tailnet_generation != snapshot.tailnet_generation
-                or enrollment.tailnet_hostname != snapshot.tailnet_hostname
-                or enrollment.tailnet_phase
-                not in {TailnetEnrollmentPhase.AwaitingDevice, TailnetEnrollmentPhase.Bound}
-                or device.id in enrollment.tailnet_cleanup_device_ids
+                or enrollment.network_generation != snapshot.network_generation
+                or enrollment.network_phase
+                not in {
+                    PrivateNetworkEnrollmentPhase.AwaitingConnection,
+                    PrivateNetworkEnrollmentPhase.Connected,
+                }
+                or site.site_id in enrollment.network_cleanup_site_ids
             ):
                 stale_registration = True
-                saved = None
-            elif enrollment.tailnet_device_id and enrollment.tailnet_device_id != device.id:
-                conflicting_device = True
                 saved = None
             else:
                 saved = enrollments.save(
                     enrollment.model_copy(
                         update={
-                            "tailnet_device_id": device.id,
-                            "tailnet_hostname": device.hostname,
-                            "tailnet_ips": list(device.addresses),
-                            "tailnet_verified_at": utc_now(),
-                            "tailnet_phase": TailnetEnrollmentPhase.Bound,
+                            "network_site_id": active_site.site_id,
+                            "network_site_name": active_site.name,
+                            "network_resource_id": active_site.resource_id,
+                            "network_address": active_site.address,
+                            "network_verified_at": utc_now(),
+                            "network_phase": PrivateNetworkEnrollmentPhase.Connected,
                             "updated_at": utc_now(),
                         }
                     )
                 )
         if stale_registration:
             try:
-                TailnetMachineIdentityReconciler(control).cleanup(
-                    machine_id=state.machine_id,
-                    generations=(snapshot.tailnet_generation,),
+                PrivateNetworkMachineIdentityReconciler(control).cleanup(
+                    resource_ids=(active_site.resource_id,),
+                    site_ids=(site.site_id,),
                 )
-            except TailnetControlError as exc:
+            except PrivateNetworkControlError as exc:
                 raise UpstreamUnavailableError(
-                    "stale tailnet device cleanup is unavailable"
+                    "stale private-network site cleanup is unavailable"
                 ) from exc
             raise InvalidInputError("agent credential is no longer current")
-        if conflicting_device:
-            try:
-                control.remove_device(device.id)
-            except TailnetControlError as exc:
-                raise UpstreamUnavailableError(
-                    "conflicting tailnet device cleanup is unavailable"
-                ) from exc
-            raise ConflictError("agent is already bound to another tailnet device")
         if saved is None:
-            raise InvalidInputError("tailnet device registration did not complete")
-        return RegisterAgentTailnetDeviceResponse(
-            device_id=saved.tailnet_device_id,
-            node_id=device.node_id,
+            raise InvalidInputError("private-network site registration did not complete")
+        return RegisterAgentPrivateNetworkResponse(
+            site_id=saved.network_site_id,
+            address=saved.network_address,
         )
 
     def list_agent_routes(
@@ -2089,7 +2090,7 @@ class GatewayControlService:
             current_state = snapshot.current.state
             if not snapshot.current.accepted or current_state is None:
                 return StreamAgentResponse(ok=False, err_msg=snapshot.current.err_msg)
-            self._require_verified_tailnet_identity(current_state)
+            self._require_verified_private_network_identity(current_state)
             heartbeat = plan_agent_heartbeat_touch(current_state)
             if heartbeat.should_save and heartbeat.state is not None:
                 response_state = self._persist_agent_state(heartbeat.state)
@@ -2113,7 +2114,6 @@ class GatewayControlService:
                 self.gateway_endpoint,
                 self.agent_image,
                 gateway_runtime_http_url=self.runtime_origin(),
-                tailnet=self.tailnet,
                 executor=response_state.executor,
             )
         except (KeyError, ValueError) as exc:
@@ -2878,7 +2878,7 @@ class GatewayControlService:
             raise ValueError(msg)
         return state
 
-    def _require_verified_tailnet_identity(
+    def _require_verified_private_network_identity(
         self,
         state: ComputeAgentTokenState,
     ) -> ComputeMachineEnrollmentRecord:
@@ -2890,13 +2890,13 @@ class GatewayControlService:
             )
         if (
             enrollment is None
-            or enrollment.tailnet_phase is not TailnetEnrollmentPhase.Bound
-            or not enrollment.tailnet_device_id
+            or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Connected
+            or not enrollment.network_site_id
         ):
-            raise ValueError("agent tailnet identity is not verified")
+            raise ValueError("agent private-network identity is not verified")
         return enrollment
 
-    def _reserve_tailnet_rotation(
+    def _reserve_private_network_rotation(
         self,
         state: ComputeAgentTokenState,
     ) -> ComputeMachineEnrollmentRecord:
@@ -2915,58 +2915,54 @@ class GatewayControlService:
                 or enrollment.credential_hash != state.token_hash
             ):
                 raise InvalidInputError("agent credential is no longer current")
-            generation = enrollment.tailnet_generation + 1
-            cleanup_auth_keys = _unique_identifiers(
-                [*enrollment.tailnet_cleanup_auth_key_ids, enrollment.tailnet_auth_key_id]
+            generation = enrollment.network_generation + 1
+            cleanup_sites = _unique_identifiers(
+                [*enrollment.network_cleanup_site_ids, enrollment.network_site_id]
             )
-            cleanup_devices = _unique_identifiers(
-                [*enrollment.tailnet_cleanup_device_ids, enrollment.tailnet_device_id]
+            cleanup_resources = _unique_identifiers(
+                [
+                    *enrollment.network_cleanup_resource_ids,
+                    enrollment.network_resource_id,
+                ]
             )
             return enrollments.save(
                 enrollment.model_copy(
                     update={
-                        "tailnet_generation": generation,
-                        "tailnet_phase": TailnetEnrollmentPhase.Rotating,
-                        "tailnet_auth_key_id": "",
-                        "tailnet_auth_key_expires_at": None,
-                        "tailnet_device_id": "",
-                        "tailnet_hostname": tailnet_machine_hostname(
-                            state.machine_id,
-                            generation,
+                        "network_generation": generation,
+                        "network_phase": PrivateNetworkEnrollmentPhase.Provisioning,
+                        "network_site_id": "",
+                        "network_site_name": private_network_machine_name(
+                            state.machine_id, generation
                         ),
-                        "tailnet_ips": [],
-                        "tailnet_verified_at": None,
-                        "tailnet_cleanup_auth_key_ids": cleanup_auth_keys,
-                        "tailnet_cleanup_device_ids": cleanup_devices,
+                        "network_resource_id": "",
+                        "network_address": "",
+                        "network_verified_at": None,
+                        "network_cleanup_resource_ids": cleanup_resources,
+                        "network_cleanup_site_ids": cleanup_sites,
                         "updated_at": now,
                     }
                 )
             )
 
-    def _cleanup_tailnet_rotation_resources(
+    def _cleanup_private_network_rotation_resources(
         self,
         state: ComputeAgentTokenState,
         enrollment: ComputeMachineEnrollmentRecord,
-        control: TailnetControl,
+        control: PrivateNetworkControl,
     ) -> None:
-        TailnetMachineIdentityReconciler(control).cleanup(
-            machine_id=state.machine_id,
-            generations=tuple(range(1, enrollment.tailnet_generation)),
-            auth_key_ids=tuple(enrollment.tailnet_cleanup_auth_key_ids),
-            device_ids=tuple(enrollment.tailnet_cleanup_device_ids),
+        PrivateNetworkMachineIdentityReconciler(control).cleanup(
+            resource_ids=tuple(enrollment.network_cleanup_resource_ids),
+            site_ids=tuple(enrollment.network_cleanup_site_ids),
         )
-        for device_id in enrollment.tailnet_cleanup_device_ids:
-            self._forget_tailnet_cleanup_resource(
+        for resource_id in enrollment.network_cleanup_resource_ids:
+            self._forget_private_network_cleanup_resource(
                 state,
-                device_id=device_id,
+                resource_id=resource_id,
             )
-        for key_id in enrollment.tailnet_cleanup_auth_key_ids:
-            self._forget_tailnet_cleanup_resource(
-                state,
-                auth_key_id=key_id,
-            )
+        for site_id in enrollment.network_cleanup_site_ids:
+            self._forget_private_network_cleanup_site(state, site_id=site_id)
 
-    def _require_current_tailnet_rotation(
+    def _require_current_private_network_rotation(
         self,
         state: ComputeAgentTokenState,
         generation: int,
@@ -2982,17 +2978,17 @@ class GatewayControlService:
                 enrollment is None
                 or enrollment.status is not ComputeMachineEnrollmentStatus.Active
                 or enrollment.credential_hash != state.token_hash
-                or enrollment.tailnet_generation != generation
-                or enrollment.tailnet_phase is not TailnetEnrollmentPhase.Rotating
+                or enrollment.network_generation != generation
+                or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Provisioning
             ):
-                raise InvalidInputError("tailnet enrollment rotation is no longer current")
+                raise InvalidInputError("private-network enrollment is no longer current")
             return enrollment
 
-    def _save_tailnet_auth_key(
+    def _save_private_network_credential(
         self,
         state: ComputeAgentTokenState,
         generation: int,
-        issued: TailnetAuthKey,
+        issued: PrivateNetworkCredential,
     ) -> ComputeMachineEnrollmentRecord:
         now = utc_now()
         with self.services.context.database.session() as session:
@@ -3007,22 +3003,25 @@ class GatewayControlService:
                 enrollment is None
                 or enrollment.status is not ComputeMachineEnrollmentStatus.Active
                 or enrollment.credential_hash != state.token_hash
-                or enrollment.tailnet_generation != generation
-                or enrollment.tailnet_phase is not TailnetEnrollmentPhase.Rotating
+                or enrollment.network_generation != generation
+                or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Provisioning
             ):
-                raise InvalidInputError("tailnet enrollment rotation is no longer current")
+                raise InvalidInputError("private-network enrollment is no longer current")
             return enrollments.save(
                 enrollment.model_copy(
                     update={
-                        "tailnet_auth_key_id": issued.id,
-                        "tailnet_auth_key_expires_at": issued.expires_at,
-                        "tailnet_phase": TailnetEnrollmentPhase.AwaitingDevice,
+                        "network_site_id": issued.site_id,
+                        "network_site_name": issued.name,
+                        "network_address": "",
+                        "network_phase": PrivateNetworkEnrollmentPhase.AwaitingConnection,
                         "updated_at": now,
                     }
                 )
             )
 
-    def _fail_tailnet_rotation(self, state: ComputeAgentTokenState, generation: int) -> None:
+    def _fail_private_network_rotation(
+        self, state: ComputeAgentTokenState, generation: int
+    ) -> None:
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrollment = enrollments.by_machine(
@@ -3033,20 +3032,20 @@ class GatewayControlService:
             )
             if (
                 enrollment is None
-                or enrollment.tailnet_generation != generation
-                or enrollment.tailnet_phase is not TailnetEnrollmentPhase.Rotating
+                or enrollment.network_generation != generation
+                or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Provisioning
             ):
                 return
             enrollments.save(
                 enrollment.model_copy(
                     update={
-                        "tailnet_phase": TailnetEnrollmentPhase.Failed,
+                        "network_phase": PrivateNetworkEnrollmentPhase.Failed,
                         "updated_at": utc_now(),
                     }
                 )
             )
 
-    def _tailnet_registration_snapshot(
+    def _private_network_registration_snapshot(
         self,
         state: ComputeAgentTokenState,
     ) -> ComputeMachineEnrollmentRecord:
@@ -3060,18 +3059,22 @@ class GatewayControlService:
             enrollment is None
             or enrollment.status is not ComputeMachineEnrollmentStatus.Active
             or enrollment.credential_hash != state.token_hash
-            or enrollment.tailnet_phase
-            not in {TailnetEnrollmentPhase.AwaitingDevice, TailnetEnrollmentPhase.Bound}
-            or not enrollment.tailnet_hostname
+            or enrollment.network_phase
+            not in {
+                PrivateNetworkEnrollmentPhase.AwaitingConnection,
+                PrivateNetworkEnrollmentPhase.Connected,
+            }
+            or not enrollment.network_site_id
+            or not enrollment.network_site_name
         ):
-            raise InvalidInputError("tailnet enrollment is not awaiting this device")
+            raise InvalidInputError("private-network enrollment is not awaiting this site")
         return enrollment
 
-    def _cleanup_unclaimed_tailnet_auth_key(
+    def _cleanup_unclaimed_private_network_site(
         self,
         state: ComputeAgentTokenState,
-        issued: TailnetAuthKey,
-        control: TailnetControl,
+        site_id: str,
+        control: PrivateNetworkControl,
     ) -> None:
         recorded = False
         with self.services.context.database.session() as session:
@@ -3083,31 +3086,28 @@ class GatewayControlService:
                 for_update=True,
             )
             if enrollment is not None:
-                cleanup_ids = _unique_identifiers(
-                    [*enrollment.tailnet_cleanup_auth_key_ids, issued.id]
-                )
+                cleanup_ids = _unique_identifiers([*enrollment.network_cleanup_site_ids, site_id])
                 enrollments.save(
                     enrollment.model_copy(
                         update={
-                            "tailnet_cleanup_auth_key_ids": cleanup_ids,
+                            "network_cleanup_site_ids": cleanup_ids,
                             "updated_at": utc_now(),
                         }
                     )
                 )
                 recorded = True
         try:
-            control.revoke_auth_key(issued.id)
-        except TailnetControlError:
+            control.delete_site(site_id)
+        except PrivateNetworkControlError:
             return
         if recorded:
-            self._forget_tailnet_cleanup_resource(state, auth_key_id=issued.id)
+            self._forget_private_network_cleanup_site(state, site_id=site_id)
 
-    def _forget_tailnet_cleanup_resource(
+    def _forget_private_network_cleanup_site(
         self,
         state: ComputeAgentTokenState,
         *,
-        auth_key_id: str = "",
-        device_id: str = "",
+        site_id: str,
     ) -> None:
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
@@ -3119,55 +3119,73 @@ class GatewayControlService:
             )
             if enrollment is None:
                 return
-            cleanup_auth_keys = [
-                item for item in enrollment.tailnet_cleanup_auth_key_ids if item != auth_key_id
-            ]
-            cleanup_devices = [
-                item for item in enrollment.tailnet_cleanup_device_ids if item != device_id
+            cleanup_sites = [
+                item for item in enrollment.network_cleanup_site_ids if item != site_id
             ]
             enrollments.save(
                 enrollment.model_copy(
                     update={
-                        "tailnet_cleanup_auth_key_ids": cleanup_auth_keys,
-                        "tailnet_cleanup_device_ids": cleanup_devices,
+                        "network_cleanup_site_ids": cleanup_sites,
                         "updated_at": utc_now(),
                     }
                 )
             )
 
-    def _require_tailnet_control(self) -> TailnetControl:
-        if self.tailnet_control is None:
-            raise UpstreamUnavailableError("tailnet device control is not configured")
-        return self.tailnet_control
+    def _forget_private_network_cleanup_resource(
+        self,
+        state: ComputeAgentTokenState,
+        *,
+        resource_id: str,
+    ) -> None:
+        with self.services.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(
+                state.workspace_id,
+                state.machine_id,
+                pool=state.pool,
+                for_update=True,
+            )
+            if enrollment is None:
+                return
+            cleanup_resources = [
+                item for item in enrollment.network_cleanup_resource_ids if item != resource_id
+            ]
+            enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "network_cleanup_resource_ids": cleanup_resources,
+                        "updated_at": utc_now(),
+                    }
+                )
+            )
 
-    def _remove_enrollment_tailnet_identity(
+    def _require_private_network_control(self) -> PrivateNetworkControl:
+        if self.private_network_control is None:
+            raise UpstreamUnavailableError("private-network control is not configured")
+        return self.private_network_control
+
+    def _remove_enrollment_private_network_identity(
         self,
         enrollment: ComputeMachineEnrollmentRecord,
     ) -> None:
-        device_ids = _unique_identifiers(
-            [enrollment.tailnet_device_id, *enrollment.tailnet_cleanup_device_ids]
+        resource_ids = _unique_identifiers(
+            [enrollment.network_resource_id, *enrollment.network_cleanup_resource_ids]
         )
-        auth_key_ids = _unique_identifiers(
-            [enrollment.tailnet_auth_key_id, *enrollment.tailnet_cleanup_auth_key_ids]
+        site_ids = _unique_identifiers(
+            [enrollment.network_site_id, *enrollment.network_cleanup_site_ids]
         )
-        last_issued_generation = enrollment.tailnet_generation
-        if enrollment.tailnet_phase is TailnetEnrollmentPhase.Revoked:
-            last_issued_generation -= 1
-        generations = tuple(range(1, max(last_issued_generation, 0) + 1))
-        if not device_ids and not auth_key_ids and not generations:
+        if not resource_ids and not site_ids:
             return
-        control = self._require_tailnet_control()
-        TailnetCleanupCoordinator(
-            DatabaseTailnetCleanupStore(self.services.context),
+        control = self._require_private_network_control()
+        PrivateNetworkCleanupCoordinator(
+            DatabasePrivateNetworkCleanupStore(self.services.context),
             control,
         ).defer_machine_cleanup(
             workspace_id=enrollment.workspace_id,
             pool=enrollment.pool,
             machine_id=enrollment.machine_id,
-            generations=generations,
-            auth_key_ids=tuple(auth_key_ids),
-            device_ids=tuple(device_ids),
-            auth_key_expires_at=enrollment.tailnet_auth_key_expires_at,
+            resource_ids=tuple(resource_ids),
+            site_ids=tuple(site_ids),
         )
 
 

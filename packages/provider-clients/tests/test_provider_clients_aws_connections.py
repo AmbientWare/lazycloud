@@ -9,12 +9,7 @@ from pathlib import Path
 import pytest
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
-from networking.settings import (
-    BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-)
-from networking.tailnet import TailnetRuntimeMode
+from networking.settings import BackendRouteSettings
 from provider_aws import (
     AwsAccountAuthorizationCleanupResult,
     AwsAccountAuthorizationCleanupStatus,
@@ -65,8 +60,6 @@ class _AwsOwnerSettings:
     connection: AwsAccountConnectionSettings
     capacity: AwsCapacitySettings
     artifact: AgentBinarySettings
-    runtime: TailnetRuntimeSettings
-    control: TailnetControlSettings
     backend_route: BackendRouteSettings
     gateway_origin: str = "https://control.example.com"
 
@@ -96,14 +89,6 @@ def _enabled_settings() -> _AwsOwnerSettings:
             binary_version="0.1.0",
             binary_sha256_by_arch={"amd64": "b" * 64},
         ),
-        runtime=TailnetRuntimeSettings(
-            mode=TailnetRuntimeMode.Managed,
-            hostname="lazycloud-control-plane",
-        ),
-        control=TailnetControlSettings(
-            oauth_client_id="oauth-client-id",
-            oauth_client_secret=SecretStr("oauth-client-secret"),
-        ),
         backend_route=BackendRouteSettings(auth_key=SecretStr("0123456789abcdef0123456789abcdef")),
     )
 
@@ -115,9 +100,6 @@ def _connection_components(
         settings.connection,
         capacity=settings.capacity,
         gateway_origin=settings.gateway_origin,
-        internal_origin="http://lazycloud-control-plane.tailnet-example.ts.net:9000",
-        tailnet_runtime=settings.runtime,
-        tailnet_control=settings.control,
         backend_route=settings.backend_route,
     )
 

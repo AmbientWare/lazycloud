@@ -23,6 +23,7 @@ from agent.operations import (
 from shared.compute_enrollment import PreflightSeverity
 from shared.compute_policy import MachinePool
 from shared.gpu import normalize_gpu_type
+from shared.routing import BackendRouteTransport
 from shared.usage import UsageBillingOwner
 
 
@@ -93,7 +94,7 @@ def test_agent_service_serializes_worker_capacity_without_credentials() -> None:
         gateway_grpc_host="grpc.example.test",
         gateway_grpc_port=7443,
         gateway_grpc_tls=True,
-        transport="tailnet",
+        transport=BackendRouteTransport.PrivateNetwork,
         image_registry_store="s3",
     )
     slot = AgentWorkerSlot(

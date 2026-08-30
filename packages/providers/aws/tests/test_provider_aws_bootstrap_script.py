@@ -78,7 +78,7 @@ def test_bootstrap_failure_reports_the_whole_provider_identity_payload(
     )
     assert syntax.returncode == 0, syntax.stderr
 
-    # Docker, Tailscale, the agent binary, and the unit are the installer's, and
+    # Docker, Newt, the agent binary, and the unit are the installer's, and
     # a unit written here would leave the machine running the agent's while this
     # script claimed a different restart policy.
     assert "/etc/systemd/system/lazycloud-agent.service" not in script

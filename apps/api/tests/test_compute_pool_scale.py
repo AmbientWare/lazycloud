@@ -310,7 +310,7 @@ def _seed_connection(services: ApiServices) -> str:
 
 
 class _Bootstrap:
-    """A pool bootstrap provisioner with no tailnet behind it."""
+    """A pool bootstrap provisioner with no external network dependency."""
 
     def __init__(self) -> None:
         self.released: list[str] = []

@@ -101,11 +101,8 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
         ("192.168.1.5", False),
         ("169.254.1.1", False),
         ("control-plane", False),
-        # Tailscale's own ranges are what a remote machine actually reaches.
-        # The IPv6 prefix is a ULA, which classifies as private, so refusing
-        # every private address would reject a working tailnet.
-        ("100.69.8.117", True),
-        ("fd7a:115c:a1e0::8132:174", True),
+        ("100.69.8.117", False),
+        ("fd7a:115c:a1e0::8132:174", False),
         ("fd00::1", False),
         ("52.1.2.3", True),
     ],

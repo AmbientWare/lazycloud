@@ -102,7 +102,7 @@ class AgentRoute(HttpModel):
     kind: BackendRouteKind = BackendRouteKind.Container
     port: int = 0
     protocol: BackendRouteProtocol = BackendRouteProtocol.Tcp
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     local_target: str = ""
     proxy_target: str = ""
     state: BackendRouteState = BackendRouteState.Opening
@@ -113,23 +113,25 @@ class AgentRoute(HttpModel):
 
 class RequestAgentTransportCredentialRequest(HttpModel):
     agent_token: str
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
 
 
 class RequestAgentTransportCredentialResponse(HttpModel):
-    auth_key: str = ""
-    control_url: str = ""
-    hostname: str = ""
+    site_name: str
+    endpoint: str
+    connector_id: str
+    secret: str = Field(repr=False)
 
 
-class RegisterAgentTailnetDeviceRequest(HttpModel):
+class RegisterAgentPrivateNetworkRequest(HttpModel):
     agent_token: str
-    node_id: str
+    site_name: str
+    connector_id: str
 
 
-class RegisterAgentTailnetDeviceResponse(HttpModel):
-    device_id: str
-    node_id: str
+class RegisterAgentPrivateNetworkResponse(HttpModel):
+    site_id: str
+    address: str
 
 
 class ListAgentRoutesRequest(HttpModel):

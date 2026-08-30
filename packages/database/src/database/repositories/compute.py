@@ -21,7 +21,7 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    TailnetCleanupTombstoneTable,
+    PrivateNetworkCleanupTombstoneTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.identity import WorkspaceMemberTable
@@ -39,8 +39,8 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    TailnetCleanupTombstone,
-    TailnetEnrollmentPhase,
+    PrivateNetworkCleanupTombstone,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_policy import (
     ComputeUnitPhase,
@@ -204,16 +204,15 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     executor: str = ""
     preflight: list[ComputePreflightCheck] = Field(default_factory=list)
     agent_version: str = ""
-    tailnet_generation: int = Field(default=0, ge=0)
-    tailnet_phase: TailnetEnrollmentPhase = TailnetEnrollmentPhase.Unconfigured
-    tailnet_auth_key_id: str = ""
-    tailnet_auth_key_expires_at: datetime | None = None
-    tailnet_device_id: str = ""
-    tailnet_hostname: str = ""
-    tailnet_ips: list[str] = Field(default_factory=list)
-    tailnet_verified_at: datetime | None = None
-    tailnet_cleanup_auth_key_ids: list[str] = Field(default_factory=list)
-    tailnet_cleanup_device_ids: list[str] = Field(default_factory=list)
+    network_generation: int = Field(default=0, ge=0)
+    network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured
+    network_site_id: str = ""
+    network_site_name: str = ""
+    network_resource_id: str = ""
+    network_address: str = ""
+    network_verified_at: datetime | None = None
+    network_cleanup_resource_ids: list[str] = Field(default_factory=list)
+    network_cleanup_site_ids: list[str] = Field(default_factory=list)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -253,16 +252,15 @@ class ComputeMachineEnrollmentCreate(ContractModel):
     executor: str = ""
     preflight: list[ComputePreflightCheck] = Field(default_factory=list)
     agent_version: str = ""
-    tailnet_generation: int = Field(default=0, ge=0)
-    tailnet_phase: TailnetEnrollmentPhase = TailnetEnrollmentPhase.Unconfigured
-    tailnet_auth_key_id: str = ""
-    tailnet_auth_key_expires_at: datetime | None = None
-    tailnet_device_id: str = ""
-    tailnet_hostname: str = ""
-    tailnet_ips: list[str] = Field(default_factory=list)
-    tailnet_verified_at: datetime | None = None
-    tailnet_cleanup_auth_key_ids: list[str] = Field(default_factory=list)
-    tailnet_cleanup_device_ids: list[str] = Field(default_factory=list)
+    network_generation: int = Field(default=0, ge=0)
+    network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured
+    network_site_id: str = ""
+    network_site_name: str = ""
+    network_resource_id: str = ""
+    network_address: str = ""
+    network_verified_at: datetime | None = None
+    network_cleanup_resource_ids: list[str] = Field(default_factory=list)
+    network_cleanup_site_ids: list[str] = Field(default_factory=list)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -274,19 +272,17 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         *,
         updated_at: datetime,
     ) -> ComputeMachineEnrollmentRecord:
-        """Re-state the row from a fresh join, keeping the row's own tailnet identity.
+        """Re-state the row from a fresh join, keeping the row's network identity.
 
-        A join reports what the machine is; the tailnet device, its auth keys, and
-        the generation that owns them are rotated by the gateway on their own
-        schedule. Letting a join carry its defaults over them would strand a live
-        device with nothing left naming it.
+        The gateway owns the site's lifecycle. Letting a join carry its network
+        defaults over the durable identity would strand a live site.
         """
         return existing.model_copy(
             update={
                 **{
                     field: value
                     for field, value in dict(self).items()
-                    if not field.startswith("tailnet_")
+                    if not field.startswith("network_")
                 },
                 "updated_at": updated_at,
             }
@@ -1337,7 +1333,7 @@ class ComputeMachineEnrollmentRepository:
 
 
 @dataclass(slots=True)
-class TailnetCleanupTombstoneRepository:
+class PrivateNetworkCleanupTombstoneRepository:
     session: Session
 
     def schedule(
@@ -1346,20 +1342,18 @@ class TailnetCleanupTombstoneRepository:
         workspace_id: str,
         pool: MachinePool,
         machine_id: str,
-        generations: list[int],
-        auth_key_ids: list[str],
-        device_ids: list[str],
+        resource_ids: list[str],
+        site_ids: list[str],
         not_before: datetime,
         now: datetime,
-    ) -> TailnetCleanupTombstone:
-        candidate = TailnetCleanupTombstone(
+    ) -> PrivateNetworkCleanupTombstone:
+        candidate = PrivateNetworkCleanupTombstone(
             id=str(uuid4()),
             workspace_id=workspace_id,
             pool=pool,
             machine_id=machine_id,
-            generations=_unique_positive_integers(generations),
-            auth_key_ids=_unique_nonempty_strings(auth_key_ids),
-            device_ids=_unique_nonempty_strings(device_ids),
+            resource_ids=_unique_nonempty_strings(resource_ids),
+            site_ids=_unique_nonempty_strings(site_ids),
             not_before=not_before,
             next_attempt_at=now,
             created_at=now,
@@ -1369,25 +1363,20 @@ class TailnetCleanupTombstoneRepository:
             return candidate
 
         row = self.session.scalars(
-            select(TailnetCleanupTombstoneTable)
-            .where(TailnetCleanupTombstoneTable.machine_id == machine_id)
+            select(PrivateNetworkCleanupTombstoneTable)
+            .where(PrivateNetworkCleanupTombstoneTable.machine_id == machine_id)
             .with_for_update()
         ).one()
 
-        current = TailnetCleanupTombstone.model_validate(row.payload)
+        current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
         tombstone = current.model_copy(
             update={
                 "workspace_id": workspace_id,
                 "pool": pool,
-                "generations": _unique_positive_integers(
-                    [*current.generations, *candidate.generations]
+                "resource_ids": _unique_nonempty_strings(
+                    [*current.resource_ids, *candidate.resource_ids]
                 ),
-                "auth_key_ids": _unique_nonempty_strings(
-                    [*current.auth_key_ids, *candidate.auth_key_ids]
-                ),
-                "device_ids": _unique_nonempty_strings(
-                    [*current.device_ids, *candidate.device_ids]
-                ),
+                "site_ids": _unique_nonempty_strings([*current.site_ids, *candidate.site_ids]),
                 "not_before": max(current.not_before, not_before),
                 "next_attempt_at": min(current.next_attempt_at, now),
                 "revision": current.revision + 1,
@@ -1400,7 +1389,7 @@ class TailnetCleanupTombstoneRepository:
         self._write(row, tombstone)
         return tombstone
 
-    def _insert_if_absent(self, tombstone: TailnetCleanupTombstone) -> bool:
+    def _insert_if_absent(self, tombstone: PrivateNetworkCleanupTombstone) -> bool:
         values: dict[str, DatabaseInsertValue] = {
             "id": tombstone.id,
             "machine_id": tombstone.machine_id,
@@ -1413,20 +1402,24 @@ class TailnetCleanupTombstoneRepository:
         dialect = self.session.get_bind().dialect.name
         if dialect == "postgresql":
             statement = (
-                postgresql_insert(TailnetCleanupTombstoneTable)
+                postgresql_insert(PrivateNetworkCleanupTombstoneTable)
                 .values(**values)
-                .on_conflict_do_nothing(index_elements=[TailnetCleanupTombstoneTable.machine_id])
-                .returning(TailnetCleanupTombstoneTable.id)
+                .on_conflict_do_nothing(
+                    index_elements=[PrivateNetworkCleanupTombstoneTable.machine_id]
+                )
+                .returning(PrivateNetworkCleanupTombstoneTable.id)
             )
         elif dialect == "sqlite":
             statement = (
-                sqlite_insert(TailnetCleanupTombstoneTable)
+                sqlite_insert(PrivateNetworkCleanupTombstoneTable)
                 .values(**values)
-                .on_conflict_do_nothing(index_elements=[TailnetCleanupTombstoneTable.machine_id])
-                .returning(TailnetCleanupTombstoneTable.id)
+                .on_conflict_do_nothing(
+                    index_elements=[PrivateNetworkCleanupTombstoneTable.machine_id]
+                )
+                .returning(PrivateNetworkCleanupTombstoneTable.id)
             )
         else:
-            raise RuntimeError(f"unsupported tailnet cleanup database dialect: {dialect}")
+            raise RuntimeError(f"unsupported private-network cleanup database dialect: {dialect}")
         return self.session.scalar(statement) is not None
 
     def claim_due(
@@ -1435,26 +1428,26 @@ class TailnetCleanupTombstoneRepository:
         now: datetime,
         lease_until: datetime,
         limit: int,
-    ) -> list[TailnetCleanupTombstone]:
+    ) -> list[PrivateNetworkCleanupTombstone]:
         statement = (
-            select(TailnetCleanupTombstoneTable)
+            select(PrivateNetworkCleanupTombstoneTable)
             .where(
-                TailnetCleanupTombstoneTable.next_attempt_at <= now,
+                PrivateNetworkCleanupTombstoneTable.next_attempt_at <= now,
                 or_(
-                    TailnetCleanupTombstoneTable.claimed_until.is_(None),
-                    TailnetCleanupTombstoneTable.claimed_until <= now,
+                    PrivateNetworkCleanupTombstoneTable.claimed_until.is_(None),
+                    PrivateNetworkCleanupTombstoneTable.claimed_until <= now,
                 ),
             )
             .order_by(
-                TailnetCleanupTombstoneTable.next_attempt_at.asc(),
-                TailnetCleanupTombstoneTable.created_at.asc(),
+                PrivateNetworkCleanupTombstoneTable.next_attempt_at.asc(),
+                PrivateNetworkCleanupTombstoneTable.created_at.asc(),
             )
             .limit(max(limit, 1))
             .with_for_update(skip_locked=True)
         )
-        claimed: list[TailnetCleanupTombstone] = []
+        claimed: list[PrivateNetworkCleanupTombstone] = []
         for row in self.session.scalars(statement):
-            current = TailnetCleanupTombstone.model_validate(row.payload)
+            current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
             tombstone = current.model_copy(
                 update={
                     "claim_token": str(uuid4()),
@@ -1472,22 +1465,22 @@ class TailnetCleanupTombstoneRepository:
         *,
         now: datetime,
         lease_until: datetime,
-    ) -> TailnetCleanupTombstone | None:
+    ) -> PrivateNetworkCleanupTombstone | None:
         row = self.session.scalars(
-            select(TailnetCleanupTombstoneTable)
+            select(PrivateNetworkCleanupTombstoneTable)
             .where(
-                TailnetCleanupTombstoneTable.machine_id == machine_id,
-                TailnetCleanupTombstoneTable.next_attempt_at <= now,
+                PrivateNetworkCleanupTombstoneTable.machine_id == machine_id,
+                PrivateNetworkCleanupTombstoneTable.next_attempt_at <= now,
                 or_(
-                    TailnetCleanupTombstoneTable.claimed_until.is_(None),
-                    TailnetCleanupTombstoneTable.claimed_until <= now,
+                    PrivateNetworkCleanupTombstoneTable.claimed_until.is_(None),
+                    PrivateNetworkCleanupTombstoneTable.claimed_until <= now,
                 ),
             )
             .with_for_update()
         ).first()
         if row is None:
             return None
-        current = TailnetCleanupTombstone.model_validate(row.payload)
+        current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
         tombstone = current.model_copy(
             update={
                 "claim_token": str(uuid4()),
@@ -1498,7 +1491,7 @@ class TailnetCleanupTombstoneRepository:
         self._write(row, tombstone)
         return tombstone
 
-    def complete(self, tombstone: TailnetCleanupTombstone) -> bool:
+    def complete(self, tombstone: PrivateNetworkCleanupTombstone) -> bool:
         row = self._claimed_row(tombstone)
         if row is None:
             return False
@@ -1508,7 +1501,7 @@ class TailnetCleanupTombstoneRepository:
 
     def reschedule(
         self,
-        tombstone: TailnetCleanupTombstone,
+        tombstone: PrivateNetworkCleanupTombstone,
         *,
         next_attempt_at: datetime,
         last_error: str,
@@ -1517,7 +1510,7 @@ class TailnetCleanupTombstoneRepository:
         row = self._claimed_row(tombstone)
         if row is None:
             return False
-        current = TailnetCleanupTombstone.model_validate(row.payload)
+        current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
         updated = current.model_copy(
             update={
                 "next_attempt_at": next_attempt_at,
@@ -1531,34 +1524,39 @@ class TailnetCleanupTombstoneRepository:
         self._write(row, updated)
         return True
 
-    def get_by_machine(self, machine_id: str) -> TailnetCleanupTombstone | None:
+    def get_by_machine(self, machine_id: str) -> PrivateNetworkCleanupTombstone | None:
         row = self.session.scalars(
-            select(TailnetCleanupTombstoneTable).where(
-                TailnetCleanupTombstoneTable.machine_id == machine_id
+            select(PrivateNetworkCleanupTombstoneTable).where(
+                PrivateNetworkCleanupTombstoneTable.machine_id == machine_id
             )
         ).first()
-        return TailnetCleanupTombstone.model_validate(row.payload) if row is not None else None
+        return (
+            PrivateNetworkCleanupTombstone.model_validate(row.payload) if row is not None else None
+        )
 
     def pending_count(self) -> int:
         return int(
-            self.session.scalar(select(func.count()).select_from(TailnetCleanupTombstoneTable)) or 0
+            self.session.scalar(
+                select(func.count()).select_from(PrivateNetworkCleanupTombstoneTable)
+            )
+            or 0
         )
 
     def _claimed_row(
         self,
-        tombstone: TailnetCleanupTombstone,
-    ) -> TailnetCleanupTombstoneTable | None:
+        tombstone: PrivateNetworkCleanupTombstone,
+    ) -> PrivateNetworkCleanupTombstoneTable | None:
         return _locked_claimed_row(
             self.session,
-            TailnetCleanupTombstoneTable,
-            TailnetCleanupTombstone.model_validate,
+            PrivateNetworkCleanupTombstoneTable,
+            PrivateNetworkCleanupTombstone.model_validate,
             tombstone,
         )
 
     def _write(
         self,
-        row: TailnetCleanupTombstoneTable,
-        tombstone: TailnetCleanupTombstone,
+        row: PrivateNetworkCleanupTombstoneTable,
+        tombstone: PrivateNetworkCleanupTombstone,
     ) -> None:
         row.payload = _model_json(tombstone)
         row.machine_id = tombstone.machine_id
@@ -1922,9 +1920,3 @@ class AwsAuthorizationCleanupTombstoneRepository:
 
 def _unique_nonempty_strings(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
-
-
-def _unique_positive_integers(values: list[int]) -> list[int]:
-    if any(value < 1 for value in values):
-        raise ValueError("tailnet cleanup generations must be positive")
-    return list(dict.fromkeys(values))
