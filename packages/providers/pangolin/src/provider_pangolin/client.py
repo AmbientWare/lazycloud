@@ -36,6 +36,17 @@ class _Envelope(_Model):
     status: int
 
 
+class _Organization(_Model):
+    organization_id: str = Field(alias="orgId", min_length=1)
+    name: str = Field(min_length=1)
+    subnet: str = Field(min_length=1)
+    utility_subnet: str = Field(alias="utilitySubnet", min_length=1)
+
+
+class _OrganizationData(_Model):
+    organization: _Organization = Field(alias="org")
+
+
 class PangolinSite(_Model):
     site_id: int = Field(alias="siteId", gt=0)
     nice_id: str = Field(default="", alias="niceId")
@@ -140,7 +151,7 @@ class PangolinResource(_Model):
     full_domain: str | None = Field(default=None, alias="fullDomain")
     mode: Literal["http", "ssh", "rdp", "vnc", "tcp", "udp"]
     ssl: bool
-    sso: bool
+    sso: bool | None = None
     enabled: bool
 
 
@@ -195,7 +206,8 @@ class PangolinApiError(RuntimeError):
         super().__init__(message)
 
 
-_PLATFORM_RESOURCE_NAME = "lazycloud-platform-public"
+_PLATFORM_APEX_RESOURCE_NAME = "lazycloud-platform-public"
+_PLATFORM_WILDCARD_RESOURCE_NAME = "lazycloud-platform-public-wildcard"
 _TARGET_HEALTH: dict[str, JsonValue] = {
     "hcEnabled": True,
     "hcPath": "/health",
@@ -225,6 +237,49 @@ class PangolinClient:
     platform_target_port: int = 9000
     timeout_seconds: float = 30.0
     transport: httpx.BaseTransport | None = field(default=None, repr=False)
+
+    def ensure_organization(
+        self,
+        *,
+        name: str,
+        subnet: str,
+        utility_subnet: str,
+    ) -> None:
+        path = f"/org/{quote(self.organization_id, safe='')}"
+        data = self._request(
+            "GET",
+            path,
+            allowed_status_codes=(200, 404),
+            missing_is_none=True,
+        )
+        if data is None:
+            created = self._request(
+                "PUT",
+                "/org",
+                json={
+                    "orgId": self.organization_id,
+                    "name": name,
+                    "subnet": subnet,
+                    "utilitySubnet": utility_subnet,
+                },
+                allowed_status_codes=(200, 201),
+            )
+            organization = self._parse(created, _Organization, "organization creation")
+        else:
+            organization = self._parse(
+                data,
+                _OrganizationData,
+                "organization lookup",
+            ).organization
+        if (
+            organization.organization_id != self.organization_id
+            or organization.subnet != subnet
+            or organization.utility_subnet != utility_subnet
+        ):
+            raise InvalidInputError(
+                f"Pangolin organization {self.organization_id} does not match "
+                "its configured networks"
+            )
 
     def create_site(self, *, name: str) -> PangolinCreatedSite:
         data = self._request(
@@ -436,13 +491,13 @@ class PangolinClient:
                 return
             page += 1
 
-    def ensure_platform_public_resource(
+    def ensure_platform_public_resources(
         self,
         *,
         hostname: str,
         site_ids: tuple[int, ...],
         ssl: bool,
-    ) -> PangolinResource:
+    ) -> tuple[PangolinResource, PangolinResource]:
         self._require_platform_target()
         normalized = hostname.strip().lower().rstrip(".")
         if not normalized:
@@ -461,28 +516,40 @@ class PangolinClient:
             if normalized == domain.base_domain
             else normalized[: -(len(domain.base_domain) + 1)]
         )
-        resources = tuple(
-            resource
-            for resource in self._domain_resources(domain.domain_id)
-            if resource.name == _PLATFORM_RESOURCE_NAME
+        desired = (
+            (_PLATFORM_APEX_RESOURCE_NAME, subdomain, normalized),
+            (
+                _PLATFORM_WILDCARD_RESOURCE_NAME,
+                f"*.{subdomain}" if subdomain else "*",
+                f"*.{normalized}",
+            ),
         )
-        if len(resources) > 1:
-            raise InvalidInputError("Pangolin has duplicate LazyCloud platform resources")
-        if resources:
-            resource = resources[0]
-            if resource.full_domain != normalized or resource.mode != "http":
+        existing = self._domain_resources(domain.domain_id)
+        ensured: list[PangolinResource] = []
+        for name, desired_subdomain, full_domain in desired:
+            resources = tuple(resource for resource in existing if resource.name == name)
+            if len(resources) > 1:
+                raise InvalidInputError("Pangolin has duplicate LazyCloud platform resources")
+            if resources:
+                resource = resources[0]
+            else:
+                resource = self._create_resource(
+                    domain_id=domain.domain_id,
+                    name=name,
+                    subdomain=desired_subdomain,
+                )
+            if (
+                resource.domain_id != domain.domain_id
+                or resource.full_domain != full_domain
+                or resource.mode != "http"
+            ):
                 raise InvalidInputError(
                     "Pangolin platform resource does not match the configured hostname"
                 )
-        else:
-            resource = self._create_resource(
-                domain_id=domain.domain_id,
-                name=_PLATFORM_RESOURCE_NAME,
-                subdomain=subdomain,
-            )
-        resource = self._ensure_public_resource_configuration(resource, ssl=ssl)
-        self._ensure_targets(resource, platform_site_ids=site_ids)
-        return resource
+            resource = self._ensure_public_resource_configuration(resource, ssl=ssl)
+            self._ensure_targets(resource, platform_site_ids=site_ids)
+            ensured.append(resource)
+        return (ensured[0], ensured[1])
 
     def _validate_agent_private_resource(
         self,
@@ -707,7 +774,7 @@ class PangolinClient:
         *,
         ssl: bool,
     ) -> PangolinResource:
-        if not resource.sso and resource.enabled and resource.ssl is ssl:
+        if resource.sso is False and resource.enabled and resource.ssl is ssl:
             return resource
         data = self._request(
             "POST",

@@ -148,7 +148,7 @@ class PangolinPlatformBootstrap:
         self.client.synchronize_platform_site_targets(
             tuple(item.site_id for item in credentials.sites)
         )
-        self.client.ensure_platform_public_resource(
+        self.client.ensure_platform_public_resources(
             hostname=public_hostname,
             site_ids=tuple(item.site_id for item in credentials.sites),
             ssl=public_tls,

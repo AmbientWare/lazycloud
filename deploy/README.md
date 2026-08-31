@@ -9,42 +9,20 @@ Local Compose runs its own Pangolin, Gerbil, Traefik, Newt site connector, and
 Pangolin CLI machine client. It uses local volumes and the `.localhost` domain;
 it does not read or change the hosted Pangolin installation or its DNS.
 
-Set `LAZYCLOUD_PANGOLIN_SERVER_SECRET` and
-`LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD` before the first boot, then start the
-server services:
-
-```sh
-docker compose up -d pangolin gerbil pangolin-traefik
-docker compose ps pangolin gerbil pangolin-traefik
-docker compose logs --tail=80 pangolin gerbil pangolin-traefik
-```
-
-Open `https://pangolin.lazycloud.localhost:8443/auth/initial-setup` and use the
-one-time setup token from the Pangolin log. Create one organization and an
-Integration API key scoped to the organization operations LazyCloud uses. Set
-the organization ID and API key in `.env`, then run the idempotent bootstrap:
-
-```sh
-docker compose up --build pangolin-bootstrap
-```
-
-It creates the Newt site, machine client, `lazycloud.localhost` public resource,
-and health-checked `control-plane:9000` target. Their one-time credentials live
-only in the `pangolin-runtime` volume; the connector, client, API and scheduler
-read the same generated state.
-
-The local stack uses Pangolin Enterprise Edition. Activate its license at
-`/admin/license` before testing delegated domains or other Enterprise features.
-Pangolin stores the license in its local data volume; it is not a LazyCloud
-environment variable.
-
-Start the complete stack after `.env` contains them:
+Set `LAZYCLOUD_PANGOLIN_SERVER_SECRET`,
+`LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD`, `LAZYCLOUD_PANGOLIN_API_KEY`,
+`LAZYCLOUD_PANGOLIN_ORGANIZATION_ID`, and
+`LAZYCLOUD_PANGOLIN_LICENSE_KEY` in the ignored `.env`. The API key uses
+Pangolin's `id.secret` form. Start the stack normally:
 
 ```sh
 docker compose up -d --build
-docker compose ps
-docker compose logs --tail=80 pangolin-site pangolin-client control-plane agent
 ```
+
+The bootstrap creates the local server administrator and organization, activates
+the Enterprise license, then reconciles the Newt site, machine client, apex and
+wildcard resources, and their health-checked `control-plane:9000` targets. Its
+one-time connector credentials live only in `pangolin-runtime`.
 
 `pangolin-site` exposes the control-plane Service to Pangolin. The
 `pangolin-client` container shares the control plane's network namespace and
@@ -66,9 +44,10 @@ Do not reuse their fingerprints, bridge subnets, state directories, or pools.
 
 ## Resetting local state
 
-PostgreSQL, Redis, Pangolin, and the agent carry related durable identities. A
-full predeployment reset must remove all four local volumes or directories in
-one scoped operation. Keep image caches only when their durable records still
-refer to the same database and Pangolin organization.
+Pangolin ties an Enterprise license to the host ID in its database. Compose
+stores that database under `.lazycloud/pangolin-postgres`, outside its managed
+volumes, so `docker compose down -v` preserves the licensed host. Deleting that
+directory requires Pangolin to reset the key before it can activate against a
+new host ID.
 
 Never apply the local reset procedure to an external or hosted deployment.

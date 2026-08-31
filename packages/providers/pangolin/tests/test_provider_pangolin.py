@@ -302,7 +302,7 @@ def test_domain_cleanup_removes_only_lazycloud_owned_resources() -> None:
     ]
 
 
-def test_platform_public_resource_has_one_health_checked_target_per_site() -> None:
+def test_platform_public_resources_cover_apex_and_wildcard_with_each_site() -> None:
     requests: list[httpx.Request] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -326,14 +326,18 @@ def test_platform_public_resource_has_one_health_checked_target_per_site() -> No
         if request.url.path == "/v1/org/org-one/public-resources":
             return _response(request, {"resources": []})
         if request.url.path == "/v1/org/org-one/public-resource":
+            body = json.loads(request.content)
+            wildcard = body["name"] == "lazycloud-platform-public-wildcard"
             return _response(
                 request,
                 {
-                    "resourceId": 71,
+                    "resourceId": 72 if wildcard else 71,
                     "domainId": "platform-domain",
-                    "name": "lazycloud-platform-public",
-                    "subdomain": "api",
-                    "fullDomain": "api.lazycloud.example.com",
+                    "name": body["name"],
+                    "subdomain": "*.api" if wildcard else "api",
+                    "fullDomain": (
+                        "*.api.lazycloud.example.com" if wildcard else "api.lazycloud.example.com"
+                    ),
                     "mode": "http",
                     "ssl": True,
                     "sso": True,
@@ -341,49 +345,103 @@ def test_platform_public_resource_has_one_health_checked_target_per_site() -> No
                 },
                 status_code=201,
             )
-        if request.url.path == "/v1/public-resource/71" and request.method == "POST":
+        if (
+            request.url.path
+            in {
+                "/v1/public-resource/71",
+                "/v1/public-resource/72",
+            }
+            and request.method == "POST"
+        ):
+            wildcard = request.url.path.endswith("/72")
             return _response(
                 request,
                 {
-                    "resourceId": 71,
+                    "resourceId": 72 if wildcard else 71,
                     "domainId": "platform-domain",
-                    "name": "lazycloud-platform-public",
-                    "subdomain": "api",
-                    "fullDomain": "api.lazycloud.example.com",
+                    "name": (
+                        "lazycloud-platform-public-wildcard"
+                        if wildcard
+                        else "lazycloud-platform-public"
+                    ),
+                    "subdomain": "*.api" if wildcard else "api",
+                    "fullDomain": (
+                        "*.api.lazycloud.example.com" if wildcard else "api.lazycloud.example.com"
+                    ),
                     "mode": "http",
                     "ssl": False,
                     "sso": False,
                     "enabled": True,
                 },
             )
-        if request.url.path == "/v1/public-resource/71/targets" and request.method == "GET":
+        if (
+            request.url.path
+            in {
+                "/v1/public-resource/71/targets",
+                "/v1/public-resource/72/targets",
+            }
+            and request.method == "GET"
+        ):
             return _response(request, {"targets": []})
         return _response(request, None, status_code=201)
 
-    resource = _client(handle).ensure_platform_public_resource(
+    resources = _client(handle).ensure_platform_public_resources(
         hostname="api.lazycloud.example.com",
         site_ids=(23, 24),
         ssl=False,
     )
 
-    assert resource.resource_id == 71
-    created_resource = json.loads(requests[2].content)
-    assert created_resource == {
-        "name": "lazycloud-platform-public",
-        "subdomain": "api",
-        "domainId": "platform-domain",
-        "mode": "http",
-    }
-    assert requests[3].url.path == "/v1/public-resource/71"
-    assert json.loads(requests[3].content) == {
-        "sso": False,
-        "enabled": True,
-        "ssl": False,
-    }
-    target_requests = requests[5:]
-    assert all(request.url.path == "/v1/public-resource/71/target" for request in target_requests)
+    assert [resource.resource_id for resource in resources] == [71, 72]
+    created_resources = [
+        json.loads(request.content)
+        for request in requests
+        if request.url.path == "/v1/org/org-one/public-resource"
+    ]
+    assert created_resources == [
+        {
+            "name": "lazycloud-platform-public",
+            "subdomain": "api",
+            "domainId": "platform-domain",
+            "mode": "http",
+        },
+        {
+            "name": "lazycloud-platform-public-wildcard",
+            "subdomain": "*.api",
+            "domainId": "platform-domain",
+            "mode": "http",
+        },
+    ]
+    update_requests = [
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.startswith("/v1/public-resource/")
+    ]
+    assert [request.url.path for request in update_requests] == [
+        "/v1/public-resource/71",
+        "/v1/public-resource/72",
+    ]
+    assert all(
+        json.loads(request.content)
+        == {
+            "sso": False,
+            "enabled": True,
+            "ssl": False,
+        }
+        for request in update_requests
+    )
+    target_requests = [
+        request
+        for request in requests
+        if request.method == "PUT" and request.url.path.endswith("/target")
+    ]
+    assert [request.url.path for request in target_requests] == [
+        "/v1/public-resource/71/target",
+        "/v1/public-resource/71/target",
+        "/v1/public-resource/72/target",
+        "/v1/public-resource/72/target",
+    ]
     target_bodies = [json.loads(request.content) for request in target_requests]
-    assert [body["siteId"] for body in target_bodies] == [23, 24]
+    assert [body["siteId"] for body in target_bodies] == [23, 24, 23, 24]
     assert all(
         body["ip"] == "control-plane"
         and body["port"] == 9000

@@ -287,8 +287,11 @@ services:
       POSTGRES_DB: pangolin
       POSTGRES_USER: pangolin
       POSTGRES_PASSWORD: "${LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD:?set a local Pangolin PostgreSQL password}"
+    # Pangolin binds its Enterprise license to a host ID in this database. Keep
+    # it outside Compose-managed volumes so `docker compose down -v` does not
+    # turn an ordinary local reset into a vendor license-reset request.
     volumes:
-      - pangolin-postgres-data:/var/lib/postgresql
+      - "${LAZYCLOUD_COMPOSE_PANGOLIN_DATA_DIR:-./.lazycloud/pangolin-postgres}:/var/lib/postgresql"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pangolin -d pangolin"]
       interval: 5s
@@ -298,9 +301,24 @@ services:
   pangolin:
     image: docker.io/fosrl/pangolin:ee-postgresql-1.21.1@sha256:8de423e4ae1127db8a0ae20a8032ef08456f798bc7721b7fbe42d5e8807fa9a8
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        bootstrap_dir=/var/lib/lazycloud/pangolin-bootstrap
+        token_file="$$bootstrap_dir/setup-token"
+        if [ ! -s "$$token_file" ]; then
+          mkdir -p "$$bootstrap_dir"
+          umask 077
+          token_tmp="$$bootstrap_dir/.setup-token.tmp"
+          head -c 48 /dev/urandom | sha256sum | cut -c1-32 > "$$token_tmp"
+          mv "$$token_tmp" "$$token_file"
+        fi
+        export PANGOLIN_SETUP_TOKEN="$$(sed -n '1p' "$$token_file")"
+        exec /usr/local/bin/docker-entrypoint.sh npm run start
     environment:
       SERVER_SECRET: "${LAZYCLOUD_PANGOLIN_SERVER_SECRET:?set a local Pangolin server secret}"
       POSTGRES_CONNECTION_STRING: "postgresql://pangolin:${LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD:?set a local Pangolin PostgreSQL password}@pangolin-postgres:5432/pangolin?sslmode=disable"
+      PANGOLIN_ROOT_API_KEY: "${LAZYCLOUD_PANGOLIN_API_KEY:?set a local Pangolin root API key}"
     depends_on:
       pangolin-postgres:
         condition: service_healthy
@@ -308,6 +326,8 @@ services:
       - source: pangolin-configuration
         target: /app/config/config.yml
         mode: 0444
+    volumes:
+      - pangolin-bootstrap-state:/var/lib/lazycloud/pangolin-bootstrap
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3001/api/v1/"]
       interval: 10s
@@ -390,7 +410,12 @@ services:
       - /var/lib/lazycloud/pangolin
       - --public-hostname
       - lazycloud.localhost
-    environment: *pangolin-env
+    environment:
+      <<: *pangolin-env
+      LAZYCLOUD_PANGOLIN_INTERNAL_API_URL: "http://pangolin:3001/api/v1"
+      LAZYCLOUD_PANGOLIN_LICENSE_KEY: "${LAZYCLOUD_PANGOLIN_LICENSE_KEY:?set a local Pangolin Enterprise license key}"
+      LAZYCLOUD_PANGOLIN_SERVER_SECRET: "${LAZYCLOUD_PANGOLIN_SERVER_SECRET:?set a local Pangolin server secret}"
+      LAZYCLOUD_PANGOLIN_SETUP_TOKEN_FILE: "/var/lib/lazycloud/pangolin-bootstrap/setup-token"
     depends_on:
       pangolin:
         condition: service_healthy
@@ -398,6 +423,7 @@ services:
         condition: service_healthy
     volumes:
       - pangolin-runtime:/var/lib/lazycloud/pangolin
+      - pangolin-bootstrap-state:/var/lib/lazycloud/pangolin-bootstrap:ro
 
   pangolin-site:
     image: docker.io/fosrl/newt:1.16.0@sha256:345fdeb369be6608d82c41d70637636c78b2c04a6112ff6ec20fc21c48afc899
@@ -1109,7 +1135,7 @@ configs:
         http_entrypoint: "web"
         https_entrypoint: "websecure"
         cert_resolver: ""
-        prefer_wildcard_cert: false
+        prefer_wildcard_cert: true
 
   pangolin-traefik-configuration:
     content: |
@@ -1239,7 +1265,7 @@ configs:
 
 volumes:
   postgres-data:
-  pangolin-postgres-data:
+  pangolin-bootstrap-state:
   pangolin-gerbil-config:
   pangolin-runtime:
   redis-data:

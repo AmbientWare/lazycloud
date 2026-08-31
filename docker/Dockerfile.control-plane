@@ -146,6 +146,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 FROM python-runtime AS api
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends skopeo \
+    && rm -rf /var/lib/apt/lists/*
 ENV LAZYCLOUD_WEB_STATIC_DIR=/app/web-static
 COPY --from=api-install /app/.venv /app/.venv
 COPY --from=managed-package-source /packages /app/packages
