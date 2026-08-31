@@ -21,7 +21,8 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    PrivateNetworkCleanupTombstoneTable,
+    WireGuardGatewayTable,
+    WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.identity import WorkspaceMemberTable
@@ -39,8 +40,10 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    PrivateNetworkCleanupTombstone,
     PrivateNetworkEnrollmentPhase,
+    WireGuardGateway,
+    WireGuardPeer,
+    WireGuardPeerStatus,
 )
 from shared.compute_policy import (
     ComputeUnitPhase,
@@ -206,13 +209,10 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     agent_version: str = ""
     network_generation: int = Field(default=0, ge=0)
     network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured
-    network_site_id: str = ""
-    network_site_name: str = ""
-    network_resource_id: str = ""
+    network_peer_id: str = ""
+    network_public_key: str = ""
     network_address: str = ""
     network_verified_at: datetime | None = None
-    network_cleanup_resource_ids: list[str] = Field(default_factory=list)
-    network_cleanup_site_ids: list[str] = Field(default_factory=list)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -254,13 +254,10 @@ class ComputeMachineEnrollmentCreate(ContractModel):
     agent_version: str = ""
     network_generation: int = Field(default=0, ge=0)
     network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured
-    network_site_id: str = ""
-    network_site_name: str = ""
-    network_resource_id: str = ""
+    network_peer_id: str = ""
+    network_public_key: str = ""
     network_address: str = ""
     network_verified_at: datetime | None = None
-    network_cleanup_resource_ids: list[str] = Field(default_factory=list)
-    network_cleanup_site_ids: list[str] = Field(default_factory=list)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -272,11 +269,7 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         *,
         updated_at: datetime,
     ) -> ComputeMachineEnrollmentRecord:
-        """Re-state the row from a fresh join, keeping the row's network identity.
-
-        The gateway owns the site's lifecycle. Letting a join carry its network
-        defaults over the durable identity would strand a live site.
-        """
+        """Re-state the row from a fresh join, keeping its WireGuard peer."""
         return existing.model_copy(
             update={
                 **{
@@ -1333,238 +1326,96 @@ class ComputeMachineEnrollmentRepository:
 
 
 @dataclass(slots=True)
-class PrivateNetworkCleanupTombstoneRepository:
+class WireGuardPeerRepository:
     session: Session
 
-    def schedule(
-        self,
-        *,
-        workspace_id: str,
-        pool: MachinePool,
-        machine_id: str,
-        resource_ids: list[str],
-        site_ids: list[str],
-        not_before: datetime,
-        now: datetime,
-    ) -> PrivateNetworkCleanupTombstone:
-        candidate = PrivateNetworkCleanupTombstone(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            pool=pool,
-            machine_id=machine_id,
-            resource_ids=_unique_nonempty_strings(resource_ids),
-            site_ids=_unique_nonempty_strings(site_ids),
-            not_before=not_before,
-            next_attempt_at=now,
-            created_at=now,
-            updated_at=now,
-        )
-        if self._insert_if_absent(candidate):
-            return candidate
-
-        row = self.session.scalars(
-            select(PrivateNetworkCleanupTombstoneTable)
-            .where(PrivateNetworkCleanupTombstoneTable.machine_id == machine_id)
-            .with_for_update()
-        ).one()
-
-        current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
-        tombstone = current.model_copy(
-            update={
-                "workspace_id": workspace_id,
-                "pool": pool,
-                "resource_ids": _unique_nonempty_strings(
-                    [*current.resource_ids, *candidate.resource_ids]
-                ),
-                "site_ids": _unique_nonempty_strings([*current.site_ids, *candidate.site_ids]),
-                "not_before": max(current.not_before, not_before),
-                "next_attempt_at": min(current.next_attempt_at, now),
-                "revision": current.revision + 1,
-                "last_error": "",
-                "claim_token": "",
-                "claimed_until": None,
-                "updated_at": now,
-            }
-        )
-        self._write(row, tombstone)
-        return tombstone
-
-    def _insert_if_absent(self, tombstone: PrivateNetworkCleanupTombstone) -> bool:
-        values: dict[str, DatabaseInsertValue] = {
-            "id": tombstone.id,
-            "machine_id": tombstone.machine_id,
-            "next_attempt_at": tombstone.next_attempt_at,
-            "claimed_until": None,
-            "payload": _model_json(tombstone),
-            "created_at": tombstone.created_at,
-            "updated_at": tombstone.updated_at,
-        }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            statement = (
-                postgresql_insert(PrivateNetworkCleanupTombstoneTable)
-                .values(**values)
-                .on_conflict_do_nothing(
-                    index_elements=[PrivateNetworkCleanupTombstoneTable.machine_id]
-                )
-                .returning(PrivateNetworkCleanupTombstoneTable.id)
-            )
-        elif dialect == "sqlite":
-            statement = (
-                sqlite_insert(PrivateNetworkCleanupTombstoneTable)
-                .values(**values)
-                .on_conflict_do_nothing(
-                    index_elements=[PrivateNetworkCleanupTombstoneTable.machine_id]
-                )
-                .returning(PrivateNetworkCleanupTombstoneTable.id)
-            )
-        else:
-            raise RuntimeError(f"unsupported private-network cleanup database dialect: {dialect}")
-        return self.session.scalar(statement) is not None
-
-    def claim_due(
-        self,
-        *,
-        now: datetime,
-        lease_until: datetime,
-        limit: int,
-    ) -> list[PrivateNetworkCleanupTombstone]:
-        statement = (
-            select(PrivateNetworkCleanupTombstoneTable)
-            .where(
-                PrivateNetworkCleanupTombstoneTable.next_attempt_at <= now,
-                or_(
-                    PrivateNetworkCleanupTombstoneTable.claimed_until.is_(None),
-                    PrivateNetworkCleanupTombstoneTable.claimed_until <= now,
-                ),
-            )
-            .order_by(
-                PrivateNetworkCleanupTombstoneTable.next_attempt_at.asc(),
-                PrivateNetworkCleanupTombstoneTable.created_at.asc(),
-            )
-            .limit(max(limit, 1))
-            .with_for_update(skip_locked=True)
-        )
-        claimed: list[PrivateNetworkCleanupTombstone] = []
-        for row in self.session.scalars(statement):
-            current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
-            tombstone = current.model_copy(
-                update={
-                    "claim_token": str(uuid4()),
-                    "claimed_until": lease_until,
-                    "updated_at": now,
-                }
-            )
-            self._write(row, tombstone)
-            claimed.append(tombstone)
-        return claimed
-
-    def claim_machine(
-        self,
-        machine_id: str,
-        *,
-        now: datetime,
-        lease_until: datetime,
-    ) -> PrivateNetworkCleanupTombstone | None:
-        row = self.session.scalars(
-            select(PrivateNetworkCleanupTombstoneTable)
-            .where(
-                PrivateNetworkCleanupTombstoneTable.machine_id == machine_id,
-                PrivateNetworkCleanupTombstoneTable.next_attempt_at <= now,
-                or_(
-                    PrivateNetworkCleanupTombstoneTable.claimed_until.is_(None),
-                    PrivateNetworkCleanupTombstoneTable.claimed_until <= now,
-                ),
-            )
-            .with_for_update()
-        ).first()
-        if row is None:
-            return None
-        current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
-        tombstone = current.model_copy(
-            update={
-                "claim_token": str(uuid4()),
-                "claimed_until": lease_until,
-                "updated_at": now,
-            }
-        )
-        self._write(row, tombstone)
-        return tombstone
-
-    def complete(self, tombstone: PrivateNetworkCleanupTombstone) -> bool:
-        row = self._claimed_row(tombstone)
-        if row is None:
-            return False
-        self.session.delete(row)
-        self.session.flush()
-        return True
-
-    def reschedule(
-        self,
-        tombstone: PrivateNetworkCleanupTombstone,
-        *,
-        next_attempt_at: datetime,
-        last_error: str,
-        now: datetime,
-    ) -> bool:
-        row = self._claimed_row(tombstone)
-        if row is None:
-            return False
-        current = PrivateNetworkCleanupTombstone.model_validate(row.payload)
-        updated = current.model_copy(
-            update={
-                "next_attempt_at": next_attempt_at,
-                "attempt_count": current.attempt_count + 1,
-                "last_error": last_error,
-                "claim_token": "",
-                "claimed_until": None,
-                "updated_at": now,
-            }
-        )
-        self._write(row, updated)
-        return True
-
-    def get_by_machine(self, machine_id: str) -> PrivateNetworkCleanupTombstone | None:
-        row = self.session.scalars(
-            select(PrivateNetworkCleanupTombstoneTable).where(
-                PrivateNetworkCleanupTombstoneTable.machine_id == machine_id
-            )
-        ).first()
-        return (
-            PrivateNetworkCleanupTombstone.model_validate(row.payload) if row is not None else None
-        )
-
-    def pending_count(self) -> int:
-        return int(
-            self.session.scalar(
-                select(func.count()).select_from(PrivateNetworkCleanupTombstoneTable)
-            )
-            or 0
-        )
-
-    def _claimed_row(
-        self,
-        tombstone: PrivateNetworkCleanupTombstone,
-    ) -> PrivateNetworkCleanupTombstoneTable | None:
-        return _locked_claimed_row(
+    @property
+    def records(self) -> WorkspaceTableRepository[WireGuardPeer]:
+        return WorkspaceTableRepository(
             self.session,
-            PrivateNetworkCleanupTombstoneTable,
-            PrivateNetworkCleanupTombstone.model_validate,
-            tombstone,
+            TableRepositoryConfig(WireGuardPeerTable, WireGuardPeer),
         )
 
-    def _write(
+    def lock_allocator(self) -> None:
+        if self.session.bind is not None and self.session.bind.dialect.name == "postgresql":
+            self.session.execute(select(func.pg_advisory_xact_lock(1_282_385_785)))
+
+    def address_allocated(self, address: str) -> bool:
+        return (
+            self.session.scalar(
+                select(WireGuardPeerTable.id).where(WireGuardPeerTable.address == address).limit(1)
+            )
+            is not None
+        )
+
+    def by_enrollment(
         self,
-        row: PrivateNetworkCleanupTombstoneTable,
-        tombstone: PrivateNetworkCleanupTombstone,
-    ) -> None:
-        row.payload = _model_json(tombstone)
-        row.machine_id = tombstone.machine_id
-        row.next_attempt_at = tombstone.next_attempt_at
-        row.claimed_until = tombstone.claimed_until
-        row.updated_at = tombstone.updated_at
-        flag_modified(row, "payload")
+        enrollment_id: str,
+        *,
+        for_update: bool = False,
+    ) -> WireGuardPeer | None:
+        statement = select(WireGuardPeerTable).where(
+            WireGuardPeerTable.enrollment_id == enrollment_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = self.session.scalars(statement).one_or_none()
+        return WireGuardPeer.model_validate(row.payload) if row is not None else None
+
+    def active(self) -> list[WireGuardPeer]:
+        rows = self.session.scalars(
+            select(WireGuardPeerTable)
+            .where(WireGuardPeerTable.status == WireGuardPeerStatus.Active.value)
+            .order_by(WireGuardPeerTable.address)
+        )
+        return [WireGuardPeer.model_validate(row.payload) for row in rows]
+
+    def save(self, peer: WireGuardPeer) -> WireGuardPeer:
+        saved = self.records.upsert(
+            peer,
+            workspace_id=peer.workspace_id,
+            status=peer.status.value,
+        )
+        row = self.session.scalars(
+            select(WireGuardPeerTable).where(WireGuardPeerTable.id == peer.id)
+        ).one()
+        row.enrollment_id = saved.enrollment_id
+        row.machine_id = saved.machine_id
+        row.public_key = saved.public_key
+        row.address = saved.address
+        row.generation = saved.generation
+        row.last_handshake_at = saved.last_handshake_at
+        row.revoked_at = saved.revoked_at
         self.session.flush()
+        return saved
+
+
+PRIMARY_WIREGUARD_GATEWAY_ID = "3acde72c-e3ae-43d2-a119-cfeb8c0309be"
+
+
+@dataclass(slots=True)
+class WireGuardGatewayRepository:
+    session: Session
+
+    @property
+    def records(self) -> GlobalTableRepository[WireGuardGateway]:
+        return GlobalTableRepository(
+            self.session,
+            TableRepositoryConfig(WireGuardGatewayTable, WireGuardGateway),
+        )
+
+    def current(self) -> WireGuardGateway | None:
+        return self.records.get(PRIMARY_WIREGUARD_GATEWAY_ID)
+
+    def save(self, gateway: WireGuardGateway) -> WireGuardGateway:
+        saved = self.records.upsert(gateway)
+        row = self.session.scalars(
+            select(WireGuardGatewayTable).where(WireGuardGatewayTable.id == gateway.id)
+        ).one()
+        row.public_key = saved.public_key
+        row.endpoint = saved.endpoint
+        self.session.flush()
+        return saved
 
 
 @dataclass(slots=True)

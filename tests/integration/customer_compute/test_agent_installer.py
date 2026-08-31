@@ -31,7 +31,6 @@ from gateway.http import LeaveAgentRequest, LeaveAgentResponse
 from shared.app_identity import AGENT_NAME
 from shared.compute_policy import MachinePool
 from shared.http.errors import ErrorResponse, HttpApiError
-from shared.newt_install import NEWT_AMD64_SHA256, NEWT_INSTALL_VERSION
 from shared.usage import UsageBillingOwner
 from tests.url_constants import EXAMPLE_URL
 from worker.source_cache_cleanup import (
@@ -146,7 +145,7 @@ def test_install_script_forwards_provider_identity_without_join_token(tmp_path: 
             "0",
             "--install-docker",
             "auto",
-            "--install-newt",
+            "--install-wireguard",
             "auto",
             "--background",
             "--agent-bin",
@@ -329,100 +328,6 @@ def test_install_script_refuses_missing_docker_when_install_is_disabled(tmp_path
     assert completed.returncode == 1
     assert "Docker is required for container execution" in completed.stderr
     assert "test-join-token" not in completed.stderr
-
-
-def test_install_script_installs_pinned_newt_binary(tmp_path: Path) -> None:
-    fake_bin = tmp_path / "fake-bin"
-    fake_bin.mkdir()
-    _fake_uname(fake_bin)
-    (fake_bin / "newt").unlink()
-    _executable(fake_bin / "id", "#!/bin/sh\nprintf '0\\n'\n")
-    _executable(
-        fake_bin / "curl",
-        (
-            """#!/bin/sh
-set -eu
-out=""
-url=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -o) shift; out="$1" ;;
-    http*) url="$1" ;;
-  esac
-  shift
-done
-printf '#!/bin/sh\nprintf "Newt version __NEWT_VERSION__\\n"\n' > "$out"
-chmod 0755 "$out"
-printf '%s\n' "$url" > "$NEWT_URL_FILE"
-"""
-        ).replace("__NEWT_VERSION__", NEWT_INSTALL_VERSION),
-    )
-    _executable(
-        fake_bin / "sha256sum",
-        f"#!/bin/sh\nprintf '{NEWT_AMD64_SHA256}  %s\\n' \"$1\"\n",
-    )
-    _executable(
-        fake_bin / "install",
-        """#!/bin/sh
-set -eu
-source="$3"
-destination="$4"
-target="$FAKE_BIN/$(basename "$destination")"
-cp "$source" "$target"
-chmod 0755 "$target"
-""",
-    )
-    args_file = tmp_path / "agent-args"
-    newt_url_file = tmp_path / "newt-url"
-    agent_binary = _executable(
-        tmp_path / AGENT_NAME,
-        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$AGENT_ARGS_FILE"\n',
-    )
-    env = _hermetic_environment(
-        fake_bin,
-        "sh",
-        "sed",
-        "tr",
-        "awk",
-        "basename",
-        "chmod",
-        "cp",
-        "mkdir",
-        "mktemp",
-        "rm",
-    )
-    env.update(
-        {
-            "FAKE_BIN": str(fake_bin),
-            "AGENT_ARGS_FILE": str(args_file),
-            "NEWT_URL_FILE": str(newt_url_file),
-        }
-    )
-
-    completed = _run_installer(
-        tmp_path,
-        [
-            "--gateway",
-            EXAMPLE_URL,
-            "--join-token",
-            "test-join-token",
-            "--agent-bin",
-            str(agent_binary),
-            "--foreground",
-            "--executor",
-            "external",
-        ],
-        env=env,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert f"Installing Newt {NEWT_INSTALL_VERSION}" in completed.stderr
-    assert (
-        newt_url_file.read_text(encoding="utf-8")
-        .strip()
-        .endswith(f"/{NEWT_INSTALL_VERSION}/newt_linux_amd64")
-    )
-    assert (fake_bin / "newt").is_file()
 
 
 def test_install_script_fails_before_changes_when_background_is_not_root(tmp_path: Path) -> None:
@@ -1004,7 +909,7 @@ def _linux_environment(tmp_path: Path) -> dict[str, str]:
 def _hermetic_environment(fake_bin: Path, *host_utilities: str) -> dict[str, str]:
     """Installer environment whose PATH resolves only fakes and the named host tools.
 
-    The installer probes the host for Docker and Newt, so a PATH that still
+    The installer probes the host for Docker and WireGuard, so a PATH that still
     reaches /usr/bin makes the result depend on what the developer happens to
     have installed. Naming every real utility keeps the probe outcome under the
     test's control.
@@ -1025,8 +930,9 @@ def _fake_uname(fake_bin: Path) -> None:
 if [ "${1:-}" = "-s" ]; then printf 'Linux\\n'; else printf 'x86_64\\n'; fi
 """,
     )
-    version_script = f"#!/bin/sh\nprintf 'Newt version {NEWT_INSTALL_VERSION}\\n'\n"
-    _executable(fake_bin / "newt", version_script)
+    _executable(fake_bin / "wg", "#!/bin/sh\nexit 0\n")
+    _executable(fake_bin / "ip", "#!/bin/sh\nexit 0\n")
+    _executable(fake_bin / "iptables", "#!/bin/sh\nexit 0\n")
 
 
 def _executable(path: Path, contents: str) -> Path:

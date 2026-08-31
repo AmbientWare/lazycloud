@@ -208,7 +208,7 @@ export default defineConfig({
        name, and accept the names it will be reached by. Vite rejects an
        unexpected Host header, so its own machine name has to be named
        explicitly — that is how the dev server is reached from another device
-       on the same private network or LAN. */
+       through WireGuard or on the same LAN. */
     host: true,
     allowedHosts: devAllowedHosts,
     proxy: {

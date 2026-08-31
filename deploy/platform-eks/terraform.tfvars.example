@@ -5,19 +5,8 @@ control_plane_cidr            = "10.80.0.0/16"
 control_plane_instance_type   = "t4g.medium"
 control_plane_root_volume_gib = 100
 
-# Empty is the intended value. Pangolin and SSM establish outbound sessions.
+# Empty is the intended value. Public ingress, WireGuard, and SSM need no operator ingress.
 operator_ingress_cidrs = []
-
-gateway_public_http_url                  = "https://lazycloud.example.com"
-github_redirect_uri                      = "https://lazycloud.example.com/auth/github/callback"
-pangolin_api_url                         = "https://pangolin-api.example.com/v1"
-pangolin_endpoint                        = "https://pangolin.example.com"
-pangolin_organization_id                 = "replace_me"
-
-# Both default to two. Increase a count to create the missing Pangolin
-# identities and matching StatefulSet ordinals during the next deployment.
-# control_plane_replicas = 3
-# pangolin_site_replicas = 3
 
 # The payment-provider account the catalog is published into, checked against the
 # credential before anything is written. `stripe accounts retrieve` prints it.

@@ -17,7 +17,7 @@ their cadences differ, not because their work is unrelated:
   enforcement, which touches only Postgres and whose interval is money, and cron
   firing, because a schedule that fires late was wrong.
 - **housekeeping**, every 30s, is everything that waits on somebody else:
-  Stripe, S3, Pangolin.
+  Stripe, S3, Cloudflare.
 - **dispatch** places what is already ready, woken by Redis rather than a clock.
 
 They were one loop, and a caller waiting for a container waited for whatever

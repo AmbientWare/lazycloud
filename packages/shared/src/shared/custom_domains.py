@@ -13,17 +13,15 @@ from shared.timestamps import utc_now
 _UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 MAX_HOSTNAME_LENGTH = 253
-WILDCARD_PREFIX = "*."
-
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _DOMAIN = rf"{_LABEL}(?:\.{_LABEL})+"
-_REGISTRABLE_PATTERN = re.compile(rf"^(?:\*\.)?{_DOMAIN}$")
+_REGISTRABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
 _ASSIGNABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
 
 
 class CustomDomainPhase(StringEnum):
     AwaitingVerification = "awaiting_verification"
-    """Provider hostname created; the customer still has to publish DNS records."""
+    """Provider hostname created; the customer still has to publish the CNAME."""
 
     Validating = "validating"
     Ready = "ready"
@@ -35,11 +33,6 @@ class CustomDomainErrorCode(StringEnum):
     CertificateFailed = "certificate_failed"
     HostnameRejected = "hostname_rejected"
     UpstreamUnavailable = "upstream_unavailable"
-
-
-class CustomDomainDnsMode(StringEnum):
-    Cname = "cname"
-    Delegation = "delegation"
 
 
 class DnsRecord(ContractModel):
@@ -66,11 +59,10 @@ class CustomDomain(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     user_id: str = Field(pattern=_UUID_PATTERN)
     hostname: str = Field(min_length=3, max_length=MAX_HOSTNAME_LENGTH)
-    dns_mode: CustomDomainDnsMode
     phase: CustomDomainPhase = CustomDomainPhase.AwaitingVerification
     provider_hostname_id: str | None = Field(default=None, min_length=1, max_length=128)
     required_records: tuple[DnsRecord, ...] = ()
-    """Records the provider is still waiting on."""
+    """Records the provider is still waiting on, beyond the routing CNAME."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -80,28 +72,10 @@ class CustomDomain(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
     deleted_at: datetime | None = None
 
-    @property
-    def is_wildcard(self) -> bool:
-        return self.hostname.startswith(WILDCARD_PREFIX)
-
     def covers(self, hostname: str) -> bool:
-        """Whether a deployment may claim `hostname` under this registration.
+        """Whether a deployment may claim this exact registered hostname."""
 
-        A wildcard covers exactly one label, matching what a certificate for it
-        actually secures; `*.acme.com` serves `api.acme.com` and not
-        `api.staging.acme.com`.
-        """
-
-        candidate = hostname.strip().rstrip(".").lower()
-        if self.dns_mode is CustomDomainDnsMode.Cname:
-            return candidate == self.hostname
-        if candidate == self.hostname:
-            return True
-        suffix = f".{self.hostname}"
-        if not candidate.endswith(suffix):
-            return False
-        label = candidate[: -len(suffix)]
-        return bool(label) and "." not in label
+        return hostname.strip().rstrip(".").lower() == self.hostname
 
 
 class ProviderCustomHostname(ContractModel):
@@ -110,7 +84,7 @@ class ProviderCustomHostname(ContractModel):
     provider_hostname_id: str = Field(min_length=1, max_length=128)
     phase: CustomDomainPhase
     required_records: tuple[DnsRecord, ...] = ()
-    """Records the provider is still waiting on."""
+    """Records the provider is still waiting on, beyond the routing CNAME."""
 
     error_code: CustomDomainErrorCode | None = None
     error_message: str | None = Field(default=None, max_length=512)
@@ -123,13 +97,8 @@ class CustomDomainProvider(Protocol):
     should exist and what its absence means, and an adapter only carries that out.
     """
 
-    def create_hostname(
-        self,
-        hostname: str,
-        *,
-        dns_mode: CustomDomainDnsMode,
-    ) -> ProviderCustomHostname:
-        """Ask the provider to serve one hostname or one delegated DNS zone."""
+    def create_hostname(self, hostname: str) -> ProviderCustomHostname:
+        """Ask the provider to serve the exact `hostname`."""
         ...
 
     def get_hostname(self, provider_hostname_id: str) -> ProviderCustomHostname | None:
@@ -142,16 +111,13 @@ class CustomDomainProvider(Protocol):
 
 
 def normalize_registrable_domain(value: str) -> str:
-    """Accept a domain a workspace can register: an apex or a one-level wildcard."""
+    """Accept an exact hostname a workspace can register."""
 
     hostname = value.strip().rstrip(".").lower()
     if len(hostname) > MAX_HOSTNAME_LENGTH:
         raise ValueError(f"domain must be at most {MAX_HOSTNAME_LENGTH} characters")
     if not _REGISTRABLE_PATTERN.fullmatch(hostname):
-        raise ValueError(
-            "domain must be a hostname such as acme.com, or a single-level wildcard "
-            "such as *.acme.com"
-        )
+        raise ValueError("domain must be an exact hostname such as app.acme.com")
     return hostname
 
 
@@ -168,9 +134,7 @@ def normalize_assignable_hostname(value: str) -> str:
 
 __all__ = [
     "MAX_HOSTNAME_LENGTH",
-    "WILDCARD_PREFIX",
     "CustomDomain",
-    "CustomDomainDnsMode",
     "CustomDomainErrorCode",
     "CustomDomainPhase",
     "CustomDomainProvider",

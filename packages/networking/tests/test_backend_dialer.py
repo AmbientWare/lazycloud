@@ -71,7 +71,7 @@ def test_backend_route_dialer_connects_to_local_tcp_and_cleans_up(
         listener.close()
 
 
-def test_private_network_route_dials_its_pangolin_alias(
+def test_private_network_route_dials_its_proxy_target(
     free_tcp_port: int,
 ) -> None:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

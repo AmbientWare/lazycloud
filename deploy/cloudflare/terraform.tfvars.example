@@ -1,0 +1,9 @@
+account_id      = "your-cloudflare-account-id"
+zone_id         = "your-zone-id"
+public_hostname = "lazycloud.dev"
+environment     = "production"
+
+# Both default to false. Turn them on only after importing the existing tunnel
+# and records and reviewing a plan that shows nothing else in the zone moves.
+confirm_zone_records   = true
+manage_fallback_origin = false

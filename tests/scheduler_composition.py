@@ -60,7 +60,6 @@ def services_with_redis_container_control(
         aws_account_connection_settings=services.aws_account_connection_settings,
         aws_capacity_settings=services.aws_capacity_settings,
         aws_capacity_reconciliation_settings=services.aws_capacity_reconciliation_settings,
-        pangolin_settings=services.pangolin_settings,
         backend_route_settings=services.backend_route_settings,
         object_store_settings=services.object_store_settings,
         object_storage=services.object_storage,

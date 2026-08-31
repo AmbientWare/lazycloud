@@ -11,7 +11,6 @@ resource "kubernetes_namespace" "argocd" {
     name = var.argocd_namespace
   }
 }
-
 resource "helm_release" "argocd" {
   name       = "argocd"
   repository = "https://argoproj.github.io/argo-helm"
@@ -26,7 +25,7 @@ resource "helm_release" "argocd" {
   timeout = 900
 
   values = [yamlencode({
-    # Reachable through the cluster only. Pangolin serves the product, and
+    # Reachable through the cluster only. The tunnel serves the product, and
     # exposing a deployment controller beside it would publish the thing that can
     # change everything. Operators reach it with `kubectl port-forward`.
     #
@@ -164,7 +163,7 @@ resource "helm_release" "argocd" {
 # value, so on a first apply the container exists and holds no version: a data
 # source reading it fails, and the single apply this is meant to be becomes two
 # with a manual step wedged between them. The operator already carries the
-# PlanetScale, Pangolin, and Stripe credentials this way.
+# PlanetScale, Cloudflare and Stripe credentials this way.
 
 resource "kubernetes_secret" "argocd_repository_credentials" {
   metadata {

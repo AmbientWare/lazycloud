@@ -7,15 +7,8 @@ import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CustomDomain, CustomDomainDnsMode } from "@/lib/api/schemas";
+import type { CustomDomain } from "@/lib/api/schemas";
 import {
   customDomainsQueryOptions,
   registerCustomDomain,
@@ -27,7 +20,6 @@ import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const queryClient = useQueryClient();
   const [hostname, setHostname] = useState("");
-  const [dnsMode, setDnsMode] = useState<CustomDomainDnsMode>("cname");
   const [failure, setFailure] = useState<string | null>(null);
   const domains = useQuery(customDomainsQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
@@ -35,8 +27,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
 
   const register = useMutation({
-    mutationFn: ({ value, mode }: { value: string; mode: CustomDomainDnsMode }) =>
-      registerCustomDomain(value, mode),
+    mutationFn: (value: string) => registerCustomDomain(value),
     onSuccess: () => {
       setHostname("");
       setFailure(null);
@@ -68,26 +59,13 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
             className="flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (hostname.trim()) register.mutate({ value: hostname, mode: dnsMode });
+              if (hostname.trim()) register.mutate(hostname);
             }}
           >
-            <Select
-              value={dnsMode}
-              onValueChange={(value) => setDnsMode(value as CustomDomainDnsMode)}
-              disabled={pending}
-            >
-              <SelectTrigger size="sm" className="w-40" aria-label="DNS setup">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="cname">Single domain</SelectItem>
-                <SelectItem value="delegation">DNS delegation</SelectItem>
-              </SelectContent>
-            </Select>
             <Input
               value={hostname}
               onChange={(event) => setHostname(event.target.value)}
-              placeholder={dnsMode === "cname" ? "app.acme.com" : "acme.com"}
+              placeholder="acme.com or *.acme.com"
               aria-label="Domain to register"
               className="h-8 w-56"
               disabled={pending}
@@ -154,15 +132,12 @@ function DomainRow({
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm text-foreground">{domain.hostname}</span>
-          <span className="text-[10px] tracking-wide text-muted-foreground uppercase">
-            {domain.dns_mode === "cname" ? "CNAME" : "Delegated"}
-          </span>
           <StatusChip status={domain.phase} />
         </div>
         {/* The one thing the customer has to act on, so it is shown until it stops
             mattering, and shown as the record they have to create rather than as prose
             they would have to translate into one. */}
-        {domain.phase !== "ready" && domain.required_records.length > 0 ? (
+        {domain.phase !== "ready" && domain.cname_target ? (
           <DnsInstructions domain={domain} />
         ) : null}
         {domain.error_message ? (
@@ -187,26 +162,47 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
   return (
     <div className="mt-1.5 space-y-1.5">
       <p className="text-[11px] text-muted-foreground">
-        Add the records Pangolin supplied where you manage DNS. Verification and certificates can
-        take a few minutes.
+        Add this record where you manage DNS for this domain. It can take a few minutes to take
+        effect; nothing else is needed here.
       </p>
-      {domain.required_records.map((record) => (
-        <dl
-          key={`${record.type}:${record.name}:${record.value}`}
-          className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1"
-        >
-          <dt className="text-[11px] text-muted-foreground">Type</dt>
-          <dd className="mono text-[11px] text-foreground">{record.type}</dd>
-          <dt className="text-[11px] text-muted-foreground">Name</dt>
-          <dd>
-            <CopyValue value={record.name} label="record name" />
-          </dd>
-          <dt className="text-[11px] text-muted-foreground">Value</dt>
-          <dd>
-            <CopyValue value={record.value} label="record value" />
-          </dd>
-        </dl>
-      ))}
+      <dl className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
+        <dt className="text-[11px] text-muted-foreground">Type</dt>
+        <dd className="mono text-[11px] text-foreground">CNAME</dd>
+        <dt className="text-[11px] text-muted-foreground">Name</dt>
+        <dd>
+          <CopyValue value={domain.hostname} label="record name" />
+        </dd>
+        <dt className="text-[11px] text-muted-foreground">Target</dt>
+        <dd>
+          <CopyValue value={domain.cname_target} label="record target" />
+        </dd>
+      </dl>
+      {domain.required_records.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-[11px] text-muted-foreground">
+            {domain.required_records.length === 1
+              ? "Add this record too — it proves you own the domain, so a certificate can be issued for it:"
+              : "Add these records too — they prove you own the domain, so a certificate can be issued for it:"}
+          </p>
+          {domain.required_records.map((record) => (
+            <dl
+              key={`${record.type}:${record.name}:${record.value}`}
+              className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1"
+            >
+              <dt className="text-[11px] text-muted-foreground">Type</dt>
+              <dd className="mono text-[11px] text-foreground">{record.type}</dd>
+              <dt className="text-[11px] text-muted-foreground">Name</dt>
+              <dd>
+                <CopyValue value={record.name} label="record name" />
+              </dd>
+              <dt className="text-[11px] text-muted-foreground">Value</dt>
+              <dd>
+                <CopyValue value={record.value} label="record value" />
+              </dd>
+            </dl>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

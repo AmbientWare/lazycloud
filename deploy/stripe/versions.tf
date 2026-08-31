@@ -6,11 +6,10 @@ terraform {
   required_providers {
     stripe = {
       source = "stripe/stripe"
-      # Stripe's own provider, generated from their internal tooling, and pinned
-      # exactly the way the platform modules pin providers. The version is a
-      # pre-release because that is what Stripe publishes today; its own README
-      # asks for an exact pin in production, and a floating constraint on a
-      # pre-release would let a generator run change this account's shape.
+      # Stripe's own provider, generated from their internal tooling, is pinned
+      # exactly. The version is a pre-release because that is what Stripe
+      # publishes today; its README asks for an exact pin in production, and a
+      # floating constraint would let a generator run change this account's shape.
       version = "= 0.3.0-beta.4"
     }
   }

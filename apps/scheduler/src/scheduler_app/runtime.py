@@ -45,7 +45,6 @@ from scheduler.service import (
     SchedulerMaintenanceControls,
     SchedulerMeterOutboxService,
     SchedulerPlanChangeService,
-    SchedulerPrivateNetworkCleanupService,
     SchedulerRetentionService,
     SchedulerStateStores,
     SchedulerVolumeMeteringService,
@@ -129,7 +128,6 @@ class SchedulerRuntime:
                 billing_reconciliation=app_services.billing_reconciliation,
                 billing_enforcement=app_services.billing_enforcement,
                 retention=app_services.retention,
-                private_network_cleanup=app_services.private_network_cleanup,
                 custom_domains=app_services.custom_domains,
                 managed_compute_reconcile_interval_seconds=(
                     managed_compute_reconcile_interval_seconds
@@ -166,7 +164,6 @@ class SchedulerRuntime:
         billing_reconciliation: SchedulerBillingReconciliationService,
         billing_enforcement: SchedulerBillingEnforcementService,
         retention: SchedulerRetentionService | None,
-        private_network_cleanup: SchedulerPrivateNetworkCleanupService,
         custom_domains: CustomDomainService,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
@@ -291,7 +288,6 @@ class SchedulerRuntime:
                 billing_reconciliation=billing_reconciliation,
                 billing_enforcement=billing_enforcement,
                 retention=retention,
-                private_network_cleanup=private_network_cleanup,
                 custom_domains=custom_domains,
             ),
             retention_interval_seconds=retention_settings.interval_seconds,

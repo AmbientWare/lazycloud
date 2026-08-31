@@ -14,7 +14,7 @@ from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.custom_domains import CustomDomain, CustomDomainDnsMode
+from shared.custom_domains import CustomDomain
 from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
@@ -103,7 +103,6 @@ def test_plan_change_refuses_to_drop_a_capability_still_in_use(
                 id=str(uuid4()),
                 user_id=user_id,
                 hostname="quota.example",
-                dns_mode=CustomDomainDnsMode.Cname,
             ),
             user_id=user_id,
         )

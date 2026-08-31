@@ -1,30 +1,43 @@
 {{- include "lazycloud.databaseBudget" . -}}
-{{- $root := . -}}
-{{- range $ordinal := until (int $root.Values.controlPlane.replicas) }}
+{{- if ne (int .Values.controlPlane.replicas) (int .Values.wireguard.platformPeers) -}}
+{{- fail "controlPlane.replicas and wireguard.platformPeers must match" -}}
+{{- end -}}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: control-plane-{{ $ordinal }}
+  name: control-plane
 spec:
-  replicas: 1
+  serviceName: control-plane
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.controlPlane.replicas }}
   selector:
     matchLabels:
       app: control-plane
-      lazycloud.dev/ordinal: {{ $ordinal | quote }}
   template:
     metadata:
       labels:
         app: control-plane
-        lazycloud.dev/ordinal: {{ $ordinal | quote }}
     spec:
-      serviceAccountName: {{ $root.Values.serviceAccounts.controlPlane }}
+      serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       topologySpreadConstraints:
-        {{- include "lazycloud.spreadOrdinalSetAcrossNodes" "control-plane" | nindent 8 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          matchLabelKeys: [controller-revision-hash]
+          labelSelector:
+            matchLabels:
+              app: control-plane
       volumes:
         - name: tun
           hostPath:
             path: /dev/net/tun
             type: CharDevice
+        - name: wireguard-keys
+          secret:
+            secretName: {{ .Values.wireguard.secretName }}
+            defaultMode: 0400
+        - name: wireguard-platform-key
+          emptyDir: {}
         # Per pod, because the artifact is immutable and 48MB: a shared volume
         # would tie replicas to one zone to save a fetch that costs seconds.
         - name: agent-binarys
@@ -32,14 +45,6 @@ spec:
         - name: aws-chain
           configMap:
             name: aws-chain
-        - name: pangolin-client-credentials
-          secret:
-            secretName: {{ $root.Values.secrets.pangolinRuntime.clients.name }}
-            items:
-              - key: LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_{{ $ordinal }}_ID
-                path: id
-              - key: LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_{{ $ordinal }}_SECRET
-                path: secret
       initContainers:
         # The release publishes the agent binary; the deployment says where it
         # keeps one. Neither holds the whole path, so it is assembled here, and
@@ -47,7 +52,7 @@ spec:
         # `AgentBinarySettings` refuses to build without a directory, so a
         # download after startup would be after the refusal.
         - name: agent-artifact
-          image: {{ include "lazycloud.image" (list $root "database-bootstrap") }}
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
           command:
             - lazycloud-admin
             - --json
@@ -56,27 +61,52 @@ spec:
             - --into
             - /var/lib/lazycloud/agent-binarys
           env:
-            {{- include "lazycloud.env" $root | nindent 12 }}
+            {{- include "lazycloud.env" . | nindent 12 }}
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
           resources:
-            {{- toYaml $root.Values.controlPlane.initResources | nindent 12 }}
+            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
+        - name: wireguard-platform-key
+          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              index="${LAZYCLOUD_WIREGUARD_POD_NAME##*-}"
+              case "$index" in
+                ''|*[!0-9]*) echo "control-plane pod has no ordinal" >&2; exit 2 ;;
+              esac
+              umask 077
+              cp "/var/run/lazycloud/wireguard/platform-${index}-private-key" /var/lib/lazycloud/wireguard/private-key
+          env:
+            - name: LAZYCLOUD_WIREGUARD_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: wireguard-keys
+              mountPath: /var/run/lazycloud/wireguard
+              readOnly: true
+            - name: wireguard-platform-key
+              mountPath: /var/lib/lazycloud/wireguard
+          resources:
+            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
       containers:
         - name: control-plane
-          image: {{ include "lazycloud.image" (list $root "api") }}
+          image: {{ include "lazycloud.image" (list . "api") }}
           ports:
             - name: http
               containerPort: 9000
-            - name: tcp-ingress
-              containerPort: 1995
           env:
-            {{- include "lazycloud.env" $root | nindent 12 }}
-            {{- include "lazycloud.pangolinControlEnv" $root | nindent 12 }}
-            {{- include "lazycloud.pangolinRuntimeProviderEnv" $root | nindent 12 }}
-            {{- include "lazycloud.databaseEnv" $root.Values.controlPlane.database | nindent 12 }}
+            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
+            - name: LAZYCLOUD_WIREGUARD_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: AWS_CONFIG_FILE
               value: /run/lazycloud/aws/config
             # Not AWS_PROFILE: boto applies that to every client in the
@@ -90,11 +120,15 @@ spec:
             - name: aws-chain
               mountPath: /run/lazycloud/aws
           resources:
-            {{- toYaml $root.Values.controlPlane.resources | nindent 12 }}
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          # Loopback rather than the advertised address: a replica has to prove
+          # it serves before it can be one of the things that address resolves
+          # to, so a check going out through WireGuard could never pass cold.
+          #
           # Startup is a phase, not a delay. uvicorn binds nothing until the
           # lifespan finishes, so a passing /livez is proof composition ended,
-          # and five minutes covers a slow release fetch without the other two
-          # probes judging a process that has not started.
+          # and five minutes of it covers a slow release fetch and peer setup
+          # without the other two probes judging a process that has not started.
           startupProbe:
             httpGet:
               path: /livez
@@ -124,68 +158,42 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6
-        - name: pangolin-client
-          image: {{ $root.Values.pangolin.client.image }}
-          command: ["/bin/sh", "-ec"]
-          args:
-            - |
-              test -s /run/lazycloud/pangolin-client/id
-              test -s /run/lazycloud/pangolin-client/secret
-              export CLIENT_ID="$(cat /run/lazycloud/pangolin-client/id)"
-              export CLIENT_SECRET="$(cat /run/lazycloud/pangolin-client/secret)"
-              exec /entrypoint.sh --override-dns=false
-          env:
-            - name: PANGOLIN_ENDPOINT
-              value: {{ required "runtime.LAZYCLOUD_PANGOLIN_ENDPOINT is required" $root.Values.runtime.LAZYCLOUD_PANGOLIN_ENDPOINT | quote }}
+        - name: wireguard-platform
+          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
           securityContext:
             capabilities:
               add: ["NET_ADMIN"]
+          env:
+            - name: LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE
+              value: /var/lib/lazycloud/wireguard/private-key
+            - name: LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY_FILE
+              value: /var/lib/lazycloud/wireguard/server/public-key
+            - name: LAZYCLOUD_WIREGUARD_GATEWAY_ENDPOINT
+              value: tunnel-gateway:51820
+            - name: LAZYCLOUD_WIREGUARD_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           volumeMounts:
             - name: tun
               mountPath: /dev/net/tun
-            - name: pangolin-client-credentials
-              mountPath: /run/lazycloud/pangolin-client
+            - name: wireguard-keys
+              mountPath: /var/lib/lazycloud/wireguard/server/public-key
+              subPath: server-public-key
+              readOnly: true
+            - name: wireguard-platform-key
+              mountPath: /var/lib/lazycloud/wireguard/private-key
+              subPath: private-key
               readOnly: true
           resources:
-            {{- toYaml $root.Values.pangolin.client.resources | nindent 12 }}
-          startupProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -ec
-                - |
-                  status="$(pangolin-cli status client --json)"
-                  printf '%s\n' "$status" | grep -q '"connected": true'
-                  printf '%s\n' "$status" | grep -q '"registered": true'
-            periodSeconds: 5
-            timeoutSeconds: 5
-            failureThreshold: 60
+            {{- toYaml .Values.wireguard.resources | nindent 12 }}
           readinessProbe:
             exec:
-              command:
-                - /bin/sh
-                - -ec
-                - |
-                  status="$(pangolin-cli status client --json)"
-                  printf '%s\n' "$status" | grep -q '"connected": true'
-                  printf '%s\n' "$status" | grep -q '"registered": true'
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          livenessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -ec
-                - |
-                  status="$(pangolin-cli status client --json)"
-                  printf '%s\n' "$status" | grep -q '"connected": true'
-                  printf '%s\n' "$status" | grep -q '"registered": true'
-            periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 6
+              command: ["test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 5
 ---
-{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -197,6 +205,3 @@ spec:
     - name: http
       port: 9000
       targetPort: http
-    - name: tcp-ingress
-      port: 1995
-      targetPort: tcp-ingress

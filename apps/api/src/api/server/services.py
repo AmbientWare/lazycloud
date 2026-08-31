@@ -125,8 +125,8 @@ from provider_clients.settings import (
     AwsCapacityReconciliationSettings,
     AwsCapacitySettings,
 )
+from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
-from provider_pangolin import PangolinPrivateNetworkControl, PangolinSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
@@ -429,7 +429,6 @@ class ApiServiceCore:
     aws_account_connection_settings: AwsAccountConnectionSettings
     aws_capacity_settings: AwsCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
-    pangolin_settings: PangolinSettings
     backend_route_settings: BackendRouteSettings
     object_store_settings: S3ObjectStoreSettings
     workspace_storage_issuer: WorkspaceStorageIssuer
@@ -534,7 +533,6 @@ class ApiServices(ApiServiceCore):
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
         aws_capacity_settings: AwsCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
-        pangolin_settings: PangolinSettings | None = None,
         backend_route_settings: BackendRouteSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
         workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
@@ -598,9 +596,6 @@ class ApiServices(ApiServiceCore):
         aws_capacity_reconciliation_config = (
             aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
         )
-        pangolin_config = pangolin_settings or PangolinSettings()
-        if aws_account_connection_config.configured and not pangolin_config.configured:
-            raise ValueError("connected AWS capacity requires Pangolin configuration")
         resolved_backend_route_settings = backend_route_settings or BackendRouteSettings()
         object_store_config = object_store_settings or S3ObjectStoreSettings()
         image_archive_config = (image_archive_settings or ImageArchiveSettings()).resolve(
@@ -925,7 +920,7 @@ class ApiServices(ApiServiceCore):
         deployment_resources = DeploymentResourceService(context)
         custom_domains = CustomDomainService(
             context=context,
-            provider_factory=pangolin_config.client,
+            provider_factory=CloudflareSettings().provider,
             platform_base_domain=gateway_config.public_base_domain,
             admission=DatabaseBillingAdmission(),
         )
@@ -957,7 +952,6 @@ class ApiServices(ApiServiceCore):
             aws_account_connection_settings=aws_account_connection_config,
             aws_capacity_settings=aws_capacity_config,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
-            pangolin_settings=pangolin_config,
             backend_route_settings=resolved_backend_route_settings,
             object_store_settings=object_store_config,
             workspace_storage_issuer=workspace_storage_issuer,
@@ -1275,7 +1269,6 @@ def _compose_api_services(
         aws_account_connection_settings=core.aws_account_connection_settings,
         aws_capacity_settings=core.aws_capacity_settings,
         aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
-        pangolin_settings=core.pangolin_settings,
         backend_route_settings=core.backend_route_settings,
         object_store_settings=core.object_store_settings,
         workspace_storage_issuer=core.workspace_storage_issuer,
@@ -1389,16 +1382,11 @@ def _gateway_control_service(
         route_prewarmer=RoutePrewarmService(route_dialer, core.events),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
         container_client_factory=container_clients,
-        private_network_control=(
-            PangolinPrivateNetworkControl(core.pangolin_settings.client())
-            if core.pangolin_settings.configured
-            else None
-        ),
         route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
-        runtime_origin=lambda: core.gateway_settings.public_http_url,
+        runtime_origin=lambda: core.gateway_settings.runtime_callback_http_url,
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(
                 SchedulerWorkerPreemptionService(

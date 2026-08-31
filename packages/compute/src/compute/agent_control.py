@@ -919,17 +919,21 @@ _LOCAL_RUNTIME_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
     """Whether a remote machine could never reach this host.
 
-    A literal address is classified rather than pattern-matched: `10.0.0.150`
-    carries dots and is not loopback, so a name-shaped check accepts a LAN
-    address that resolves only on the control plane's own network. A name is
-    accepted here and left to DNS, except a single label, which resolves only
-    inside a container network.
+    Private addresses can be routable through WireGuard, a VPC, or another
+    operator-owned network. Loopback, unspecified, link-local, and multicast
+    addresses cannot name the control-plane peer from another machine. A name is
+    accepted here and left to DNS except for a single container-local label.
     """
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
         return "." not in host
-    return not address.is_global
+    return (
+        address.is_loopback
+        or address.is_unspecified
+        or address.is_link_local
+        or address.is_multicast
+    )
 
 
 def _reject_unroutable_runtime_url(

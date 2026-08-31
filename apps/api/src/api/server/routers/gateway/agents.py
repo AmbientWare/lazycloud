@@ -16,8 +16,6 @@ from gateway.http import (
     ListAgentRoutesResponse,
     RegisterAgentPrivateNetworkRequest,
     RegisterAgentPrivateNetworkResponse,
-    RequestAgentTransportCredentialRequest,
-    RequestAgentTransportCredentialResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
@@ -96,17 +94,6 @@ def leave_agent(
     service: GatewayControlService = Depends(gateway_service),
 ) -> LeaveAgentResponse:
     return service.leave_agent(request)
-
-
-@router.post(
-    "/agents/transport-credential",
-    response_model=RequestAgentTransportCredentialResponse,
-)
-def request_agent_transport_credential(
-    request: RequestAgentTransportCredentialRequest,
-    service: GatewayControlService = Depends(gateway_service),
-) -> RequestAgentTransportCredentialResponse:
-    return service.request_agent_transport_credential(request)
 
 
 @router.post(

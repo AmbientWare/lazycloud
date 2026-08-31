@@ -8,7 +8,7 @@ proof. So the script lives here and the provider supplies a shell fragment. The
 alternative was a copy per cloud, which is how the script would drift.
 
 Everything after identity belongs to the published agent installer, which this
-script downloads and runs. It installs the container runtime, Newt, the agent,
+script downloads and runs. It installs the container runtime, WireGuard, the agent,
 and the agent's systemd unit.
 """
 
@@ -179,7 +179,7 @@ bootstrap_main() {
   STEP=identity
   resolve_node_identity
 
-  # Docker, Newt, the agent binary, and the systemd unit are the published
+  # Docker, WireGuard, the agent binary, and the systemd unit are the published
   # installer's job. This script duplicated all four, and the copies drifted:
   # it wrote a unit the agent also writes, and pinned a connector version the
   # installer pins per-architecture.

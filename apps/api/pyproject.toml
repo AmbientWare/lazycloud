@@ -23,7 +23,7 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
-    "provider-pangolin",
+    "provider-cloudflare",
     "provider-github",
     "provider-stripe",
     "pydantic-settings>=2.4,<3",

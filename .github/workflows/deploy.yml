@@ -100,7 +100,7 @@ jobs:
           set -euo pipefail
           present=0
           missing=0
-          for repository in api scheduler cache-server worker-bootstrap cli database-bootstrap; do
+          for repository in api scheduler tunnel-gateway cache-server worker-bootstrap cli database-bootstrap; do
             if aws ecr describe-images \
               --repository-name "$DEPLOYMENT/$repository" \
               --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
@@ -138,6 +138,7 @@ jobs:
             *.cache-to=type=gha,mode=max,scope=deploy-control-plane
             api.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/api:${{ github.sha }}
             scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/scheduler:${{ github.sha }}
+            tunnel-gateway.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/tunnel-gateway:${{ github.sha }}
             cache-server.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cache-server:${{ github.sha }}
             worker-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/worker-bootstrap:${{ github.sha }}
             cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cli:${{ github.sha }}
@@ -167,11 +168,11 @@ jobs:
             -backend-config="key=platform-eks/$DEPLOYMENT.tfstate" \
             -backend-config="region=$AWS_REGION"
           terraform -chdir=deploy/platform-eks output -json runtime_configuration >runtime.json
-          terraform -chdir=deploy/platform-eks output -json scoped_secrets >scoped-secrets.json
-          terraform -chdir=deploy/platform-eks output -json pangolin_control_secrets >pangolin-control-secrets.json
+          terraform -chdir=deploy/platform-eks output -json secret_files >secret-files.json
           terraform -chdir=deploy/platform-eks output -json fleet_connection >fleet.json
           terraform -chdir=deploy/platform-eks output -json secret_environment >secret-map.json
-          pangolin_runtime_secret="$(terraform -chdir=deploy/platform-eks output -raw pangolin_runtime_secret)"
+          tunnel_id="$(terraform -chdir=deploy/platform-eks output -raw cloudflare_tunnel_id)"
+          wireguard_secret="$(terraform -chdir=deploy/platform-eks output -raw wireguard_secret)"
 
           # Which release this deployment runs is a fact about the deployment,
           # not about its infrastructure, so it is not a Terraform output. It
@@ -192,11 +193,11 @@ jobs:
             --registry "${{ steps.ecr.outputs.registry }}" \
             --deployment "$DEPLOYMENT" \
             --tag "$GITHUB_SHA" \
+            --tunnel-id "${tunnel_id}" \
+            --wireguard-secret "${wireguard_secret}" \
             --runtime runtime.json \
             --secret-map secret-map.json \
-            --pangolin-control-secrets pangolin-control-secrets.json \
-            --pangolin-runtime-secret "$pangolin_runtime_secret" \
-            --scoped-secrets scoped-secrets.json \
+            --secret-files secret-files.json \
             --fleet fleet.json \
             --release-manifest-url "${RELEASE_MANIFEST_URL}" \
             --output values-prod.yaml

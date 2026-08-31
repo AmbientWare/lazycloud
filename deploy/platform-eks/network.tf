@@ -34,7 +34,7 @@ resource "aws_internet_gateway" "cluster" {
 # Public subnets, and no NAT gateway.
 #
 # Everything these nodes reach is outbound and public: ECR, Secrets Manager,
-# PlanetScale, Pangolin, and the external package registries. A NAT gateway would
+# PlanetScale, Cloudflare, and the public WireGuard endpoint. A NAT gateway would
 # add an hourly charge and a per-gigabyte one to reach the same endpoints a
 # public subnet reaches for free, and buy privacy for nodes whose inbound is
 # already closed by their security group.

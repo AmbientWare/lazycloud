@@ -31,7 +31,6 @@ from compute.agent_control import (
     plan_agent_worker_slot,
     plan_agent_worker_token,
     plan_route_status_update,
-    validate_agent_transport_config,
 )
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
@@ -62,7 +61,6 @@ from control.deployment_resources import DeploymentResourceService, client_manif
 from control.deployments import DeploymentService
 from control.service import ControlPlaneService, StubKind
 from database.context import ServiceContext
-from database.private_network_cleanup import DatabasePrivateNetworkCleanupStore
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -70,6 +68,8 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
+    WireGuardGatewayRepository,
+    WireGuardPeerRepository,
 )
 from database.repositories.execution import EventRepository
 from database.repositories.identity import WorkspaceMemberRepository
@@ -80,16 +80,14 @@ from execution.tasks import TaskService
 from identity.auth import AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
-from networking.private_network_cleanup import PrivateNetworkCleanupCoordinator
-from networking.private_network_control import (
-    PrivateNetworkControl,
-    PrivateNetworkControlError,
-    PrivateNetworkControlErrorCode,
-    PrivateNetworkCredential,
-    PrivateNetworkMachineIdentityReconciler,
-    private_network_machine_name,
-)
 from networking.routing import BackendRouteAuthenticator
+from networking.wireguard import (
+    WIREGUARD_KEEPALIVE_SECONDS,
+    WIREGUARD_PLATFORM_NETWORK,
+    WireGuardPeerConfiguration,
+    allocate_wireguard_agent_address,
+    validate_wireguard_public_key,
+)
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.stream_state import RedisEventStreamRepository
@@ -113,6 +111,8 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineReadinessPhase,
     PrivateNetworkEnrollmentPhase,
+    WireGuardPeer,
+    WireGuardPeerStatus,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -218,8 +218,6 @@ from gateway.http import (
     ListAgentRoutesResponse,
     RegisterAgentPrivateNetworkRequest,
     RegisterAgentPrivateNetworkResponse,
-    RequestAgentTransportCredentialRequest,
-    RequestAgentTransportCredentialResponse,
     SignPayloadRequest,
     SignPayloadResponse,
     StreamAgentRequest,
@@ -369,7 +367,6 @@ class GatewayControlService:
     # device rename that every agent picks up on its next poll.
     runtime_origin: Callable[[], str]
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
-    private_network_control: PrivateNetworkControl | None = None
     route_authenticator: BackendRouteAuthenticator | None = None
     agent_cluster_name: str = AGENT_NAME
     agent_worker_image_registry: str = ""
@@ -1864,79 +1861,20 @@ class GatewayControlService:
         if not destroyed.complete:
             raise ConflictError("machine-owned source cache destruction is incomplete")
 
-    def request_agent_transport_credential(
-        self,
-        request: RequestAgentTransportCredentialRequest,
-    ) -> RequestAgentTransportCredentialResponse:
-        state = self._require_agent_state(request.agent_token)
-        validation = validate_agent_transport_config(request.transport)
-        if not validation.accepted:
-            raise InvalidInputError(validation.err_msg or "agent transport credential rejected")
-        control = self._require_private_network_control()
-        enrollment = self._reserve_private_network_rotation(state)
-        generation = enrollment.network_generation
-        site_name = private_network_machine_name(state.machine_id, generation)
-        try:
-            self._cleanup_private_network_rotation_resources(state, enrollment, control)
-            self._require_current_private_network_rotation(state, generation)
-            issued = control.create_site(name=site_name)
-        except PrivateNetworkControlError as exc:
-            self._fail_private_network_rotation(state, generation)
-            raise UpstreamUnavailableError(
-                "private-network machine enrollment is unavailable"
-            ) from exc
-        except Exception:
-            self._fail_private_network_rotation(state, generation)
-            raise
-        try:
-            self._save_private_network_credential(state, generation, issued)
-        except Exception:
-            self._cleanup_unclaimed_private_network_site(state, issued.site_id, control)
-            self._fail_private_network_rotation(state, generation)
-            raise
-        return RequestAgentTransportCredentialResponse(
-            site_name=issued.name,
-            endpoint=issued.endpoint,
-            connector_id=issued.connector_id,
-            secret=issued.secret.get_secret_value(),
-        )
-
     def register_agent_private_network(
         self,
         request: RegisterAgentPrivateNetworkRequest,
     ) -> RegisterAgentPrivateNetworkResponse:
+        try:
+            public_key = validate_wireguard_public_key(request.public_key)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
         state = self._require_agent_state(request.agent_token)
-        control = self._require_private_network_control()
-        snapshot = self._private_network_registration_snapshot(state)
-        if request.site_name != snapshot.network_site_name:
-            raise InvalidInputError("private-network site could not be verified")
-        try:
-            site = control.find_site(
-                site_id=snapshot.network_site_id,
-                name=request.site_name,
-                connector_id=request.connector_id,
-            )
-        except PrivateNetworkControlError as exc:
-            if exc.code in {
-                PrivateNetworkControlErrorCode.NotFound,
-                PrivateNetworkControlErrorCode.VerificationFailed,
-            }:
-                raise InvalidInputError("private-network site could not be verified") from exc
-            raise UpstreamUnavailableError(
-                "private-network site verification is unavailable"
-            ) from exc
-        if site is None or site.name != snapshot.network_site_name:
-            raise InvalidInputError("private-network site could not be verified")
-        if not site.online:
-            raise InvalidInputError("private-network site is not online")
-        try:
-            active_site = control.activate_site(site.site_id)
-        except PrivateNetworkControlError as exc:
-            raise UpstreamUnavailableError(
-                "private-network resource activation is unavailable"
-            ) from exc
-        stale_registration = False
+        now = utc_now()
         with self.services.context.database.session() as session:
+            gateway = WireGuardGatewayRepository(session).current()
+            if gateway is None:
+                raise UpstreamUnavailableError("WireGuard gateway is not ready")
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrollment = enrollments.by_machine(
                 state.workspace_id,
@@ -1948,47 +1886,67 @@ class GatewayControlService:
                 enrollment is None
                 or enrollment.status is not ComputeMachineEnrollmentStatus.Active
                 or enrollment.credential_hash != state.token_hash
-                or enrollment.network_generation != snapshot.network_generation
-                or enrollment.network_phase
-                not in {
-                    PrivateNetworkEnrollmentPhase.AwaitingConnection,
-                    PrivateNetworkEnrollmentPhase.Connected,
-                }
-                or site.site_id in enrollment.network_cleanup_site_ids
             ):
-                stale_registration = True
-                saved = None
+                raise InvalidInputError("agent credential is no longer current")
+            peers = WireGuardPeerRepository(session)
+            peer = peers.by_enrollment(enrollment.id, for_update=True)
+            if peer is None:
+                peers.lock_allocator()
+                peer = peers.by_enrollment(enrollment.id, for_update=True)
+            if peer is None:
+                generation = enrollment.network_generation + 1
+                peer = WireGuardPeer(
+                    id=str(uuid4()),
+                    enrollment_id=enrollment.id,
+                    workspace_id=enrollment.workspace_id,
+                    machine_id=enrollment.machine_id,
+                    public_key=public_key,
+                    address=allocate_wireguard_agent_address(
+                        enrollment.id,
+                        is_allocated=peers.address_allocated,
+                    ),
+                    generation=generation,
+                    created_at=now,
+                    updated_at=now,
+                )
+            elif peer.public_key != public_key or peer.status is WireGuardPeerStatus.Revoked:
+                generation = max(peer.generation, enrollment.network_generation) + 1
+                peer = peer.model_copy(
+                    update={
+                        "public_key": public_key,
+                        "generation": generation,
+                        "status": WireGuardPeerStatus.Active,
+                        "last_handshake_at": None,
+                        "revoked_at": None,
+                        "updated_at": now,
+                    }
+                )
             else:
-                saved = enrollments.save(
-                    enrollment.model_copy(
-                        update={
-                            "network_site_id": active_site.site_id,
-                            "network_site_name": active_site.name,
-                            "network_resource_id": active_site.resource_id,
-                            "network_address": active_site.address,
-                            "network_verified_at": utc_now(),
-                            "network_phase": PrivateNetworkEnrollmentPhase.Connected,
-                            "updated_at": utc_now(),
-                        }
-                    )
+                generation = peer.generation
+            saved_peer = peers.save(peer)
+            enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "network_generation": generation,
+                        "network_phase": PrivateNetworkEnrollmentPhase.AwaitingHandshake,
+                        "network_peer_id": saved_peer.id,
+                        "network_public_key": saved_peer.public_key,
+                        "network_address": saved_peer.address,
+                        "network_verified_at": None,
+                        "updated_at": now,
+                    }
                 )
-        if stale_registration:
-            try:
-                PrivateNetworkMachineIdentityReconciler(control).cleanup(
-                    resource_ids=(active_site.resource_id,),
-                    site_ids=(site.site_id,),
-                )
-            except PrivateNetworkControlError as exc:
-                raise UpstreamUnavailableError(
-                    "stale private-network site cleanup is unavailable"
-                ) from exc
-            raise InvalidInputError("agent credential is no longer current")
-        if saved is None:
-            raise InvalidInputError("private-network site registration did not complete")
-        return RegisterAgentPrivateNetworkResponse(
-            site_id=saved.network_site_id,
-            address=saved.network_address,
+            )
+        configuration = WireGuardPeerConfiguration(
+            peer_id=saved_peer.id,
+            address=saved_peer.address,
+            server_public_key=gateway.public_key,
+            endpoint=gateway.endpoint,
+            allowed_ips=(str(WIREGUARD_PLATFORM_NETWORK),),
+            persistent_keepalive_seconds=WIREGUARD_KEEPALIVE_SECONDS,
+            generation=saved_peer.generation,
         )
+        return RegisterAgentPrivateNetworkResponse(**configuration.model_dump())
 
     def list_agent_routes(
         self,
@@ -2883,314 +2841,60 @@ class GatewayControlService:
         state: ComputeAgentTokenState,
     ) -> ComputeMachineEnrollmentRecord:
         with self.services.context.database.session() as session:
-            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-            )
-        if (
-            enrollment is None
-            or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Connected
-            or not enrollment.network_site_id
-        ):
-            raise ValueError("agent private-network identity is not verified")
-        return enrollment
-
-    def _reserve_private_network_rotation(
-        self,
-        state: ComputeAgentTokenState,
-    ) -> ComputeMachineEnrollmentRecord:
-        now = utc_now()
-        with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrollment = enrollments.by_machine(
                 state.workspace_id,
                 state.machine_id,
                 pool=state.pool,
+                for_update=True,
+            )
+            if enrollment is None or not enrollment.network_peer_id:
+                raise ValueError("agent WireGuard peer is not registered")
+            peer = WireGuardPeerRepository(session).by_enrollment(
+                enrollment.id,
                 for_update=True,
             )
             if (
-                enrollment is None
-                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-                or enrollment.credential_hash != state.token_hash
+                peer is None
+                or peer.status is not WireGuardPeerStatus.Active
+                or peer.id != enrollment.network_peer_id
+                or peer.public_key != enrollment.network_public_key
+                or peer.address != enrollment.network_address
+                or peer.generation != enrollment.network_generation
             ):
-                raise InvalidInputError("agent credential is no longer current")
-            generation = enrollment.network_generation + 1
-            cleanup_sites = _unique_identifiers(
-                [*enrollment.network_cleanup_site_ids, enrollment.network_site_id]
+                raise ValueError("agent WireGuard peer does not match its enrollment")
+            if peer.last_handshake_at is None:
+                raise ValueError("agent WireGuard handshake has not been observed")
+            if enrollment.network_phase is PrivateNetworkEnrollmentPhase.Connected:
+                return enrollment
+            verified = enrollment.model_copy(
+                update={
+                    "network_phase": PrivateNetworkEnrollmentPhase.Connected,
+                    "network_verified_at": peer.last_handshake_at,
+                    "updated_at": utc_now(),
+                }
             )
-            cleanup_resources = _unique_identifiers(
-                [
-                    *enrollment.network_cleanup_resource_ids,
-                    enrollment.network_resource_id,
-                ]
-            )
-            return enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "network_generation": generation,
-                        "network_phase": PrivateNetworkEnrollmentPhase.Provisioning,
-                        "network_site_id": "",
-                        "network_site_name": private_network_machine_name(
-                            state.machine_id, generation
-                        ),
-                        "network_resource_id": "",
-                        "network_address": "",
-                        "network_verified_at": None,
-                        "network_cleanup_resource_ids": cleanup_resources,
-                        "network_cleanup_site_ids": cleanup_sites,
-                        "updated_at": now,
-                    }
-                )
-            )
-
-    def _cleanup_private_network_rotation_resources(
-        self,
-        state: ComputeAgentTokenState,
-        enrollment: ComputeMachineEnrollmentRecord,
-        control: PrivateNetworkControl,
-    ) -> None:
-        PrivateNetworkMachineIdentityReconciler(control).cleanup(
-            resource_ids=tuple(enrollment.network_cleanup_resource_ids),
-            site_ids=tuple(enrollment.network_cleanup_site_ids),
-        )
-        for resource_id in enrollment.network_cleanup_resource_ids:
-            self._forget_private_network_cleanup_resource(
-                state,
-                resource_id=resource_id,
-            )
-        for site_id in enrollment.network_cleanup_site_ids:
-            self._forget_private_network_cleanup_site(state, site_id=site_id)
-
-    def _require_current_private_network_rotation(
-        self,
-        state: ComputeAgentTokenState,
-        generation: int,
-    ) -> ComputeMachineEnrollmentRecord:
-        with self.services.context.database.session() as session:
-            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if (
-                enrollment is None
-                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-                or enrollment.credential_hash != state.token_hash
-                or enrollment.network_generation != generation
-                or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Provisioning
-            ):
-                raise InvalidInputError("private-network enrollment is no longer current")
-            return enrollment
-
-    def _save_private_network_credential(
-        self,
-        state: ComputeAgentTokenState,
-        generation: int,
-        issued: PrivateNetworkCredential,
-    ) -> ComputeMachineEnrollmentRecord:
-        now = utc_now()
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if (
-                enrollment is None
-                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-                or enrollment.credential_hash != state.token_hash
-                or enrollment.network_generation != generation
-                or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Provisioning
-            ):
-                raise InvalidInputError("private-network enrollment is no longer current")
-            return enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "network_site_id": issued.site_id,
-                        "network_site_name": issued.name,
-                        "network_address": "",
-                        "network_phase": PrivateNetworkEnrollmentPhase.AwaitingConnection,
-                        "updated_at": now,
-                    }
-                )
-            )
-
-    def _fail_private_network_rotation(
-        self, state: ComputeAgentTokenState, generation: int
-    ) -> None:
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if (
-                enrollment is None
-                or enrollment.network_generation != generation
-                or enrollment.network_phase is not PrivateNetworkEnrollmentPhase.Provisioning
-            ):
-                return
-            enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "network_phase": PrivateNetworkEnrollmentPhase.Failed,
-                        "updated_at": utc_now(),
-                    }
-                )
-            )
-
-    def _private_network_registration_snapshot(
-        self,
-        state: ComputeAgentTokenState,
-    ) -> ComputeMachineEnrollmentRecord:
-        with self.services.context.database.session() as session:
-            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-            )
-        if (
-            enrollment is None
-            or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-            or enrollment.credential_hash != state.token_hash
-            or enrollment.network_phase
-            not in {
-                PrivateNetworkEnrollmentPhase.AwaitingConnection,
-                PrivateNetworkEnrollmentPhase.Connected,
-            }
-            or not enrollment.network_site_id
-            or not enrollment.network_site_name
-        ):
-            raise InvalidInputError("private-network enrollment is not awaiting this site")
-        return enrollment
-
-    def _cleanup_unclaimed_private_network_site(
-        self,
-        state: ComputeAgentTokenState,
-        site_id: str,
-        control: PrivateNetworkControl,
-    ) -> None:
-        recorded = False
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if enrollment is not None:
-                cleanup_ids = _unique_identifiers([*enrollment.network_cleanup_site_ids, site_id])
-                enrollments.save(
-                    enrollment.model_copy(
-                        update={
-                            "network_cleanup_site_ids": cleanup_ids,
-                            "updated_at": utc_now(),
-                        }
-                    )
-                )
-                recorded = True
-        try:
-            control.delete_site(site_id)
-        except PrivateNetworkControlError:
-            return
-        if recorded:
-            self._forget_private_network_cleanup_site(state, site_id=site_id)
-
-    def _forget_private_network_cleanup_site(
-        self,
-        state: ComputeAgentTokenState,
-        *,
-        site_id: str,
-    ) -> None:
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if enrollment is None:
-                return
-            cleanup_sites = [
-                item for item in enrollment.network_cleanup_site_ids if item != site_id
-            ]
-            enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "network_cleanup_site_ids": cleanup_sites,
-                        "updated_at": utc_now(),
-                    }
-                )
-            )
-
-    def _forget_private_network_cleanup_resource(
-        self,
-        state: ComputeAgentTokenState,
-        *,
-        resource_id: str,
-    ) -> None:
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if enrollment is None:
-                return
-            cleanup_resources = [
-                item for item in enrollment.network_cleanup_resource_ids if item != resource_id
-            ]
-            enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "network_cleanup_resource_ids": cleanup_resources,
-                        "updated_at": utc_now(),
-                    }
-                )
-            )
-
-    def _require_private_network_control(self) -> PrivateNetworkControl:
-        if self.private_network_control is None:
-            raise UpstreamUnavailableError("private-network control is not configured")
-        return self.private_network_control
+            return enrollments.save(verified)
 
     def _remove_enrollment_private_network_identity(
         self,
         enrollment: ComputeMachineEnrollmentRecord,
     ) -> None:
-        resource_ids = _unique_identifiers(
-            [enrollment.network_resource_id, *enrollment.network_cleanup_resource_ids]
-        )
-        site_ids = _unique_identifiers(
-            [enrollment.network_site_id, *enrollment.network_cleanup_site_ids]
-        )
-        if not resource_ids and not site_ids:
-            return
-        control = self._require_private_network_control()
-        PrivateNetworkCleanupCoordinator(
-            DatabasePrivateNetworkCleanupStore(self.services.context),
-            control,
-        ).defer_machine_cleanup(
-            workspace_id=enrollment.workspace_id,
-            pool=enrollment.pool,
-            machine_id=enrollment.machine_id,
-            resource_ids=tuple(resource_ids),
-            site_ids=tuple(site_ids),
-        )
-
-
-def _unique_identifiers(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        now = utc_now()
+        with self.services.context.database.session() as session:
+            peers = WireGuardPeerRepository(session)
+            peer = peers.by_enrollment(enrollment.id, for_update=True)
+            if peer is None or peer.status is WireGuardPeerStatus.Revoked:
+                return
+            peers.save(
+                peer.model_copy(
+                    update={
+                        "status": WireGuardPeerStatus.Revoked,
+                        "revoked_at": now,
+                        "updated_at": now,
+                    }
+                )
+            )
 
 
 def _join_token_state(

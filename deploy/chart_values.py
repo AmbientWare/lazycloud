@@ -19,10 +19,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
@@ -77,9 +75,9 @@ REQUIRED_RUNTIME_VARIABLES = {
         "the coordination Redis; without it the scheduler holds no lease and the "
         "control plane publishes no origin for a worker to dial"
     ),
-    "LAZYCLOUD_PANGOLIN_API_URL": "the Pangolin Integration API the provider reconciles",
-    "LAZYCLOUD_PANGOLIN_ENDPOINT": "the Pangolin endpoint Newt and machine clients connect to",
-    "LAZYCLOUD_PANGOLIN_ORGANIZATION_ID": "the Pangolin organization LazyCloud owns",
+    "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT": (
+        "the stable UDP host and port agents use to reach the WireGuard gateway"
+    ),
 }
 
 
@@ -114,67 +112,6 @@ def _checked_runtime(runtime: dict[str, str]) -> dict[str, str]:
     return runtime
 
 
-def _credential_count(values: dict[str, str], prefix: str, label: str) -> int:
-    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)_(ID|SECRET)$")
-    fields_by_ordinal: dict[int, set[str]] = {}
-    for name in values:
-        match = pattern.fullmatch(name)
-        if match is None:
-            raise ValuesError(f"unrecognized {label} credential key: {name}")
-        fields_by_ordinal.setdefault(int(match.group(1)), set()).add(match.group(2))
-
-    ordinals = sorted(fields_by_ordinal)
-    if ordinals != list(range(len(ordinals))):
-        raise ValuesError(f"{label} credential ordinals must be contiguous from zero")
-    incomplete = [
-        ordinal for ordinal, fields in fields_by_ordinal.items() if fields != {"ID", "SECRET"}
-    ]
-    if incomplete:
-        raise ValuesError(f"{label} credentials require ID and SECRET for ordinals {incomplete}")
-    if len(ordinals) < 2:
-        raise ValuesError(f"{label} credentials require at least two replicas")
-    return len(ordinals)
-
-
-def _pangolin_runtime_maps(
-    values: dict[str, str],
-) -> tuple[dict[str, dict[str, str]], int, int]:
-    provider_names = {
-        "LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS",
-        "LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS",
-    }
-    groups: dict[str, dict[str, str]] = {
-        "provider": {},
-        "sites": {},
-        "clients": {},
-    }
-    for name, secret in values.items():
-        if name in provider_names:
-            groups["provider"][name] = secret
-        elif name.startswith("LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_"):
-            groups["sites"][name] = secret
-        elif name.startswith("LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_"):
-            groups["clients"][name] = secret
-        else:
-            raise ValuesError(f"unrecognized Pangolin runtime secret key: {name}")
-    missing = sorted(provider_names - groups["provider"].keys())
-    if missing:
-        raise ValuesError(
-            "Pangolin runtime secrets require aggregate provider IDs: " + ", ".join(missing)
-        )
-    site_count = _credential_count(
-        groups["sites"],
-        "LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR",
-        "Pangolin site",
-    )
-    client_count = _credential_count(
-        groups["clients"],
-        "LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT",
-        "Pangolin client",
-    )
-    return groups, site_count, client_count
-
-
 def render(args: argparse.Namespace) -> None:
     runtime = _checked_runtime(_string_map(Path(args.runtime), "runtime"))
     if args.release_manifest_url:
@@ -184,13 +121,6 @@ def render(args: argparse.Namespace) -> None:
         # that names no release.
         runtime["LAZYCLOUD_RELEASE_MANIFEST_URL"] = args.release_manifest_url
 
-    public_hostname = urlsplit(runtime["LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"]).hostname
-    if public_hostname is None:
-        raise ValuesError("LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL has no hostname")
-
-    pangolin_runtime, site_count, client_count = _pangolin_runtime_maps(
-        _string_map(Path(args.scoped_secrets), "Pangolin runtime secrets")
-    )
     values: dict[str, object] = {
         "image": {
             "registry": args.registry,
@@ -201,22 +131,18 @@ def render(args: argparse.Namespace) -> None:
         "fleet": _json_value(Path(args.fleet), "fleet connection"),
         "secrets": {
             "map": _string_map(Path(args.secret_map), "secret map"),
-            "pangolinControl": {
-                "map": _string_map(
-                    Path(args.pangolin_control_secrets),
-                    "Pangolin control secrets",
-                ),
-            },
-            "pangolinRuntime": {
-                "secretId": args.pangolin_runtime_secret,
-                **{name: {"map": values} for name, values in pangolin_runtime.items()},
-            },
+            "files": _string_map(Path(args.secret_files), "secret files"),
         },
-        "pangolin": {
-            "publicHostname": public_hostname,
-            "site": {"replicas": site_count},
+        "cloudflared": {
+            # The zone the tunnel answers for, taken from the origin rather than
+            # named twice: an ingress rule written against a different host than
+            # the one the deployment publishes routes nothing.
+            "apex": runtime["LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"].removeprefix("https://"),
+            "tunnelId": args.tunnel_id,
         },
-        "controlPlane": {"replicas": client_count},
+        "wireguard": {
+            "secretId": args.wireguard_secret,
+        },
     }
     Path(args.output).write_text(yaml.safe_dump(values, sort_keys=True))
     print(json.dumps({"output": args.output, "tag": args.tag}, indent=2))
@@ -239,24 +165,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
     parser.add_argument(
-        "--pangolin-control-secrets",
-        required=True,
-        help="JSON file of operator Pangolin variable to secret name.",
-    )
-    parser.add_argument(
-        "--pangolin-runtime-secret",
-        required=True,
-        help="Secrets Manager entry the Pangolin bootstrap owns.",
-    )
-    parser.add_argument(
         "--fleet",
         required=True,
         help="JSON file of the platform's own account, network and connection role.",
     )
     parser.add_argument(
-        "--scoped-secrets",
+        "--secret-files",
         required=True,
-        help="JSON file of variable to secret name, for entries exposed only to named containers.",
+        help="JSON file of variable to secret name, for entries mounted rather than exported.",
+    )
+    parser.add_argument("--tunnel-id", default="", help="Cloudflare tunnel the ingress runs.")
+    parser.add_argument(
+        "--wireguard-secret",
+        required=True,
+        help="Secrets Manager document holding gateway and platform peer keys.",
     )
     parser.add_argument("--release-manifest-url", default="", help="Release this deployment runs.")
     parser.add_argument("--output", required=True, help="Where to write the rendered values.")

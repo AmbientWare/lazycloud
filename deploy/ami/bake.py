@@ -1,8 +1,8 @@
 """Bake per-region connected-AWS node AMIs for a release.
 
 Launches one temporary Amazon Linux 2023 instance per region, installs the
-release runtime dependencies (Docker, the pinned Newt build, the release
-agent executable, the pre-pulled container-worker image) through user data,
+release runtime dependencies (Docker, WireGuard tools, the release agent
+executable, the pre-pulled container-worker image) through user data,
 stops the instance, and registers the immutable node image. The managed-pool
 bootstrap script keeps every install step as a guarded no-op, so nodes booted
 from a baked image skip straight to enrollment.
@@ -33,7 +33,6 @@ from urllib.request import pathname2url
 from agent.operations import build_agent_install_script
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.app_identity import AGENT_NAME
-from shared.newt_install import NEWT_INSTALL_VERSION
 
 _AGENT_FILENAME = "lazycloud-agent-linux-amd64"
 # One driver serves every card this fleet rents: the branch is unified from
@@ -239,7 +238,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Bake immutable per-region connected-AWS node AMIs "
-            "(Docker + pinned Newt + release agent + pre-pulled worker image)."
+            "(Docker + WireGuard tools + release agent + pre-pulled worker image)."
         )
     )
     parser.add_argument(
@@ -847,7 +846,6 @@ trap bake_announce EXIT
 WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 RELEASE_VERSION=__RELEASE_VERSION__
 AGENT_SHA256=__AGENT_SHA256__
-NEWT_VERSION=__NEWT_VERSION__
 
 # The installer this image was built from, embedded rather than fetched: a bake
 # has no control plane to ask, and an image whose runtime came from a different
@@ -871,7 +869,7 @@ systemctl is-enabled amazon-ssm-agent
 docker pull "$WORKER_IMAGE_DIGEST"
 
 cat > /etc/lazycloud-node-image.json <<MARKER
-{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","newt_version":"${NEWT_VERSION}","worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true,"variant":"__VARIANT__"}
+{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","wireguard_tools":true,"worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER
 
 # Last, and the baker will not image an instance that never said it. A stop is
@@ -1051,7 +1049,6 @@ def _reject_unparsable_script(script: str) -> None:
 
 def _bake_user_data(request: _BakeRequest) -> str:
     values = {
-        "__NEWT_VERSION__": NEWT_INSTALL_VERSION,
         "__AGENT_BINARY_URL__": request.agent_url,
         "__AGENT_SHA256__": request.agent.sha256,
         "__WORKER_IMAGE_DIGEST__": request.worker_image,

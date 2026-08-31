@@ -42,6 +42,6 @@ does not publish the executables to a package index, object store, or release.
 
 The same Dockerfile also owns the `agent-runtime` image used by the canonical
 local Compose stack. That image runs the standalone production agent with the
-Docker client, Newt, and host preflight tools; it uses
+Docker client, WireGuard tools, and host preflight tools; it uses
 the host Docker socket to launch the production worker image as a sibling
 container.

@@ -28,16 +28,14 @@ x-telemetry-env: &telemetry-env
   LAZYCLOUD_TELEMETRY_ENDPOINT: "${LAZYCLOUD_TELEMETRY_ENDPOINT:-http://otel-collector:4318}"
 x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://localhost:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
-  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://control-plane:9000}"
+  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://100.96.0.2:9000}"
 
-x-pangolin-env: &pangolin-env
-  LAZYCLOUD_PANGOLIN_API_URL: "${LAZYCLOUD_PANGOLIN_API_URL:-http://pangolin:3003/v1}"
-  LAZYCLOUD_PANGOLIN_API_KEY: "${LAZYCLOUD_PANGOLIN_API_KEY:-}"
-  LAZYCLOUD_PANGOLIN_ORGANIZATION_ID: "${LAZYCLOUD_PANGOLIN_ORGANIZATION_ID:-}"
-  LAZYCLOUD_PANGOLIN_ENDPOINT: "${LAZYCLOUD_PANGOLIN_ENDPOINT:-http://pangolin:3000}"
-  LAZYCLOUD_PANGOLIN_PLATFORM_IDENTITY_PREFIX: "${LAZYCLOUD_PANGOLIN_PLATFORM_IDENTITY_PREFIX:-lazycloud-platform}"
-  LAZYCLOUD_PANGOLIN_PLATFORM_TARGET_HOST: "control-plane"
-  LAZYCLOUD_PANGOLIN_PLATFORM_TARGET_PORT: "9000"
+# Credentials for the edge that terminates TLS on customer-owned hostnames. Empty
+# by default: a deployment without them serves every platform hostname exactly as
+# before, and only the domain operations fail, naming what is missing.
+x-cloudflare-env: &cloudflare-env
+  LAZYCLOUD_CLOUDFLARE_API_TOKEN: "${LAZYCLOUD_CLOUDFLARE_API_TOKEN:-}"
+  LAZYCLOUD_CLOUDFLARE_ZONE_ID: "${LAZYCLOUD_CLOUDFLARE_ZONE_ID:-}"
 
 # The payment provider customers are registered with. Empty by default: the stack
 # boots and goes on metering and pricing usage, but nothing can be registered or
@@ -245,8 +243,6 @@ x-lazycloud-depends: &lazycloud-depends
     condition: service_healthy
   object-store-bucket:
     condition: service_completed_successfully
-  pangolin-bootstrap:
-    condition: service_completed_successfully
 
 x-lazycloud-role-depends: &lazycloud-role-depends
   control-plane:
@@ -279,178 +275,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-
-  pangolin-postgres:
-    image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: pangolin
-      POSTGRES_USER: pangolin
-      POSTGRES_PASSWORD: "${LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD:?set a local Pangolin PostgreSQL password}"
-    # Pangolin binds its Enterprise license to a host ID in this database. Keep
-    # it outside Compose-managed volumes so `docker compose down -v` does not
-    # turn an ordinary local reset into a vendor license-reset request.
-    volumes:
-      - "${LAZYCLOUD_COMPOSE_PANGOLIN_DATA_DIR:-./.lazycloud/pangolin-postgres}:/var/lib/postgresql"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pangolin -d pangolin"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  pangolin:
-    image: docker.io/fosrl/pangolin:ee-postgresql-1.21.1@sha256:8de423e4ae1127db8a0ae20a8032ef08456f798bc7721b7fbe42d5e8807fa9a8
-    restart: unless-stopped
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        bootstrap_dir=/var/lib/lazycloud/pangolin-bootstrap
-        token_file="$$bootstrap_dir/setup-token"
-        if [ ! -s "$$token_file" ]; then
-          mkdir -p "$$bootstrap_dir"
-          umask 077
-          token_tmp="$$bootstrap_dir/.setup-token.tmp"
-          head -c 48 /dev/urandom | sha256sum | cut -c1-32 > "$$token_tmp"
-          mv "$$token_tmp" "$$token_file"
-        fi
-        export PANGOLIN_SETUP_TOKEN="$$(sed -n '1p' "$$token_file")"
-        exec /usr/local/bin/docker-entrypoint.sh npm run start
-    environment:
-      SERVER_SECRET: "${LAZYCLOUD_PANGOLIN_SERVER_SECRET:?set a local Pangolin server secret}"
-      POSTGRES_CONNECTION_STRING: "postgresql://pangolin:${LAZYCLOUD_PANGOLIN_POSTGRES_PASSWORD:?set a local Pangolin PostgreSQL password}@pangolin-postgres:5432/pangolin?sslmode=disable"
-      PANGOLIN_ROOT_API_KEY: "${LAZYCLOUD_PANGOLIN_API_KEY:?set a local Pangolin root API key}"
-    depends_on:
-      pangolin-postgres:
-        condition: service_healthy
-    configs:
-      - source: pangolin-configuration
-        target: /app/config/config.yml
-        mode: 0444
-    volumes:
-      - pangolin-bootstrap-state:/var/lib/lazycloud/pangolin-bootstrap
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:3001/api/v1/"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
-
-  gerbil:
-    image: docker.io/fosrl/gerbil:1.3.1@sha256:b16a722d5603fa74acd3e1deb86cea0b8330d015ab5325dc41e44108fe6f29c9
-    restart: unless-stopped
-    command:
-      - --reachableAt=http://gerbil:3004
-      - --generateAndSaveKeyTo=/var/config/key
-      - --remoteConfig=http://pangolin:3001/api/v1/
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    ports:
-      - "${LAZYCLOUD_COMPOSE_PANGOLIN_HTTP_PORT:-8080}:80"
-      - "${LAZYCLOUD_COMPOSE_PANGOLIN_HTTPS_PORT:-8443}:443"
-      - "${LAZYCLOUD_COMPOSE_PANGOLIN_HTTPS_PORT:-8443}:443/udp"
-      - "${LAZYCLOUD_COMPOSE_PANGOLIN_SITE_PORT:-51820}:51820/udp"
-      - "${LAZYCLOUD_COMPOSE_PANGOLIN_CLIENT_PORT:-21820}:21820/udp"
-    depends_on:
-      pangolin:
-        condition: service_healthy
-    volumes:
-      - pangolin-gerbil-config:/var/config
-    healthcheck:
-      test: ["CMD-SHELL", "test -s /var/config/key"]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 10s
-
-  pangolin-traefik:
-    image: docker.io/traefik:v3.7.0@sha256:eb328e2c806c53aafbbace6c451fa54d268961261a85452fcf0fb752a30c17be
-    restart: unless-stopped
-    network_mode: service:gerbil
-    command: ["--configFile=/etc/traefik/traefik_config.yml"]
-    depends_on:
-      pangolin:
-        condition: service_healthy
-      gerbil:
-        condition: service_healthy
-    configs:
-      - source: pangolin-traefik-configuration
-        target: /etc/traefik/traefik_config.yml
-        mode: 0444
-      - source: pangolin-traefik-dynamic-configuration
-        target: /etc/traefik/dynamic_config.yml
-        mode: 0444
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "traefik",
-          "healthcheck",
-          "--ping",
-          "--configFile=/etc/traefik/traefik_config.yml",
-        ]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 10s
-
-  pangolin-bootstrap:
-    image: cli:local
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-      target: cli
-      args: *lazycloud-build-args
-    command:
-      - lazycloud-admin
-      - --json
-      - pangolin
-      - bootstrap-filesystem
-      - --directory
-      - /var/lib/lazycloud/pangolin
-      - --public-hostname
-      - lazycloud.localhost
-    environment:
-      <<: *pangolin-env
-      LAZYCLOUD_PANGOLIN_INTERNAL_API_URL: "http://pangolin:3001/api/v1"
-      LAZYCLOUD_PANGOLIN_LICENSE_KEY: "${LAZYCLOUD_PANGOLIN_LICENSE_KEY:?set a local Pangolin Enterprise license key}"
-      LAZYCLOUD_PANGOLIN_SERVER_SECRET: "${LAZYCLOUD_PANGOLIN_SERVER_SECRET:?set a local Pangolin server secret}"
-      LAZYCLOUD_PANGOLIN_SETUP_TOKEN_FILE: "/var/lib/lazycloud/pangolin-bootstrap/setup-token"
-    depends_on:
-      pangolin:
-        condition: service_healthy
-      pangolin-traefik:
-        condition: service_healthy
-    volumes:
-      - pangolin-runtime:/var/lib/lazycloud/pangolin
-      - pangolin-bootstrap-state:/var/lib/lazycloud/pangolin-bootstrap:ro
-
-  pangolin-site:
-    image: docker.io/fosrl/newt:1.16.0@sha256:345fdeb369be6608d82c41d70637636c78b2c04a6112ff6ec20fc21c48afc899
-    restart: unless-stopped
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        export NEWT_ID="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_0_ID)"
-        export NEWT_SECRET="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CONNECTOR_0_SECRET)"
-        exec newt
-    environment:
-      PANGOLIN_ENDPOINT: "${LAZYCLOUD_PANGOLIN_ENDPOINT:-http://pangolin:3000}"
-      DISABLE_CLIENTS: "true"
-      HEALTH_FILE: /tmp/healthy
-    extra_hosts:
-      - "gerbil:host-gateway"
-    depends_on:
-      pangolin-bootstrap:
-        condition: service_completed_successfully
-    volumes:
-      - pangolin-runtime:/var/lib/lazycloud/pangolin:ro
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/healthy"]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 10s
 
   database-bootstrap:
     image: database-bootstrap:local
@@ -568,6 +392,57 @@ services:
     volumes:
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress
 
+  wireguard-key-bootstrap:
+    image: tunnel-gateway:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: tunnel-gateway
+      args: *lazycloud-build-args
+    command:
+      - lazycloud-wireguard-bootstrap
+      - --directory
+      - /var/lib/lazycloud/wireguard
+      - --platform-peers
+      - "1"
+    volumes:
+      - wireguard-keys:/var/lib/lazycloud/wireguard
+
+  tunnel-gateway:
+    image: tunnel-gateway:local
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: tunnel-gateway
+      args: *lazycloud-build-args
+    environment:
+      <<: [*process-env, *database-env, *redis-env]
+      LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/server/private-key
+      LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
+      LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
+      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT:-host.docker.internal:51820}"
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "${LAZYCLOUD_COMPOSE_WIREGUARD_PORT:-51820}:51820/udp"
+    depends_on:
+      <<: *lazycloud-depends
+      wireguard-key-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - wireguard-keys:/var/lib/lazycloud/wireguard:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/lazycloud-tunnel-gateway.ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
   control-plane:
     image: api:local
     restart: unless-stopped
@@ -576,12 +451,16 @@ services:
       dockerfile: docker/Dockerfile.control-plane
       target: api
       args: *lazycloud-build-args
-    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - |
-        export LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS)"
-        export LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS)"
-        exec lazycloud-api --host 0.0.0.0 --port 9000 --log-level "${LAZYCLOUD_LOG_LEVEL:-INFO}"
+      [
+        "lazycloud-api",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9000",
+        "--log-level",
+        "${LAZYCLOUD_LOG_LEVEL:-INFO}",
+      ]
     environment:
       <<:
         [
@@ -590,7 +469,7 @@ services:
           *redis-env,
           *telemetry-env,
           *gateway-env,
-          *pangolin-env,
+          *cloudflare-env,
           *stripe-env,
           *github-env,
           *api-env,
@@ -605,15 +484,11 @@ services:
           *container-service-credentials,
           *cache-origin-registry,
         ]
-    # One here because this local service publishes fixed host ports. Production
-    # replicas sit behind Pangolin's platform resource.
     deploy:
       replicas: 1
     ports:
       - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
       - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
-    extra_hosts:
-      - "gerbil:host-gateway"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:
@@ -624,7 +499,6 @@ services:
       - lazycloud-files:/var/lib/lazycloud
       - "${LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
-      - pangolin-runtime:/var/lib/lazycloud/pangolin:ro
       - *platform-aws-config
     healthcheck:
       test:
@@ -639,18 +513,17 @@ services:
       retries: 12
       start_period: 30s
 
-  pangolin-client:
-    image: docker.io/fosrl/pangolin-cli:0.16.0@sha256:a25a6d81b1f6c20f9f4c47fda4c82e61ec5a7cf72f6465174db552b0fe616434
+  wireguard-platform:
+    image: tunnel-gateway:local
     restart: unless-stopped
-    network_mode: service:control-plane
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        export CLIENT_ID="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_0_ID)"
-        export CLIENT_SECRET="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_0_SECRET)"
-        exec /entrypoint.sh --override-dns=false
+    network_mode: "service:control-plane"
+    command: ["lazycloud-wireguard-platform"]
     environment:
-      PANGOLIN_ENDPOINT: "${LAZYCLOUD_PANGOLIN_ENDPOINT:-http://pangolin:3000}"
+      <<: *process-env
+      LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/platform-0/private-key
+      LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY_FILE: /var/lib/lazycloud/wireguard/server/public-key
+      LAZYCLOUD_WIREGUARD_GATEWAY_ENDPOINT: "tunnel-gateway:51820"
+      LAZYCLOUD_WIREGUARD_PLATFORM_INDEX: "0"
     cap_add:
       - NET_ADMIN
     devices:
@@ -658,20 +531,16 @@ services:
     depends_on:
       control-plane:
         condition: service_healthy
-      pangolin-bootstrap:
-        condition: service_completed_successfully
+      tunnel-gateway:
+        condition: service_healthy
     volumes:
-      - pangolin-runtime:/var/lib/lazycloud/pangolin:ro
+      - wireguard-keys:/var/lib/lazycloud/wireguard:ro
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "status=$$(pangolin-cli status client --json) && printf '%s\\n' \"$$status\" | grep -q '\"connected\": true' && printf '%s\\n' \"$$status\" | grep -q '\"registered\": true'",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 24
-      start_period: 10s
+      test: ["CMD", "test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
 
   cli:
     profiles: ["tools"]
@@ -689,7 +558,7 @@ services:
           *database-env,
           *redis-env,
           *gateway-env,
-          *pangolin-env,
+          *cloudflare-env,
           *object-store-env,
           *image-build-env,
           *agent-binary-env,
@@ -701,6 +570,29 @@ services:
         condition: service_healthy
     volumes:
       - lazycloud-files:/var/lib/lazycloud
+
+  public-ingress:
+    profiles:
+      - public-ingress
+    image: "${LAZYCLOUD_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.7.3}"
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    command:
+      - tunnel
+      - --config
+      - /etc/cloudflared/cloudflared.yml
+      - run
+    volumes:
+      # The route allowlist is reviewed in this repository, not held in the
+      # Cloudflare dashboard: the tunnel is created with `config_src: local`, so
+      # the edge pushes no ingress configuration and this file is the only
+      # source of what is exposed.
+      - "./deploy/public-ingress/cloudflared.yml:/etc/cloudflared/cloudflared.yml:ro"
+      - "${LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE:-/dev/null}:/etc/cloudflared/credentials.json:ro"
+    environment:
+      TUNNEL_METRICS: "127.0.0.1:20241"
 
   agent-join-token:
     image: cli:local
@@ -811,6 +703,7 @@ services:
       - "host.docker.internal:host-gateway"
     devices:
       - /dev/fuse:/dev/fuse
+      - /dev/net/tun:/dev/net/tun
     environment:
       # Forwarded to worker slots so they can back platform volumes. Platform
       # deployments set these; agents on customer infrastructure do not, and
@@ -825,6 +718,8 @@ services:
       agent-join-token:
         condition: service_completed_successfully
       cache-server:
+        condition: service_healthy
+      wireguard-platform:
         condition: service_healthy
     volumes:
       - "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}:${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}"
@@ -857,12 +752,12 @@ services:
       dockerfile: docker/Dockerfile.control-plane
       target: scheduler
       args: *lazycloud-build-args
-    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - |
-        export LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS)"
-        export LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS)"
-        exec lazycloud-scheduler --container-limit "${LAZYCLOUD_COMPOSE_SCHEDULER_CONTAINER_LIMIT:-100}"
+      [
+        "lazycloud-scheduler",
+        "--container-limit",
+        "${LAZYCLOUD_COMPOSE_SCHEDULER_CONTAINER_LIMIT:-100}",
+      ]
     environment:
       <<:
         [
@@ -871,7 +766,7 @@ services:
           *redis-env,
           *telemetry-env,
           *gateway-env,
-          *pangolin-env,
+          *cloudflare-env,
           # The scheduler drains the meter outbox, so it holds the payment
           # credential the control plane holds. Without it this process runs and
           # never delivers, which is metered usage nobody is charged for.
@@ -906,7 +801,6 @@ services:
       start_period: 120s
     volumes:
       - lazycloud-files:/var/lib/lazycloud
-      - pangolin-runtime:/var/lib/lazycloud/pangolin:ro
       - *platform-aws-config
 
   platform-unit:
@@ -1104,132 +998,6 @@ services:
       start_period: 5s
 
 configs:
-  pangolin-configuration:
-    content: |
-      app:
-        dashboard_url: "https://pangolin.lazycloud.localhost:8443"
-        log_level: "info"
-        telemetry:
-          anonymous_usage: false
-      domains:
-        domain1:
-          base_domain: "lazycloud.localhost"
-      server:
-        internal_hostname: "pangolin"
-        cors:
-          origins: ["https://pangolin.lazycloud.localhost:8443"]
-          methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
-          allowed_headers: ["X-CSRF-Token", "Content-Type"]
-          credentials: false
-      gerbil:
-        start_port: 51820
-        clients_start_port: 21820
-        base_endpoint: "gerbil"
-      flags:
-        require_email_verification: false
-        disable_signup_without_invite: true
-        disable_user_create_org: false
-        allow_raw_resources: true
-        enable_integration_api: true
-      traefik:
-        http_entrypoint: "web"
-        https_entrypoint: "websecure"
-        cert_resolver: ""
-        prefer_wildcard_cert: true
-
-  pangolin-traefik-configuration:
-    content: |
-      api:
-        insecure: true
-        dashboard: true
-      providers:
-        http:
-          endpoint: "http://pangolin:3001/api/v1/traefik-config"
-          pollInterval: "5s"
-        file:
-          filename: "/etc/traefik/dynamic_config.yml"
-      experimental:
-        plugins:
-          badger:
-            moduleName: "github.com/fosrl/badger"
-            version: "v1.4.0"
-      log:
-        level: "INFO"
-        format: "common"
-      entryPoints:
-        web:
-          address: ":80"
-        websecure:
-          address: ":443"
-          transport:
-            respondingTimeouts:
-              readTimeout: "30m"
-          http3:
-            advertisedPort: 443
-          http:
-            tls: {}
-            encodedCharacters:
-              allowEncodedSlash: true
-              allowEncodedQuestionMark: true
-      serversTransport:
-        insecureSkipVerify: true
-      ping:
-        entryPoint: "web"
-
-  pangolin-traefik-dynamic-configuration:
-    content: |
-      http:
-        middlewares:
-          badger:
-            plugin:
-              badger:
-                disableForwardAuth: true
-          redirect-to-https:
-            redirectScheme:
-              scheme: https
-              port: "8443"
-        routers:
-          pangolin-dashboard-redirect:
-            rule: "Host(`pangolin.lazycloud.localhost`)"
-            service: pangolin-dashboard
-            entryPoints: [web]
-            middlewares: [redirect-to-https, badger]
-          pangolin-dashboard:
-            rule: "Host(`pangolin.lazycloud.localhost`) && !PathPrefix(`/api/v1`)"
-            service: pangolin-dashboard
-            entryPoints: [websecure]
-            middlewares: [badger]
-            tls: {}
-          pangolin-api:
-            rule: "Host(`pangolin.lazycloud.localhost`) && PathPrefix(`/api/v1`)"
-            service: pangolin-api
-            entryPoints: [websecure]
-            middlewares: [badger]
-            tls: {}
-          pangolin-websocket:
-            rule: "Host(`pangolin.lazycloud.localhost`)"
-            service: pangolin-api
-            entryPoints: [websecure]
-            middlewares: [badger]
-            tls: {}
-        services:
-          pangolin-dashboard:
-            loadBalancer:
-              servers:
-                - url: "http://pangolin:3002"
-          pangolin-api:
-            loadBalancer:
-              servers:
-                - url: "http://pangolin:3000"
-      tcp:
-        serversTransports:
-          pp-transport-v1:
-            proxyProtocol:
-              version: 1
-          pp-transport-v2:
-            proxyProtocol:
-              version: 2
-
   container-worker-configuration:
     content: |
       configuration:
@@ -1265,9 +1033,6 @@ configs:
 
 volumes:
   postgres-data:
-  pangolin-bootstrap-state:
-  pangolin-gerbil-config:
-  pangolin-runtime:
   redis-data:
   object-store-data:
   lazycloud-files:
@@ -1277,6 +1042,7 @@ volumes:
   lazycloud-worker-tokens:
   lazycloud-shared-worker:
   tcp-ingress-tls:
+  wireguard-keys:
 
 secrets:
   lazycloud-bootstrap-administrator-token:

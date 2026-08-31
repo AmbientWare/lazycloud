@@ -10,9 +10,7 @@ from database.repositories.apps import DeploymentResourceRepository
 from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from shared.custom_domains import (
-    WILDCARD_PREFIX,
     CustomDomain,
-    CustomDomainDnsMode,
     CustomDomainErrorCode,
     CustomDomainPhase,
     CustomDomainProvider,
@@ -73,22 +71,12 @@ class CustomDomainService:
         except ValueError as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
 
-    def register(
-        self,
-        domain: str,
-        *,
-        dns_mode: CustomDomainDnsMode,
-        user_id: str,
-    ) -> CustomDomain:
+    def register(self, domain: str, *, user_id: str) -> CustomDomain:
         try:
             hostname = normalize_registrable_domain(domain)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         self._reject_platform_domain(hostname)
-        if hostname.startswith(WILDCARD_PREFIX):
-            raise InvalidInputError(
-                "register the base domain with DNS delegation instead of a wildcard name"
-            )
         with self.context.database.session() as session:
             self.admission.assert_may_use_custom_domains(session, user_id=user_id)
             existing = CustomDomainRepository(session).get_by_hostname(
@@ -96,21 +84,16 @@ class CustomDomainService:
                 user_id=user_id,
             )
             if existing is not None:
-                if existing.dns_mode is not dns_mode:
-                    raise ConflictError(
-                        f"{hostname} is already registered with {existing.dns_mode.value} DNS"
-                    )
                 return existing
 
         # Outside the transaction: the provider call is a network round trip, and a
         # session held across it holds a row lock for as long as the edge takes.
-        state = self.provider.create_hostname(hostname, dns_mode=dns_mode)
+        state = self.provider.create_hostname(hostname)
         now = utc_now()
         record = CustomDomain(
             id=str(uuid4()),
             user_id=user_id,
             hostname=hostname,
-            dns_mode=dns_mode,
             phase=state.phase,
             provider_hostname_id=state.provider_hostname_id,
             required_records=state.required_records,

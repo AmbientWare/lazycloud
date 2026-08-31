@@ -37,11 +37,6 @@ from shared.env import (
     WORKER_REPOSITORY_URL_ENV,
 )
 from shared.gpu import normalize_gpu_type
-from shared.newt_install import (
-    NEWT_AMD64_SHA256,
-    NEWT_ARM64_SHA256,
-    NEWT_INSTALL_VERSION,
-)
 from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -201,7 +196,7 @@ SERVICE_MANAGER="${LAZYCLOUD_AGENT_SERVICE_MANAGER:-auto}"
 SERVICE_NAME="${LAZYCLOUD_AGENT_SERVICE_NAME:-__AGENT_NAME__}"
 STATE_DIR="${LAZYCLOUD_AGENT_STATE_DIR:-}"
 INSTALL_DOCKER="${LAZYCLOUD_AGENT_INSTALL_DOCKER:-auto}"
-INSTALL_NEWT="${LAZYCLOUD_AGENT_INSTALL_NEWT:-auto}"
+INSTALL_WIREGUARD="${LAZYCLOUD_AGENT_INSTALL_WIREGUARD:-auto}"
 READY_TIMEOUT_SECONDS="${LAZYCLOUD_AGENT_READY_TIMEOUT_SECONDS:-__READY_TIMEOUT_SECONDS__}"
 DOCKER_BINARY="${LAZYCLOUD_AGENT_DOCKER_BINARY:-docker}"
 EXECUTOR=""
@@ -228,7 +223,7 @@ main() {
     require_systemd
   fi
   ensure_docker
-  ensure_newt
+  ensure_wireguard
   install_agent
   if [ "$INSTALL_ONLY" = "1" ]; then
     say "Installed __AGENT_NAME__ runtime without enrolling"
@@ -282,8 +277,8 @@ parse_args() {
       --state-dir) require_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
       --install-docker) require_value "$1" "${2:-}"; INSTALL_DOCKER="$2"; shift 2 ;;
       --no-install-docker) INSTALL_DOCKER="never"; shift ;;
-      --install-newt) require_value "$1" "${2:-}"; INSTALL_NEWT="$2"; shift 2 ;;
-      --no-install-newt) INSTALL_NEWT="never"; shift ;;
+      --install-wireguard) require_value "$1" "${2:-}"; INSTALL_WIREGUARD="$2"; shift 2 ;;
+      --no-install-wireguard) INSTALL_WIREGUARD="never"; shift ;;
       --docker-binary) require_value "$1" "${2:-}"; DOCKER_BINARY="$2"; shift 2 ;;
       --executor) require_value "$1" "${2:-}"; EXECUTOR="$2"; shift 2 ;;
       --worker-image) require_value "$1" "${2:-}"; WORKER_IMAGE="$2"; shift 2 ;;
@@ -415,9 +410,9 @@ validate_input() {
     auto|1|true|yes|0|false|no|never) ;;
     *) fail "--install-docker must be auto, true, or never" 2 ;;
   esac
-  case "$INSTALL_NEWT" in
+  case "$INSTALL_WIREGUARD" in
     auto|1|true|yes|0|false|no|never) ;;
-    *) fail "--install-newt must be auto, true, or never" 2 ;;
+    *) fail "--install-wireguard must be auto, true, or never" 2 ;;
   esac
   case "$READY_TIMEOUT_SECONDS" in
     ""|*[!0-9]*) fail "LAZYCLOUD_AGENT_READY_TIMEOUT_SECONDS must be a positive integer" 2 ;;
@@ -555,46 +550,43 @@ install_docker() {
   rm -f "$docker_installer"
 }
 
-newt_ready() {
-  command -v newt >/dev/null 2>&1 && \
-    [ "$(newt --version 2>/dev/null | sed -n '1p')" = "Newt version __NEWT_VERSION__" ]
+wireguard_ready() {
+  command -v wg >/dev/null 2>&1 && \
+    command -v ip >/dev/null 2>&1 && \
+    command -v iptables >/dev/null 2>&1
 }
 
-newt_install_allowed() {
-  case "$INSTALL_NEWT" in
+wireguard_install_allowed() {
+  case "$INSTALL_WIREGUARD" in
     auto|1|true|yes) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-ensure_newt() {
-  if newt_ready; then
+ensure_wireguard() {
+  if wireguard_ready; then
     return
   fi
-  if ! newt_install_allowed; then
-    fail "Newt __NEWT_VERSION__ is required; use --install-newt auto" 1
+  if ! wireguard_install_allowed; then
+    fail "WireGuard tools are required; use --install-wireguard auto" 1
   fi
   if [ "$(id -u)" -ne 0 ]; then
-    fail "automatic Newt installation requires root; rerun with sudo" 1
+    fail "automatic WireGuard installation requires root; rerun with sudo" 1
   fi
 
-  case "$ARCH_NAME" in
-    amd64) newt_sha="__NEWT_AMD64_SHA256__" ;;
-    arm64) newt_sha="__NEWT_ARM64_SHA256__" ;;
-    *) fail "unsupported Newt architecture: $ARCH_NAME" 1 ;;
-  esac
-  binary="$(mktemp)"
-  binary_url="https://github.com/fosrl/newt/releases/download/__NEWT_VERSION__/newt_linux_${ARCH_NAME}"
-  say "Installing Newt __NEWT_VERSION__"
-  if ! download_file "$binary_url" "$binary"; then
-    rm -f "$binary"
-    fail "unable to download the pinned official Newt binary" 1
+  say "Installing WireGuard tools"
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y wireguard-tools iproute iptables || \
+      fail "WireGuard package installation failed" 1
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update && apt-get install -y --no-install-recommends \
+      wireguard-tools iproute2 iptables || \
+      fail "WireGuard package installation failed" 1
+  else
+    fail "automatic WireGuard installation requires dnf or apt-get" 1
   fi
-  verify_sha256 "$binary" "$newt_sha" "Newt binary"
-  install -m 0755 "$binary" /usr/local/bin/newt
-  rm -f "$binary"
-  if ! newt_ready; then
-    fail "Newt __NEWT_VERSION__ was installed but failed its version readiness check" 1
+  if ! wireguard_ready; then
+    fail "WireGuard tools were installed but are not available" 1
   fi
 }
 
@@ -783,9 +775,6 @@ main "$@"
     return (
         script.replace("__AGENT_NAME__", name)
         .replace("__HOME_DIR__", HOME_DIR)
-        .replace("__NEWT_VERSION__", NEWT_INSTALL_VERSION)
-        .replace("__NEWT_AMD64_SHA256__", NEWT_AMD64_SHA256)
-        .replace("__NEWT_ARM64_SHA256__", NEWT_ARM64_SHA256)
         .replace("__DEFAULT_AGENT_STATE_DIR__", DEFAULT_AGENT_STATE_DIR)
         .replace("__AGENT_RUNTIME_READY_FILE__", AGENT_RUNTIME_READY_FILE)
         .replace("__READY_TIMEOUT_SECONDS__", str(AGENT_SERVICE_READY_TIMEOUT_SECONDS))

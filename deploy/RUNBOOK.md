@@ -149,18 +149,17 @@ control-plane 9000` prints the mapping if it changes.
 ### Recreating the control plane
 
 ```bash
-docker compose up -d --build control-plane pangolin-client
-docker compose ps control-plane pangolin-client pangolin-site
-docker compose logs --tail=80 control-plane pangolin-client pangolin-site
+docker compose up -d --build control-plane wireguard-platform
+docker compose ps control-plane wireguard-platform tunnel-gateway
 ```
 
-`pangolin-client` shares the control plane's network namespace. Recreate it with
-the control plane so it does not remain attached to the replaced namespace.
-`pangolin-site` is separate and keeps serving the stable control-plane Service.
+`wireguard-platform` shares the control plane's network namespace. Recreate both
+services together or the sidecar remains attached to the namespace of the old
+container. `tunnel-gateway` is separate and should remain healthy throughout.
 
-The control plane is usable only when the API healthcheck and the Pangolin client
-healthcheck both pass. If agents remain unreachable, read the client status and
-the agent's Newt logs before restarting either end.
+If an agent is unreachable, read the handshake state at both ends before
+restarting either one. A healthy process without a recent handshake has not
+proved the private route.
 
 ## Reading a failed node
 
@@ -243,19 +242,27 @@ Expect a `409` while a reconcile is in flight; retry. Watch it drain with
 
 ## Public ingress
 
-Pangolin serves the platform hostname and customer domains through the
-`pangolin-site` Newt connector. Separate site health, the public resource target,
-and DNS before changing any of them:
+`https://lazycloud.dev` reaches the origin through the `public-ingress`
+connector. Routes are in `deploy/public-ingress/cloudflared.yml`, not the
+dashboard; `deploy/public-ingress/README.md` owns mint and rotation.
+
+Separate connector health from edge routing before anything else — the two
+fail identically from outside:
 
 ```bash
-docker compose ps pangolin-site
-docker compose logs --tail=80 pangolin-site
-curl -kI "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL}"
+docker compose exec -T control-plane python -c \
+  "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:20241/ready',timeout=5).read().decode())"
 ```
 
-The Pangolin dashboard and Integration API must show `lazycloud-platform`
-online. The public resource must target that site at `control-plane:9000`. Only
-then inspect the domain's delegation or CNAME records.
+`readyConnections` above zero means the connector is fine and the problem is at
+the edge or in DNS. A `530`/`1033` with a healthy connector is DNS: the
+hostname's record is not a proxied CNAME to this tunnel. Read the zone through
+the API — `dig` cannot distinguish a flattened apex CNAME from an unrelated
+proxied A record.
+
+Repeated `control stream encountered a failure while serving` with every
+network precheck passing means the tunnel no longer exists at Cloudflare, not a
+connectivity fault.
 
 ## The hosted deployment
 
@@ -352,14 +359,15 @@ they land on the same nodes:
 
 | Workload | Declared in |
 | --- | --- |
-| control plane, scheduler, cache, Pangolin connectors, Jobs | `deploy/chart/values.yaml` |
-| External Secrets | `deploy/argocd/apps/external-secrets.yaml` |
+| control plane, scheduler, cache, tunnel, Jobs | `deploy/chart/values.yaml` |
+| External Secrets (3 pods) | `deploy/argocd/apps/external-secrets.yaml` |
 | Argo CD (7 pods) | `deploy/platform-eks/argocd.tf` |
 
-Two nodes is the floor and it is deliberate. The control-plane replicas spread
-one per node with `DoNotSchedule`, so the second cannot share a node with the
-first. During bring-up, a rollout, or a node replacement that replica can sit
-`Pending` while Karpenter provisions. `Pending` is the signal Karpenter acts on.
+Two nodes is the floor and it is deliberate. `control-plane`, `cloudflared`, and
+`tunnel-gateway` each spread replicas across nodes. During bring-up, a rollout,
+or a node replacement a replica may sit `Pending` while Karpenter provisions.
+`Pending` is the signal Karpenter acts on, so allowing all replicas to pack onto
+one node would hide the need for the second node.
 
 A node vanishing from `kubectl get nodes` until only one remains is not
 consolidation working. It means something started requesting less than it uses.
@@ -378,10 +386,12 @@ the wall time between the samples; a single reading is a lifetime average and
 hides everything that matters.
 
 The failure this guards against does not look like a resource problem from
-outside. A starved node can keep every process running while Pangolin sessions
-drop and the public origin returns an upstream error. Probe timeouts across
-unrelated pods at once identify the node. One workload failing its own probe is
-that workload's problem.
+outside. A starved node reports its requests at 75% while its CPU sits at 85%,
+every process keeps running, and what the user sees is Cloudflare returning 502
+because `cloudflared` could not run for long enough to answer a QUIC keepalive.
+Liveness probes timing out with `context deadline exceeded` across unrelated
+pods at once is the signal. One workload failing its own probe is that
+workload's problem; four failing together is the node.
 
 ### What a deployment runs, and what it does not
 
@@ -414,11 +424,9 @@ administrator credential while replicas are still serving.
 
 ### Secrets
 
-The External Secrets Operator reads credentials from Secrets Manager through a
-Pod Identity association. It materializes separate shared, Pangolin control,
-provider, site, and client Kubernetes Secrets. The API never receives connector
-credentials, and a Newt or client sidecar receives only the ordinal credential
-it reads from its mounted Secret. No credential is in the chart or deployment
+The External Secrets Operator reads them from Secrets Manager as itself, through
+a Pod Identity association, and materialises one Kubernetes Secret the workloads
+read by variable name. No credential is ever in the chart or on the deployment
 branch: both are git, and a value committed there outlives every rotation.
 
 To rotate one, write the new value. Nothing else is needed -- the operator
@@ -451,19 +459,25 @@ in `provider_aws/account_connection.py`.
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
-| Pangolin Integration API key | Production operator secret or local `.env`, `LAZYCLOUD_PANGOLIN_API_KEY` | Create a replacement in the same organization, update the secret, restart API and scheduler, then revoke the old key after both can list the organization's sites. |
-| Pangolin platform machine clients | Production `<deployment>/pangolin-runtime` document or local `pangolin-runtime` volume | The bootstrap owns these one-time values. Do not edit the generated keys by hand. Replace an identity only through an operation that first grants and verifies its replacement, then retires the old client. |
-| Pangolin platform Newt sites | Production `<deployment>/pangolin-runtime` document or local `pangolin-runtime` volume | The bootstrap owns these one-time values. Do not edit the generated keys by hand. Replace a site only through an operation that first attaches and verifies its replacement targets, then retires the old site. |
+| WireGuard gateway and platform keys | Local `wireguard-keys` volume or production `<deployment>/wireguard` Secrets Manager document | Do not hand-rotate. Replacing the gateway identity invalidates enrolled peer configurations; perform a scoped deployment reset or a planned re-enrollment instead. |
+| Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
+| Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
+| Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
 | Stripe webhook signing secret | `.env`, `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` | Returned only when the endpoint is created. Replace the endpoint through `deploy/stripe`, take the new output, recreate `control-plane`. |
 | Stripe API key | `.env`, `LAZYCLOUD_STRIPE_API_KEY` | Roll the restricted key in the Stripe dashboard, update `.env`, recreate `control-plane`. |
+
+Legacy credentials from the superseded architecture live outside the repo at
+`~/.lazycloud-legacy-secrets/secrets-backup/`. They are **not** rotated. Anything
+still live there (AWS keys, Cloudflare, WorkOS, Polar, Resend, Depot, Upstash,
+Prefect) should be rotated and the directory deleted.
 
 ## Irreversible actions
 
 Confirm the target belongs to the task before each of these. None can be undone.
 
-- **Deleting a Pangolin site or machine client.** Site and client IDs are stored
-  in the deployment and attached to resources. Replace every reference and prove
-  the new connection before deleting the old object.
+- **Deleting the WireGuard key document or local key volume.** This changes the
+  gateway identity and invalidates existing peer configurations. Reset all
+  related local state together, or use a planned production re-enrollment.
 - **Deleting a customer connection stack.** Removes the roles the control plane
   assumes; the connection must be re-established from scratch.
 - **Deleting launch-template versions.** The pool cannot roll back to a template

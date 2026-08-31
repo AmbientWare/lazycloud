@@ -28,7 +28,6 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from database.private_network_cleanup import DatabasePrivateNetworkCleanupStore
 from execution.collections.service import CollectionService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
@@ -36,8 +35,6 @@ from execution.containers.service import ContainerService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.settings import GatewaySettings
-from networking.private_network_cleanup import PrivateNetworkCleanupCoordinator
-from networking.private_network_control import PrivateNetworkControl
 from networking.settings import BackendRouteSettings
 from observability.events import EventService
 from observability.metrics import MetricsService
@@ -57,7 +54,7 @@ from provider_clients import (
     workspace_compute_provider_resolver,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from provider_pangolin import PangolinPrivateNetworkControl, PangolinSettings
+from provider_cloudflare import CloudflareSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
@@ -66,10 +63,6 @@ from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
-)
-from scheduler.service import (
-    SchedulerPrivateNetworkCleanupService,
-    UnavailablePrivateNetworkCleanupService,
 )
 from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
@@ -144,7 +137,6 @@ class SchedulerAppServices:
     container_shutdowns: ContainerShutdownService
     scheduler_workloads: SchedulerWorkloadDirectory
     compute: ComputeService
-    private_network_cleanup: SchedulerPrivateNetworkCleanupService
     custom_domains: CustomDomainService
     tasks: TaskService
     usage: UsageService
@@ -343,7 +335,6 @@ class SchedulerAppServices:
             DatabaseBillingAdmission(),
             workspace_changes=workspace_changes,
         )
-        _, private_network_cleanup = scheduler_private_network_services(context=context)
         return cls(
             context=context,
             events=events,
@@ -358,10 +349,9 @@ class SchedulerAppServices:
             container_shutdowns=container_shutdowns,
             scheduler_workloads=scheduler_workloads,
             compute=compute,
-            private_network_cleanup=private_network_cleanup,
             custom_domains=CustomDomainService(
                 context=context,
-                provider_factory=PangolinSettings().client,
+                provider_factory=CloudflareSettings().provider,
                 platform_base_domain=GatewaySettings().public_base_domain,
                 admission=DatabaseBillingAdmission(),
             ),
@@ -506,21 +496,3 @@ def scheduler_retention(
         ),
         deployment_resources=DeploymentResourceService(context),
     )
-
-
-def scheduler_private_network_services(
-    *,
-    context: ServiceContext,
-) -> tuple[PrivateNetworkControl | None, SchedulerPrivateNetworkCleanupService]:
-    pangolin = PangolinSettings()
-    active_control = (
-        PangolinPrivateNetworkControl(pangolin.client()) if pangolin.configured else None
-    )
-    cleanup_control = active_control
-    cleanup_store = DatabasePrivateNetworkCleanupStore(context)
-    cleanup = (
-        PrivateNetworkCleanupCoordinator(cleanup_store, cleanup_control)
-        if cleanup_control is not None
-        else UnavailablePrivateNetworkCleanupService(cleanup_store)
-    )
-    return active_control, cleanup

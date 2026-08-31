@@ -6,7 +6,6 @@ import {
   customDomainListSchema,
   customDomainSchema,
   type CustomDomain,
-  type CustomDomainDnsMode,
   type CustomDomainList,
 } from "@/lib/api/schemas";
 import { accountQueryKeys } from "./workspace-keys";
@@ -28,14 +27,8 @@ export function customDomainsQueryOptions() {
   });
 }
 
-export function registerCustomDomain(
-  domain: string,
-  dnsMode: CustomDomainDnsMode,
-): Promise<CustomDomain> {
-  return postJson(COLLECTION, customDomainSchema, {
-    domain: domain.trim(),
-    dns_mode: dnsMode,
-  });
+export function registerCustomDomain(domain: string): Promise<CustomDomain> {
+  return postJson(COLLECTION, customDomainSchema, { domain: domain.trim() });
 }
 
 export function removeCustomDomain(hostname: string): Promise<null> {

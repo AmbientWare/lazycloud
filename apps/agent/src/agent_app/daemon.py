@@ -70,13 +70,12 @@ from gateway.http import (
     LeaveAgentResponse,
     RegisterAgentPrivateNetworkRequest,
     RegisterAgentPrivateNetworkResponse,
-    RequestAgentTransportCredentialRequest,
-    RequestAgentTransportCredentialResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
+from networking.wireguard import WireGuardClientRuntime, WireGuardPeerConfiguration
 from provider_aws import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
@@ -86,8 +85,7 @@ from provider_clients import (
     ProviderNodeIdentityEvidenceProvider,
     provider_node_identity_evidence_provider,
 )
-from provider_pangolin import NewtConnection, NewtRuntime, NewtRuntimeStatus
-from pydantic import Field, JsonValue, SecretStr, TypeAdapter, field_validator, model_validator
+from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 from shared.app_identity import AGENT_NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -144,7 +142,6 @@ AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
-PRIVATE_NETWORK_NOT_ONLINE_DETAIL = "private-network site is not online"
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
     {
         "invalid agent token",
@@ -203,7 +200,6 @@ class AgentDaemonOptions(ContractModel):
     once: bool = False
     capacity: AgentCapacityOptions = Field(default_factory=AgentCapacityOptions)
     route_proxy: AgentRouteProxyConfig = Field(default_factory=AgentRouteProxyConfig)
-    newt_binary: str = "newt"
 
     @field_validator(
         "stream_interval_seconds",
@@ -294,11 +290,6 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
         request: UpdateAgentRouteStatusRequest,
     ) -> UpdateAgentRouteStatusResponse: ...
 
-    def request_agent_transport_credential(
-        self,
-        request: RequestAgentTransportCredentialRequest,
-    ) -> RequestAgentTransportCredentialResponse: ...
-
     def register_agent_private_network(
         self,
         request: RegisterAgentPrivateNetworkRequest,
@@ -311,16 +302,13 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
 
 
 class AgentPrivateNetworkRuntime(Protocol):
-    @property
-    def configured(self) -> bool: ...
+    def public_key(self) -> str: ...
 
-    def start(self, connection: NewtConnection | None = None) -> NewtRuntimeStatus: ...
+    def configure(self, configuration: WireGuardPeerConfiguration) -> None: ...
 
-    def status(self) -> NewtRuntimeStatus: ...
+    def latest_handshake_at(self, server_public_key: str) -> datetime | None: ...
 
     def close(self) -> None: ...
-
-    def discard(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -389,14 +377,6 @@ class HttpAgentGatewayClient:
     ) -> UpdateAgentRouteStatusResponse:
         return UpdateAgentRouteStatusResponse.model_validate(
             self.channel.post("/gateway/agents/routes/status", _payload(request))
-        )
-
-    def request_agent_transport_credential(
-        self,
-        request: RequestAgentTransportCredentialRequest,
-    ) -> RequestAgentTransportCredentialResponse:
-        return RequestAgentTransportCredentialResponse.model_validate(
-            self.channel.post("/gateway/agents/transport-credential", _payload(request))
         )
 
     def register_agent_private_network(
@@ -1384,88 +1364,37 @@ class AgentDaemonService:
     ) -> tuple[AgentPrivateNetworkRuntime | None, str]:
         if not _agent_uses_private_network(state.bootstrap.transport):
             return (None, "")
-        runtime = self.private_network_runtime or NewtRuntime(
-            Path(self.options.state_dir) / "private-network",
-            binary=self.options.newt_binary,
+        runtime = self.private_network_runtime or WireGuardClientRuntime(
+            Path(self.options.state_dir) / "wireguard",
         )
         try:
-            if runtime.configured:
-                runtime.start()
-            else:
-                runtime.start(self._issue_private_network_connection(state))
-            replaced_saved_site = False
-            for attempt in range(1, PRIVATE_NETWORK_CONNECT_ATTEMPTS + 1):
-                status = runtime.status()
-                if not status.running:
-                    raise RuntimeError(
-                        f"Newt exited before connecting to Pangolin (exit code {status.exit_code})"
-                    )
-                pangolin_online = False
-                binding = None
-                if status.connection.connector_id:
-                    try:
-                        binding = self._register_private_network_site(
-                            state,
-                            site_name=status.connection.site_name,
-                            connector_id=status.connection.connector_id,
-                        )
-                        pangolin_online = True
-                    except HttpApiError as exc:
-                        if _private_network_registration_is_pending(exc):
-                            binding = None
-                        elif not replaced_saved_site and _private_network_site_is_stale(exc):
-                            runtime.discard()
-                            runtime.start(self._issue_private_network_connection(state))
-                            replaced_saved_site = True
-                            LOGGER.info("discarded stale Pangolin site and requested a new one")
-                            continue
-                        else:
-                            raise
-                LOGGER.info(
-                    "private-network poll attempt=%s newt_running=%s "
-                    "newt_healthy=%s pangolin_online=%s site_name=%s",
-                    attempt,
-                    status.running,
-                    status.healthy,
-                    pangolin_online,
-                    status.connection.site_name,
+            binding = self.client.register_agent_private_network(
+                RegisterAgentPrivateNetworkRequest(
+                    agent_token=state.agent_token,
+                    public_key=runtime.public_key(),
                 )
-                if binding is not None and status.healthy:
+            )
+            configuration = WireGuardPeerConfiguration.model_validate(
+                binding.model_dump(mode="python")
+            )
+            runtime.configure(configuration)
+            for attempt in range(1, PRIVATE_NETWORK_CONNECT_ATTEMPTS + 1):
+                handshake = runtime.latest_handshake_at(binding.server_public_key)
+                LOGGER.info(
+                    "private-network poll attempt=%s wireguard_handshake=%s peer_id=%s",
+                    attempt,
+                    handshake.isoformat() if handshake is not None else "pending",
+                    binding.peer_id,
+                )
+                if handshake is not None:
                     return (runtime, _private_network_host(binding.address))
                 time.sleep(PRIVATE_NETWORK_POLL_SECONDS)
-            raise RuntimeError("Newt did not establish a healthy Pangolin private network")
+            raise RuntimeError(
+                f"WireGuard did not handshake with {binding.endpoint}; verify outbound UDP"
+            )
         except Exception:
             runtime.close()
             raise
-
-    def _issue_private_network_connection(self, state: AgentState) -> NewtConnection:
-        credential = self.client.request_agent_transport_credential(
-            RequestAgentTransportCredentialRequest(
-                agent_token=state.agent_token,
-                transport=BackendRouteTransport.PrivateNetwork,
-            )
-        )
-        return NewtConnection(
-            site_name=credential.site_name,
-            endpoint=credential.endpoint,
-            connector_id=credential.connector_id,
-            secret=SecretStr(credential.secret),
-        )
-
-    def _register_private_network_site(
-        self,
-        state: AgentState,
-        *,
-        site_name: str,
-        connector_id: str,
-    ) -> RegisterAgentPrivateNetworkResponse:
-        return self.client.register_agent_private_network(
-            RegisterAgentPrivateNetworkRequest(
-                agent_token=state.agent_token,
-                site_name=site_name,
-                connector_id=connector_id,
-            )
-        )
 
     def _build_route_proxy(
         self,
@@ -1478,6 +1407,8 @@ class AgentDaemonService:
         config = self.options.route_proxy
         if private_network_address and _agent_uses_private_network(state.bootstrap.transport):
             update: dict[str, str] = {}
+            if config.bind_host == "127.0.0.1":
+                update["bind_host"] = private_network_address
             if not config.advertise_host:
                 update["advertise_host"] = private_network_address
             if update:
@@ -1563,7 +1494,7 @@ def _agent_uses_private_network(transport: BackendRouteTransport) -> bool:
 def _private_network_host(address: str) -> str:
     host = address.strip().split("/", 1)[0]
     if not host:
-        raise RuntimeError("Pangolin site address is empty")
+        raise RuntimeError("WireGuard peer address is empty")
     return host
 
 
@@ -1865,20 +1796,6 @@ def _agent_lock_pid(contents: str) -> int:
             except ValueError:
                 return 0
     return 0
-
-
-def _private_network_registration_is_pending(exc: HttpApiError) -> bool:
-    return (
-        400 <= exc.status_code < 500
-        and (exc.detail or "").strip() == PRIVATE_NETWORK_NOT_ONLINE_DETAIL
-    )
-
-
-def _private_network_site_is_stale(exc: HttpApiError) -> bool:
-    return 400 <= exc.status_code < 500 and (exc.detail or "").strip() in {
-        "private-network enrollment is not awaiting this site",
-        "private-network site could not be verified",
-    }
 
 
 def _recoverable_stream_error(exc: Exception) -> bool:

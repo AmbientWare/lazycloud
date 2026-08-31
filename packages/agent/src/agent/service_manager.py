@@ -523,7 +523,7 @@ def plan_agent_preflight(probes: AgentPreflightProbeSet) -> AgentPreflightPlan:
         _preflight_check(
             PreflightCheckName.PrivateNetworkConnector,
             True,
-            "private-network transport uses the managed Newt connector",
+            "private-network transport uses the managed WireGuard connector",
             required=False,
         ),
     ]

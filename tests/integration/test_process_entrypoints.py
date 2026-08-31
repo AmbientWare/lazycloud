@@ -129,7 +129,6 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         billing_reconciliation=app_services.billing_reconciliation,
         billing_enforcement=app_services.billing_enforcement,
         retention=app_services.retention,
-        private_network_cleanup=app_services.private_network_cleanup,
         custom_domains=app_services.custom_domains,
     )
     runtime.owned_services = app_services

@@ -20,7 +20,7 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
-    "provider-pangolin",
+    "provider-cloudflare",
     "provider-stripe",
     "scheduler",
     "storage",

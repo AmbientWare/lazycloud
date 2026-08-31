@@ -99,7 +99,6 @@ class AgentCommandArgs(argparse.Namespace):
     route_proxy_bind_host: str
     route_proxy_bind_port: int
     route_proxy_advertise_host: str
-    newt_binary: str
     once: bool
     target: str
     service_name: str
@@ -265,7 +264,6 @@ def _add_daemon_options(
     parser.add_argument("--route-proxy-bind-host", default="127.0.0.1")
     parser.add_argument("--route-proxy-bind-port", type=int, default=DEFAULT_ROUTE_PROXY_PORT)
     parser.add_argument("--route-proxy-advertise-host", default="")
-    parser.add_argument("--newt-binary", default="newt")
     if include_run_flags:
         parser.add_argument("--once", action="store_true")
 
@@ -316,7 +314,6 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
             bind_port=args.route_proxy_bind_port,
             advertise_host=args.route_proxy_advertise_host,
         ),
-        newt_binary=args.newt_binary,
         capacity=AgentCapacityOptions(
             max_cpu=args.max_cpu,
             max_memory=args.max_memory,
@@ -441,8 +438,6 @@ def _install_service_command(
         command.extend(["--route-proxy-bind-port", str(args.route_proxy_bind_port)])
     if args.route_proxy_advertise_host:
         command.extend(["--route-proxy-advertise-host", args.route_proxy_advertise_host])
-    if args.newt_binary != "newt":
-        command.extend(["--newt-binary", args.newt_binary])
     return command
 
 

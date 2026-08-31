@@ -5,7 +5,7 @@ Authenticate with `lazycloud login`; for non-interactive use, configure the
 documented `LAZYCLOUD_ENDPOINT`, `LAZYCLOUD_TOKEN`, and `LAZYCLOUD_WORKSPACE`
 settings instead.
 
-## Guided Examples
+## Guided examples
 
 Each directory below is paired with a complete Mintlify guide. The guide is
 the canonical entry point for prerequisites, deployment, inspection, costs or
@@ -27,7 +27,7 @@ root. Examples use importable module targets such as
 `examples.openai_compatible_llm.app:app`; they do not require changing into the
 example directory.
 
-## GPU Probe
+## GPU probe
 
 `examples.gpu_probe` reports what a GPU container can reach, layer by layer:
 device nodes, driver libraries, whether `libcuda.so.1` loads, and whether
@@ -39,7 +39,7 @@ that happened to touch it first.
 uv run lazycloud run examples.gpu_probe:probe
 ```
 
-## All Workloads
+## All workloads
 
 `examples.all_workloads` is one app that makes every currently deployable
 workload kind visible in the dashboard: function, endpoint, ASGI, and
@@ -87,15 +87,4 @@ uv run lazycloud run examples.all_workloads:create_sandbox
 
 Endpoint, ASGI, and exposed sandbox-port calls require routable inbound
 container networking. A deployment can succeed while those calls remain
-unavailable on a direct-transport environment that only publishes private
-container bridge addresses.
-
-## Cron Failure Acceptance
-
-`examples.cron_failure` is a disposable App for verifying scheduled-run retry,
-terminal failure, and deployment lifecycle behavior without adding a
-permanently failing schedule to the All Workloads App.
-
-```sh
-uv run lazycloud deploy examples.cron_failure:app --workspace default
-```
+unavailable when it publishes only private container bridge addresses.

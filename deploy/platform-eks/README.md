@@ -1,83 +1,70 @@
 # Platform EKS
 
-This module owns LazyCloud's AWS infrastructure: EKS, Redis, IAM, ECR, S3,
-Secrets Manager containers, the PlanetScale branch, Argo CD, and the platform
-account's connected-AWS fleet identity. Customer accounts remain owned by the
-CloudFormation connection flow.
+This Terraform module owns the hosted AWS deployment: VPC, EKS, managed Redis,
+IAM, ECR, S3, Secrets Manager entries, the PlanetScale branch, and Argo CD.
+Customer accounts remain behind the connected-AWS CloudFormation boundary
+because the platform holds no credentials for them.
 
-Pangolin is an external prerequisite. This module does not install or manage the
-Pangolin server. It publishes the supplied endpoint, Integration API URL,
-and organization ID to the chart.
+See `LIFECYCLE.md` for creation and teardown. The Helm workloads live in
+`deploy/chart`; Argo CD applies them from the deployment branch.
 
-## Pangolin prerequisites
+## Private network
 
-Complete these Pangolin steps before the first deployment:
+The chart runs a two-replica WireGuard gateway behind a UDP `LoadBalancer`
+Service. Set `wireguard_public_endpoint` to the stable `<host>:<port>` agents can
+reach. The host can use Route 53, Cloudflare DNS, or another DNS provider. It
+must resolve to a service that carries UDP to the gateway; a Cloudflare HTTP
+tunnel does not carry WireGuard traffic.
 
-- an activated Enterprise license on the Pangolin server;
-- an Integration API key scoped to the LazyCloud organization;
-- a load-balancer route to Pangolin's Integration API listener (port 3003 by
-  default), separate from the dashboard and tunnel API listeners;
-- a verified domain covering the hostname in `gateway_public_http_url`.
+The gateway replicas share one server keypair. Redis grants one replica the
+active lease while the other is ready to take over. The pair provides failover,
+not twice the packet throughput.
 
-`pangolin_api_url` includes `/v1`. Before deployment,
-`<pangolin_api_url>/openapi.json` must return Pangolin's Integration API
-document without authentication. A dashboard URL or tunnel API URL returns 404
-and the bootstrap correctly refuses to create any platform identity.
+Control-plane replicas run as a StatefulSet with one stable WireGuard keypair
+per ordinal. Keep `controlPlane.replicas` and `wireguard.platformPeers` equal.
+Agents generate and retain their own private keys. Postgres stores agent public
+keys, assigned addresses, revocation state, and handshake observations.
 
-For Pangolin 1.21.1, grant the key these actions:
-`createSite`, `deleteSite`, `getSite`, `listSites`, `createClient`,
-`deleteClient`, `getClient`, `listClients`, `createSiteResource`,
-`deleteSiteResource`, `listSiteResources`, `listResourceUsers`, `setResourceUsers`,
-`createResource`, `deleteResource`, `listResources`, `updateResource`,
-`createTarget`, `getTarget`, `listTargets`, `updateTarget`,
-`createOrgDomain`, `deleteOrgDomain`, `getDomain`, `listOrgDomains`, and
-`getDNSRecords`.
+## WireGuard key storage
 
-The in-cluster bootstrap creates one Newt site per `pangolin_site_replicas`, one
-machine client per `control_plane_replicas`, the public resource, and
-health-checked targets. Both counts default to two. It stores their credentials
-in the Terraform-created `<deployment>/pangolin-runtime` Secrets Manager entry.
-A repeat deploy validates and reuses the same identities; increasing either
-count creates only the missing ordinals.
+Terraform declares one `<deployment>/wireguard` Secrets Manager entry. It does
+not put key material in Terraform state. The chart's `wireguard-bootstrap` Job
+generates the gateway pair and the configured platform pairs, then writes one
+JSON document through a narrowly scoped Pod Identity role. Repeated runs reuse
+the complete document.
 
-Do not reduce either fixed platform replica count. The bootstrap refuses a
-reduction rather than leave a stored connector or machine client with
-privileged access. Workload nodes and customer agents still scale without
-operator configuration.
+External Secrets projects the keys into the gateway and platform containers as
+read-only files. Secrets Manager is read during bootstrap and projection, not
+for enrollment or packet forwarding. One document per deployment is enough;
+there is no secret per agent.
 
-Set these non-secret values in `terraform.tfvars`:
-
-- `gateway_public_http_url`
-- `github_redirect_uri`
-- `pangolin_api_url`
-- `pangolin_endpoint`
-- `pangolin_organization_id`
-
-Write the Pangolin API key to the operator Secrets Manager document.
-`secrets.tf` owns the exact key list. Terraform never receives the value, and no
-operator copies connector credentials.
-
-The Pangolin installation must use the vendor-supported production topology for
-the purchased Enterprise edition. Pangolin's
-[clustering guidance](https://docs.pangolin.net/self-host/advanced/clustering)
-requires vendor engagement, a shared PostgreSQL database and Valkey, redundant
-Pangolin, DNS, Traefik, and Gerbil instances, and an operator-supplied HA load
-balancer. This repository treats the resulting API and tunnel endpoint as an
-external service boundary instead of maintaining a second implementation of
-that cluster.
+Do not edit or delete that document on a persistent installation. Replacing the
+server key changes the gateway identity and invalidates every enrolled peer
+configuration.
 
 ## Ownership rules
 
 `provider_aws.connection_policy` owns the connected-account permission set.
-Terraform consumes its rendered policy; do not maintain another list here.
+Terraform consumes its rendered policy; do not maintain another copy here.
 
-`control_role_name` is a public contract after a customer connects. Customer
-trust policies name its ARN, and recreating the same IAM name does not restore
-the old role identity.
+`control_role_name` is a durable external contract after a customer connects.
+Customer trust policies name its ARN, and recreating the same IAM name does not
+restore the old role identity.
 
-Every global AWS name carries `var.deployment` except that control role. The
-deployment name also prefixes Pangolin sites and clients. Two deployments in
-one account therefore need distinct `control_role_name` values, public
-hostnames, deployment names, and Stripe test or live accounts.
+Every global AWS name carries `var.deployment` except that control role. Two
+deployments in one account need distinct deployment names, control role names,
+WireGuard public endpoints, Cloudflare tunnels and hostnames, and Stripe test or
+live configuration.
 
-See `LIFECYCLE.md` for creation and teardown.
+Operator-supplied credentials belong in `<deployment>/operator`. Terraform owns
+`<deployment>/platform`, and the WireGuard bootstrap owns
+`<deployment>/wireguard`. Each document has one writer so an apply cannot erase
+values supplied through another path.
+
+## Scaling
+
+The API replicas and their platform peers scale together. Gateway replicas are
+active and standby because one server identity owns the endpoint. If one gateway
+reaches its measured packet or peer limit, the next scaling boundary is another
+gateway endpoint and peer shard, not more active replicas sharing the same
+endpoint. Sharding is not implemented by this module yet.

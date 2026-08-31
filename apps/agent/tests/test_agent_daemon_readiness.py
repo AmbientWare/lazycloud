@@ -29,8 +29,6 @@ from gateway.http import (
     LeaveAgentResponse,
     RegisterAgentPrivateNetworkRequest,
     RegisterAgentPrivateNetworkResponse,
-    RequestAgentTransportCredentialRequest,
-    RequestAgentTransportCredentialResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
@@ -103,13 +101,6 @@ class _Gateway:
     ) -> UpdateAgentRouteStatusResponse:
         del request
         return UpdateAgentRouteStatusResponse()
-
-    def request_agent_transport_credential(
-        self,
-        request: RequestAgentTransportCredentialRequest,
-    ) -> RequestAgentTransportCredentialResponse:
-        del request
-        raise AssertionError("direct transport should not request private-network credentials")
 
     def register_agent_private_network(
         self,

@@ -51,7 +51,7 @@ class ClosableRoutePrewarmRunner(Protocol):
 
 
 def route_prewarm_shutdown_timeout_seconds(dial_timeout_seconds: float) -> float:
-    return dial_timeout_seconds
+    return dial_timeout_seconds + 1.0
 
 
 @dataclass(slots=True)

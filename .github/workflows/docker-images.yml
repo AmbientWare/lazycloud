@@ -41,6 +41,7 @@ jobs:
             *.cache-to=type=gha,mode=max,scope=docker-images-control-plane
             api.tags=ghcr.io/${{ github.repository }}-api:${{ github.sha }}
             scheduler.tags=ghcr.io/${{ github.repository }}-scheduler:${{ github.sha }}
+            tunnel-gateway.tags=ghcr.io/${{ github.repository }}-tunnel-gateway:${{ github.sha }}
             cache-server.tags=ghcr.io/${{ github.repository }}-cache-server:${{ github.sha }}
             worker-bootstrap.tags=ghcr.io/${{ github.repository }}-worker-bootstrap:${{ github.sha }}
             cli.tags=ghcr.io/${{ github.repository }}-cli:${{ github.sha }}
@@ -105,4 +106,3 @@ jobs:
             container-worker.cache-from=type=gha,scope=docker-images-worker
             container-worker.cache-to=type=gha,mode=max,scope=docker-images-worker
             container-worker.tags=ghcr.io/${{ github.repository }}-container-worker:${{ github.sha }}
-

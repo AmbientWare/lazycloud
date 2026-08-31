@@ -9,7 +9,7 @@ migrate, reset, or inventory the platform: a scenario that provisions what it
 then tests is mostly testing its own setup.
 
 - `local/` targets the healthy canonical root Compose stack. `external/` targets
-  an explicitly authorized provider, cluster, private network, or other external system.
+  an explicitly authorized provider, cluster, or other external system.
 - Establish that the environment is running the code under test before trusting a
   result. A stack can report every service healthy while serving images built
   from older source; a pass against stale code proves nothing, and a failure

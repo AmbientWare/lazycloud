@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from networking.wireguard import wireguard_platform_address, wireguard_platform_index
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.deployment_settings import MissingDeploymentSettingError
@@ -17,11 +18,20 @@ class GatewaySettings(BaseSettings):
     # account, and the address a node enrols against. A localhost default would
     # be accepted everywhere and correct nowhere.
     public_http_url: str = Field(default="", validation_alias=PUBLIC_HTTP_URL_VARIABLE)
-    # The worker process uses this loopback listener after authenticating through
-    # the public control-plane origin.
+    # Workers reach the replica that assigned them through its WireGuard address.
+    # The ordinal selects that address without a second registry beside the
+    # StatefulSet and gateway peer list.
     runtime_callback_http_url: str = Field(
-        default="http://127.0.0.1:9000",
+        default="",
         validation_alias="LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",
+    )
+    wireguard_platform_index: int | None = Field(
+        default=0,
+        validation_alias="LAZYCLOUD_WIREGUARD_PLATFORM_INDEX",
+    )
+    wireguard_pod_name: str = Field(
+        default="",
+        validation_alias="LAZYCLOUD_WIREGUARD_POD_NAME",
     )
 
     model_config = SettingsConfigDict(
@@ -42,6 +52,15 @@ class GatewaySettings(BaseSettings):
             raise MissingDeploymentSettingError(
                 PUBLIC_HTTP_URL_VARIABLE,
                 purpose="the public origin this deployment is reached on",
+            )
+        if not self.runtime_callback_http_url:
+            index = wireguard_platform_index(
+                self.wireguard_platform_index,
+                pod_name=self.wireguard_pod_name,
+            )
+            self.runtime_callback_http_url = normalize_http_origin(
+                f"http://{wireguard_platform_address(index)}:9000",
+                field_name="gateway runtime HTTP URL",
             )
         return self
 

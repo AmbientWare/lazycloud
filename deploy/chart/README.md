@@ -1,45 +1,90 @@
 # LazyCloud chart
 
-This chart runs the control plane, scheduler, cache, bootstrap jobs, platform
-Newt connector, and the Pangolin CLI client sidecars.
+The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
+has to run before any of them.
 
-The deployment workflow renders values from Terraform outputs. `runtime` holds
-non-secret settings. External Secrets materializes separate shared, Pangolin
-control, and Pangolin runtime Secrets so generated connector credentials do not
-reach unrelated workloads.
+Values come from the platform module rather than being authored here: `images`
+from what the deploy pushed, `runtime` from `runtime_configuration`, and
+`secrets.map` from `secret_environment`. Nothing in this chart decides a value
+the infrastructure already knows.
 
-## Pangolin connections
+`billing.ratesEffectiveAt` is the exception, and it is authored here on purpose.
+No infrastructure output knows the instant a rate card starts applying, and
+nothing may derive one, because a rate boundary is a figure customers are charged
+either side of. It changes in the same commit as the figures in
+`packages/shared/src/shared/billing_rate_card.py`.
 
-`pangolin-site` is an ordinal set of single-replica Newt Deployments, with two
-members by default. Each Deployment projects only its own Pangolin site
-credential and connects that site to the stable `control-plane:9000` Service.
+## The order the bootstrap runs in
 
-Each control-plane ordinal is also a single-replica Deployment with a
-`pangolin-cli` sidecar. Containers in a Pod share a network namespace, so the API
-can dial private agent resources through the sidecar's WireGuard interface. The
-sidecar projects only its ordinal's machine-client credential and is the only
-container that receives it or `NET_ADMIN`.
+Sync waves, not preference. The schema must exist before an administrator can be
+created against it, and the administrator must exist before anything
+authenticates. The rate card is published into that schema last, so the
+deployment can price usage from the moment it serves any.
 
-Terraform sizes both identity sets from `pangolin_site_replicas` and
-`control_plane_replicas`. The values renderer derives the StatefulSet counts
-from those generated credential keys, so increasing either variable creates
-the missing Pangolin identities before the new ordinals start.
+Each Job that opens a database is alone in its wave. The chart refuses to render
+when the pools it declares can exceed the server's connection ceiling, and the
+sum it checks counts one Job's pool rather than every Job's.
 
-The Newt and client probes check Pangolin connectivity. A Pod does not become
-Ready merely because the application process is listening.
+The administrator credential is the one with a trap in it. `auth bootstrap`
+adopts a configured credential when it finds one and mints its own when it does
+not, recording a different bootstrap request id for each. Install without
+`administrator-token` written to Secrets Manager and the credential exists only
+inside that Job's pod, every later step has no bearer token, and supplying the
+value afterwards is refused as an already completed bootstrap. The way back is
+resetting the schema.
 
-## Bootstrap order
+Write it before the first install.
 
-Argo sync waves create the shared and Pangolin control Secrets, run the Pangolin
-bootstrap, then materialize separate provider, site, and client Secrets from its
-generated runtime document. The schema precedes administrator bootstrap and the
-rate card. Each database job runs alone so the connection-budget check remains
-true during a rollout.
+## Private network
 
-Write `LAZYCLOUD_TOKEN` to the operator secret before the first sync. Bootstrap
-adopts that token. If it runs without one, it creates a token that exists only
-inside the completed Job and the predeployment database must be reset.
+Each control-plane pod has a `wireguard-platform` sidecar in the same network
+namespace. The StatefulSet ordinal selects a stable platform keypair, so
+`controlPlane.replicas` and `wireguard.platformPeers` must match. The sidecar
+needs `NET_ADMIN` and `/dev/net/tun`; those are pod requirements, not reasons to
+select an instance type.
 
-`billing.ratesEffectiveAt` stays in `values.yaml` because it is a customer
-charge boundary, not infrastructure data. Change it in the same commit as the
-shared rate card.
+The separate `tunnel-gateway` Deployment exposes UDP 51820 through a
+`LoadBalancer` Service. `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` is the
+stable host and port agents receive at enrollment. The host may use any DNS
+provider as long as it reaches that UDP service.
+
+The `wireguard-bootstrap` Job initializes one Secrets Manager document with the
+gateway keypair and the small set of platform keypairs. External Secrets mounts
+them as read-only files. Agent private keys remain on their machines; Postgres
+stores public peer records, and Redis stores only the active-gateway lease.
+
+## Requests, and the node count that follows from them
+
+Karpenter provisions from what the pods request, which makes a request an
+instruction to the cluster rather than a description of a process. Every
+container in this chart states one, including the Jobs and the init containers,
+because a pod that requests nothing is not one the node's arithmetic can see.
+It is provisioned around, and then run anyway.
+
+The figures come from `/api/v1/nodes/<node>/proxy/metrics/resource` on a live
+node, not from estimates. Memory carries a limit; CPU does not, because a CPU
+limit is throttling, and throttling a connector or an API turns contention into
+the latency the request was meant to prevent.
+
+`control-plane`, `cloudflared`, and `tunnel-gateway` spread replicas across
+nodes. That is what turns their second replicas into redundancy, and it obliges
+the cluster to hold more than one node. `DoNotSchedule` leaves the second replica
+Pending, and Pending is the state Karpenter provisions for. A
+`PodDisruptionBudget` on each prevents one drain from removing both replicas.
+
+## Replica counts
+
+`scheduler` at one is a capacity decision: it serialises on Redis token locks and
+tolerates overlapping ticks, so more is safe once there is load to justify it.
+
+`cache-server` at one is a correctness decision: it serves a local directory, so
+a second replica is a second cache rather than a larger one.
+
+`tunnel-gateway` runs two replicas against one gateway key. Redis grants the
+active lease to one replica and the other remains ready to take over. This is
+availability, not packet-capacity scaling; both replicas do not forward traffic
+at the same time.
+
+`cloudflared` runs several deliberately. Cloudflare balances a tunnel across its
+connectors, and one was a single point of failure that also collided with any
+other process holding the same credentials.

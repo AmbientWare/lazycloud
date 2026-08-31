@@ -23,7 +23,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    PrivateNetworkCleanupTombstoneRepository,
+    WireGuardPeerRepository,
 )
 from database.repositories.orchestration import (
     MachineRepository,
@@ -40,6 +40,7 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineReadinessPhase,
     PrivateNetworkEnrollmentPhase,
+    WireGuardPeerStatus,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
@@ -79,9 +80,6 @@ from compute.providers import (
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
-
-PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS = 30
-
 
 _LAUNCH_STATE_INTENT = "intent"
 
@@ -174,10 +172,6 @@ def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputeUnitPhase:
         ProviderCapacityPhase.Deleting: ComputeUnitPhase.Deleting,
         ProviderCapacityPhase.Deleted: ComputeUnitPhase.Deleted,
     }[phase]
-
-
-def _unique_nonempty(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
 def _utc(value: datetime | None) -> datetime:
@@ -998,23 +992,18 @@ class ProviderMachineReconciler:
         *,
         now: datetime,
     ) -> None:
-        resource_ids = _unique_nonempty(
-            [enrollment.network_resource_id, *enrollment.network_cleanup_resource_ids]
-        )
-        site_ids = _unique_nonempty(
-            [enrollment.network_site_id, *enrollment.network_cleanup_site_ids]
-        )
-        if not resource_ids and not site_ids:
+        peers = WireGuardPeerRepository(session)
+        peer = peers.by_enrollment(enrollment.id, for_update=True)
+        if peer is None or peer.status is WireGuardPeerStatus.Revoked:
             return
-        not_before = now + timedelta(seconds=PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS)
-        PrivateNetworkCleanupTombstoneRepository(session).schedule(
-            workspace_id=enrollment.workspace_id,
-            pool=enrollment.pool,
-            machine_id=enrollment.machine_id,
-            resource_ids=resource_ids,
-            site_ids=site_ids,
-            not_before=not_before,
-            now=now,
+        peers.save(
+            peer.model_copy(
+                update={
+                    "status": WireGuardPeerStatus.Revoked,
+                    "revoked_at": now,
+                    "updated_at": now,
+                }
+            )
         )
 
     def _revoke_provider_join_credential(

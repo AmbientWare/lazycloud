@@ -39,22 +39,22 @@ output "ecr_repositories" {
 }
 
 output "secret_arns" {
-  description = "The three single-writer documents this deployment's credentials live in."
+  description = "The documents this deployment's credentials live in."
   value = {
-    platform         = aws_secretsmanager_secret.platform.arn
-    operator         = aws_secretsmanager_secret.operator.arn
-    pangolin_runtime = aws_secretsmanager_secret.pangolin_runtime.arn
+    platform  = aws_secretsmanager_secret.platform.arn
+    operator  = aws_secretsmanager_secret.operator.arn
+    wireguard = aws_secretsmanager_secret.wireguard.arn
   }
+}
+
+output "wireguard_secret" {
+  description = "Entry initialized with the gateway and stable platform WireGuard keys."
+  value       = aws_secretsmanager_secret.wireguard.name
 }
 
 output "operator_secret" {
   description = "Entry an operator writes the externally-obtained credentials into."
   value       = aws_secretsmanager_secret.operator.name
-}
-
-output "pangolin_runtime_secret" {
-  description = "Entry the Pangolin bootstrap Job writes generated platform identities into."
-  value       = aws_secretsmanager_secret.pangolin_runtime.name
 }
 
 output "runtime_configuration" {
@@ -86,23 +86,23 @@ output "runtime_configuration" {
     # be remembered on every stand-up and reports its absence as a refused
     # capability rather than as a missing setting.
     LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN = aws_iam_role.control_principal.arn
-    LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL              = var.gateway_public_http_url
+    # The origin customers and the SDK reach this deployment on, taken from the
+    # zone whose tunnel serves it rather than written twice. The default is
+    # localhost, which is correct for the local stack and silently wrong here:
+    # nothing fails, and the authorization templates and OAuth redirects a
+    # customer receives point at their own machine.
+    LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
     # Where GitHub returns a person after they sign in. Configuration rather than
     # something derived from the request: the Host header belongs to whoever sent
     # it, so deriving the callback would let a caller choose a redirect target
     # GitHub then honours. Absent, sign-in is refused as provider_unavailable and
     # the dashboard reports that sign-ins are not supported.
-    LAZYCLOUD_GITHUB_REDIRECT_URI = var.github_redirect_uri
+    LAZYCLOUD_GITHUB_REDIRECT_URI = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}/auth/github/callback"
     # `rediss`, because the replication group requires TLS in transit. A plain
     # `redis://` here connects, gets refused at the handshake, and reports it as
     # a connection error rather than as a scheme.
-    LAZYCLOUD_REDIS_URL                         = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
-    LAZYCLOUD_PANGOLIN_API_URL                  = var.pangolin_api_url
-    LAZYCLOUD_PANGOLIN_ENDPOINT                 = var.pangolin_endpoint
-    LAZYCLOUD_PANGOLIN_ORGANIZATION_ID          = var.pangolin_organization_id
-    LAZYCLOUD_PANGOLIN_PLATFORM_IDENTITY_PREFIX = "${var.deployment}-platform"
-    LAZYCLOUD_PANGOLIN_PLATFORM_TARGET_HOST     = "control-plane"
-    LAZYCLOUD_PANGOLIN_PLATFORM_TARGET_PORT     = "9000"
+    LAZYCLOUD_REDIS_URL                 = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
+    LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT = var.wireguard_public_endpoint
     # Read by the catalog publisher rather than the control plane: it is the
     # account the credential is checked against before any plan or price is
     # written.
@@ -173,12 +173,18 @@ output "secret_environment" {
   value       = local.secret_environment
 }
 
-output "scoped_secrets" {
-  description = "Generated Pangolin entries exposed only to their owning workloads."
-  value       = local.scoped_secrets
+output "secret_files" {
+  description = "Secret entries the cluster mounts as files rather than exporting."
+  value       = local.secret_files
 }
 
-output "pangolin_control_secrets" {
-  description = "Operator Pangolin credentials exposed only to provider-owning workloads."
-  value       = local.pangolin_control_secrets
+output "cloudflare_tunnel_id" {
+  description = <<-EOT
+    Tunnel the in-cluster connectors run.
+
+    Read from the module that owns it rather than pasted, for the same reason its
+    credentials are: a tunnel replaced in `deploy/cloudflare` would otherwise
+    leave this naming one that no longer exists.
+  EOT
+  value       = data.terraform_remote_state.cloudflare.outputs.tunnel_id
 }

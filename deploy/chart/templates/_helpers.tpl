@@ -14,37 +14,10 @@ does not start, and nothing reports which of the two was wrong.
       name: {{ $.Values.secrets.name }}
       key: {{ $variable }}
 {{- end }}
-{{- include "lazycloud.runtimeEnv" . }}
-{{- end -}}
-
-{{- define "lazycloud.runtimeEnv" -}}
 {{- range $key, $value := $.Values.runtime }}
 - name: {{ $key }}
   value: {{ $value | quote }}
 {{- end }}
-{{- end -}}
-
-{{- define "lazycloud.pangolinControlEnv" -}}
-{{- range $variable, $_ := $.Values.secrets.pangolinControl.map }}
-- name: {{ $variable }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ $.Values.secrets.pangolinControl.name }}
-      key: {{ $variable }}
-{{- end }}
-{{- end -}}
-
-{{- define "lazycloud.pangolinRuntimeProviderEnv" -}}
-- name: LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS
-  valueFrom:
-    secretKeyRef:
-      name: {{ $.Values.secrets.pangolinRuntime.provider.name }}
-      key: LAZYCLOUD_PANGOLIN_PLATFORM_SITE_IDS
-- name: LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS
-  valueFrom:
-    secretKeyRef:
-      name: {{ $.Values.secrets.pangolinRuntime.provider.name }}
-      key: LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_RECORD_IDS
 {{- end -}}
 
 {{/*
@@ -100,24 +73,6 @@ minutes later.
   whenUnsatisfiable: DoNotSchedule
   matchLabelKeys:
     - pod-template-hash
-  labelSelector:
-    matchLabels:
-      app: {{ . }}
-{{- end -}}
-
-{{/*
-Spread separately declared ordinal Deployments as one replicated workload.
-
-These pods do not share a ReplicaSet because each projects a different
-credential. Selecting the common app label keeps the placement decision across
-the full set. A rollout may add one surge pod without asking for a third node:
-with the old replicas balanced, placing the surge beside either one produces a
-skew of one, then returns to zero when the old pod exits.
-*/}}
-{{- define "lazycloud.spreadOrdinalSetAcrossNodes" -}}
-- maxSkew: 1
-  topologyKey: kubernetes.io/hostname
-  whenUnsatisfiable: DoNotSchedule
   labelSelector:
     matchLabels:
       app: {{ . }}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -35,7 +37,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    PrivateNetworkCleanupTombstoneRepository,
+    WireGuardPeerRepository,
 )
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -63,6 +65,8 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineReadinessPhase,
     PrivateNetworkEnrollmentPhase,
+    WireGuardPeer,
+    WireGuardPeerStatus,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -1252,7 +1256,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             max_uses=1,
             expires_at=now + timedelta(minutes=2),
         )
-        ComputeMachineEnrollmentRepository(session).create(
+        enrollment = ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 user_id=owner_user_id,
                 workspace_id=pool.workspace_id,
@@ -1269,9 +1273,25 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
                 readiness_phase=MachineReadinessPhase.Ready,
                 network_generation=1,
                 network_phase=PrivateNetworkEnrollmentPhase.Connected,
-                network_site_id="site-1",
+                network_peer_id=str(uuid4()),
+                network_public_key=_wireguard_public_key(machine_id),
+                network_address="100.96.1.1/32",
                 last_join_at=now,
                 last_heartbeat_at=now,
+            )
+        )
+        WireGuardPeerRepository(session).save(
+            WireGuardPeer(
+                id=enrollment.network_peer_id,
+                enrollment_id=enrollment.id,
+                workspace_id=pool.workspace_id,
+                machine_id=machine_id,
+                public_key=enrollment.network_public_key,
+                address=enrollment.network_address,
+                generation=enrollment.network_generation,
+                last_handshake_at=now,
+                created_at=now,
+                updated_at=now,
             )
         )
         bound = ComputeProviderInstanceRepository(session).bind_machine(
@@ -1299,8 +1319,8 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         machine = MachineRepository(session).get(machine_id, workspace_id=pool.workspace_id)
         worker = WorkerRepository(session).get(worker_id, workspace_id=pool.workspace_id)
         durable_credential = ComputeJoinCredentialRepository(session).get(credential.id)
-        tombstone = PrivateNetworkCleanupTombstoneRepository(session).get_by_machine(machine_id)
-    assert enrollment is not None
+        assert enrollment is not None
+        peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
     assert enrollment.status is ComputeMachineEnrollmentStatus.Deleted
     assert enrollment.schedulable is False
     assert enrollment.heartbeat_confirmed is False
@@ -1309,8 +1329,9 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     assert worker is not None and worker.status is ResourceStatus.Deleted
     assert durable_credential is not None
     assert durable_credential.status is ComputeCredentialStatus.Revoked
-    assert tombstone is not None
-    assert tombstone.site_ids == ["site-1"]
+    assert peer is not None
+    assert peer.status is WireGuardPeerStatus.Revoked
+    assert peer.revoked_at is not None
     assert {item[1] for item in hooks.retired} == {machine_id}
     assert set(hooks.revoked_join_tokens) == {credential.token_hash}
 
@@ -1989,9 +2010,6 @@ def _seed_serving_machine(
                 heartbeat_confirmed=True,
                 schedulable=True,
                 readiness_phase=MachineReadinessPhase.Ready,
-                network_generation=1,
-                network_phase=PrivateNetworkEnrollmentPhase.Connected,
-                network_site_id=f"site-{machine_id[:4]}",
                 last_join_at=now,
                 last_heartbeat_at=now,
             )
@@ -2008,6 +2026,10 @@ def _seed_serving_machine(
             now=now,
         )
     hooks.available_machines.add(machine_id)
+
+
+def _wireguard_public_key(identity: str) -> str:
+    return base64.b64encode(hashlib.sha256(identity.encode()).digest()).decode()
 
 
 def _serving_pool(

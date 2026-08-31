@@ -33,7 +33,6 @@ from identity.auth import AuthService, TokenIssuer
 from networking.settings import BackendRouteSettings
 from provider_aws import aws_account_connection_template_identity
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from provider_pangolin import PangolinSettings
 from pydantic import SecretStr
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.state import RedisSchedulerWorkerRepository
@@ -171,12 +170,6 @@ def _configured_aws_services(
         agent_binary_settings=configuration.agent_binaries,
         aws_account_connection_settings=configuration.connection,
         aws_capacity_settings=configuration.capacity,
-        pangolin_settings=PangolinSettings(
-            api_url="https://pangolin.example.test/v1",
-            api_key=SecretStr("integration-key"),
-            organization_id="organization-one",
-            endpoint="https://pangolin.example.test",
-        ),
         backend_route_settings=backend_route_settings,
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=isolated_services.redis_client,

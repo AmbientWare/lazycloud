@@ -105,13 +105,9 @@ resource "aws_iam_role_policy" "external_secrets" {
   policy = data.aws_iam_policy_document.external_secrets.json
 }
 
-# Creates and reconciles only the Pangolin identities LazyCloud itself owns.
-# The operator credential reaches the pod through a Kubernetes Secret; this AWS
-# role can neither read the operator document nor write any other deployment
-# secret.
-resource "aws_iam_role" "pangolin_bootstrap" {
-  name        = "${var.deployment}-pangolin-bootstrap"
-  description = "Pangolin bootstrap: writes generated platform identities."
+resource "aws_iam_role" "wireguard_bootstrap" {
+  name        = "${var.deployment}-wireguard-bootstrap"
+  description = "Initializes this deployment's WireGuard key document."
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -123,22 +119,21 @@ resource "aws_iam_role" "pangolin_bootstrap" {
   })
 }
 
-data "aws_iam_policy_document" "pangolin_bootstrap" {
+data "aws_iam_policy_document" "wireguard_bootstrap" {
   statement {
-    sid = "ManagePangolinRuntimeIdentity"
     actions = [
       "secretsmanager:DescribeSecret",
       "secretsmanager:GetSecretValue",
       "secretsmanager:PutSecretValue",
     ]
-    resources = [aws_secretsmanager_secret.pangolin_runtime.arn]
+    resources = [aws_secretsmanager_secret.wireguard.arn]
   }
 }
 
-resource "aws_iam_role_policy" "pangolin_bootstrap" {
-  name   = "pangolin-runtime-secret"
-  role   = aws_iam_role.pangolin_bootstrap.id
-  policy = data.aws_iam_policy_document.pangolin_bootstrap.json
+resource "aws_iam_role_policy" "wireguard_bootstrap" {
+  name   = "wireguard-bootstrap"
+  role   = aws_iam_role.wireguard_bootstrap.id
+  policy = data.aws_iam_policy_document.wireguard_bootstrap.json
 }
 
 # Who may act inside the cluster. The deploy role runs `helm upgrade`, so it
@@ -180,9 +175,9 @@ resource "aws_eks_pod_identity_association" "external_secrets" {
   role_arn        = aws_iam_role.external_secrets.arn
 }
 
-resource "aws_eks_pod_identity_association" "pangolin_bootstrap" {
+resource "aws_eks_pod_identity_association" "wireguard_bootstrap" {
   cluster_name    = aws_eks_cluster.control_plane.name
   namespace       = var.kubernetes_namespace
-  service_account = var.pangolin_bootstrap_service_account
-  role_arn        = aws_iam_role.pangolin_bootstrap.arn
+  service_account = var.wireguard_bootstrap_service_account
+  role_arn        = aws_iam_role.wireguard_bootstrap.arn
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import threading
 from collections.abc import Iterator
@@ -32,7 +33,11 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
-from database.repositories.compute import ComputeUnitRepository
+from database.repositories.compute import (
+    PRIMARY_WIREGUARD_GATEWAY_ID,
+    ComputeUnitRepository,
+    WireGuardGatewayRepository,
+)
 from database.repositories.execution import TaskRepository
 from database.repositories.images import (
     CheckpointRepository,
@@ -48,18 +53,12 @@ from foundation.network import worker_network_prefix
 from gateway.http import (
     JoinAgentRequest,
     RegisterAgentPrivateNetworkRequest,
-    RequestAgentTransportCredentialRequest,
     UpdateAgentRouteStatusRequest,
 )
 from gateway.service import GatewayControlService
 from identity.auth import AuthorizationDeniedError, AuthService
-from networking.private_network_control import (
-    PrivateNetworkActiveSite,
-    PrivateNetworkCredential,
-    PrivateNetworkSite,
-)
 from operations.container_shutdown import ContainerShutdownService
-from pydantic import JsonValue, SecretStr, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from scheduler.containers import SchedulerContainerDispatchStatus
 from scheduler.fleet import SchedulerContainerStatus, SchedulerWorkerStatus
 from scheduler.routes import SchedulerBackendRouteResolver
@@ -74,7 +73,11 @@ from scheduler.state import (
 )
 from shared.app_identity import FUNCTION_IMAGE
 from shared.cache_records import CacheEntry
-from shared.compute_enrollment import ComputePreflightCheck, PreflightSeverity
+from shared.compute_enrollment import (
+    ComputePreflightCheck,
+    PreflightSeverity,
+    WireGuardGateway,
+)
 from shared.compute_policy import (
     MachinePool,
     UnitName,
@@ -164,51 +167,6 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 def client_stack() -> Iterator[ExitStack]:
     with ExitStack() as stack:
         yield stack
-
-
-class _WorkerRepositoryPrivateNetworkControl:
-    def __init__(self) -> None:
-        self.sites: dict[str, PrivateNetworkSite] = {}
-
-    def create_site(self, *, name: str) -> PrivateNetworkCredential:
-        site_id = str(len(self.sites) + 1)
-        site = PrivateNetworkSite(
-            site_id=site_id,
-            name=name,
-            online=True,
-        )
-        self.sites[site_id] = site
-        return PrivateNetworkCredential(
-            name=name,
-            endpoint="https://pangolin.example",
-            site_id=site_id,
-            connector_id=name,
-            secret=SecretStr(f"site-{site_id}.secret"),
-        )
-
-    def find_site(
-        self,
-        *,
-        site_id: str,
-        name: str,
-        connector_id: str,
-    ) -> PrivateNetworkSite | None:
-        site = self.sites.get(site_id)
-        return site if site is not None and site.name == name and connector_id == name else None
-
-    def activate_site(self, site_id: str) -> PrivateNetworkActiveSite:
-        site = self.sites[site_id]
-        return PrivateNetworkActiveSite(
-            **site.model_dump(),
-            resource_id=f"resource-{site_id}",
-            address=f"10.0.0.{site_id}",
-        )
-
-    def delete_resource(self, resource_id: str) -> None:
-        del resource_id
-
-    def delete_site(self, site_id: str) -> None:
-        self.sites.pop(site_id, None)
 
 
 def test_image_build_credentials_reject_wrong_assigned_worker(
@@ -2361,7 +2319,6 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=containers,
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        private_network_control=_WorkerRepositoryPrivateNetworkControl(),
     )
     workspace_id, machine_id, agent_token = _join_gateway_agent(
         isolated_services,
@@ -2448,7 +2405,6 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        private_network_control=_WorkerRepositoryPrivateNetworkControl(),
     )
     workspace_id, machine_id, _agent_token = _join_gateway_agent(
         isolated_services,
@@ -2538,20 +2494,26 @@ def _join_gateway_agent(
             ],
         )
     )
-    credential = gateway.request_agent_transport_credential(
-        RequestAgentTransportCredentialRequest(
-            agent_token=joined.agent_token,
-            transport=BackendRouteTransport.PrivateNetwork,
+    with services.context.database.session() as session:
+        WireGuardGatewayRepository(session).save(
+            WireGuardGateway(
+                id=PRIMARY_WIREGUARD_GATEWAY_ID,
+                public_key=_wireguard_public_key("test-gateway"),
+                endpoint="wireguard.test:51820",
+                updated_at=utc_now(),
+            )
         )
-    )
     gateway.register_agent_private_network(
         RegisterAgentPrivateNetworkRequest(
             agent_token=joined.agent_token,
-            site_name=credential.site_name,
-            connector_id=credential.site_name,
+            public_key=_wireguard_public_key(joined.machine_id),
         )
     )
     return workspace_id, joined.machine_id, joined.agent_token
+
+
+def _wireguard_public_key(identity: str) -> str:
+    return base64.b64encode(hashlib.sha256(identity.encode()).digest()).decode()
 
 
 _ROUTE_CAPACITY_OWNER = "33333333-3333-4333-8333-333333333333"

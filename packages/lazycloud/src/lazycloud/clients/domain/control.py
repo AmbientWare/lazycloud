@@ -4,10 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import quote
 
-from shared.custom_domains import CustomDomainDnsMode
 from shared.http.custom_domains import (
     CustomDomainListResponse,
-    CustomDomainRegisterRequest,
     CustomDomainResponse,
 )
 from shared.http_transport import HttpChannel
@@ -42,15 +40,9 @@ class DomainControlClient:
             workspace=workspace,
         )
 
-    def register(
-        self,
-        domain: str,
-        *,
-        dns_mode: CustomDomainDnsMode,
-    ) -> CustomDomainResponse:
-        request = CustomDomainRegisterRequest(domain=domain, dns_mode=dns_mode)
+    def register(self, domain: str) -> CustomDomainResponse:
         return CustomDomainResponse.model_validate(
-            self.channel.post(COLLECTION_PATH, request.model_dump(mode="json"))
+            self.channel.post(COLLECTION_PATH, {"domain": domain})
         )
 
     def list(self) -> CustomDomainListResponse:

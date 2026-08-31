@@ -111,27 +111,19 @@ class AgentRoute(HttpModel):
     proxy_auth_token: str = Field(default="", repr=False)
 
 
-class RequestAgentTransportCredentialRequest(HttpModel):
-    agent_token: str
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
-
-
-class RequestAgentTransportCredentialResponse(HttpModel):
-    site_name: str
-    endpoint: str
-    connector_id: str
-    secret: str = Field(repr=False)
-
-
 class RegisterAgentPrivateNetworkRequest(HttpModel):
     agent_token: str
-    site_name: str
-    connector_id: str
+    public_key: str = Field(min_length=44, max_length=44)
 
 
 class RegisterAgentPrivateNetworkResponse(HttpModel):
-    site_id: str
+    peer_id: str
     address: str
+    server_public_key: str = Field(min_length=44, max_length=44)
+    endpoint: str
+    allowed_ips: tuple[str, ...]
+    persistent_keepalive_seconds: int = Field(ge=1, le=120)
+    generation: int = Field(ge=1)
 
 
 class ListAgentRoutesRequest(HttpModel):
@@ -262,8 +254,6 @@ __all__ = [
     "LeaveAgentResponse",
     "ListAgentRoutesRequest",
     "ListAgentRoutesResponse",
-    "RequestAgentTransportCredentialRequest",
-    "RequestAgentTransportCredentialResponse",
     "SignPayloadRequest",
     "SignPayloadResponse",
     "StreamAgentRequest",

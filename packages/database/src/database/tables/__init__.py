@@ -34,7 +34,8 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    PrivateNetworkCleanupTombstoneTable,
+    WireGuardGatewayTable,
+    WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.custom_domains import CustomDomainTable
@@ -134,7 +135,6 @@ __all__ = [
     "PlatformRateTable",
     "PodProcessTable",
     "PodUrlTable",
-    "PrivateNetworkCleanupTombstoneTable",
     "QueueMessageTable",
     "RouteTable",
     "SecretTable",
@@ -149,6 +149,8 @@ __all__ = [
     "UserIdentityTable",
     "UserTable",
     "VolumeTable",
+    "WireGuardGatewayTable",
+    "WireGuardPeerTable",
     "WorkerCacheGenerationTable",
     "WorkerEventTable",
     "WorkerTable",
