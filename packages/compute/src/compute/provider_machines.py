@@ -23,7 +23,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    TailnetCleanupTombstoneRepository,
+    WireGuardPeerRepository,
 )
 from database.repositories.orchestration import (
     MachineRepository,
@@ -39,7 +39,8 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    TailnetEnrollmentPhase,
+    PrivateNetworkEnrollmentPhase,
+    WireGuardPeerStatus,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
@@ -79,9 +80,6 @@ from compute.providers import (
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
-
-PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS = 30
-
 
 _LAUNCH_STATE_INTENT = "intent"
 
@@ -174,10 +172,6 @@ def _compute_pool_phase(phase: ProviderCapacityPhase) -> ComputeUnitPhase:
         ProviderCapacityPhase.Deleting: ComputeUnitPhase.Deleting,
         ProviderCapacityPhase.Deleted: ComputeUnitPhase.Deleted,
     }[phase]
-
-
-def _unique_nonempty(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
 def _utc(value: datetime | None) -> datetime:
@@ -692,7 +686,7 @@ class ProviderMachineReconciler:
                                 "heartbeat_confirmed": False,
                                 "schedulable": False,
                                 "readiness_phase": MachineReadinessPhase.Revoked,
-                                "tailnet_phase": TailnetEnrollmentPhase.Revoked,
+                                "network_phase": PrivateNetworkEnrollmentPhase.Revoked,
                                 "last_disconnect_at": now,
                                 "revoked_at": enrollment.revoked_at or now,
                                 "updated_at": now,
@@ -998,28 +992,18 @@ class ProviderMachineReconciler:
         *,
         now: datetime,
     ) -> None:
-        auth_key_ids = _unique_nonempty(
-            [enrollment.tailnet_auth_key_id, *enrollment.tailnet_cleanup_auth_key_ids]
-        )
-        device_ids = _unique_nonempty(
-            [enrollment.tailnet_device_id, *enrollment.tailnet_cleanup_device_ids]
-        )
-        generations = list(range(1, enrollment.tailnet_generation + 1))
-        if not generations and not auth_key_ids and not device_ids:
+        peers = WireGuardPeerRepository(session)
+        peer = peers.by_enrollment(enrollment.id, for_update=True)
+        if peer is None or peer.status is WireGuardPeerStatus.Revoked:
             return
-        identity_expiry = enrollment.tailnet_auth_key_expires_at or now
-        not_before = max(now, _utc(identity_expiry)) + timedelta(
-            seconds=PROVIDER_MACHINE_IDENTITY_SETTLE_SECONDS
-        )
-        TailnetCleanupTombstoneRepository(session).schedule(
-            workspace_id=enrollment.workspace_id,
-            pool=enrollment.pool,
-            machine_id=enrollment.machine_id,
-            generations=generations,
-            auth_key_ids=auth_key_ids,
-            device_ids=device_ids,
-            not_before=not_before,
-            now=now,
+        peers.save(
+            peer.model_copy(
+                update={
+                    "status": WireGuardPeerStatus.Revoked,
+                    "revoked_at": now,
+                    "updated_at": now,
+                }
+            )
         )
 
     def _revoke_provider_join_credential(

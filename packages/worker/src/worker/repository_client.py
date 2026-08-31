@@ -174,14 +174,7 @@ class WorkerSourceCacheNotAvailableError(WorkerRepositoryClientError):
 
 @dataclass(slots=True)
 class WorkerRepositoryHttpTransport:
-    """The worker's channel to the control plane.
-
-    Dials through the shared internal client so the destination decides the
-    transport: a control plane named by tailnet peer is reached over the
-    tailnet, and a Compose service name is reached directly. Before that, this
-    built its own connection from the endpoint hostname, which is why a remote
-    worker dialed an origin only the control plane could resolve.
-    """
+    """The worker's HTTP channel to the control plane."""
 
     endpoint: str
     token: str

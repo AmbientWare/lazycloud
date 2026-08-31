@@ -12,11 +12,6 @@ from shared.contracts import ContractModel
 BACKEND_ROUTE_DIAL_HOST = "backend.route"
 BACKEND_ROUTE_ID_METADATA_KEY = "backend_route_id"
 BACKEND_ROUTE_PREFACE = "BACKEND-ROUTE/2 "
-# A worker has no tailnet client of its own and must not be given the
-# tailscaled socket, which grants tailnet control rather than lookup. It asks
-# the agent on the loopback it already shares, presenting the worker token the
-# agent itself issued, so no new secret is introduced.
-TAILNET_RESOLVE_PREFACE = "TAILNET-RESOLVE/1 "
 BACKEND_ROUTE_CREDENTIAL_CONTEXT = b"backend-route-preface/v1\x00"
 
 
@@ -104,28 +99,6 @@ def backend_route_preface(route_id: str, credential: str) -> bytes:
     if not normalized_credential or any(character.isspace() for character in normalized_credential):
         raise ValueError("backend route credential is required")
     return f"{BACKEND_ROUTE_PREFACE}{normalized_route_id} {normalized_credential}\n".encode()
-
-
-def tailnet_resolve_preface(host: str, credential: str) -> bytes:
-    normalized_host = host.strip().rstrip(".")
-    normalized_credential = credential.strip()
-    if not normalized_host or any(character.isspace() for character in normalized_host):
-        raise ValueError("tailnet resolve host is required")
-    if not normalized_credential or any(character.isspace() for character in normalized_credential):
-        raise ValueError("tailnet resolve credential is required")
-    return f"{TAILNET_RESOLVE_PREFACE}{normalized_host} {normalized_credential}\n".encode()
-
-
-def parse_tailnet_resolve_preface(line: str) -> tuple[str, str] | None:
-    if not line.startswith(TAILNET_RESOLVE_PREFACE):
-        return None
-    fields = line.removeprefix(TAILNET_RESOLVE_PREFACE).split()
-    if len(fields) != 2:
-        return None
-    host = fields[0].strip().rstrip(".")
-    if not host:
-        return None
-    return (host, fields[1])
 
 
 def parse_backend_route_preface(line: str) -> tuple[str, str] | None:

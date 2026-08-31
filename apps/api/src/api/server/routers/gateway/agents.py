@@ -14,10 +14,8 @@ from gateway.http import (
     LeaveAgentResponse,
     ListAgentRoutesRequest,
     ListAgentRoutesResponse,
-    RegisterAgentTailnetDeviceRequest,
-    RegisterAgentTailnetDeviceResponse,
-    RequestAgentTransportCredentialRequest,
-    RequestAgentTransportCredentialResponse,
+    RegisterAgentPrivateNetworkRequest,
+    RegisterAgentPrivateNetworkResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
@@ -99,26 +97,15 @@ def leave_agent(
 
 
 @router.post(
-    "/agents/transport-credential",
-    response_model=RequestAgentTransportCredentialResponse,
+    "/agents/private-network",
+    response_model=RegisterAgentPrivateNetworkResponse,
+    operation_id="register_agent_private_network",
 )
-def request_agent_transport_credential(
-    request: RequestAgentTransportCredentialRequest,
+def register_agent_private_network(
+    request: RegisterAgentPrivateNetworkRequest,
     service: GatewayControlService = Depends(gateway_service),
-) -> RequestAgentTransportCredentialResponse:
-    return service.request_agent_transport_credential(request)
-
-
-@router.post(
-    "/agents/tailnet-device",
-    response_model=RegisterAgentTailnetDeviceResponse,
-    operation_id="register_agent_tailnet_device",
-)
-def register_agent_tailnet_device(
-    request: RegisterAgentTailnetDeviceRequest,
-    service: GatewayControlService = Depends(gateway_service),
-) -> RegisterAgentTailnetDeviceResponse:
-    return service.register_agent_tailnet_device(request)
+) -> RegisterAgentPrivateNetworkResponse:
+    return service.register_agent_private_network(request)
 
 
 @router.post("/agents/routes", response_model=ListAgentRoutesResponse)

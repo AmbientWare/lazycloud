@@ -32,7 +32,6 @@ from shared.errors import UpstreamUnavailableError
 from api.server.dependencies import api_services
 from api.server.services import (
     ApiServices,
-    ApiTailnetRuntime,
     EndpointApiService,
     FunctionApiService,
 )
@@ -158,12 +157,6 @@ def backend_route_dialer_config(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> BackendRouteDialerConfig:
     return services.backend_route_dialer_config
-
-
-def tailnet_runtime_service(
-    services: Annotated[ApiServices, Depends(api_services)],
-) -> ApiTailnetRuntime | None:
-    return services.tailnet_runtime
 
 
 def task_rerun_service(

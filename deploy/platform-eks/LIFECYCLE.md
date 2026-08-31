@@ -51,7 +51,8 @@ terraform -chdir=deploy/platform-eks init \
 terraform -chdir=deploy/platform-eks apply \
   -var="deployment=$DEPLOYMENT" \
   -var="planetscale_organization=<org>" \
-  -var="state_bucket=<state-bucket>"
+  -var="state_bucket=<state-bucket>" \
+  -var="wireguard_public_endpoint=gateway.example.com:51820"
 ```
 
 `terraform.tfvars` carries the instance price map and the payment-provider
@@ -67,14 +68,12 @@ check `aws eks list-clusters` before retrying.
 
 ### 3. Secret values
 
-A deployment's credentials live in two Secrets Manager entries, each a JSON
-document. Secrets Manager bills per entry, so a dozen containers was a dozen
-charges for what is one set of values.
+A deployment's credentials live in three Secrets Manager entries. Each entry is
+a JSON document grouped by its writer, not one entry per key.
 
-`<deployment>/platform` is Terraform's. It holds the database URL, the two
-generated shared keys, the tunnel credentials and the fleet external ID, and it
-is rewritten on every apply. Do not edit it by hand; the next apply will
-overwrite what you wrote.
+`<deployment>/platform` is Terraform's. It holds the database URL, generated
+service keys, tunnel credentials, and fleet external ID. Terraform rewrites it
+on every apply. Do not edit it by hand.
 
 `<deployment>/operator` is yours, and Terraform only declares it. Write it once,
 before anything syncs:
@@ -86,8 +85,6 @@ cat > operator.json <<'JSON'
   "LAZYCLOUD_TOKEN": "rt_...",
   "LAZYCLOUD_GITHUB_CLIENT_ID": "...",
   "LAZYCLOUD_GITHUB_CLIENT_SECRET": "...",
-  "LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID": "...",
-  "LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET": "...",
   "LAZYCLOUD_CLOUDFLARE_API_TOKEN": "...",
   "LAZYCLOUD_STRIPE_API_KEY": "...",
   "LAZYCLOUD_STRIPE_WEBHOOK_SECRET": "..."
@@ -98,6 +95,12 @@ aws secretsmanager put-secret-value \
   --secret-string "file://$PWD/operator.json"
 shred -u operator.json
 ```
+
+`<deployment>/wireguard` belongs to the `wireguard-bootstrap` Job. The Job
+generates one gateway keypair and one platform keypair per control-plane
+ordinal. It writes them as one document through a role that can access only
+that entry. External Secrets projects the keys as read-only files. There is no
+operator value to copy and no secret per agent.
 
 Every key is named in the chart, so one you leave out is caught when the values
 render rather than by a pod that will not start.
@@ -169,12 +172,11 @@ catalog to serve it with, and refuses. That is a half-configured deployment bein
 rejected rather than a fault, and the way out is `ship`.
 
 Argo takes it from there, in wave order: the storage class and service accounts,
-the secrets, then the schema and the billing catalog, then the administrator,
-then the rate card, and the workloads last. Nothing waits on a workload, so one
-that cannot start fails by itself instead of holding up the Job that would fix
-it. The three Jobs that open a database are each alone in their wave, because the
-chart's connection budget counts one Job's pool and refuses to render if the
-pools can exceed what the server allows.
+the WireGuard key bootstrap, External Secrets, the schema and billing catalog,
+the administrator, the rate card, and the workloads. The Jobs that open a
+database are each alone in their wave because the chart's connection budget
+counts one Job's pool and refuses to render if the pools can exceed what the
+server allows.
 
 The fleet registers itself on the way past too, in the one wave after the
 workloads: it registers through the public API, so the control plane has to be
@@ -213,6 +215,11 @@ kubectl -n lazycloud get pods
 Point the tunnel at the cluster once the control plane is Ready. `cloudflared`
 runs in the chart with more than one connector, so the tunnel is served by the
 cluster rather than by a host.
+
+Point the DNS name in `wireguard_public_endpoint` at the UDP load balancer on
+port 51820. This endpoint is separate from the Cloudflare HTTP tunnel. Confirm
+an enrolled agent and a platform peer report recent WireGuard handshakes before
+calling the private network ready.
 
 ## Taking one down
 

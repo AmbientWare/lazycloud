@@ -16,13 +16,7 @@ def _mapping(value: JsonValue, context: str) -> dict[str, JsonValue]:
     return value
 
 
-def test_compose_holds_no_long_lived_tailnet_identity_credential() -> None:
-    """No service is handed a tailnet auth key, because none needs one.
-
-    The control plane mints its own from its OAuth client at the moment it joins,
-    which is also what carries its tag. A static key in a deployment file is both
-    a long-lived credential and a silent way to register an untagged device.
-    """
+def test_compose_keeps_wireguard_private_keys_out_of_environment() -> None:
     rendered = subprocess.run(
         ["docker", "compose", "--profile", "tools", "config"],
         cwd=ROOT,
@@ -36,8 +30,7 @@ def test_compose_holds_no_long_lived_tailnet_identity_credential() -> None:
     for name, service in services.items():
         environment = _mapping(service, name).get("environment") or {}
         keys = set(_mapping(environment, f"{name} environment"))
-        assert "LAZYCLOUD_TAILNET_AUTH_KEY" not in keys, name
-        assert "TS_AUTHKEY" not in keys, name
+        assert not any(key.endswith("WIREGUARD_PRIVATE_KEY") for key in keys), name
 
     cli_env = _mapping(_mapping(services["cli"], "cli")["environment"], "CLI environment")
     assert "LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY" in cli_env

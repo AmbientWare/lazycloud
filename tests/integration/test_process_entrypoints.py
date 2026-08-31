@@ -65,7 +65,6 @@ def _create_scheduler_app_services(
         create_schema=False,
         redis_client=redis,
         gateway_origin=services.gateway_settings.public_http_url,
-        runtime_callback_origin=services.gateway_settings.runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=services.workspace_change_stream_settings,
         ),
@@ -76,8 +75,6 @@ def _create_scheduler_app_services(
             volume_metering=VolumeMeteringSettings(),
         ),
         network=SchedulerNetworkSettings(
-            tailnet_runtime=services.tailnet_runtime_settings,
-            tailnet_control=services.tailnet_control_settings,
             backend_routes=services.backend_route_settings,
         ),
         capacity=SchedulerCapacitySettings(
@@ -132,7 +129,6 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         billing_reconciliation=app_services.billing_reconciliation,
         billing_enforcement=app_services.billing_enforcement,
         retention=app_services.retention,
-        tailnet_cleanup=app_services.tailnet_cleanup,
         custom_domains=app_services.custom_domains,
     )
     runtime.owned_services = app_services

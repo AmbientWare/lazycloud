@@ -149,21 +149,17 @@ control-plane 9000` prints the mapping if it changes.
 ### Recreating the control plane
 
 ```bash
-docker compose up -d --build control-plane
+docker compose up -d --build control-plane wireguard-platform
+docker compose ps control-plane wireguard-platform tunnel-gateway
 ```
 
-Nothing else needs recreating. The control plane runs its own `tailscaled` and no
-service shares its network namespace, so a rebuild cannot leave anything attached
-to a namespace that no longer exists.
+`wireguard-platform` shares the control plane's network namespace. Recreate both
+services together or the sidecar remains attached to the namespace of the old
+container. `tunnel-gateway` is separate and should remain healthy throughout.
 
-It mints a short-lived, single-use key for a durable device when it starts. A
-graceful shutdown logs that device out before stopping `tailscaled`. A hard kill
-can leave a stale device in the tailnet, which must be removed by its exact
-device identity.
-
-A restarted daemon can hold a stale netmap that lists deleted devices as online
-and omits new ones. If a node is on the tailnet but unreachable from the control
-plane, restart `control-plane` before investigating further.
+If an agent is unreachable, read the handshake state at both ends before
+restarting either one. A healthy process without a recent handshake has not
+proved the private route.
 
 ## Reading a failed node
 
@@ -367,13 +363,11 @@ they land on the same nodes:
 | External Secrets (3 pods) | `deploy/argocd/apps/external-secrets.yaml` |
 | Argo CD (7 pods) | `deploy/platform-eks/argocd.tf` |
 
-Two nodes is the floor and it is deliberate. `control-plane` and `cloudflared`
-each spread one replica per node with `DoNotSchedule`, so a second replica
-cannot share a node with the first. During bring-up, a rollout, or a node
-replacement that replica sits `Pending` for around a minute while Karpenter
-provisions. That is the constraint doing its job. `Pending` is the only state
-Karpenter provisions for, so a spread that could be satisfied by packing would
-never ask for the node.
+Two nodes is the floor and it is deliberate. `control-plane`, `cloudflared`, and
+`tunnel-gateway` each spread replicas across nodes. During bring-up, a rollout,
+or a node replacement a replica may sit `Pending` while Karpenter provisions.
+`Pending` is the signal Karpenter acts on, so allowing all replicas to pack onto
+one node would hide the need for the second node.
 
 A node vanishing from `kubectl get nodes` until only one remains is not
 consolidation working. It means something started requesting less than it uses.
@@ -465,7 +459,7 @@ in `provider_aws/account_connection.py`.
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
-| Tailscale OAuth client | Production operator secret or local `.env`, `LAZYCLOUD_TAILNET_OAUTH_CLIENT_*` | Each Tailnet Terraform state owns a different runtime client. Change its tag list and apply, then transfer both replacement outputs to that environment. Never put production's client in local `.env`. |
+| WireGuard gateway and platform keys | Local `wireguard-keys` volume or production `<deployment>/wireguard` Secrets Manager document | Do not hand-rotate. Replacing the gateway identity invalidates enrolled peer configurations; perform a scoped deployment reset or a planned re-enrollment instead. |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
 | Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
 | Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
@@ -481,9 +475,9 @@ Prefect) should be rotated and the directory deleted.
 
 Confirm the target belongs to the task before each of these. None can be undone.
 
-- **Deleting a tailnet device.** The control plane's own device name is sticky to
-  the device record: delete it and it rejoins under a `-1` suffix, and every
-  configured origin naming the old name breaks. See `deploy/AGENTS.md`.
+- **Deleting the WireGuard key document or local key volume.** This changes the
+  gateway identity and invalidates existing peer configurations. Reset all
+  related local state together, or use a planned production re-enrollment.
 - **Deleting a customer connection stack.** Removes the roles the control plane
   assumes; the connection must be re-established from scratch.
 - **Deleting launch-template versions.** The pool cannot roll back to a template

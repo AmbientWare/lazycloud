@@ -875,7 +875,7 @@ class ComputeService:
         scale_up_cooldown_seconds: int = 5,
         scale_down_cooldown_seconds: int = 60,
         registration_timeout_seconds: int = 600,
-        transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted,
+        transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
         fallback: PrivateUnitFallback = PrivateUnitFallback.Internal,
     ) -> ComputeUnitRecord:
         """Create or update a provisioning unit the workspace owns directly.

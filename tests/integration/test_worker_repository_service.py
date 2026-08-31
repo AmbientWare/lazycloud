@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import threading
 from collections.abc import Iterator
@@ -19,10 +20,7 @@ from api.server.worker_repository_service import (
     WorkerRepositoryObjectStorage,
     WorkerRepositoryService,
 )
-from compute.agent_control import (
-    TailnetConfig,
-    agent_machine_worker_id,
-)
+from compute.agent_control import agent_machine_worker_id
 from compute.state import (
     RedisComputeStateRepository,
 )
@@ -35,7 +33,11 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
-from database.repositories.compute import ComputeUnitRepository
+from database.repositories.compute import (
+    PRIMARY_WIREGUARD_GATEWAY_ID,
+    ComputeUnitRepository,
+    WireGuardGatewayRepository,
+)
 from database.repositories.execution import TaskRepository
 from database.repositories.images import (
     CheckpointRepository,
@@ -50,15 +52,13 @@ from fastapi.testclient import TestClient
 from foundation.network import worker_network_prefix
 from gateway.http import (
     JoinAgentRequest,
-    RegisterAgentTailnetDeviceRequest,
-    RequestAgentTransportCredentialRequest,
+    RegisterAgentPrivateNetworkRequest,
     UpdateAgentRouteStatusRequest,
 )
 from gateway.service import GatewayControlService
 from identity.auth import AuthorizationDeniedError, AuthService
-from networking.tailnet_control import TailnetAuthKey, TailnetDevice
 from operations.container_shutdown import ContainerShutdownService
-from pydantic import JsonValue, SecretStr, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from scheduler.containers import SchedulerContainerDispatchStatus
 from scheduler.fleet import SchedulerContainerStatus, SchedulerWorkerStatus
 from scheduler.routes import SchedulerBackendRouteResolver
@@ -73,7 +73,11 @@ from scheduler.state import (
 )
 from shared.app_identity import FUNCTION_IMAGE
 from shared.cache_records import CacheEntry
-from shared.compute_enrollment import ComputePreflightCheck, PreflightSeverity
+from shared.compute_enrollment import (
+    ComputePreflightCheck,
+    PreflightSeverity,
+    WireGuardGateway,
+)
 from shared.compute_policy import (
     MachinePool,
     UnitName,
@@ -163,35 +167,6 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 def client_stack() -> Iterator[ExitStack]:
     with ExitStack() as stack:
         yield stack
-
-
-class _WorkerRepositoryTailnetControl:
-    def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey:
-        return TailnetAuthKey(
-            id=f"key-{machine_id}",
-            key=SecretStr(f"secret-{hostname}"),
-            expires_at=utc_now() + timedelta(minutes=5),
-        )
-
-    def revoke_auth_key(self, key_id: str) -> None:
-        del key_id
-
-    def verify_device(self, node_id: str, *, expected_hostname: str) -> TailnetDevice:
-        return TailnetDevice(
-            id=f"rest-{node_id}",
-            node_id=node_id,
-            hostname=expected_hostname,
-            addresses=("100.64.0.10",),
-            tags=("tag:lazycloud-agent",),
-            authorized=True,
-        )
-
-    def find_devices(self, *, hostname: str) -> tuple[TailnetDevice, ...]:
-        del hostname
-        return ()
-
-    def remove_device(self, device_id: str) -> None:
-        del device_id
 
 
 def test_image_build_credentials_reject_wrong_assigned_worker(
@@ -2344,8 +2319,6 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=containers,
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(),
-        tailnet_control=_WorkerRepositoryTailnetControl(),
     )
     workspace_id, machine_id, agent_token = _join_gateway_agent(
         isolated_services,
@@ -2382,7 +2355,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         worker_id=worker_id,
         container_id="container-1",
         port=8001,
-        transport=BackendRouteTransport.TsnetRestricted,
+        transport=BackendRouteTransport.PrivateNetwork,
         local_target="192.168.0.4:8001",
         state=BackendRouteState.Opening,
     )
@@ -2399,7 +2372,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
             agent_token=agent_token,
             route_id=route.route_id,
             state=BackendRouteState.Ready,
-            proxy_target="tailnet-host:34399",
+            proxy_target="agent.private:34399",
         )
     )
     resolved = SchedulerBackendRouteResolver(
@@ -2410,7 +2383,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     assert response.route_id == route.route_id
     assert resolved is not None
     assert resolved.state == BackendRouteState.Ready.value
-    assert resolved.proxy_target == "tailnet-host:34399"
+    assert resolved.proxy_target == "agent.private:34399"
 
 
 def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
@@ -2432,8 +2405,6 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(),
-        tailnet_control=_WorkerRepositoryTailnetControl(),
     )
     workspace_id, machine_id, _agent_token = _join_gateway_agent(
         isolated_services,
@@ -2523,19 +2494,26 @@ def _join_gateway_agent(
             ],
         )
     )
-    gateway.request_agent_transport_credential(
-        RequestAgentTransportCredentialRequest(
-            agent_token=joined.agent_token,
-            transport=BackendRouteTransport.TsnetRestricted,
+    with services.context.database.session() as session:
+        WireGuardGatewayRepository(session).save(
+            WireGuardGateway(
+                id=PRIMARY_WIREGUARD_GATEWAY_ID,
+                public_key=_wireguard_public_key("test-gateway"),
+                endpoint="wireguard.test:51820",
+                updated_at=utc_now(),
+            )
         )
-    )
-    gateway.register_agent_tailnet_device(
-        RegisterAgentTailnetDeviceRequest(
+    gateway.register_agent_private_network(
+        RegisterAgentPrivateNetworkRequest(
             agent_token=joined.agent_token,
-            node_id=f"node-{joined.machine_id}",
+            public_key=_wireguard_public_key(joined.machine_id),
         )
     )
     return workspace_id, joined.machine_id, joined.agent_token
+
+
+def _wireguard_public_key(identity: str) -> str:
+    return base64.b64encode(hashlib.sha256(identity.encode()).digest()).decode()
 
 
 _ROUTE_CAPACITY_OWNER = "33333333-3333-4333-8333-333333333333"

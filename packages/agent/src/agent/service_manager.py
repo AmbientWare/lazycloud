@@ -54,7 +54,7 @@ class PreflightCheckName(StrEnum):
     PythonVersion = "python-version"
     K3s = "k3s"
     Flux = "flux"
-    TailnetDaemon = "tailnet-daemon"
+    PrivateNetworkConnector = "private-network-connector"
     LocalDev = "local-dev"
     AgentContainer = "agent-container"
     Linux = "linux"
@@ -521,9 +521,9 @@ def plan_agent_preflight(probes: AgentPreflightProbeSet) -> AgentPreflightPlan:
             required=False,
         ),
         _preflight_check(
-            PreflightCheckName.TailnetDaemon,
+            PreflightCheckName.PrivateNetworkConnector,
             True,
-            "tailnet transport requires a tailscale daemon, sidecar, or managed tailscaled",
+            "private-network transport uses the managed WireGuard connector",
             required=False,
         ),
     ]

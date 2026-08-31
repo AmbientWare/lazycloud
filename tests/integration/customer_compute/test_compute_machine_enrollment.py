@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import shlex
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -8,13 +10,16 @@ from uuid import UUID, uuid4
 import pytest
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
-from compute.agent_control import TailnetConfig, agent_machine_worker_id, hash_compute_token
+from compute.agent_control import agent_machine_worker_id, hash_compute_token
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from database.repositories.compute import (
+    PRIMARY_WIREGUARD_GATEWAY_ID,
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
+    WireGuardGatewayRepository,
+    WireGuardPeerRepository,
 )
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
@@ -23,16 +28,12 @@ from gateway.http import (
     AgentTelemetryRequest,
     JoinAgentRequest,
     LeaveAgentRequest,
-    RegisterAgentTailnetDeviceRequest,
-    RequestAgentTransportCredentialRequest,
+    RegisterAgentPrivateNetworkRequest,
     StreamAgentRequest,
 )
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
-from networking.control_plane_origin import RedisControlPlaneOriginRepository
-from networking.tailnet_control import TailnetAuthKey, TailnetDevice
 from observability.usage import UsageService
 from operations.management import ManagementService
-from pydantic import SecretStr
 from scheduler.capacity_reservations import (
     CapacityReservationService,
     RedisCapacityReservationRepository,
@@ -50,6 +51,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
     PreflightSeverity,
+    WireGuardGateway,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
@@ -60,7 +62,6 @@ from shared.errors import ConflictError, InvalidInputError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
-from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.real_redis import RealRedisActors
@@ -74,50 +75,14 @@ from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
 
-class _FakeTailnetControl:
-    def __init__(self) -> None:
-        self.issued_key_ids: list[str] = []
-        self.revoked_key_ids: list[str] = []
-        self.removed_device_ids: list[str] = []
-
-    def issue_auth_key(self, *, machine_id: str, hostname: str) -> TailnetAuthKey:
-        key_id = f"key-{machine_id}-{len(self.issued_key_ids) + 1}"
-        self.issued_key_ids.append(key_id)
-        return TailnetAuthKey(
-            id=key_id,
-            key=SecretStr(f"secret-{machine_id}"),
-            expires_at=utc_now() + timedelta(minutes=5),
-        )
-
-    def revoke_auth_key(self, key_id: str) -> None:
-        self.revoked_key_ids.append(key_id)
-
-    def verify_device(self, node_id: str, *, expected_hostname: str) -> TailnetDevice:
-        return TailnetDevice(
-            id=f"rest-{node_id}",
-            node_id=node_id,
-            hostname=expected_hostname,
-            addresses=("100.64.0.10",),
-            tags=("tag:lazycloud-agent",),
-            authorized=True,
-        )
-
-    def find_devices(self, *, hostname: str) -> tuple[TailnetDevice, ...]:
-        del hostname
-        return ()
-
-    def remove_device(self, device_id: str) -> None:
-        self.removed_device_ids.append(device_id)
-
-
 def _gateway(
     services: ApiServices,
     *,
     key_prefix: str,
-    tailnet_control: _FakeTailnetControl | None = None,
     redis: RedisClient | None = None,
 ) -> GatewayControlService:
     selected_redis = redis or RedisClient(FakeRedis(), key_prefix=key_prefix)
+    _publish_wireguard_gateway(services)
     return replace(
         services.gateway_service,
         compute_state=RedisComputeStateRepository(selected_redis),
@@ -128,9 +93,23 @@ def _gateway(
             RedisCapacityReservationRepository(selected_redis),
             lambda: [],
         ),
-        tailnet=TailnetConfig(),
-        tailnet_control=tailnet_control or _FakeTailnetControl(),
     )
+
+
+def _wireguard_public_key(identity: str) -> str:
+    return base64.b64encode(hashlib.sha256(identity.encode()).digest()).decode()
+
+
+def _publish_wireguard_gateway(services: ApiServices) -> None:
+    with services.context.database.session() as session:
+        WireGuardGatewayRepository(session).save(
+            WireGuardGateway(
+                id=PRIMARY_WIREGUARD_GATEWAY_ID,
+                public_key=_wireguard_public_key("test-gateway"),
+                endpoint="wireguard.test:51820",
+                updated_at=utc_now(),
+            )
+        )
 
 
 def _create_join_token(
@@ -156,25 +135,29 @@ def _pool_machines(
     return [machine for machine in gateway.machine_views(workspace_id) if machine.pool == pool]
 
 
-def _bind_tailnet(gateway: GatewayControlService, agent_token: str, machine_id: str) -> str:
-    credential = gateway.request_agent_transport_credential(
-        RequestAgentTransportCredentialRequest(
+def _bind_private_network(
+    gateway: GatewayControlService,
+    workspace_id: str,
+    agent_token: str,
+    machine_id: str,
+) -> str:
+    binding = gateway.register_agent_private_network(
+        RegisterAgentPrivateNetworkRequest(
             agent_token=agent_token,
-            transport=BackendRouteTransport.TsnetRestricted,
+            public_key=_wireguard_public_key(machine_id),
         )
     )
-    assert credential.auth_key == f"secret-{machine_id}"
-    node_id = f"node-{machine_id}"
-    device_id = f"rest-{node_id}"
-    binding = gateway.register_agent_tailnet_device(
-        RegisterAgentTailnetDeviceRequest(
-            agent_token=agent_token,
-            node_id=node_id,
+    with gateway.services.context.database.session() as session:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id,
+            machine_id,
         )
-    )
-    assert binding.device_id == device_id
-    assert binding.node_id == node_id
-    return device_id
+        assert enrollment is not None
+        peers = WireGuardPeerRepository(session)
+        peer = peers.by_enrollment(enrollment.id, for_update=True)
+        assert peer is not None
+        peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
+    return binding.peer_id
 
 
 def _join_request(token: str, *, fingerprint: str = "host-fingerprint") -> JoinAgentRequest:
@@ -216,7 +199,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     bootstrap = _create_join_token(gateway, MachinePool("customer-machines"), workspace_id)
 
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_tailnet(gateway, joined.agent_token, joined.machine_id)
+    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
 
     assert UUID(joined.machine_id)
     assert joined.bootstrap is not None
@@ -227,8 +210,6 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     assert view.preflight_checks[0].remediation.startswith("Install and start Docker")
     assert {
         "registration_token",
-        "tailscale_auth",
-        "tailscale_url",
         "user_data",
     }.isdisjoint(view.model_dump(mode="json"))
 
@@ -302,7 +283,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
     gateway = _gateway(isolated_services, key_prefix="capacity-interruption")
     bootstrap = _create_join_token(gateway, MachinePool("preemptible-machines"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_tailnet(gateway, joined.agent_token, joined.machine_id)
+    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
     observed_at = datetime(2026, 7, 21, tzinfo=UTC)
     request = AgentCapacityInterruptionRequest(
@@ -357,22 +338,28 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         provider="agent",
         workspace=workspace_id,
     )
-    tailnet_control = _FakeTailnetControl()
-    gateway = _gateway(
-        isolated_services,
-        key_prefix="machine-cleanup",
-        tailnet_control=tailnet_control,
-    )
+    gateway = _gateway(isolated_services, key_prefix="machine-cleanup")
     first_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
     first = gateway.join_agent(_join_request(first_token.token, fingerprint="first-host"))
-    first_device_id = _bind_tailnet(gateway, first.agent_token, first.machine_id)
+    first_peer_id = _bind_private_network(
+        gateway,
+        workspace_id,
+        first.agent_token,
+        first.machine_id,
+    )
 
     left = gateway.leave_agent(LeaveAgentRequest(agent_token=first.agent_token))
     assert left.machine_id == first.machine_id
-    assert tailnet_control.removed_device_ids == [first_device_id]
     assert _pool_machines(gateway, MachinePool("cleanup-machines"), workspace_id) == []
     assert not gateway.stream_agent(StreamAgentRequest(agent_token=first.agent_token)).ok
     with isolated_services.context.database.session() as session:
+        assert (
+            WireGuardPeerRepository(session).records.get(
+                first_peer_id,
+                workspace_id=workspace_id,
+            )
+            is None
+        )
         assert MachineRepository(session).get_across_workspaces(first.machine_id) is None
         assert (
             WorkerRepository(session).get_across_workspaces(
@@ -561,8 +548,6 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         scheduler_workers=RedisSchedulerWorkerRepository(redis),
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
-        tailnet=TailnetConfig(),
-        tailnet_control=_FakeTailnetControl(),
     )
     bootstrap = _create_join_token(gateway, MachinePool("workspace-machine-pool"), workspace.id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
@@ -636,11 +621,6 @@ def _services_with_redis(
         binary_redis_client=redis,
         owns_redis_client=False,
         owns_binary_redis_client=False,
-    )
-    # Anything that hands a joining machine its callback address reads the origin a
-    # started control plane publishes, and this graph is built without that startup.
-    RedisControlPlaneOriginRepository(redis).publish(
-        services.gateway_settings.runtime_callback_http_url
     )
     request.addfinalizer(services.close)
     return services
@@ -810,7 +790,7 @@ def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_its_owne
     gateway = _gateway(isolated_services, key_prefix="agent-disconnect")
     bootstrap = _create_join_token(gateway, pool, workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_tailnet(gateway, joined.agent_token, joined.machine_id)
+    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
     # A platform defect belongs to the platform, so it carries no workspace. It is
     # here to prove the customer's feed does not fold those in.

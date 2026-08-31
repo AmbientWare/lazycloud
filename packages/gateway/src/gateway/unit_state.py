@@ -79,7 +79,7 @@ class GatewayComputeService(Protocol):
         worker_gpu_type: str = "",
         worker_gpu_count: int = 0,
         priority: int = 0,
-        transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted,
+        transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
         fallback: PrivateUnitFallback = PrivateUnitFallback.Internal,
         workspace: str = "default",
     ) -> ComputeUnitRecord: ...

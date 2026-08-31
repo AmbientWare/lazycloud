@@ -1,7 +1,7 @@
 [project]
 name = "networking"
 version = "0.1.0"
-description = "Network routing, backend dialing plans, and tailnet runtime helpers."
+description = "Private-network routing and backend dialing plans."
 requires-python = ">=3.12"
 dependencies = [
     "compute",

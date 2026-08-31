@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -8,7 +9,11 @@ from typing import Protocol
 from shared.timestamps import utc_now
 
 from worker.credential_payloads import WorkerCredentialPrincipal
-from worker.tools import ContainerCredentialRequest, ContainerCredentials
+from worker.tools import (
+    ContainerCredentialRequest,
+    ContainerCredentials,
+    WorkspaceStorageCredentials,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,13 +78,17 @@ class MountedWorkspaceInstance(Protocol):
 
 
 class MountedWorkspaceInstanceLister(Protocol):
-    def list_container_instances(self) -> list[MountedWorkspaceInstance]: ...
+    def list_container_instances(self) -> Sequence[MountedWorkspaceInstance]: ...
 
 
 class RefreshableWorkspaceStorage(Protocol):
     def workspaces_due_for_refresh(self, *, now: datetime | None = ...) -> list[str]: ...
 
-    def refresh_credentials(self, workspace_name: str, credentials: object) -> None: ...
+    def refresh_credentials(
+        self,
+        workspace_name: str,
+        credentials: WorkspaceStorageCredentials,
+    ) -> None: ...
 
 
 @dataclass(slots=True)

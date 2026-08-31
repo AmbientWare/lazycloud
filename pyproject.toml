@@ -36,6 +36,7 @@ workspace = [
     "billing",
     "container-worker-app",
     "scheduler-app",
+    "tunnel-gateway-app",
     "worker-bootstrap-app",
     "provider-aws",
     "provider-cloudflare",
@@ -87,6 +88,7 @@ members = [
     "apps/cli",
     "apps/container-worker",
     "apps/scheduler",
+    "apps/tunnel-gateway",
     "apps/worker-bootstrap",
     "packages/billing",
     "packages/providers/aws",
@@ -122,6 +124,7 @@ provider-cloudflare = { workspace = true }
 provider-github = { workspace = true }
 provider-stripe = { workspace = true }
 scheduler-app = { workspace = true }
+tunnel-gateway-app = { workspace = true }
 scheduler = { workspace = true }
 runner = { workspace = true }
 lazycloud = { workspace = true }

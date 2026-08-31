@@ -146,7 +146,7 @@ class WorkerRouteIdentity(ContractModel):
     pod_address: str = ""
     container_service_port: int = 0
     persistent: bool = False
-    route_transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    route_transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     route_local_target_host: str = ""
     agent_worker: bool = True
 

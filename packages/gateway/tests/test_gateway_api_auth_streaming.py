@@ -43,7 +43,7 @@ _GATEWAY_RPC_PATHS = {
     "/gateway/agents/routes/status",
     "/gateway/agents/stream",
     "/gateway/agents/stream/events",
-    "/gateway/agents/tailnet-device",
+    "/gateway/agents/private-network",
     "/gateway/agents/telemetry",
     "/gateway/agents/telemetry/stream",
     "/gateway/agents/transport-credential",

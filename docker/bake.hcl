@@ -6,6 +6,7 @@ group "default" {
   targets = [
     "api",
     "scheduler",
+    "tunnel-gateway",
     "cache-server",
     "worker-bootstrap",
     "cli",
@@ -19,6 +20,7 @@ group "control-plane" {
   targets = [
     "api",
     "scheduler",
+    "tunnel-gateway",
     "cache-server",
     "worker-bootstrap",
     "cli",
@@ -41,6 +43,12 @@ target "scheduler" {
   inherits = ["_control-plane"]
   target   = "scheduler"
   tags     = ["scheduler:${TAG}"]
+}
+
+target "tunnel-gateway" {
+  inherits = ["_control-plane"]
+  target   = "tunnel-gateway"
+  tags     = ["tunnel-gateway:${TAG}"]
 }
 
 target "cache-server" {
@@ -80,4 +88,3 @@ target "container-worker" {
   target     = "container-worker"
   tags       = ["container-worker:${TAG}"]
 }
-

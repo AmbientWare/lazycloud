@@ -20,8 +20,6 @@ from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
     BackendRouteResolver,
-    TailnetPeerResolver,
-    TailnetPeerWaiter,
 )
 from networking.routing import build_backend_route_dial_plan
 from shared.routing import parse_backend_route_address
@@ -150,8 +148,6 @@ class RedisPodProxyConnectionRepository:
 class PodProxyHttpClient:
     route_resolver: BackendRouteResolver | None = None
     route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None
-    tailnet_peer_resolver: TailnetPeerResolver | None = None
 
     def forward(
         self,
@@ -202,8 +198,6 @@ class PodProxyHttpClient:
             connection = BackendRouteDialer(
                 resolver=self.route_resolver,
                 config=dialer_config,
-                tailnet_peer_waiter=self.tailnet_peer_waiter,
-                tailnet_peer_resolver=self.tailnet_peer_resolver,
             ).dial_plan(build_backend_route_dial_plan(route_id))
             if not isinstance(connection, socket.socket):
                 msg = "pod proxy requires a socket backend connection"

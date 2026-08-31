@@ -8,7 +8,7 @@ export const viteEnv = createEnv({
        reach the production-shaped local stack without extra configuration. */
     VITE_API_TARGET: z.string().url().default("http://127.0.0.1:8000"),
     /* Vite rejects a request whose Host header it was not told to expect, so
-       reaching the dev server by machine name — over a tailnet, say — fails
+       reaching the dev server by machine name over WireGuard or a LAN fails
        until that name is listed. Comma separated. */
     VITE_DEV_ALLOWED_HOSTS: z.string().default(""),
   },

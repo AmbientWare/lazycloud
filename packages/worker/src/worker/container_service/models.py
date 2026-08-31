@@ -94,7 +94,7 @@ class WorkerContainerServiceInstance(ContractModel):
     machine_id: str = ""
     pool: MachinePool = MachinePool("")
     route_local_target_host: str = ""
-    route_transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    route_transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     agent_worker: bool = True
     image_id: str = ""
     build_archive_object_key: str = ""

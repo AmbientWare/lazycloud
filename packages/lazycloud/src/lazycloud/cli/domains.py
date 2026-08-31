@@ -43,12 +43,13 @@ def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
 def _print_dns_record(domain: CustomDomainResponse) -> None:
     """Print the record to create, named the way a DNS form asks for it."""
 
-    # A wildcard is entered as the `*` label; spelling out `*.acme.com` in a form
-    # that already appends the zone produces `*.acme.com.acme.com`.
-    name = "*" if domain.hostname.startswith("*.") else domain.hostname
     console.print("\nAdd this record where you manage DNS for this domain:")
     console.print(
-        table("DNS record", ["type", "name", "target"], [["CNAME", name, domain.cname_target]])
+        table(
+            "DNS record",
+            ["type", "name", "target"],
+            [["CNAME", domain.hostname, domain.cname_target]],
+        )
     )
     if domain.required_records:
         console.print(

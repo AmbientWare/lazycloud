@@ -102,7 +102,7 @@ class AgentRoute(HttpModel):
     kind: BackendRouteKind = BackendRouteKind.Container
     port: int = 0
     protocol: BackendRouteProtocol = BackendRouteProtocol.Tcp
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     local_target: str = ""
     proxy_target: str = ""
     state: BackendRouteState = BackendRouteState.Opening
@@ -111,25 +111,19 @@ class AgentRoute(HttpModel):
     proxy_auth_token: str = Field(default="", repr=False)
 
 
-class RequestAgentTransportCredentialRequest(HttpModel):
+class RegisterAgentPrivateNetworkRequest(HttpModel):
     agent_token: str
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    public_key: str = Field(min_length=44, max_length=44)
 
 
-class RequestAgentTransportCredentialResponse(HttpModel):
-    auth_key: str = ""
-    control_url: str = ""
-    hostname: str = ""
-
-
-class RegisterAgentTailnetDeviceRequest(HttpModel):
-    agent_token: str
-    node_id: str
-
-
-class RegisterAgentTailnetDeviceResponse(HttpModel):
-    device_id: str
-    node_id: str
+class RegisterAgentPrivateNetworkResponse(HttpModel):
+    peer_id: str
+    address: str
+    server_public_key: str = Field(min_length=44, max_length=44)
+    endpoint: str
+    allowed_ips: tuple[str, ...]
+    persistent_keepalive_seconds: int = Field(ge=1, le=120)
+    generation: int = Field(ge=1)
 
 
 class ListAgentRoutesRequest(HttpModel):
@@ -260,8 +254,6 @@ __all__ = [
     "LeaveAgentResponse",
     "ListAgentRoutesRequest",
     "ListAgentRoutesResponse",
-    "RequestAgentTransportCredentialRequest",
-    "RequestAgentTransportCredentialResponse",
     "SignPayloadRequest",
     "SignPayloadResponse",
     "StreamAgentRequest",

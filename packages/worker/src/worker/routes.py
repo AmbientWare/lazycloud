@@ -31,7 +31,7 @@ class WorkerRouteContext(ContractModel):
     machine_id: str
     worker_id: str
     container_id: str
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     local_target_host: str = ""
 
 

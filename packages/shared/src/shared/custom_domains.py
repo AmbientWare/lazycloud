@@ -13,11 +13,9 @@ from shared.timestamps import utc_now
 _UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 MAX_HOSTNAME_LENGTH = 253
-WILDCARD_PREFIX = "*."
-
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _DOMAIN = rf"{_LABEL}(?:\.{_LABEL})+"
-_REGISTRABLE_PATTERN = re.compile(rf"^(?:\*\.)?{_DOMAIN}$")
+_REGISTRABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
 _ASSIGNABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
 
 
@@ -74,26 +72,10 @@ class CustomDomain(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
     deleted_at: datetime | None = None
 
-    @property
-    def is_wildcard(self) -> bool:
-        return self.hostname.startswith(WILDCARD_PREFIX)
-
     def covers(self, hostname: str) -> bool:
-        """Whether a deployment may claim `hostname` under this registration.
+        """Whether a deployment may claim this exact registered hostname."""
 
-        A wildcard covers exactly one label, matching what a certificate for it
-        actually secures; `*.acme.com` serves `api.acme.com` and not
-        `api.staging.acme.com`.
-        """
-
-        candidate = hostname.strip().rstrip(".").lower()
-        if not self.is_wildcard:
-            return candidate == self.hostname
-        suffix = self.hostname.removeprefix("*")
-        if not candidate.endswith(suffix):
-            return False
-        label = candidate[: -len(suffix)]
-        return bool(label) and "." not in label
+        return hostname.strip().rstrip(".").lower() == self.hostname
 
 
 class ProviderCustomHostname(ContractModel):
@@ -116,7 +98,7 @@ class CustomDomainProvider(Protocol):
     """
 
     def create_hostname(self, hostname: str) -> ProviderCustomHostname:
-        """Ask the provider to serve `hostname`, including a one-level wildcard."""
+        """Ask the provider to serve the exact `hostname`."""
         ...
 
     def get_hostname(self, provider_hostname_id: str) -> ProviderCustomHostname | None:
@@ -129,16 +111,13 @@ class CustomDomainProvider(Protocol):
 
 
 def normalize_registrable_domain(value: str) -> str:
-    """Accept a domain a workspace can register: an apex or a one-level wildcard."""
+    """Accept an exact hostname a workspace can register."""
 
     hostname = value.strip().rstrip(".").lower()
     if len(hostname) > MAX_HOSTNAME_LENGTH:
         raise ValueError(f"domain must be at most {MAX_HOSTNAME_LENGTH} characters")
     if not _REGISTRABLE_PATTERN.fullmatch(hostname):
-        raise ValueError(
-            "domain must be a hostname such as acme.com, or a single-level wildcard "
-            "such as *.acme.com"
-        )
+        raise ValueError("domain must be an exact hostname such as app.acme.com")
     return hostname
 
 
@@ -155,7 +134,6 @@ def normalize_assignable_hostname(value: str) -> str:
 
 __all__ = [
     "MAX_HOSTNAME_LENGTH",
-    "WILDCARD_PREFIX",
     "CustomDomain",
     "CustomDomainErrorCode",
     "CustomDomainPhase",

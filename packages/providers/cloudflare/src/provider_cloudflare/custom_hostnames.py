@@ -7,7 +7,6 @@ from typing import NoReturn
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.custom_domains import (
-    WILDCARD_PREFIX,
     CustomDomainErrorCode,
     CustomDomainPhase,
     DnsRecord,
@@ -106,7 +105,7 @@ class CloudflareCustomHostnames:
 
     def create_hostname(self, hostname: str) -> ProviderCustomHostname:
         body = _CreateHostnameRequest(
-            hostname=hostname.removeprefix(WILDCARD_PREFIX),
+            hostname=hostname,
             ssl=_SslRequest(
                 # The CNAME the customer publishes to route traffic here also proves
                 # they control the name, so one record does both. Asking for a TXT as
@@ -114,8 +113,7 @@ class CloudflareCustomHostnames:
                 # already answered.
                 method="http",
                 type="dv",
-                # One label, matching what the domain model promises a wildcard covers.
-                wildcard=hostname.startswith(WILDCARD_PREFIX),
+                wildcard=False,
             ),
         )
         envelope = self._request(

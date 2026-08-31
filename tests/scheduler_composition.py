@@ -60,8 +60,6 @@ def services_with_redis_container_control(
         aws_account_connection_settings=services.aws_account_connection_settings,
         aws_capacity_settings=services.aws_capacity_settings,
         aws_capacity_reconciliation_settings=services.aws_capacity_reconciliation_settings,
-        tailnet_runtime_settings=services.tailnet_runtime_settings,
-        tailnet_control_settings=services.tailnet_control_settings,
         backend_route_settings=services.backend_route_settings,
         object_store_settings=services.object_store_settings,
         object_storage=services.object_storage,
@@ -71,7 +69,6 @@ def services_with_redis_container_control(
         volume_metering=services.volume_metering,
         redis_client=redis,
         binary_redis_client=redis,
-        tailnet_runtime=services.tailnet_runtime,
     )
 
 

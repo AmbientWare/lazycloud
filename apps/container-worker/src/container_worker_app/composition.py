@@ -10,12 +10,7 @@ from cache.server import (
     WorkerCacheHttpClient,
 )
 from foundation.process import ProcessTimeoutError, run_process
-from networking.agent_peer_client import AgentPeerClient
-from networking.internal_http import (
-    InternalHttpClient,
-    TailnetHostPolicy,
-    TailnetPeerAddresses,
-)
+from networking.internal_http import InternalHttpClient
 from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.adapters import WorkerRouteIdentity
@@ -461,26 +456,7 @@ def planned_scheduler_worker_record_from_settings(
 
 
 def _internal_http_client(config: WorkerSettings) -> InternalHttpClient:
-    """The worker's one HTTP client, routed when the node runs a tailnet.
-
-    The worker holds no tailnet client of its own; the agent that launched it
-    answers peer lookups over loopback. Without both an address and a suffix the
-    client dials names as written, which is what a single-host Compose stack
-    wants and needs no branch anywhere else.
-    """
-    timeout = config.worker_repository_timeout_seconds
-    if not config.peer_resolver_address or not config.tailnet_dns_suffix:
-        return InternalHttpClient(timeout_seconds=timeout)
-    return InternalHttpClient(
-        timeout_seconds=timeout,
-        addresses=TailnetPeerAddresses(
-            runtime=AgentPeerClient(
-                agent_address=config.peer_resolver_address,
-                worker_token=config.worker_token,
-            ),
-            policy=TailnetHostPolicy(dns_suffix=config.tailnet_dns_suffix),
-        ),
-    )
+    return InternalHttpClient(timeout_seconds=config.worker_repository_timeout_seconds)
 
 
 def _worker_content_cache(

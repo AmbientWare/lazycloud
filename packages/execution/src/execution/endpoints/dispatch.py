@@ -19,8 +19,6 @@ from networking.dialer import (
     BackendRouteDialerConfig,
     BackendRouteResolver,
     BackendRouteUnavailable,
-    TailnetPeerResolver,
-    TailnetPeerWaiter,
 )
 from networking.routing import build_backend_route_dial_plan
 from pydantic import Field
@@ -277,8 +275,6 @@ class EndpointInstanceDispatcher:
     containers: EndpointContainerRepository
     route_resolver: BackendRouteResolver | None = None
     route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None
-    tailnet_peer_resolver: TailnetPeerResolver | None = None
     endpoint_port: int = CONTAINER_INNER_PORT
     http_client: EndpointHttpClient | None = None
     readiness_probe: ContainerReadiness | None = None
@@ -305,8 +301,6 @@ class EndpointInstanceDispatcher:
         client = self.http_client or EndpointHttpClient(
             route_resolver=self.route_resolver,
             route_dialer_config=self.route_dialer_config,
-            tailnet_peer_waiter=self.tailnet_peer_waiter,
-            tailnet_peer_resolver=self.tailnet_peer_resolver,
         )
         for target in targets:
             try:
@@ -328,8 +322,6 @@ class EndpointInstanceDispatcher:
         client = self.http_client or EndpointHttpClient(
             route_resolver=self.route_resolver,
             route_dialer_config=self.route_dialer_config,
-            tailnet_peer_waiter=self.tailnet_peer_waiter,
-            tailnet_peer_resolver=self.tailnet_peer_resolver,
         )
         return client.forward(target, request, timeout_seconds=timeout_seconds)
 
@@ -374,8 +366,6 @@ class EndpointInstanceDispatcher:
         connection = BackendRouteDialer(
             resolver=self.route_resolver,
             config=self.route_dialer_config,
-            tailnet_peer_waiter=self.tailnet_peer_waiter,
-            tailnet_peer_resolver=self.tailnet_peer_resolver,
         ).dial_plan(build_backend_route_dial_plan(route.route_id))
         if not isinstance(connection, socket.socket):
             connection.close()
@@ -393,8 +383,6 @@ class EndpointInstanceDispatcher:
         client = self.http_client or EndpointHttpClient(
             route_resolver=self.route_resolver,
             route_dialer_config=self.route_dialer_config,
-            tailnet_peer_waiter=self.tailnet_peer_waiter,
-            tailnet_peer_resolver=self.tailnet_peer_resolver,
         )
         return client.open_stream(target, request, timeout_seconds=timeout_seconds)
 
@@ -514,8 +502,6 @@ class EndpointInstanceDispatcher:
 class EndpointHttpClient:
     route_resolver: BackendRouteResolver | None = None
     route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None
-    tailnet_peer_resolver: TailnetPeerResolver | None = None
 
     def forward(
         self,
@@ -586,8 +572,6 @@ class EndpointHttpClient:
             connection = BackendRouteDialer(
                 resolver=self.route_resolver,
                 config=self.route_dialer_config,
-                tailnet_peer_waiter=self.tailnet_peer_waiter,
-                tailnet_peer_resolver=self.tailnet_peer_resolver,
             ).dial_plan(build_backend_route_dial_plan(target.route.route_id))
             if not isinstance(connection, socket.socket):
                 connection.close()

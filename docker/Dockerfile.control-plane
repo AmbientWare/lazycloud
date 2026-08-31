@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
 ARG PYTHON_IMAGE=python:3.12-slim
-ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.98.8
 
 FROM oven/bun:1.3.12-debian AS web-build
 # Destinations that live outside this app. Unset means the build renders no
@@ -16,8 +15,6 @@ RUN --mount=type=cache,id=lazycloud-bun-cache-v2,target=/root/.bun/install/cache
     bun install --frozen-lockfile
 COPY apps/web ./
 RUN bun run build
-
-FROM ${TAILSCALE_IMAGE} AS tailscale
 
 FROM ${PYTHON_IMAGE} AS python-manifests
 
@@ -56,12 +53,16 @@ COPY packages/storage-client/pyproject.toml ./packages/storage-client/pyproject.
 COPY packages/worker/pyproject.toml ./packages/worker/pyproject.toml
 COPY packages/worker-repository/pyproject.toml ./packages/worker-repository/pyproject.toml
 COPY packages/providers/aws/pyproject.toml ./packages/providers/aws/pyproject.toml
+COPY packages/providers/cloudflare/pyproject.toml ./packages/providers/cloudflare/pyproject.toml
+COPY packages/providers/github/pyproject.toml ./packages/providers/github/pyproject.toml
+COPY packages/providers/stripe/pyproject.toml ./packages/providers/stripe/pyproject.toml
 COPY apps/agent/pyproject.toml ./apps/agent/pyproject.toml
 COPY apps/api/pyproject.toml ./apps/api/pyproject.toml
 COPY apps/cache-server/pyproject.toml ./apps/cache-server/pyproject.toml
 COPY apps/cli/pyproject.toml ./apps/cli/pyproject.toml
 COPY apps/container-worker/pyproject.toml ./apps/container-worker/pyproject.toml
 COPY apps/scheduler/pyproject.toml ./apps/scheduler/pyproject.toml
+COPY apps/tunnel-gateway/pyproject.toml ./apps/tunnel-gateway/pyproject.toml
 COPY apps/worker-bootstrap/pyproject.toml ./apps/worker-bootstrap/pyproject.toml
 
 FROM scratch AS workspace-source
@@ -72,6 +73,7 @@ COPY apps/cache-server /apps/cache-server
 COPY apps/cli /apps/cli
 COPY apps/container-worker /apps/container-worker
 COPY apps/scheduler /apps/scheduler
+COPY apps/tunnel-gateway /apps/tunnel-gateway
 COPY apps/worker-bootstrap /apps/worker-bootstrap
 
 FROM scratch AS managed-package-source
@@ -103,6 +105,16 @@ COPY --from=workspace-source /packages ./packages
 COPY --from=workspace-source /apps ./apps
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package scheduler-app --no-editable
+
+FROM python-manifests AS tunnel-gateway-dependencies
+RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package tunnel-gateway-app --no-install-workspace
+
+FROM tunnel-gateway-dependencies AS tunnel-gateway-install
+COPY --from=workspace-source /packages ./packages
+COPY --from=workspace-source /apps ./apps
+RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package tunnel-gateway-app --no-editable
 
 FROM python-manifests AS cache-server-dependencies
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
@@ -155,8 +167,6 @@ RUN apt-get update \
 COPY --from=api-install /app/.venv /app/.venv
 COPY --from=managed-package-source /packages /app/packages
 COPY --from=web-build /app/apps/web/dist/client/ /app/web-static/
-COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
-COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 EXPOSE 9000
 VOLUME ["/var/lib/lazycloud"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -173,6 +183,16 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD python -m shared.process_liveness /tmp/lazycloud-scheduler.heartbeat.placement /tmp/lazycloud-scheduler.heartbeat.capacity /tmp/lazycloud-scheduler.heartbeat.housekeeping /tmp/lazycloud-scheduler.heartbeat.dispatch --max-age-seconds 300
 CMD ["lazycloud-scheduler", "--container-limit", "100"]
 
+FROM python-runtime AS tunnel-gateway
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 iptables iputils-ping procps wireguard-tools \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=tunnel-gateway-install /app/.venv /app/.venv
+VOLUME ["/var/lib/lazycloud"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD test -f /tmp/lazycloud-tunnel-gateway.ready
+CMD ["lazycloud-tunnel-gateway"]
+
 FROM python-runtime AS cache-server
 COPY --from=cache-server-install /app/.venv /app/.venv
 EXPOSE 7900
@@ -187,6 +207,9 @@ VOLUME ["/var/lib/lazycloud"]
 CMD ["lazycloud-worker-bootstrap", "--help"]
 
 FROM python-runtime AS cli
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wireguard-tools \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=cli-install /app/.venv /app/.venv
 VOLUME ["/var/lib/lazycloud"]
 CMD ["lazycloud-admin", "--help"]

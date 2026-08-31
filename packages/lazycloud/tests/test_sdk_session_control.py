@@ -32,7 +32,7 @@ from shared.http.objects import PutObjectResponse
 from shared.http.observability import (
     LogRecord,
 )
-from shared.http.tasks import TaskPageResponse, TaskResponse, TaskStopResponse
+from shared.http.tasks import TaskDetailResponse, TaskPageResponse, TaskResponse, TaskStopResponse
 from shared.tasks import TaskStatus
 from tests.fakes import http_api_error
 from tests.url_constants import EXAMPLE_URL, HTTP_EXAMPLE_COM_URL
@@ -51,7 +51,7 @@ class FakeSessionResources:
     deployment_stop_requests: list[str] = field(default_factory=list)
     deployment_start_requests: list[str] = field(default_factory=list)
     deployment_scale_requests: list[tuple[str, int]] = field(default_factory=list)
-    task_responses: dict[str, TaskResponse] = field(default_factory=dict)
+    task_responses: dict[str, TaskDetailResponse] = field(default_factory=dict)
     fail_deployments: bool = False
     fail_tasks: bool = False
 
@@ -127,12 +127,12 @@ class FakeSessionResources:
         tasks = [task] if status in {None, TaskStatus.Complete} else []
         return TaskPageResponse(data=tasks)
 
-    def task(self, task_id: str) -> TaskResponse:
+    def task(self, task_id: str) -> TaskDetailResponse:
         if task_id in self.task_responses:
             return self.task_responses[task_id]
         if task_id != "task-1":
             raise http_api_error("task not found", status_code=404)
-        return TaskResponse(
+        return TaskDetailResponse(
             id="task-1",
             name="worker",
             status=TaskStatus.Complete,
@@ -164,7 +164,7 @@ def test_resource_get_preserves_non_not_found_failures(
             _ = deployment_id
             raise failure
 
-        def task(self, task_id: str) -> TaskResponse:
+        def task(self, task_id: str) -> TaskDetailResponse:
             _ = task_id
             raise failure
 
@@ -438,7 +438,7 @@ def test_function_call_gather_can_return_exceptions_in_result_slots() -> None:
 
 
 class _UnsupportedTaskHandleOperations:
-    def get(self, task_id: str) -> TaskResponse:
+    def get(self, task_id: str) -> TaskDetailResponse:
         raise AssertionError(f"unexpected task view read for {task_id}")
 
     def logs(

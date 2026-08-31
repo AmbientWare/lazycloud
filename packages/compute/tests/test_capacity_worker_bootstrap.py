@@ -94,19 +94,12 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
 @pytest.mark.parametrize(
     ("host", "reachable"),
     [
-        # A LAN address carries dots and is not loopback, so a name-shaped check
-        # accepts it. A remote machine enrols against it, reports healthy, and
-        # crash-loops its worker on an origin only the control plane can reach.
-        ("10.0.0.150", False),
-        ("192.168.1.5", False),
+        ("10.0.0.150", True),
+        ("192.168.1.5", True),
         ("169.254.1.1", False),
         ("control-plane", False),
-        # Tailscale's own ranges are what a remote machine actually reaches.
-        # The IPv6 prefix is a ULA, which classifies as private, so refusing
-        # every private address would reject a working tailnet.
-        ("100.69.8.117", True),
-        ("fd7a:115c:a1e0::8132:174", True),
-        ("fd00::1", False),
+        ("100.96.0.2", True),
+        ("fd00::1", True),
         ("52.1.2.3", True),
     ],
 )

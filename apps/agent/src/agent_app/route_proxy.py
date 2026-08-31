@@ -16,11 +16,7 @@ from gateway.http import (
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from networking.routing import (
-    BACKEND_ROUTE_PREFACE,
-    parse_backend_route_preface,
-    parse_tailnet_resolve_preface,
-)
+from networking.routing import BACKEND_ROUTE_PREFACE, parse_backend_route_preface
 from pydantic import TypeAdapter, field_validator
 from shared.app_identity import AGENT_NAME
 from shared.contracts import ContractModel
@@ -124,19 +120,12 @@ class RouteProxyTarget:
     credential: str = field(repr=False)
 
 
-class WorkerPeerResolver(Protocol):
-    """Resolves a tailnet peer for a worker that authenticated with its token."""
-
-    def resolve_for_worker(self, host: str, worker_token: str) -> str: ...
-
-
 @dataclass(slots=True)
 class AgentRouteProxyService:
     config: AgentRouteProxyConfig
     client: AgentRouteStatusClient
     agent_token: str
     telemetry: AgentTelemetryBuffer | None = None
-    peer_resolver: WorkerPeerResolver | None = None
     _routes: dict[str, RouteProxyTarget] = field(default_factory=dict, init=False)
     _failure_counts: dict[str, int] = field(default_factory=dict, init=False)
     _listener: socket.socket | None = field(default=None, init=False)
@@ -264,9 +253,6 @@ class AgentRouteProxyService:
             if line is None:
                 return RouteProxyConnectionResult(error="missing route preface")
             text, remainder = line
-            resolve = parse_tailnet_resolve_preface(text)
-            if resolve is not None:
-                return self._answer_resolve(connection, host=resolve[0], credential=resolve[1])
             preface = self._parse_route_preface(text, remainder)
             if preface is None:
                 return RouteProxyConnectionResult(error="missing route preface")
@@ -432,35 +418,6 @@ class AgentRouteProxyService:
             remainder=remainder,
         )
 
-    def _answer_resolve(
-        self,
-        connection: socket.socket,
-        *,
-        host: str,
-        credential: str,
-    ) -> RouteProxyConnectionResult:
-        """Answer a worker asking where a tailnet peer lives.
-
-        The reply is the address and nothing else; the connection carries no
-        traffic afterwards. Keeping the agent out of the data path matters — a
-        worker fetches image archives over these hops, and proxying them through
-        the agent would make it the bottleneck.
-        """
-        if self.peer_resolver is None:
-            _write_resolve_error(connection, "peer resolution is unavailable")
-            return RouteProxyConnectionResult(error="peer resolution is unavailable")
-        try:
-            address = self.peer_resolver.resolve_for_worker(host, credential)
-        except Exception as exc:
-            _write_resolve_error(connection, str(exc))
-            return RouteProxyConnectionResult(error=f"peer resolution failed: {exc}")
-        if not address:
-            _write_resolve_error(connection, f"no reachable peer for {host}")
-            return RouteProxyConnectionResult(error=f"no reachable peer for {host}")
-        with suppress(OSError):
-            connection.sendall(f"{address}\n".encode())
-        return RouteProxyConnectionResult(local_target=address, proxied=False)
-
     def _report_route_status(self, request: UpdateAgentRouteStatusRequest) -> bool:
         """Report one route's status, surviving a refusal.
 
@@ -623,9 +580,3 @@ def _join_host_port(host: str, port: int) -> str:
     if ":" in host and not host.startswith("["):
         return f"[{host}]:{port}"
     return f"{host}:{port}"
-
-
-def _write_resolve_error(connection: socket.socket, reason: str) -> None:
-    """Name the failure to the caller rather than closing on it silently."""
-    with suppress(OSError):
-        connection.sendall(f"ERROR {reason}\n".encode())

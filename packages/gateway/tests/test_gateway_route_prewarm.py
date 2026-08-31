@@ -6,10 +6,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Event as ThreadEvent
 
 import pytest
-from compute.agent_control import (
-    ComputeAgentTokenState,
-    TailnetPeerView,
-)
+from compute.agent_control import ComputeAgentTokenState
 from gateway.route_prewarm import RoutePrewarmService, ThreadRoutePrewarmRunner
 from networking.dialer import BackendRouteDialer, BackendRouteDialerConfig
 from networking.routing import BackendRouteAuthenticator, backend_route_preface
@@ -86,14 +83,6 @@ class _Events:
         )
 
 
-@dataclass(slots=True)
-class _PeerProvider:
-    peer_list: list[TailnetPeerView]
-
-    def peers(self) -> list[TailnetPeerView]:
-        return self.peer_list
-
-
 def test_route_prewarm_dials_route_writes_preface_emits_event_and_throttles() -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     connector = _Connector()
@@ -117,7 +106,7 @@ def test_route_prewarm_dials_route_writes_preface_emits_event_and_throttles() ->
 
     assert first.decision is RoutePrewarmDecision.Attempt
     assert second.decision is RoutePrewarmDecision.Throttled
-    assert connector.calls[0][0] == "agent.tailnet:29443"
+    assert connector.calls[0][0] == "agent.private:29443"
     assert connector.connections[0].writes == [
         backend_route_preface("route-one", ROUTE_AUTHENTICATOR.credential("route-one"))
     ]
@@ -130,47 +119,7 @@ def test_route_prewarm_dials_route_writes_preface_emits_event_and_throttles() ->
     assert data["route_id"] == "route-one"
     attrs = data["attrs"]
     assert isinstance(attrs, dict)
-    assert attrs["proxy_target"] == "agent.tailnet:29443"
-
-
-def test_route_prewarm_emits_error_with_peer_status() -> None:
-    connector = _Connector(error=OSError("dial timeout"))
-    events = _Events()
-    prewarmer = RoutePrewarmService(
-        BackendRouteDialer(
-            config=BackendRouteDialerConfig(
-                timeout_seconds=0.01,
-                ready_poll_seconds=0.001,
-                auth_key=ROUTE_AUTH_KEY,
-            ),
-            connector=connector,
-        ),
-        events,
-        runner=_InlineRunner(),
-        peer_provider=_PeerProvider(
-            [
-                TailnetPeerView(
-                    dns_name="agent.tailnet.",
-                    online=True,
-                    active=True,
-                    current_address="203.0.113.10:1234",
-                )
-            ]
-        ),
-    )
-
-    attempt = prewarmer.prewarm_route(_route(), _agent())
-
-    assert attempt.decision is RoutePrewarmDecision.Attempt
-    _action, data, _workspace_id = events.records[0]
-    assert data is not None
-    assert data["status"] == "error"
-    attrs = data["attrs"]
-    assert isinstance(attrs, dict)
-    reason = attrs["reason"]
-    assert isinstance(reason, str)
-    assert "dial timeout" in reason
-    assert attrs["peer_online"] == "true"
+    assert attrs["proxy_target"] == "agent.private:29443"
 
 
 def test_thread_route_prewarm_runner_quiesces_before_close() -> None:
@@ -197,7 +146,7 @@ def _agent() -> ComputeAgentTokenState:
 
 def _route(
     *,
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted,
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
 ) -> AgentBackendRoute:
     return AgentBackendRoute(
         route_id="route-one",
@@ -207,6 +156,6 @@ def _route(
         worker_id="worker-one",
         container_id="container-one",
         state=BackendRouteState.Ready,
-        proxy_target="agent.tailnet:29443",
+        proxy_target="agent.private:29443",
         transport=transport,
     )

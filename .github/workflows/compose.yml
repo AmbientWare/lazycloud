@@ -38,6 +38,7 @@ jobs:
           docker compose build --check
           database-bootstrap
           control-plane
+          tunnel-gateway
           scheduler
           container-worker
           cache-server

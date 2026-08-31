@@ -33,6 +33,16 @@ serviceAccounts:
   controlPlane: control-plane
   scheduler: scheduler
   externalSecrets: external-secrets
+  wireguardBootstrap: wireguard-bootstrap
+
+wireguard:
+  replicas: 2
+  platformPeers: 2
+  secretName: lazycloud-wireguard
+  secretId: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
 
 # The server's own ceiling, divided below. Every process holds its own pool, so
 # the sum of what they may open is the number that has to fit, and nothing

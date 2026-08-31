@@ -1,9 +1,0 @@
-confirm_dedicated_tailnet = true
-overwrite_existing_policy = true
-environment               = "production"
-
-# Keep these aligned with the production deployment values.
-agent_tag          = "tag:lazycloud-agent"
-control_plane_tag  = "tag:lazycloud-control-plane"
-agent_proxy_port   = 29443
-tcp_ingress_enabled = false

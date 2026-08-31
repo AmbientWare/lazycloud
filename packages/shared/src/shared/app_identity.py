@@ -20,11 +20,6 @@ SHELL_LOG_PATH = f"/tmp/{NAME}-shell.log"
 AGENT_CONTAINER_TMP_PATH = f"/tmp/{NAME}"
 AGENT_CONTAINER_LOG_PATH = f"/var/log/{NAME}"
 AGENT_STATE_DIR = f"{STATE_DIR}/agent"
-# The agent spawns its own tailscaled under its state directory; nothing else on
-# the node opens a tailnet session, so these paths have one owner.
-AGENT_TAILNET_DIR_NAME = "tailnet"
-TAILSCALED_SOCKET_NAME = "tailscaled.sock"
-TAILSCALED_STATE_NAME = "tailscaled.state"
 AGENT_CONTAINER_DATA_PATH = f"{AGENT_STATE_DIR}/data"
 AGENT_CONTAINER_OBJECT_PATH = f"{AGENT_CONTAINER_DATA_PATH}/objects"
 AGENT_WORKER_CONFIG_PATH = f"/etc/{NAME}/worker/config.json"
@@ -55,10 +50,6 @@ AGENT_NAME = f"{NAME}-agent"
 AGENT_SERVICE_DESCRIPTION = f"{DISPLAY_NAME} agent"
 AGENT_LAUNCHD_LABEL_PREFIX = f"com.{NAME}.agent"
 CONTROL_PLANE_SERVICE_NAME = f"{NAME}-api"
-# The control plane's tailnet device name. Distinct from the process name
-# above: this is what a node dials, so the deployment origin a remote
-# machine is given has to match it exactly.
-CONTROL_PLANE_TAILNET_HOSTNAME = f"{NAME}-control-plane"
 CONTROL_PLANE_IMAGE = "api"
 SCHEDULER_PROCESS_NAME = f"{NAME}-scheduler"
 SCHEDULER_IMAGE = "scheduler"
@@ -88,7 +79,6 @@ __all__ = [
     "AGENT_NAME",
     "AGENT_SERVICE_DESCRIPTION",
     "AGENT_STATE_DIR",
-    "AGENT_TAILNET_DIR_NAME",
     "AGENT_WORKER_CONFIG_PATH",
     "CACHE_DIR",
     "CACHE_PAGES_DIR",
@@ -102,7 +92,6 @@ __all__ = [
     "CONTAINER_WORKER_PROCESS_NAME",
     "CONTROL_PLANE_IMAGE",
     "CONTROL_PLANE_SERVICE_NAME",
-    "CONTROL_PLANE_TAILNET_HOSTNAME",
     "DATA_STORAGE_BUCKET",
     "DEFAULT_RESOURCE_TYPE",
     "DISPLAY_NAME",
@@ -133,8 +122,6 @@ __all__ = [
     "SOURCE_CACHE_DIR",
     "SOURCE_PACKAGE_BUCKET",
     "STATE_DIR",
-    "TAILSCALED_SOCKET_NAME",
-    "TAILSCALED_STATE_NAME",
     "WORKER_BOOTSTRAP_IMAGE",
     "WORKER_BOOTSTRAP_PROCESS_NAME",
     "WORKER_BUNDLE_ROOT",

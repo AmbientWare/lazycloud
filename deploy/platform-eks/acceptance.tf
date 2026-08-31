@@ -118,7 +118,7 @@ resource "aws_iam_role_policy" "acceptance_operator" {
 }
 
 # A node that fails after handoff is otherwise unreachable: no public ingress,
-# Tailscale SSH not granted, and cloud-init output going nowhere a caller can
+# no inbound administrative transport, and cloud-init output going nowhere a caller can
 # read. Every diagnosis so far cost a full launch cycle for want of these four
 # calls. Break-glass rather than operator permissions, because SendCommand is
 # remote code execution on a running node.

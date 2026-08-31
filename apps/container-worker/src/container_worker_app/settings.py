@@ -20,9 +20,7 @@ from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.env import (
     GATEWAY_HTTP_URL_ENV,
-    WORKER_PEER_RESOLVER_ADDRESS_ENV,
     WORKER_REPOSITORY_URL_ENV,
-    WORKER_TAILNET_DNS_SUFFIX_ENV,
 )
 from worker.configuration import (
     WORKER_CONFIG_PATH_ENV,
@@ -90,14 +88,6 @@ class WorkerSettings(BaseSettings):
         validation_alias=WORKER_REPOSITORY_URL_ENV,
     )
 
-    peer_resolver_address: str = Field(
-        default="",
-        validation_alias=AliasChoices(WORKER_PEER_RESOLVER_ADDRESS_ENV),
-    )
-    tailnet_dns_suffix: str = Field(
-        default="",
-        validation_alias=AliasChoices(WORKER_TAILNET_DNS_SUFFIX_ENV),
-    )
     gateway_runtime_http_url: str = Field(
         default="",
         validation_alias=GATEWAY_HTTP_URL_ENV,

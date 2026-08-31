@@ -131,7 +131,7 @@ comparison is the acceptance for this module; a green apply is not.
 
 ## After applying
 
-Two values move by hand, the same way the tailnet module's do:
+Two tunnel values move by hand:
 
 | Output | Destination |
 | --- | --- |

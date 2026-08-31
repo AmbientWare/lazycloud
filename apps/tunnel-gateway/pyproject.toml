@@ -1,0 +1,25 @@
+[project]
+name = "tunnel-gateway-app"
+version = "0.1.0"
+description = "WireGuard gateway process for LazyCloud."
+requires-python = ">=3.12"
+dependencies = [
+    "coordination",
+    "database",
+    "lazycloud-shared==0.1.0",
+    "networking",
+    "observability",
+    "pydantic-settings>=2.4,<3",
+]
+
+[project.scripts]
+lazycloud-tunnel-gateway = "tunnel_gateway_app.main:main"
+lazycloud-wireguard-bootstrap = "tunnel_gateway_app.bootstrap:main"
+lazycloud-wireguard-platform = "tunnel_gateway_app.platform_client:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

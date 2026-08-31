@@ -1,10 +1,10 @@
-# Two documents, and each has exactly one writer.
+# Three documents, and each has exactly one writer.
 #
 # Secrets Manager bills per entry per month and a deployment holds a dozen
 # credentials, so each entry is a JSON document rather than a container of its
 # own. The split is by author: Terraform writes what it generates or reads from
-# a module that owns it, an operator writes what only a person can obtain, and a
-# value belongs to whichever of them can produce it.
+# a module that owns it, an operator writes what only a person can obtain, and
+# the WireGuard bootstrap writes the key material only it generates.
 #
 # One document would be cheaper again and cannot work. A document is written
 # atomically, so Terraform rendering it would drop every field an operator had
@@ -12,11 +12,12 @@
 # database URL carries the PlanetScale role's password and has to be rewritten
 # when that rotates, so this configuration cannot be a write-once author.
 #
-# Both are named for the deployment, so a second one is a second pair rather than
-# a shared entry two deployments write.
+# All are named for the deployment, so a second deployment gets its own entries
+# rather than sharing documents with another writer.
 locals {
-  platform_secret = "${var.deployment}/platform"
-  operator_secret = "${var.deployment}/operator"
+  platform_secret  = "${var.deployment}/platform"
+  operator_secret  = "${var.deployment}/operator"
+  wireguard_secret = "${var.deployment}/wireguard"
 
   platform_values = {
     LAZYCLOUD_DATABASE_URL = format(
@@ -37,14 +38,12 @@ locals {
   # is written once by an operator; a value in this configuration is a value in
   # the state file.
   operator_variables = {
-    LAZYCLOUD_TOKEN                       = "Platform administrator bearer. Write it before the first sync: bootstrap adopts a configured credential and mints an unreachable one when it finds none."
-    LAZYCLOUD_GITHUB_CLIENT_ID            = "GitHub App client id for dashboard sign-in."
-    LAZYCLOUD_GITHUB_CLIENT_SECRET        = "GitHub App client secret."
-    LAZYCLOUD_TAILNET_OAUTH_CLIENT_ID     = "Tailscale OAuth client id, from deploy/tailnet outputs."
-    LAZYCLOUD_TAILNET_OAUTH_CLIENT_SECRET = "Tailscale OAuth client secret, from deploy/tailnet outputs."
-    LAZYCLOUD_CLOUDFLARE_API_TOKEN        = "Cloudflare token for custom hostnames. Zone SSL and Certificates, edit."
-    LAZYCLOUD_STRIPE_API_KEY              = "Stripe restricted key."
-    LAZYCLOUD_STRIPE_WEBHOOK_SECRET       = "Stripe webhook signing secret. Returned only at endpoint creation."
+    LAZYCLOUD_TOKEN                 = "Platform administrator bearer. Write it before the first sync: bootstrap adopts a configured credential and mints an unreachable one when it finds none."
+    LAZYCLOUD_GITHUB_CLIENT_ID      = "GitHub App client id for dashboard sign-in."
+    LAZYCLOUD_GITHUB_CLIENT_SECRET  = "GitHub App client secret."
+    LAZYCLOUD_CLOUDFLARE_API_TOKEN  = "Cloudflare token for custom hostnames. Zone SSL and Certificates, edit."
+    LAZYCLOUD_STRIPE_API_KEY        = "Stripe restricted key."
+    LAZYCLOUD_STRIPE_WEBHOOK_SECRET = "Stripe webhook signing secret. Returned only at endpoint creation."
   }
 
   # Which document each variable is read out of. Every workload gets these as
@@ -91,6 +90,13 @@ resource "aws_secretsmanager_secret" "operator" {
     "Credentials from outside this deployment, as one JSON document. Keys: %s.",
     join(", ", sort(keys(local.operator_variables))),
   )
+
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret" "wireguard" {
+  name        = local.wireguard_secret
+  description = "Durable WireGuard gateway and platform peer keys, initialized by the deployment bootstrap."
 
   recovery_window_in_days = 0
 }

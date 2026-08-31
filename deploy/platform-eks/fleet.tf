@@ -75,7 +75,7 @@ resource "aws_route_table_association" "fleet" {
 }
 
 # Public subnets with public addressing rather than private ones behind NAT. The
-# nodes need egress to pull images and reach the tailnet, they accept nothing
+# nodes need egress to pull images and reach the control plane, they accept nothing
 # inbound, and a NAT gateway per zone would cost more than the instances it
 # serves at this size.
 resource "aws_security_group" "fleet_node" {
@@ -87,10 +87,10 @@ resource "aws_security_group" "fleet_node" {
 }
 
 # No inbound rule, and none should be added. A worker is reached over the
-# tailnet, which is a session the node itself establishes outbound.
+# WireGuard network, which is a session the node itself establishes outbound.
 resource "aws_vpc_security_group_egress_rule" "fleet_node" {
   security_group_id = aws_security_group.fleet_node.id
-  description       = "Image pulls, the tailnet, and the control plane."
+  description       = "Image pulls, WireGuard, and the control plane."
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }

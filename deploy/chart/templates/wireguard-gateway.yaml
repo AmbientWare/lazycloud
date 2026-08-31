@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tunnel-gateway
+spec:
+  replicas: {{ .Values.wireguard.replicas }}
+  selector:
+    matchLabels:
+      app: tunnel-gateway
+  template:
+    metadata:
+      labels:
+        app: tunnel-gateway
+    spec:
+      topologySpreadConstraints:
+        {{- include "lazycloud.spreadAcrossNodes" "tunnel-gateway" | nindent 8 }}
+      volumes:
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+        - name: wireguard-keys
+          secret:
+            secretName: {{ .Values.wireguard.secretName }}
+            defaultMode: 0400
+      initContainers:
+        - name: enable-ip-forwarding
+          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
+          command: ["sysctl", "-w", "net.ipv4.ip_forward=1"]
+          securityContext:
+            privileged: true
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
+      containers:
+        - name: tunnel-gateway
+          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          ports:
+            - name: wireguard
+              containerPort: 51820
+              protocol: UDP
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: LAZYCLOUD_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: LAZYCLOUD_DATABASE_URL
+            - name: LAZYCLOUD_REDIS_URL
+              value: {{ required "runtime.LAZYCLOUD_REDIS_URL is required" .Values.runtime.LAZYCLOUD_REDIS_URL | quote }}
+            - name: LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT
+              value: {{ required "runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT is required" .Values.runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT | quote }}
+            - name: LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE
+              value: /var/lib/lazycloud/wireguard/server/private-key
+            - name: LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY
+              value: /var/lib/lazycloud/wireguard
+            - name: LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT
+              value: {{ .Values.wireguard.platformPeers | quote }}
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
+            - name: wireguard-keys
+              mountPath: /var/lib/lazycloud/wireguard/server/private-key
+              subPath: server-private-key
+              readOnly: true
+            {{- range $index := until (int .Values.wireguard.platformPeers) }}
+            - name: wireguard-keys
+              mountPath: /var/lib/lazycloud/wireguard/platform-{{ $index }}/public-key
+              subPath: platform-{{ $index }}-public-key
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.wireguard.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/lazycloud-tunnel-gateway.ready"]
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tunnel-gateway
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  externalTrafficPolicy: Local
+  selector:
+    app: tunnel-gateway
+  ports:
+    - name: wireguard
+      port: 51820
+      targetPort: wireguard
+      protocol: UDP

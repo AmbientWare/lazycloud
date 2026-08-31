@@ -13,11 +13,11 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import TypedDict
+from collections.abc import Awaitable, Callable
+from typing import Required, TypedDict
 
 from lazycloud.json_contracts import JsonValue
 
-from examples.asgi import ASGIMessage, ASGIReceive, ASGISend
 from lazycloud import App, Client, Image
 
 APP_NAME_ENV = "LAZYCLOUD_ALL_WORKLOADS_APP_NAME"
@@ -25,6 +25,26 @@ APP_NAME = os.getenv(APP_NAME_ENV, "all_workloads")
 
 image = Image(python_version="3.12")
 app = App(APP_NAME)
+
+
+class ASGIMessage(TypedDict, total=False):
+    type: Required[str]
+    path: str
+    query_string: bytes
+    subprotocols: list[str]
+    text: str | None
+    bytes: bytes | None
+    status: int
+    headers: list[tuple[bytes, bytes]]
+    body: bytes
+    more_body: bool
+    subprotocol: str | None
+    code: int
+    reason: str
+
+
+type ASGIReceive = Callable[[], Awaitable[ASGIMessage]]
+type ASGISend = Callable[[ASGIMessage], Awaitable[None]]
 
 
 class CalculationResult(TypedDict):

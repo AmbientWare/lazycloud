@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import socket
 import time
 from dataclasses import dataclass, field
@@ -20,8 +19,6 @@ from networking.routing import (
 
 DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS = 30.0
 DEFAULT_BACKEND_ROUTE_READY_POLL_SECONDS = 0.25
-MIN_TAILNET_DIAL_RESERVE_SECONDS = 0.1
-MAX_TAILNET_DIAL_RESERVE_SECONDS = 2.0
 
 
 class BackendRouteUnavailable(Exception):
@@ -47,31 +44,6 @@ class BackendConnector(Protocol):
     def connect(self, address: str, timeout_seconds: float) -> BackendConnection: ...
 
 
-class TailnetPeerWaiter(Protocol):
-    def wait_for_peer(self, host: str, timeout_seconds: float) -> None: ...
-
-
-class TailnetPeerResolver(Protocol):
-    def resolve_peer_host(self, host: str) -> str: ...
-
-
-class TailnetPeerLookup(TailnetPeerWaiter, TailnetPeerResolver, Protocol):
-    """Whatever can answer where a peer lives.
-
-    Separate from the runtime because the answer does not have to come from a
-    tailnet client: a worker holds none and asks the agent instead, and requiring
-    a lifecycle it does not own would exclude it for no reason.
-    """
-
-
-class TailnetPeerRuntime(TailnetPeerLookup, Protocol):
-    """A tailnet client that resolves peers and owns its own lifecycle."""
-
-    def start(self) -> None: ...
-
-    def close(self) -> None: ...
-
-
 class BackendRouteDialerConfig(ContractModel):
     timeout_seconds: float = Field(default=DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS, gt=0)
     ready_poll_seconds: float = Field(default=DEFAULT_BACKEND_ROUTE_READY_POLL_SECONDS, gt=0)
@@ -93,8 +65,6 @@ class BackendRouteDialer:
     resolver: BackendRouteResolver | None = None
     config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
     connector: BackendConnector = field(default_factory=SocketBackendConnector)
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None
-    tailnet_peer_resolver: TailnetPeerResolver | None = None
 
     def dial_plan(self, plan: BackendDialPlan) -> BackendConnection:
         route_id = _backend_route_id(plan)
@@ -141,7 +111,6 @@ class BackendRouteDialer:
         connection = self._dial_route_target(
             route,
             route_id,
-            transport=transport,
             deadline=deadline,
         )
         if authenticator is not None:
@@ -178,39 +147,17 @@ class BackendRouteDialer:
         route: AgentBackendRoute,
         route_id: str,
         *,
-        transport: BackendRouteTransport,
         deadline: float,
     ) -> BackendConnection:
-        host = proxy_target_host(route.proxy_target)
         last_error: OSError | None = None
-        # The proxy target is dialed as written until that fails. Waiting on the
-        # peer first would put a netmap round trip in front of every connection
-        # to a peer that answers to its name perfectly well.
-        resolve_peer = False
         while _remaining_seconds(deadline) > 0:
-            remaining = _remaining_seconds(deadline)
-            if (
-                resolve_peer
-                and transport is BackendRouteTransport.TsnetRestricted
-                and host
-                and self.tailnet_peer_waiter is not None
-            ):
-                wait_timeout = max(remaining - tailnet_dial_reserve_seconds(remaining), 0.001)
-                self.tailnet_peer_waiter.wait_for_peer(host, wait_timeout)
-            target = (
-                self._resolved_tailnet_target(route.proxy_target, transport, host)
-                if resolve_peer
-                else route.proxy_target
-            )
             try:
-                return self.connector.connect(target, _remaining_seconds(deadline))
+                return self.connector.connect(
+                    route.proxy_target,
+                    _remaining_seconds(deadline),
+                )
             except OSError as exc:
                 last_error = exc
-                if not resolve_peer:
-                    # The name did not connect. Every later attempt goes through
-                    # the netmap, which is where a stale peer gets corrected.
-                    resolve_peer = True
-                    continue
                 if _remaining_seconds(deadline) <= self.config.ready_poll_seconds:
                     break
                 time.sleep(self.config.ready_poll_seconds)
@@ -219,25 +166,6 @@ class BackendRouteDialer:
             raise TimeoutError(msg) from last_error
         msg = f"backend route {route_id} dial timed out"
         raise TimeoutError(msg)
-
-    def _resolved_tailnet_target(
-        self,
-        proxy_target: str,
-        transport: BackendRouteTransport,
-        host: str,
-    ) -> str:
-        if (
-            transport is not BackendRouteTransport.TsnetRestricted
-            or not host
-            or _is_ip_address(host)
-            or self.tailnet_peer_resolver is None
-        ):
-            return proxy_target
-        resolved_host = self.tailnet_peer_resolver.resolve_peer_host(host)
-        if not resolved_host:
-            return proxy_target
-        _host, port = split_host_port(proxy_target)
-        return join_host_port(resolved_host, port)
 
 
 def split_host_port(address: str) -> tuple[str, int]:
@@ -256,26 +184,10 @@ def proxy_target_host(address: str) -> str:
     return host.rstrip(".")
 
 
-def _is_ip_address(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host.strip("[]"))
-    except ValueError:
-        return False
-    return True
-
-
 def join_host_port(host: str, port: int) -> str:
     if ":" in host and not host.startswith("["):
         return f"[{host}]:{port}"
     return f"{host}:{port}"
-
-
-def tailnet_dial_reserve_seconds(remaining_seconds: float) -> float:
-    return min(
-        max(remaining_seconds / 3, MIN_TAILNET_DIAL_RESERVE_SECONDS),
-        MAX_TAILNET_DIAL_RESERVE_SECONDS,
-        remaining_seconds,
-    )
 
 
 def _remaining_seconds(deadline: float) -> float:

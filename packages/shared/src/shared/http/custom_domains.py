@@ -16,7 +16,7 @@ from shared.http.base import HttpModel
 
 class CustomDomainRegisterRequest(HttpModel):
     domain: str = Field(min_length=3, max_length=MAX_HOSTNAME_LENGTH)
-    """An apex such as `acme.com`, or a single-level wildcard such as `*.acme.com`."""
+    """An exact hostname such as `app.acme.com`."""
 
 
 class CustomDomainResponse(HttpModel):

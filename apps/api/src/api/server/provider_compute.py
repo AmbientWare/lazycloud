@@ -18,8 +18,6 @@ from compute.context import ComputeContext
 from coordination.redis_client import RedisClient
 from networking.settings import (
     BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
 )
 from observability.workspace_changes import WorkspaceChangePublisher
 from provider_aws import require_resolvable_aws_credentials
@@ -141,9 +139,6 @@ def aws_account_connection_composition_from_settings(
     connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
     gateway_origin: str,
-    internal_origin: str,
-    tailnet_runtime: TailnetRuntimeSettings,
-    tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
     workspace_changes: WorkspaceChangePublisher,
     capacity_baseline: AwsConnectionCapacityBaseline,
@@ -158,9 +153,6 @@ def aws_account_connection_composition_from_settings(
         connection_settings,
         capacity=capacity_settings,
         gateway_origin=gateway_origin,
-        internal_origin=internal_origin,
-        tailnet_runtime=tailnet_runtime,
-        tailnet_control=tailnet_control,
         backend_route=backend_route,
     )
     bucket_access = AwsDeploymentBucketAccessService(

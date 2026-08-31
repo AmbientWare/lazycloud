@@ -11,11 +11,7 @@ from pathlib import Path
 from compute.reclaim import ComputeReclaimSettings
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
-from networking.settings import (
-    BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-)
+from networking.settings import BackendRouteSettings
 from observability.process_logs import configure_process_logging
 from observability.settings import (
     TelemetrySettings,
@@ -98,9 +94,6 @@ class SchedulerProcessResult:
     billing_enforcement_failure_count: int = 0
     objects_removed: int = 0
     retention_failure_count: int = 0
-    tailnet_cleanup_processed_count: int = 0
-    tailnet_cleanup_completed_count: int = 0
-    tailnet_cleanup_failure_count: int = 0
 
     def to_dict(self) -> dict[str, int]:
         return {
@@ -145,9 +138,6 @@ class SchedulerProcessResult:
             "billing_enforcement_failure_count": self.billing_enforcement_failure_count,
             "objects_removed": self.objects_removed,
             "retention_failure_count": self.retention_failure_count,
-            "tailnet_cleanup_processed_count": self.tailnet_cleanup_processed_count,
-            "tailnet_cleanup_completed_count": self.tailnet_cleanup_completed_count,
-            "tailnet_cleanup_failure_count": self.tailnet_cleanup_failure_count,
             "container_dispatch_count": self.container_dispatch_count,
             "dispatched_container_count": self.dispatched_container_count,
         }
@@ -258,9 +248,6 @@ def run_scheduler(
                 billing_enforcement_failure_count=result.billing_enforcement_failure_count,
                 objects_removed=result.objects_removed,
                 retention_failure_count=result.retention_failure_count,
-                tailnet_cleanup_processed_count=result.tailnet_cleanup_processed_count,
-                tailnet_cleanup_completed_count=result.tailnet_cleanup_completed_count,
-                tailnet_cleanup_failure_count=result.tailnet_cleanup_failure_count,
             )
         stop = threading.Event()
         beats = _loop_heartbeats(heartbeat_file)
@@ -324,8 +311,6 @@ def build_scheduler_runtime(
             volume_metering=VolumeMeteringSettings(),
         ),
         network=SchedulerNetworkSettings(
-            tailnet_runtime=TailnetRuntimeSettings(),
-            tailnet_control=TailnetControlSettings(),
             backend_routes=BackendRouteSettings(),
         ),
         capacity=SchedulerCapacitySettings(

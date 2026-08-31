@@ -1640,7 +1640,11 @@ class ManagementService:
         # used to mean a hundred sessions against a connection budget the whole
         # deployment shares, which is how a dashboard left open exhausted it.
         app_ids = self.control_plane.stub_app_ids(
-            [container.stub_id for container in page.data if not container.app_id],
+            [
+                container.stub_id
+                for container in page.data
+                if not container.app_id and container.stub_id
+            ],
             workspace_id=workspace_record.id,
         )
         return CursorPage(

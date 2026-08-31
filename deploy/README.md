@@ -49,18 +49,18 @@ connection later.
 ### Recreating the control plane
 
 ```sh
-docker compose up -d --build control-plane
+docker compose up -d --build control-plane wireguard-platform
+docker compose ps control-plane wireguard-platform tunnel-gateway
 ```
 
-That is the whole procedure. The control plane runs its own `tailscaled`, so
-nothing else has to be recreated alongside it and no service borrows its network
-namespace.
+`wireguard-platform` shares the control plane's network namespace. Recreate it
+with the control plane so it does not remain attached to a replaced namespace.
+The separate `tunnel-gateway` service keeps its network namespace and continues
+serving enrolled agents.
 
-It mints a short-lived, single-use key for a durable device when it starts. A
-graceful shutdown logs that device out before stopping `tailscaled`; a hard kill
-can leave a stale device for an operator to remove. Its healthcheck resolves the
-host it advertises to workers, so a control plane that came up unable to reach
-the tailnet reports unhealthy rather than serving nothing quietly.
+The stack is usable when all three services are healthy. The platform sidecar's
+readiness proves it configured the replica's stable key and completed a
+WireGuard handshake with the gateway.
 
 ### Shared fleet and one customer machine
 
@@ -114,26 +114,23 @@ unless the image cache is the thing being tested.
 The shared fleet needs nothing cleared: its unit, token, and worker record are all
 derived on start, and its volumes hold only caches.
 
-### Naming the control plane
+### WireGuard endpoint and keys
 
-Read the control plane's tailnet name from the running control plane rather than
-assuming it. A device that lost its name to a collision keeps the `-1` suffix,
-and `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` must match what the device actually
-holds. Do not delete a tailnet device to reclaim a nicer name: it invalidates the
-control plane's identity and takes it off the tailnet.
+Compose publishes gateway UDP port 51820. Agents on the Docker host use the
+default `host.docker.internal:51820`. Set
+`LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT=<host>:51820` when agents reach the host by
+another address. The host may be a DNS name from any provider, but it must reach
+the gateway over UDP. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.
 
-Give `LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL` the MagicDNS name, never the tailnet
-IP. The address changes when the device re-registers. The control plane's
-healthcheck resolves this host, so a stale one now shows up as an unhealthy
-container rather than as nodes that never report — but only the name is checked,
-not that it points at this deployment.
+`wireguard-key-bootstrap` creates one gateway keypair and one platform keypair
+in the `wireguard-keys` named volume. The volume keeps those identities stable
+across container recreation. Agents keep their own private keys in their state
+directories; Postgres stores only their public keys and assigned addresses.
 
-Every deployment value naming the control plane has to carry the real
-device name, `-1` suffix included — `LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL` as
-much as the runtime origin. Each is read on a different path, so fixing one
-proves nothing about the rest: an agent-binary URL pointing at the pre-collision
-name resolved nowhere and failed the boot at `ensure_agent`, long after the
-runtime origin had been corrected. Grep the whole file for the bare name.
+Deleting the key volume changes the gateway and platform identities. During a
+complete local reset, delete it together with Postgres and the agent state so
+the bootstrap can create a coherent network. Never apply that reset to an
+external deployment.
 
 ### Public ingress and DNS
 

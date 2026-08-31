@@ -98,17 +98,6 @@ NETWORK_INTERFACE_NAME_MAX_LENGTH = 15
 DEFAULT_CONTAINER_BRIDGE_NAME = "rt_br0"
 DEFAULT_CONTAINER_SUBNET = "192.168.0.0/20"
 DEFAULT_CONTAINER_IPV6_SUBNET = "fd00:abcd::/64"
-TAILNET_SUBNET = "100.64.0.0/10"
-TAILNET_IPV6_SUBNET = "fd7a:115c:a1e0::/48"
-"""The tailnet's address ranges, which container traffic must be able to reach.
-
-A workload dials the gateway at the runtime origin, and on a managed node that
-origin is a tailnet peer. The tailnet leaves through its own interface rather
-than the default route, so rules written against the default route alone let a
-container reach the internet and nothing internal. Matched on destination rather
-than on an interface name, because the range is what the reachability
-requirement is about — the interface carrying it is an implementation detail.
-"""
 CHECKPOINT_ARCHIVE_EXTENSION = ".tar"
 CHECKPOINT_ORIGIN_PREFIX = "checkpoints"
 CHECKPOINT_FILESYSTEM_DIR = "filesystem"

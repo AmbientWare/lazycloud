@@ -13,6 +13,7 @@ from agent.operations import (
 from agent_app.daemon import CommandResult, DockerAgentWorkerController
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.routing import BackendRouteTransport
 from shared.usage import UsageBillingOwner
 from worker.configuration import WorkerConfiguration
 
@@ -64,7 +65,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
         AgentBootstrap(
             gateway_public_http_url="https://gateway.example.test",
             gateway_runtime_http_url="http://host.docker.internal:8000",
-            transport="tsnet_restricted",
+            transport=BackendRouteTransport.PrivateNetwork,
         ),
     )
 

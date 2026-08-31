@@ -27,7 +27,6 @@ from execution.collections.redis import (
 from identity.auth import TokenIssuer
 from identity.users import UserService
 from images.execution import ManifestImageBuildExecutor
-from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
@@ -129,8 +128,8 @@ def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServi
 
     Separate from the fixture so a test needing a real PostgreSQL backend gets
     the same wiring rather than assembling its own. Only the database differs;
-    everything a workspace needs before it can run anything — the account, the
-    published control-plane origin, provisioned storage — is set up here, and a
+    everything a workspace needs before it can run anything — the account and
+    provisioned storage — is set up here, and a
     graph missing any of it refuses work for a reason the test did not intend.
     """
 
@@ -169,12 +168,6 @@ def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServi
             binary_version="test",
             binary_sha256_by_arch={"amd64": "a" * 64},
         ),
-    )
-    # A running control plane publishes where it is reachable during startup,
-    # and everything that hands that address onward reads it back. These
-    # services are built without that startup, so the fixture stands in for it.
-    RedisControlPlaneOriginRepository(redis).publish(
-        services.gateway_settings.runtime_callback_http_url
     )
     services.control_plane_service.set_workspace(
         "default",

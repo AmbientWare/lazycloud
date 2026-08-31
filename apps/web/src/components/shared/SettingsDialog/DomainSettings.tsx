@@ -159,9 +159,6 @@ function DomainRow({
 
 /** The record to create, laid out the way a DNS form asks for it. */
 function DnsInstructions({ domain }: { domain: CustomDomain }) {
-  // A wildcard registration is entered as the `*` label, which is how every DNS
-  // form names it; spelling out `*.acme.com` there produces `*.acme.com.acme.com`.
-  const recordName = domain.hostname.startsWith("*.") ? "*" : domain.hostname;
   return (
     <div className="mt-1.5 space-y-1.5">
       <p className="text-[11px] text-muted-foreground">
@@ -173,7 +170,7 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
         <dd className="mono text-[11px] text-foreground">CNAME</dd>
         <dt className="text-[11px] text-muted-foreground">Name</dt>
         <dd>
-          <CopyValue value={recordName} label="record name" />
+          <CopyValue value={domain.hostname} label="record name" />
         </dd>
         <dt className="text-[11px] text-muted-foreground">Target</dt>
         <dd>

@@ -11,7 +11,6 @@ resource "kubernetes_namespace" "argocd" {
     name = var.argocd_namespace
   }
 }
-
 resource "helm_release" "argocd" {
   name       = "argocd"
   repository = "https://argoproj.github.io/argo-helm"
@@ -185,4 +184,3 @@ resource "kubernetes_secret" "argocd_repository_credentials" {
   }
 
 }
-

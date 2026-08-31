@@ -11,8 +11,6 @@ from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
     BackendRouteResolver,
-    TailnetPeerResolver,
-    TailnetPeerWaiter,
 )
 from networking.routing import build_backend_route_dial_plan
 from pydantic import JsonValue, TypeAdapter
@@ -40,8 +38,6 @@ _JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 class HttpContainerServiceTransportFactory:
     route_resolver: BackendRouteResolver | None = None
     route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None
-    tailnet_peer_resolver: TailnetPeerResolver | None = None
 
     def create_transport(
         self,
@@ -51,8 +47,6 @@ class HttpContainerServiceTransportFactory:
             options,
             route_resolver=self.route_resolver,
             route_dialer_config=self.route_dialer_config,
-            tailnet_peer_waiter=self.tailnet_peer_waiter,
-            tailnet_peer_resolver=self.tailnet_peer_resolver,
         )
 
 
@@ -61,8 +55,6 @@ class HttpContainerServiceTransport:
     options: ContainerClientConnectionOptions
     route_resolver: BackendRouteResolver | None = None
     route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None
-    tailnet_peer_resolver: TailnetPeerResolver | None = None
 
     def unary(
         self,
@@ -166,8 +158,6 @@ class HttpContainerServiceTransport:
             backend_connection = BackendRouteDialer(
                 resolver=self.route_resolver,
                 config=self.route_dialer_config,
-                tailnet_peer_waiter=self.tailnet_peer_waiter,
-                tailnet_peer_resolver=self.tailnet_peer_resolver,
             ).dial_plan(build_backend_route_dial_plan(self.options.backend_route_id))
             if not isinstance(backend_connection, socket.socket):
                 backend_connection.close()

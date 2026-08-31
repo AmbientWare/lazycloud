@@ -220,6 +220,22 @@ variable "external_secrets_service_account" {
   default     = "external-secrets"
 }
 
+variable "wireguard_bootstrap_service_account" {
+  description = "Service account permitted to initialize the deployment's WireGuard key document."
+  type        = string
+  default     = "wireguard-bootstrap"
+}
+
+variable "wireguard_public_endpoint" {
+  description = "Stable DNS name or address agents use for the WireGuard UDP gateway, including port."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^:[:space:]]+:[0-9]{1,5}$", var.wireguard_public_endpoint))
+    error_message = "wireguard_public_endpoint must be a host and port, for example gateway.example.com:51820."
+  }
+}
+
 variable "redis_node_type" {
   description = "ElastiCache node type for the coordination Redis."
   type        = string

@@ -11,7 +11,7 @@ BACKEND_ROUTE_ADDRESS_SCHEME = "route"
 
 class BackendRouteTransport(StringEnum):
     Direct = "direct"
-    TsnetRestricted = "tsnet_restricted"
+    PrivateNetwork = "private_network"
     LocalDirect = "local_direct"
 
 
@@ -59,7 +59,7 @@ class AgentBackendRoute(ContractModel):
     kind: BackendRouteKind = BackendRouteKind.Container
     port: int = 0
     protocol: BackendRouteProtocol = BackendRouteProtocol.Tcp
-    transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     local_target: str = ""
     proxy_target: str = ""
     state: BackendRouteState = BackendRouteState.Opening

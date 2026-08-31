@@ -11,13 +11,10 @@ from typing import Protocol, runtime_checkable
 from compute.agent_control import (
     ComputeAgentTokenState,
     RoutePrewarmAttemptPlan,
-    TailnetPeerView,
     plan_route_prewarm_attempt,
     plan_route_prewarm_result,
-    route_peer_attrs,
 )
 from networking.dialer import DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS, BackendRouteDialer
-from networking.tailnet import DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS
 from pydantic import JsonValue
 from shared.events import Event
 from shared.routing import AgentBackendRoute
@@ -53,20 +50,8 @@ class ClosableRoutePrewarmRunner(Protocol):
     def close(self) -> None: ...
 
 
-class TailnetPeerStatusProvider(Protocol):
-    def peers(self) -> list[TailnetPeerView]: ...
-
-
 def route_prewarm_shutdown_timeout_seconds(dial_timeout_seconds: float) -> float:
-    """Time one in-flight prewarm still needs once shutdown starts.
-
-    A prewarm thread runs a single backend dial to that dial's own deadline and
-    then records the outcome, which reads tailnet peer status before emitting
-    the event. Both terms are owned by the operations that bound them, so a
-    shutdown budget derived here can never be shorter than the work it waits
-    on and no caller has to keep a second number in step.
-    """
-    return dial_timeout_seconds + DEFAULT_TAILNET_STATUS_TIMEOUT_SECONDS
+    return dial_timeout_seconds + 1.0
 
 
 @dataclass(slots=True)
@@ -120,7 +105,6 @@ class RoutePrewarmService:
         events: RoutePrewarmEventEmitter,
         *,
         runner: RoutePrewarmRunner | None = None,
-        peer_provider: TailnetPeerStatusProvider | None = None,
         interval_seconds: float = 30.0,
     ) -> None:
         self.dialer = dialer
@@ -130,7 +114,6 @@ class RoutePrewarmService:
                 dialer.config.timeout_seconds
             )
         )
-        self.peer_provider = peer_provider
         self.interval_seconds = interval_seconds
         self.attempts: dict[str, datetime] = {}
         self._lock = threading.Lock()
@@ -170,12 +153,10 @@ class RoutePrewarmService:
             if connection is not None:
                 connection.close()
         latency_ms = int(max(time.monotonic() - started, 0) * 1000)
-        peer_attrs = self._peer_attrs(route.proxy_target)
         result = plan_route_prewarm_result(
             route,
             dial_latency_ms=latency_ms,
             error=error,
-            peer_attrs=peer_attrs,
         )
         attrs: dict[str, JsonValue] = dict(result.attrs)
         event_data: dict[str, JsonValue] = {
@@ -199,14 +180,6 @@ class RoutePrewarmService:
             data=event_data,
             workspace_id=agent_state.workspace_id,
         )
-
-    def _peer_attrs(self, proxy_target: str) -> dict[str, str]:
-        if self.peer_provider is None:
-            return {}
-        try:
-            return route_peer_attrs(proxy_target, self.peer_provider.peers())
-        except Exception as exc:
-            return route_peer_attrs(proxy_target, [], status_error=str(exc))
 
     def close(self) -> None:
         runner = self.runner

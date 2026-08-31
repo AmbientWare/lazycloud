@@ -4,10 +4,9 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from boto3.session import Session
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.deployment_settings import MissingDeploymentSettingError
@@ -15,12 +14,27 @@ from shared.identity import WorkspaceStorageConfig
 from shared.timestamps import utc_now
 from shared.workspace_storage import WorkspaceStorageGrant
 
-from provider_aws.account_connection import AwsConnectionStsClient
+from provider_aws.account_connection import AwsConnectionStsClient, ambient_connection_session
+
+
+class _WorkspaceSessionCredentials(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    access_key_id: str = Field(alias="AccessKeyId", min_length=1)
+    secret_access_key: str = Field(alias="SecretAccessKey", min_length=1)
+    session_token: str = Field(alias="SessionToken", min_length=1)
+    expiration: datetime | None = Field(default=None, alias="Expiration")
+
+
+class _WorkspaceAssumeRoleResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    credentials: _WorkspaceSessionCredentials = Field(alias="Credentials")
 
 
 def _ambient_sts_client(region_name: str) -> AwsConnectionStsClient:
     """STS as whatever identity this process already has, and no profile."""
-    return Session(region_name=region_name).client("sts")
+    return ambient_connection_session(region_name=region_name).client("sts")
 
 
 def _workspace_session_name(workspace_id: str) -> str:
@@ -151,24 +165,24 @@ class AwsWorkspaceStorageIssuer:
             DurationSeconds=seconds,
             Policy=json.dumps(workspace_bucket_session_policy(bucket), separators=(",", ":")),
         )
-        credentials = assumed["Credentials"]
-        if not isinstance(credentials, dict):
-            raise TypeError("assume-role response carried no credentials")
-        expiration = credentials.get("Expiration")
+        try:
+            credentials = _WorkspaceAssumeRoleResponse.model_validate(assumed).credentials
+        except ValidationError as exc:
+            raise TypeError("assume-role response carried no valid credentials") from exc
         return WorkspaceStorageGrant(
             endpoint_url=storage.endpoint_url,
             region=storage.region or self.settings.region_name,
             bucket_name=bucket,
             prefix=storage.key_prefix,
             force_path_style=storage.force_path_style,
-            access_key=str(credentials["AccessKeyId"]),
-            secret_key=str(credentials["SecretAccessKey"]),
-            session_token=str(credentials["SessionToken"]),
+            access_key=credentials.access_key_id,
+            secret_key=credentials.secret_access_key,
+            session_token=credentials.session_token,
             # STS states its own expiry, and it is authoritative over the duration
             # asked for: a chained role is capped at an hour however long a caller
             # requests, so trusting the request would refresh too late.
-            expires_at=expiration
-            if expiration is not None
+            expires_at=credentials.expiration
+            if credentials.expiration is not None
             else utc_now() + timedelta(seconds=seconds),
         )
 

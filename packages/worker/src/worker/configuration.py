@@ -82,7 +82,7 @@ class WorkerExecutionConfiguration(ContractModel):
 
 
 class WorkerNetworkConfiguration(ContractModel):
-    route_transport: BackendRouteTransport = BackendRouteTransport.TsnetRestricted
+    route_transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     agent_bridge_network: bool = False
     bridge_name: str = DEFAULT_CONTAINER_BRIDGE_NAME
     bridge_subnet: str = DEFAULT_CONTAINER_SUBNET
