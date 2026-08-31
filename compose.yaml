@@ -412,6 +412,8 @@ services:
       PANGOLIN_ENDPOINT: "${LAZYCLOUD_PANGOLIN_ENDPOINT:-http://pangolin:3000}"
       DISABLE_CLIENTS: "true"
       HEALTH_FILE: /tmp/healthy
+    extra_hosts:
+      - "gerbil:host-gateway"
     depends_on:
       pangolin-bootstrap:
         condition: service_completed_successfully
@@ -584,6 +586,8 @@ services:
     ports:
       - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
       - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
+    extra_hosts:
+      - "gerbil:host-gateway"
     depends_on:
       <<: *lazycloud-depends
       administrator-bootstrap:

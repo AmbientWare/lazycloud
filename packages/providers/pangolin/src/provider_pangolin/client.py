@@ -139,6 +139,7 @@ class PangolinResource(_Model):
     subdomain: str | None = None
     full_domain: str | None = Field(default=None, alias="fullDomain")
     mode: Literal["http", "ssh", "rdp", "vnc", "tcp", "udp"]
+    ssl: bool
     sso: bool
     enabled: bool
 
@@ -426,7 +427,10 @@ class PangolinClient:
                     _resource_name(resource.domain_id, "*"),
                 }:
                     continue
-                resource = self._ensure_public_resource_passthrough(resource)
+                resource = self._ensure_public_resource_configuration(
+                    resource,
+                    ssl=resource.ssl,
+                )
                 self._ensure_targets(resource, platform_site_ids=site_ids)
             if len(resources) < 100:
                 return
@@ -437,6 +441,7 @@ class PangolinClient:
         *,
         hostname: str,
         site_ids: tuple[int, ...],
+        ssl: bool,
     ) -> PangolinResource:
         self._require_platform_target()
         normalized = hostname.strip().lower().rstrip(".")
@@ -475,7 +480,7 @@ class PangolinClient:
                 name=_PLATFORM_RESOURCE_NAME,
                 subdomain=subdomain,
             )
-        resource = self._ensure_public_resource_passthrough(resource)
+        resource = self._ensure_public_resource_configuration(resource, ssl=ssl)
         self._ensure_targets(resource, platform_site_ids=site_ids)
         return resource
 
@@ -656,7 +661,7 @@ class PangolinClient:
                     f"Pangolin resource {resource.resource_id} no longer matches "
                     "its LazyCloud hostname"
                 )
-            resource = self._ensure_public_resource_passthrough(resource)
+            resource = self._ensure_public_resource_configuration(resource, ssl=True)
             self._ensure_targets(resource)
 
     def _domain_resources(self, domain_id: str) -> tuple[PangolinResource, ...]:
@@ -696,21 +701,23 @@ class PangolinClient:
         )
         return self._parse(data, PangolinResource, "resource creation")
 
-    def _ensure_public_resource_passthrough(
+    def _ensure_public_resource_configuration(
         self,
         resource: PangolinResource,
+        *,
+        ssl: bool,
     ) -> PangolinResource:
-        if not resource.sso and resource.enabled:
+        if not resource.sso and resource.enabled and resource.ssl is ssl:
             return resource
         data = self._request(
             "POST",
             f"/public-resource/{resource.resource_id}",
-            json={"sso": False, "enabled": True},
+            json={"sso": False, "enabled": True, "ssl": ssl},
         )
         updated = self._parse(data, PangolinResource, "resource access update")
-        if updated.sso or not updated.enabled:
+        if updated.sso or not updated.enabled or updated.ssl is not ssl:
             raise PangolinApiError(
-                f"Pangolin resource {resource.resource_id} did not accept public access",
+                f"Pangolin resource {resource.resource_id} did not accept its public configuration",
                 status_code=200,
                 retryable=True,
             )

@@ -161,6 +161,7 @@ def bootstrap_filesystem(
         site_count=site_count,
         client_count=client_count,
         public_hostname=public_hostname,
+        public_tls=False,
     )
     print_payload(ctx, _result_payload(result))
 
@@ -184,6 +185,7 @@ def bootstrap_aws(
         site_count=site_count,
         client_count=client_count,
         public_hostname=public_hostname,
+        public_tls=True,
     )
     print_payload(ctx, _result_payload(result))
 

@@ -262,6 +262,7 @@ def test_domain_cleanup_removes_only_lazycloud_owned_resources() -> None:
             "name": "lazycloud-domain-one-apex",
             "fullDomain": "app.example.com",
             "mode": "http",
+            "ssl": True,
             "sso": False,
             "enabled": True,
         },
@@ -271,6 +272,7 @@ def test_domain_cleanup_removes_only_lazycloud_owned_resources() -> None:
             "name": "customer-owned-resource",
             "fullDomain": "other.example.com",
             "mode": "http",
+            "ssl": True,
             "sso": True,
             "enabled": True,
         },
@@ -280,6 +282,7 @@ def test_domain_cleanup_removes_only_lazycloud_owned_resources() -> None:
             "name": "lazycloud-domain-two-apex",
             "fullDomain": "third.example.com",
             "mode": "http",
+            "ssl": True,
             "sso": False,
             "enabled": True,
         },
@@ -332,6 +335,7 @@ def test_platform_public_resource_has_one_health_checked_target_per_site() -> No
                     "subdomain": "api",
                     "fullDomain": "api.lazycloud.example.com",
                     "mode": "http",
+                    "ssl": True,
                     "sso": True,
                     "enabled": True,
                 },
@@ -347,6 +351,7 @@ def test_platform_public_resource_has_one_health_checked_target_per_site() -> No
                     "subdomain": "api",
                     "fullDomain": "api.lazycloud.example.com",
                     "mode": "http",
+                    "ssl": False,
                     "sso": False,
                     "enabled": True,
                 },
@@ -358,6 +363,7 @@ def test_platform_public_resource_has_one_health_checked_target_per_site() -> No
     resource = _client(handle).ensure_platform_public_resource(
         hostname="api.lazycloud.example.com",
         site_ids=(23, 24),
+        ssl=False,
     )
 
     assert resource.resource_id == 71
@@ -369,7 +375,11 @@ def test_platform_public_resource_has_one_health_checked_target_per_site() -> No
         "mode": "http",
     }
     assert requests[3].url.path == "/v1/public-resource/71"
-    assert json.loads(requests[3].content) == {"sso": False, "enabled": True}
+    assert json.loads(requests[3].content) == {
+        "sso": False,
+        "enabled": True,
+        "ssl": False,
+    }
     target_requests = requests[5:]
     assert all(request.url.path == "/v1/public-resource/71/target" for request in target_requests)
     target_bodies = [json.loads(request.content) for request in target_requests]
@@ -433,4 +443,5 @@ def test_platform_bootstrap_refuses_to_orphan_privileged_identities() -> None:
             site_count=1,
             client_count=2,
             public_hostname="api.lazycloud.example.com",
+            public_tls=True,
         )

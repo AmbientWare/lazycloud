@@ -63,6 +63,7 @@ class PangolinPlatformBootstrap:
         site_count: int,
         client_count: int,
         public_hostname: str,
+        public_tls: bool,
     ) -> PangolinPlatformBootstrapResult:
         if site_count < 1 or client_count < 1:
             raise InvalidInputError("Pangolin platform site and client counts must be positive")
@@ -150,6 +151,7 @@ class PangolinPlatformBootstrap:
         self.client.ensure_platform_public_resource(
             hostname=public_hostname,
             site_ids=tuple(item.site_id for item in credentials.sites),
+            ssl=public_tls,
         )
         return PangolinPlatformBootstrapResult(
             site_count=len(credentials.sites),
