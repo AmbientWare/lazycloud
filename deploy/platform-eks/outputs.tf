@@ -39,11 +39,17 @@ output "ecr_repositories" {
 }
 
 output "secret_arns" {
-  description = "The two documents this deployment's credentials live in."
+  description = "The documents this deployment's credentials live in."
   value = {
-    platform = aws_secretsmanager_secret.platform.arn
-    operator = aws_secretsmanager_secret.operator.arn
+    platform  = aws_secretsmanager_secret.platform.arn
+    operator  = aws_secretsmanager_secret.operator.arn
+    wireguard = aws_secretsmanager_secret.wireguard.arn
   }
+}
+
+output "wireguard_secret" {
+  description = "Entry initialized with the gateway and stable platform WireGuard keys."
+  value       = aws_secretsmanager_secret.wireguard.name
 }
 
 output "operator_secret" {
@@ -56,10 +62,7 @@ output "runtime_configuration" {
   value = {
     LAZYCLOUD_OBJECT_STORE_BUCKET                  = aws_s3_bucket.objects["objects"].id
     LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX = local.workspace_bucket_prefix
-    # Carries the deployment name because a tailnet is shared across accounts.
-    # Two deployments advertising one hostname collide, and the loser keeps a
-    # "-1" suffix that every configured origin naming the old name then misses.
-    LAZYCLOUD_OBJECT_STORE_REGION_NAME = var.region
+    LAZYCLOUD_OBJECT_STORE_REGION_NAME             = var.region
     # Empty is meaningful and distinct from omitted: it tells the object store to
     # resolve the platform role through the SDK credential chain and to presign
     # against S3 itself rather than a local endpoint.
@@ -98,17 +101,8 @@ output "runtime_configuration" {
     # `rediss`, because the replication group requires TLS in transit. A plain
     # `redis://` here connects, gets refused at the handshake, and reports it as
     # a connection error rather than as a scheme.
-    LAZYCLOUD_REDIS_URL = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
-    # Managed, and stated rather than defaulted. The runtime's own default is
-    # `disabled`, so a deployment that says nothing comes up with no tailnet
-    # device at all: it serves, reports healthy, and no worker can reach it.
-    # Stated because the runtime will not infer it. A tailnet daemon is opted
-    # into rather than inherited, so the default is off and a deployment that
-    # says nothing serves, reports healthy, and holds no address any worker can
-    # reach. Everything else about the tailnet is a default that is already
-    # right: the device name is a constant the enrolment origin is built from,
-    # and the two tags match the policy `deploy/tailnet` grants.
-    LAZYCLOUD_TAILNET_MODE = "managed"
+    LAZYCLOUD_REDIS_URL                 = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
+    LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT = var.wireguard_public_endpoint
     # Read by the catalog publisher rather than the control plane: it is the
     # account the credential is checked against before any plan or price is
     # written.

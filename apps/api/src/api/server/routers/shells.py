@@ -26,7 +26,6 @@ from identity.websocket_tickets import (
     WebSocketTicketService,
 )
 from networking.dialer import BackendRouteDialerConfig, BackendRouteResolver
-from networking.tailnet import TailnetRuntime
 from shared.errors import UpstreamUnavailableError
 from shared.http.shells import (
     CreateShellInExistingContainerRequest,
@@ -48,7 +47,6 @@ from api.server.service_dependencies import (
     backend_route_dialer_config,
     backend_route_resolver,
     shell_service,
-    tailnet_runtime_service,
 )
 from api.server.services import ApiServices
 
@@ -160,7 +158,6 @@ async def shell_connect_tunnel(
     service: ShellControlService = Depends(shell_service),
     route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
     route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
-    tailnet_runtime: TailnetRuntime | None = Depends(tailnet_runtime_service),
 ) -> StreamingResponse:
     target = service.shell_backend_target(
         stub_id=stub_id,
@@ -173,8 +170,6 @@ async def shell_connect_tunnel(
             target,
             route_resolver=route_resolver,
             route_dialer_config=route_dialer_config,
-            tailnet_peer_waiter=tailnet_runtime,
-            tailnet_peer_resolver=tailnet_runtime,
         )
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Failed to connect to container") from exc
@@ -194,7 +189,6 @@ async def shell_connect_websocket(
     services: ApiServices = Depends(current_websocket_services),
     route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
     route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
-    tailnet_runtime: TailnetRuntime | None = Depends(tailnet_runtime_service),
 ) -> None:
     authorization = _authorize_shell_websocket(
         websocket,
@@ -215,8 +209,6 @@ async def shell_connect_websocket(
             target,
             route_resolver=route_resolver,
             route_dialer_config=route_dialer_config,
-            tailnet_peer_waiter=tailnet_runtime,
-            tailnet_peer_resolver=tailnet_runtime,
         )
     except Exception as exc:
         # Surface why the shell tunnel could not be established — without this

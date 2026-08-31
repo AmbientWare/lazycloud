@@ -65,6 +65,8 @@ jobs:
             --set image.repositoryPrefix=lazycloud-prod \
             --set image.tag=0000000000000000000000000000000000000000 \
             --set runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME=us-east-1 \
+            --set runtime.LAZYCLOUD_REDIS_URL=rediss://redis.invalid:6379/0 \
+            --set runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT=wireguard.example.invalid:51820 \
             --set runtime.LAZYCLOUD_STRIPE_ACCOUNT_ID=acct_0000000000 \
             --set runtime.LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN=arn:aws:iam::000000000000:role/control \
             --set cloudflared.tunnelId=00000000-0000-0000-0000-000000000000 \
@@ -72,6 +74,7 @@ jobs:
             --set secrets.map.LAZYCLOUD_DATABASE_URL=deployment/database-url \
             --set secrets.map.LAZYCLOUD_TOKEN=deployment/administrator-token \
             --set secrets.files.LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS=deployment/tunnel \
+            --set wireguard.secretId=deployment/wireguard \
             --set fleet.account_id=000000000000 \
             --set fleet.role_arn=arn:aws:iam::000000000000:role/connection \
             --set fleet.vpc_id=vpc-0 \

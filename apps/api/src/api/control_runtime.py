@@ -23,13 +23,7 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
-from networking.settings import (
-    BackendRouteSettings,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-)
-from networking.tailnet import TailnetRuntime
-from networking.tailnet_control import TailscaleTailnetControl
+from networking.settings import BackendRouteSettings
 from observability.settings import (
     TelemetrySettings,
     VolumeMeteringSettings,
@@ -229,10 +223,9 @@ def _production_api_services() -> ApiServices:
     container_service_settings = ContainerServiceSettings()
     retention_settings = RetentionSettings()
     volume_metering_settings = VolumeMeteringSettings()
-    tailnet_runtime_settings = TailnetRuntimeSettings()
-    tailnet_control_settings = TailnetControlSettings()
     backend_route_settings = BackendRouteSettings()
     with ExitStack() as rollback:
+        owned_resources: list[ApiOwnedResource] = []
         database = DatabaseClient.from_settings(
             DatabaseSettings(application_name=DatabaseApplicationName.Api)
         )
@@ -244,15 +237,6 @@ def _production_api_services() -> ApiServices:
             decode_responses=False,
         )
         rollback.callback(binary_redis_client.close)
-        # The control plane joins the tailnet the way every agent does, and
-        # `tailscale up` advertises no tag of its own: the tag rides on the key,
-        # so it mints its own rather than redeeming one a deployment supplied
-        # and may have scoped wrongly.
-        tailnet_runtime = TailnetRuntime(
-            tailnet_runtime_settings,
-            auth_key_issuer=TailscaleTailnetControl(tailnet_control_settings.to_control_config()),
-        )
-        rollback.callback(tailnet_runtime.close)
         object_store_client = S3ObjectStoreClient.from_settings(object_store_settings)
         rollback.callback(object_store_client.close)
         resolved_image_archive_settings = image_archive_settings.resolve(object_store_settings)
@@ -263,7 +247,7 @@ def _production_api_services() -> ApiServices:
         )
         if image_archive_store is not None:
             rollback.callback(image_archive_store.close)
-        owned_resources: list[ApiOwnedResource] = [object_store_client]
+        owned_resources.append(object_store_client)
         if image_archive_store is not None:
             owned_resources.append(image_archive_store)
         services = ApiServices.create(
@@ -278,8 +262,6 @@ def _production_api_services() -> ApiServices:
             aws_account_connection_settings=aws_account_connection_settings,
             aws_capacity_settings=aws_capacity_settings,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_settings,
-            tailnet_runtime_settings=tailnet_runtime_settings,
-            tailnet_control_settings=tailnet_control_settings,
             backend_route_settings=backend_route_settings,
             object_store_settings=object_store_settings,
             object_store_client=object_store_client,
@@ -295,9 +277,6 @@ def _production_api_services() -> ApiServices:
             binary_redis_client=binary_redis_client,
             owns_redis_client=True,
             owns_binary_redis_client=True,
-            tailnet_peer_waiter=tailnet_runtime,
-            tailnet_peer_resolver=tailnet_runtime,
-            tailnet_runtime=tailnet_runtime,
             owned_resources=tuple(owned_resources),
         )
         rollback.pop_all()

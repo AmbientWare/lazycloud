@@ -6,7 +6,6 @@ ARG PYTHON_IMAGE=python:3.12.11-slim-bullseye@sha256:411fa4dcfdce7e7a3057c45662b
 ARG AMAZON_LINUX_IMAGE=amazonlinux:2023@sha256:f590f33787c76bee9c42cc6826ee887bc1f3b60ba5ed137af450a6c0a79cdb57
 ARG AGENT_RUNTIME_IMAGE=debian:bookworm-slim
 ARG DOCKER_CLI_IMAGE=docker:27.5.1-cli
-ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.98.8
 FROM ${PYTHON_IMAGE} AS agent-artifact-build
 
 ARG TARGETARCH
@@ -64,7 +63,6 @@ FROM scratch AS agent-artifact
 COPY --from=agent-artifact-amazon-linux-test /out/ /
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
-FROM ${TAILSCALE_IMAGE} AS tailscale
 
 FROM ${AGENT_RUNTIME_IMAGE} AS agent-runtime
 ARG TARGETARCH
@@ -75,17 +73,16 @@ RUN apt-get update \
         fuse3 \
         iproute2 \
         iptables \
+        wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
-COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 COPY --from=agent-artifact-amazon-linux-test \
     "/out/lazycloud-agent-linux-${TARGETARCH}" \
     /usr/local/bin/lazycloud-agent
 
 RUN docker --version \
-    && tailscale version \
+    && wg --version \
     && lazycloud-agent --help >/dev/null
 
 ENTRYPOINT ["lazycloud-agent"]

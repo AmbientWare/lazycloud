@@ -4,7 +4,6 @@ ARG PYTHON_IMAGE=python:3.12-slim
 ARG PYTHON310_IMAGE=python:3.10-slim
 ARG PYTHON311_IMAGE=python:3.11-slim
 ARG PYTHON312_IMAGE=python:3.12-slim
-ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.98.8
 ARG GO_IMAGE=golang:1.24.4-bookworm
 
 FROM debian:bookworm-slim AS runsc
@@ -100,8 +99,6 @@ WORKDIR /src
 COPY apps/sandbox-supervisor/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/lazycloud-sandbox-supervisor .
-
-FROM ${TAILSCALE_IMAGE} AS tailscale
 
 FROM ${PYTHON_IMAGE} AS python-manifests
 
@@ -347,8 +344,6 @@ COPY --from=qemu-binfmt /out/opt/lazycloud/binfmt/ /opt/lazycloud/binfmt/
 COPY --from=criu /out/usr/ /usr/
 COPY --from=sandbox-supervisor /out/lazycloud-sandbox-supervisor /usr/local/bin/lazycloud-sandbox-supervisor
 COPY --from=managed-runtime /out/ /opt/lazycloud/managed-runtime-source/
-COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
-COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 COPY --from=managed-package-source /packages /app/packages
 RUN criu --version | grep -Fx 'Version: 4.2'
 

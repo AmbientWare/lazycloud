@@ -14,7 +14,6 @@ from execution.pods.service import PodControlService
 from execution.services import ExecutionServices
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
-from networking.control_plane_origin import RedisControlPlaneOriginRepository
 from scheduler.agent_pool import SchedulerAgentPoolService
 from scheduler.autoscaling import (
     AutoscalingDriver,
@@ -48,7 +47,6 @@ from scheduler.service import (
     SchedulerPlanChangeService,
     SchedulerRetentionService,
     SchedulerStateStores,
-    SchedulerTailnetCleanupService,
     SchedulerVolumeMeteringService,
     SchedulerWorkloadControls,
 )
@@ -111,7 +109,6 @@ class SchedulerRuntime:
                 create_schema=create_schema,
                 redis_client=redis_client,
                 gateway_origin=public_gateway_http_url,
-                runtime_callback_origin=runtime_callback_http_url,
                 observability=observability,
                 storage=storage,
                 network=network,
@@ -131,7 +128,6 @@ class SchedulerRuntime:
                 billing_reconciliation=app_services.billing_reconciliation,
                 billing_enforcement=app_services.billing_enforcement,
                 retention=app_services.retention,
-                tailnet_cleanup=app_services.tailnet_cleanup,
                 custom_domains=app_services.custom_domains,
                 managed_compute_reconcile_interval_seconds=(
                     managed_compute_reconcile_interval_seconds
@@ -168,17 +164,14 @@ class SchedulerRuntime:
         billing_reconciliation: SchedulerBillingReconciliationService,
         billing_enforcement: SchedulerBillingEnforcementService,
         retention: SchedulerRetentionService | None,
-        tailnet_cleanup: SchedulerTailnetCleanupService,
         custom_domains: CustomDomainService,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
     ) -> SchedulerRuntime:
-        # The same origin the control plane published, read the same way the
-        # control plane reads it back. This process has no tailnet device of
-        # its own, so deriving the address locally would work there and be
-        # wrong here.
-        runtime_origin = RedisControlPlaneOriginRepository(redis_client).resolve
+        def runtime_origin() -> str:
+            return runtime_callback_http_url
+
         compute_states = RedisComputeStateRepository(redis_client)
         pool_states = RedisWorkerPoolStateRepository(redis_client)
         worker_states = RedisSchedulerWorkerRepository(redis_client)
@@ -295,7 +288,6 @@ class SchedulerRuntime:
                 billing_reconciliation=billing_reconciliation,
                 billing_enforcement=billing_enforcement,
                 retention=retention,
-                tailnet_cleanup=tailnet_cleanup,
                 custom_domains=custom_domains,
             ),
             retention_interval_seconds=retention_settings.interval_seconds,

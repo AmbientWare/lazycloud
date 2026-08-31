@@ -34,7 +34,8 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    TailnetCleanupTombstoneTable,
+    WireGuardGatewayTable,
+    WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.custom_domains import CustomDomainTable
@@ -139,7 +140,6 @@ __all__ = [
     "SecretTable",
     "SourceCacheCleanupTargetTable",
     "StubTable",
-    "TailnetCleanupTombstoneTable",
     "TaskAttemptTable",
     "TaskDependencyTable",
     "TaskTable",
@@ -149,6 +149,8 @@ __all__ = [
     "UserIdentityTable",
     "UserTable",
     "VolumeTable",
+    "WireGuardGatewayTable",
+    "WireGuardPeerTable",
     "WorkerCacheGenerationTable",
     "WorkerEventTable",
     "WorkerTable",

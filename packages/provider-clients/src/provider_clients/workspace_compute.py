@@ -8,10 +8,7 @@ from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.providers import ComputeProviderResolver, ResolvedComputeProvider
 from networking.settings import (
     BackendRouteSettings,
-    ProviderNetworkClass,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-    validate_provider_network_configuration,
+    validate_remote_provider_network_configuration,
 )
 from provider_aws import (
     AWS_INSTANCE_CATALOG,
@@ -134,19 +131,12 @@ def workspace_compute_provider_resolver(
     *,
     connections: AwsConnectionLoader,
     gateway_origin: str,
-    internal_origin: str,
     presigned_origin: str = "",
-    tailnet_runtime: TailnetRuntimeSettings,
-    tailnet_control: TailnetControlSettings,
     backend_route: BackendRouteSettings,
 ) -> WorkspaceComputeProviderResolver:
-    validate_provider_network_configuration(
-        ProviderNetworkClass.Remote,
+    validate_remote_provider_network_configuration(
         gateway_origin=gateway_origin,
-        internal_origin=internal_origin,
         presigned_origin=presigned_origin,
-        runtime=tailnet_runtime,
-        control=tailnet_control,
         backend_route=backend_route,
     )
     artifacts = capacity_settings.binaries_by_region(agent_binary_settings)

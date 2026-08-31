@@ -7,10 +7,8 @@ import pytest
 from api.control_runtime import ControlPlaneRuntime, ControlPlaneRuntimeState
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.agent_control import TailnetPeerView
 from coordination.redis_client import RedisClient, RedisWireScalar
 from fastapi.testclient import TestClient
-from networking.tailnet import TailnetRuntimeError
 from shared.http.system import HealthResponse
 from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.redis_fakes import FakeRedis
@@ -19,35 +17,6 @@ from tests.redis_fakes import FakeRedis
 class _FailingRedis(FakeRedis):
     def ping(self, **_kwargs: RedisWireScalar) -> bool:
         return False
-
-
-class _FailingTailnetRuntime:
-    def __init__(self) -> None:
-        self.started = False
-        self.closed = False
-
-    def start(self) -> None:
-        self.started = True
-        raise TailnetRuntimeError("tailnet sidecar is not authenticated (NeedsLogin)")
-
-    def close(self) -> None:
-        self.closed = True
-
-    def wait_for_peer(self, host: str, timeout_seconds: float) -> None:
-        _ = host, timeout_seconds
-
-    def resolve_peer_host(self, host: str) -> str:
-        return host
-
-    def peers(self) -> list[TailnetPeerView]:
-        return []
-
-    def self_dns_name(self) -> str:
-        return ""
-
-    def advertise_service(self, service: str, ports: tuple[int, ...]) -> str:
-        _ = service, ports
-        return ""
 
 
 def test_control_plane_runtime_start_is_one_shot_under_concurrency(
@@ -150,27 +119,3 @@ def test_control_plane_health_endpoint_reports_dependency_failure(
     health = HealthResponse.model_validate_json(response.content)
     assert health.ok is False
     assert health.checks["redis"].error == "unhealthy"
-
-
-def test_control_plane_refuses_to_start_without_its_tailnet(
-    isolated_services: ApiServices,
-) -> None:
-    """A control plane reaches every agent over the tailnet, so one that cannot
-    join serves nothing. It used to log a warning and come up reporting healthy,
-    which is how a broken tailnet stayed invisible for hours."""
-    tailnet_runtime = _FailingTailnetRuntime()
-    services = ApiServices.create(
-        isolated_services.database,
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
-        root=isolated_services.root,
-        create_schema=False,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        tailnet_runtime=tailnet_runtime,
-    )
-
-    with pytest.raises(BaseException) as error, TestClient(create_app(services)):
-        pass
-
-    assert tailnet_runtime.started is True
-    assert "NeedsLogin" in str(error.value) or isinstance(error.value, BaseExceptionGroup)

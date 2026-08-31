@@ -382,8 +382,9 @@ class _Sts:
         RoleSessionName: str,
         DurationSeconds: int,
         ExternalId: str | None = None,
+        Policy: str = "",
     ) -> Mapping[str, object]:
-        del RoleSessionName, DurationSeconds
+        del RoleSessionName, DurationSeconds, Policy
         if self.state.revoked or (self.state.enforce_external_id and ExternalId != _EXTERNAL_ID):
             raise ClientError(
                 {"Error": {"Code": "AccessDenied", "Message": "not authorized"}},

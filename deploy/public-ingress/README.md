@@ -17,7 +17,7 @@ everything except two prefixes refused before the origin is dialed:
 | Refused at the edge | Why |
 | --- | --- |
 | `/metrics` | No route serves this. The rule stays so the path cannot be exposed if one returns. |
-| `/worker-repository/` | Worker RPC. Workers dial the internal or tailnet origin, never the public one. |
+| `/worker-repository/` | Worker RPC. Workers dial the internal or WireGuard origin, never the public one. |
 
 Both are also authorized at the origin — the edge rule removes the surface, it
 does not replace the check. Verify with a request that the origin would answer

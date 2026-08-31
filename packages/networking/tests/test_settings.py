@@ -3,64 +3,22 @@ from __future__ import annotations
 import pytest
 from networking.settings import (
     BackendRouteSettings,
-    ProviderNetworkClass,
-    TailnetControlSettings,
-    TailnetRuntimeSettings,
-    validate_provider_network_configuration,
+    validate_remote_provider_network_configuration,
 )
-from networking.tailnet import TailnetRuntimeMode
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
 
-def test_tailnet_control_rejects_partial_cleanup_credentials() -> None:
-    settings = TailnetControlSettings(
-        oauth_client_id="oauth-client",
-        oauth_client_secret=SecretStr(""),
-    )
-
-    with pytest.raises(ValueError, match="OAuth client ID and secret"):
-        settings.to_control_config()
-
-
-def test_remote_provider_gate_reports_all_missing_security_requirements() -> None:
-    runtime = TailnetRuntimeSettings(
-        mode=TailnetRuntimeMode.Managed,
-        hostname="",
-    )
-    control = TailnetControlSettings(
-        oauth_client_id="",
-        oauth_client_secret=SecretStr(""),
-        agent_tag="tag:shared",
-        control_plane_tag="tag:shared",
-        api_url="http://user:secret@tailscale.example.test?insecure=true",
-    )
+def test_remote_provider_gate_reports_every_missing_network_requirement() -> None:
     route = BackendRouteSettings(auth_key=SecretStr("short"))
 
     with pytest.raises(ValueError) as error:
-        validate_provider_network_configuration(
-            ProviderNetworkClass.Remote,
+        validate_remote_provider_network_configuration(
             gateway_origin="https://user@control.example.test/path",
-            internal_origin="http://control-plane:9000",
             presigned_origin="http://object-store:9002",
-            runtime=runtime,
-            control=control,
             backend_route=route,
         )
 
     message = str(error.value)
     assert "gateway HTTP URL must be an HTTPS origin" in message
-    # The presigned endpoint is the third origin a remote node dials, and the
-    # only one it does not use while enrolling: a local value here produces a
-    # machine that joins and reports ready before failing to read its image.
     assert "'object-store' is unreachable from a remote machine" in message
-    assert "tailnet hostname is required" in message
-    assert "tailnet agent and control-plane tags must be distinct" in message
-    assert "Tailscale OAuth client ID is required" in message
-    assert "Tailscale OAuth client secret is required" in message
-    assert "Tailscale API URL must be an HTTPS URL without query or fragment" in message
     assert "backend route authentication key must be at least 32 bytes" in message
-
-
-def test_tailnet_tags_reject_invalid_values() -> None:
-    with pytest.raises(ValidationError, match="tag:<name>"):
-        TailnetControlSettings(agent_tag="provider_agent")

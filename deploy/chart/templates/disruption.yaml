@@ -37,3 +37,13 @@ spec:
   selector:
     matchLabels:
       app: cloudflared
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tunnel-gateway
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: tunnel-gateway

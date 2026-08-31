@@ -12,7 +12,6 @@ from api.server.services import ApiServices
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
-from compute.agent_control import TailnetConfig
 from compute.offers import ComputeOffer
 from compute.providers import (
     ComputeProviderResolver,
@@ -339,7 +338,6 @@ def _service(
         gateway=replace(
             isolated_services.gateway_service,
             compute_state=RedisComputeStateRepository(isolated_services.redis()),
-            tailnet=TailnetConfig(),
         ),
         compute=_compute(isolated_services, provider),
         identity_verifier=AwsProviderNodeIdentityAdapter(
@@ -533,7 +531,7 @@ def _offer() -> ComputeOffer:
 
 
 class _Bootstrap:
-    """A pool bootstrap provisioner with no tailnet behind it."""
+    """A pool bootstrap provisioner that returns the configured public origin."""
 
     def __init__(self) -> None:
         self.released: list[str] = []

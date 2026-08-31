@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wireguard-bootstrap
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccounts.wireguardBootstrap }}
+      containers:
+        - name: bootstrap
+          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
+          command:
+            - lazycloud-admin
+            - wireguard
+            - bootstrap-aws
+            - --secret-id
+            - {{ required "wireguard.secretId is required" .Values.wireguard.secretId | quote }}
+            - --region
+            - {{ required "runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME is required" .Values.runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME | quote }}
+            - --platform-peers
+            - {{ .Values.wireguard.platformPeers | quote }}
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}

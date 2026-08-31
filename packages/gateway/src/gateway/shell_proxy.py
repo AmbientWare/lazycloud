@@ -8,8 +8,6 @@ from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
     BackendRouteResolver,
-    TailnetPeerResolver,
-    TailnetPeerWaiter,
 )
 from networking.routing import build_backend_route_dial_plan
 from shared.routing import AgentBackendRoute, parse_backend_route_address
@@ -20,8 +18,6 @@ def connect_shell_backend(
     *,
     route_resolver: BackendRouteResolver | None = None,
     route_dialer_config: BackendRouteDialerConfig | None = None,
-    tailnet_peer_waiter: TailnetPeerWaiter | None = None,
-    tailnet_peer_resolver: TailnetPeerResolver | None = None,
 ) -> socket.socket:
     parsed_route_id, address_is_route = parse_backend_route_address(target.address)
     route_id = target.route.route_id if target.route is not None else parsed_route_id
@@ -34,8 +30,6 @@ def connect_shell_backend(
         config=(route_dialer_config or BackendRouteDialerConfig()).model_copy(
             update={"timeout_seconds": target.dial_timeout_seconds}
         ),
-        tailnet_peer_waiter=tailnet_peer_waiter,
-        tailnet_peer_resolver=tailnet_peer_resolver,
     )
     connection = (
         dialer.dial_plan(build_backend_route_dial_plan(route_id))

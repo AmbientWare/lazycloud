@@ -35,18 +35,23 @@ resetting the schema.
 
 Write it before the first install.
 
-## Why the control plane is not pinned to a node
+## Private network
 
-It holds a tailnet device, for outbound rather than inbound. Userspace
-networking would serve workers reaching it by tailnet name; what it cannot do is
-dial, and this process dials every agent's route proxy by name. So it needs
-`NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`.
+Each control-plane pod has a `wireguard-platform` sidecar in the same network
+namespace. The StatefulSet ordinal selects a stable platform keypair, so
+`controlPlane.replicas` and `wireguard.platformPeers` must match. The sidecar
+needs `NET_ADMIN` and `/dev/net/tun`; those are pod requirements, not reasons to
+select an instance type.
 
-None of those is a reason to choose hardware. The capabilities are a property of
-the pod and the device node is a property of the node image every Auto Mode node
-already runs, so nothing here names a node group, a taint or an instance type.
-Exposing the control plane through the Tailscale operator instead would answer
-the inbound half and leave the outbound half needing `tailscaled` anyway.
+The separate `tunnel-gateway` Deployment exposes UDP 51820 through a
+`LoadBalancer` Service. `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` is the
+stable host and port agents receive at enrollment. The host may use any DNS
+provider as long as it reaches that UDP service.
+
+The `wireguard-bootstrap` Job initializes one Secrets Manager document with the
+gateway keypair and the small set of platform keypairs. External Secrets mounts
+them as read-only files. Agent private keys remain on their machines; Postgres
+stores public peer records, and Redis stores only the active-gateway lease.
 
 ## Requests, and the node count that follows from them
 
@@ -61,12 +66,11 @@ node, not from estimates. Memory carries a limit; CPU does not, because a CPU
 limit is throttling, and throttling a connector or an API turns contention into
 the latency the request was meant to prevent.
 
-`control-plane` and `cloudflared` also spread one replica per node. That is what
-makes their second replica redundancy rather than cost, and it is what obliges
-the cluster to hold more than one node: `DoNotSchedule` leaves the second
-replica Pending, and Pending is the only thing Karpenter provisions for. A
-`PodDisruptionBudget` on each is the other half. Spreading decides placement,
-and only a budget stops one drain removing both.
+`control-plane`, `cloudflared`, and `tunnel-gateway` spread replicas across
+nodes. That is what turns their second replicas into redundancy, and it obliges
+the cluster to hold more than one node. `DoNotSchedule` leaves the second replica
+Pending, and Pending is the state Karpenter provisions for. A
+`PodDisruptionBudget` on each prevents one drain from removing both replicas.
 
 ## Replica counts
 
@@ -75,6 +79,11 @@ tolerates overlapping ticks, so more is safe once there is load to justify it.
 
 `cache-server` at one is a correctness decision: it serves a local directory, so
 a second replica is a second cache rather than a larger one.
+
+`tunnel-gateway` runs two replicas against one gateway key. Redis grants the
+active lease to one replica and the other remains ready to take over. This is
+availability, not packet-capacity scaling; both replicas do not forward traffic
+at the same time.
 
 `cloudflared` runs several deliberately. Cloudflare balances a tunnel across its
 connectors, and one was a single point of failure that also collided with any

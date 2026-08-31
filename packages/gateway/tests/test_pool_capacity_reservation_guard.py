@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.agent_control import TailnetConfig, agent_machine_worker_id
+from compute.agent_control import agent_machine_worker_id
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
@@ -92,7 +92,6 @@ def _gateway(
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
         capacity_reservations=guard,
-        tailnet=TailnetConfig(),
     )
 
 

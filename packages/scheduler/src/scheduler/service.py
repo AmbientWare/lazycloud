@@ -277,26 +277,6 @@ class SchedulerRetentionService(Protocol):
     def reconcile(self, *, now: datetime | None = None) -> SchedulerRetentionBatch: ...
 
 
-class SchedulerTailnetCleanupBatch(Protocol):
-    @property
-    def processed_count(self) -> int: ...
-
-    @property
-    def completed_count(self) -> int: ...
-
-    @property
-    def failure_count(self) -> int: ...
-
-
-class SchedulerTailnetCleanupService(Protocol):
-    def reconcile_due(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> SchedulerTailnetCleanupBatch: ...
-
-
 class SchedulerCustomDomainService(Protocol):
     def reconcile_due(
         self,
@@ -304,10 +284,6 @@ class SchedulerCustomDomainService(Protocol):
         now: datetime | None = None,
         limit: int = 50,
     ) -> int: ...
-
-
-class SchedulerTailnetCleanupBacklog(Protocol):
-    def pending_count(self) -> int: ...
 
 
 class ScheduledFunctionControl(Protocol):
@@ -323,28 +299,6 @@ class ScheduledFunctionControl(Protocol):
 
 class SchedulerPreemptionRecovery(Protocol):
     def recover_unsettled(self, *, limit: int = 100) -> list[str]: ...
-
-
-class UnavailableTailnetCleanupBatch(ContractModel):
-    processed_count: int = 0
-    completed_count: int = 0
-    failure_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class UnavailableTailnetCleanupService:
-    backlog: SchedulerTailnetCleanupBacklog
-
-    def reconcile_due(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> UnavailableTailnetCleanupBatch:
-        del now, limit
-        return UnavailableTailnetCleanupBatch(
-            failure_count=self.backlog.pending_count(),
-        )
 
 
 def next_run_after(expression: str, now: datetime | None = None) -> datetime:
@@ -407,7 +361,6 @@ class SchedulerMaintenanceControls:
     billing_reconciliation: SchedulerBillingReconciliationService | None = None
     billing_enforcement: SchedulerBillingEnforcementService | None = None
     retention: SchedulerRetentionService | None = None
-    tailnet_cleanup: SchedulerTailnetCleanupService | None = None
     custom_domains: SchedulerCustomDomainService | None = None
 
 
@@ -765,8 +718,7 @@ class Scheduler:
     ) -> SchedulerRunResult:
         """Everything that talks to somebody else's service.
 
-        Stripe, S3, Tailscale and Cloudflare all answer on their own schedule,
-        and this is the pass that waits for them. Nothing placement needs is
+        Stripe, S3, and Cloudflare answer on their own schedule. Nothing placement needs is
         produced here: the allowance admission reads is written when usage is
         priced, so draining the outbox afterwards is downstream of the number
         that decides whether work may start.
@@ -780,10 +732,6 @@ class Scheduler:
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
         meter_events_pruned = self._best_effort_prune_meter_events(now=now)
-        tailnet_cleanup = self._best_effort_reconcile_tailnet_cleanup(
-            now=now,
-            limit=container_limit,
-        )
         self._best_effort_reconcile_custom_domains(now=now)
         expired_tokens_pruned = (
             self._best_effort_prune_expired_tokens(now=now) if include_containers else 0
@@ -793,9 +741,6 @@ class Scheduler:
             self._best_effort_retain_artifacts(now=now) if include_containers else (0, 0)
         )
         return SchedulerRunResult(
-            tailnet_cleanup_processed_count=tailnet_cleanup[0],
-            tailnet_cleanup_completed_count=tailnet_cleanup[1],
-            tailnet_cleanup_failure_count=tailnet_cleanup[2],
             expired_tokens_pruned=expired_tokens_pruned,
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
@@ -1459,31 +1404,6 @@ class Scheduler:
             LOGGER.exception("scheduler custom domain reconciliation failed")
             return 0
 
-    def _best_effort_reconcile_tailnet_cleanup(
-        self,
-        *,
-        now: datetime | None,
-        limit: int,
-    ) -> tuple[int, int, int]:
-        tailnet_cleanup = self.maintenance.tailnet_cleanup
-        if tailnet_cleanup is None:
-            return (0, 0, 0)
-        try:
-            batch = tailnet_cleanup.reconcile_due(now=now, limit=limit)
-        except Exception:
-            LOGGER.exception("scheduler tailnet cleanup reconciliation failed")
-            return (0, 0, 1)
-        if batch.failure_count:
-            LOGGER.warning(
-                "scheduler tailnet cleanup remains incomplete",
-                extra={
-                    "tailnet_cleanup_processed_count": batch.processed_count,
-                    "tailnet_cleanup_completed_count": batch.completed_count,
-                    "tailnet_cleanup_failure_count": batch.failure_count,
-                },
-            )
-        return (batch.processed_count, batch.completed_count, batch.failure_count)
-
     def _best_effort_drain_worker_pools(
         self,
         *,
@@ -1646,9 +1566,6 @@ class SchedulerRunResult(ContractModel):
     capacity_reservations: list[CapacityProvisioningReservation] = Field(default_factory=list)
     capacity_interruptions: list[WorkerPreemptionResult] = Field(default_factory=list)
     managed_compute_reconciliations: list[PrivateUnitState] = Field(default_factory=list)
-    tailnet_cleanup_processed_count: int = 0
-    tailnet_cleanup_completed_count: int = 0
-    tailnet_cleanup_failure_count: int = 0
     worker_pool_drains: list[WorkerPoolDrainResult] = Field(default_factory=list)
     container_dispatches: list[SchedulerContainerDispatchResult] = Field(default_factory=list)
     orphaned_containers_failed: list[str] = Field(default_factory=list)

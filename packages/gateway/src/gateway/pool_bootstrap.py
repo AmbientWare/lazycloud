@@ -1,10 +1,4 @@
-"""What a managed pool's launch template tells every node it starts.
-
-The control-plane origin, the agent artifact and its digest, and the worker
-image the node will run. A node carries no credential in its user-data: it
-reports over the public origin, and enrolment vends it the single-use machine
-key it joins the tailnet with.
-"""
+"""What a managed pool's launch template tells every node it starts."""
 
 from __future__ import annotations
 
@@ -12,8 +6,6 @@ from dataclasses import dataclass
 
 from compute.offers import ComputeOffer
 from compute.providers import ProviderUnitBootstrap
-from database.context import ServiceContext
-from networking.settings import TailnetControlSettings
 from shared.compute_policy import ComputeUnitRecord
 
 # A launch template version already in service keeps working for this long after
@@ -56,14 +48,12 @@ class PoolBootstrapProvisioner:
 
 
 def pool_bootstrap_provisioner(
-    context: ServiceContext,
     *,
     control_plane_url: str,
     agent_version: str,
     agent_sha256: str,
     agent_binary_url: str,
     worker_image_digest: str,
-    tailnet_control: TailnetControlSettings,
 ) -> PoolBootstrapProvisioner:
     """Build the provisioner both the API and the scheduler compose.
 

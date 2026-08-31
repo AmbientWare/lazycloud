@@ -5,13 +5,16 @@ description = "Full LazyCloud CLI."
 requires-python = ">=3.12"
 dependencies = [
     "agent",
+    "boto3>=1.35,<2",
     "control",
     "database",
     "foundation",
     "identity",
     "lazycloud-shared==0.1.0",
     "lazycloud==0.1.0",
+    "networking",
     "provider-clients",
+    "provider-aws",
     "provider-stripe",
     "pydantic>=2.8,<3",
     "rich>=15,<16",

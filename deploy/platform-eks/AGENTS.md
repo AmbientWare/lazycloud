@@ -36,9 +36,9 @@ runbook and states the two deployment models.
   declared here and no workload names a node: Karpenter sizes from what the pods
   request, so a hand-declared pool would be choosing hardware on its behalf and
   paying for it whether or not anything lands there.
-  The control plane does need `NET_ADMIN`, `NET_RAW` and a real `/dev/net/tun`
-  for the tailnet device it holds. Those are properties of a pod and of the node
-  image every node already runs, not reasons to pick an instance type.
+  The control-plane WireGuard sidecar and gateway need `NET_ADMIN` and a real
+  `/dev/net/tun`. Those are properties of a pod and of the node image every node
+  already runs, not reasons to pick an instance type.
 - A workload's AWS identity is its own, assumed through the cluster's OIDC
   provider, and never the node's. The subject names service accounts exactly: a
   wildcard would let any pod in the namespace hold the role that reaches every

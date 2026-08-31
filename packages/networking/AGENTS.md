@@ -1,6 +1,6 @@
 # Networking package
 
-Protocol-neutral route planning, backend dial targets, and tailnet helpers.
+Protocol-neutral route planning, backend dial targets, and private-network control.
 Gateway composition stays outside.
 
 Environment settings may satisfy runtime options directly where the semantics

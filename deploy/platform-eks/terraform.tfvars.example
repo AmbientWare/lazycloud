@@ -5,7 +5,7 @@ control_plane_cidr            = "10.80.0.0/16"
 control_plane_instance_type   = "t4g.medium"
 control_plane_root_volume_gib = 100
 
-# Empty is the intended value. The tunnel, the tailnet and SSM are all outbound.
+# Empty is the intended value. Public ingress, WireGuard, and SSM need no operator ingress.
 operator_ingress_cidrs = []
 
 # The payment-provider account the catalog is published into, checked against the

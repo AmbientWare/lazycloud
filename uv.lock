@@ -36,6 +36,7 @@ members = [
     "scheduler-app",
     "storage",
     "storage-client",
+    "tunnel-gateway-app",
     "worker",
     "worker-bootstrap-app",
     "worker-repository",
@@ -505,12 +506,15 @@ version = "0.1.0"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "agent" },
+    { name = "boto3" },
     { name = "control" },
     { name = "database" },
     { name = "foundation" },
     { name = "identity" },
     { name = "lazycloud" },
     { name = "lazycloud-shared" },
+    { name = "networking" },
+    { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-stripe" },
     { name = "pydantic" },
@@ -522,12 +526,15 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
+    { name = "boto3", specifier = ">=1.35,<2" },
     { name = "control", editable = "packages/control" },
     { name = "database", editable = "packages/database" },
     { name = "foundation", editable = "packages/foundation" },
     { name = "identity", editable = "packages/identity" },
     { name = "lazycloud", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
+    { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic", specifier = ">=2.8,<3" },
@@ -2201,6 +2208,29 @@ wheels = [
 ]
 
 [[package]]
+name = "tunnel-gateway-app"
+version = "0.1.0"
+source = { editable = "apps/tunnel-gateway" }
+dependencies = [
+    { name = "coordination" },
+    { name = "database" },
+    { name = "lazycloud-shared" },
+    { name = "networking" },
+    { name = "observability" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "coordination", editable = "packages/coordination" },
+    { name = "database", editable = "packages/database" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "networking", editable = "packages/networking" },
+    { name = "observability", editable = "packages/observability" },
+    { name = "pydantic-settings", specifier = ">=2.4,<3" },
+]
+
+[[package]]
 name = "typer"
 version = "0.27.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2499,6 +2529,7 @@ dev = [
     { name = "scheduler-app" },
     { name = "storage" },
     { name = "storage-client" },
+    { name = "tunnel-gateway-app" },
     { name = "worker" },
     { name = "worker-bootstrap-app" },
     { name = "worker-repository" },
@@ -2536,6 +2567,7 @@ workspace = [
     { name = "scheduler-app" },
     { name = "storage" },
     { name = "storage-client" },
+    { name = "tunnel-gateway-app" },
     { name = "worker" },
     { name = "worker-bootstrap-app" },
     { name = "worker-repository" },
@@ -2583,6 +2615,7 @@ dev = [
     { name = "scheduler-app", editable = "apps/scheduler" },
     { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
+    { name = "tunnel-gateway-app", editable = "apps/tunnel-gateway" },
     { name = "worker", editable = "packages/worker" },
     { name = "worker-bootstrap-app", editable = "apps/worker-bootstrap" },
     { name = "worker-repository", editable = "packages/worker-repository" },
@@ -2620,6 +2653,7 @@ workspace = [
     { name = "scheduler-app", editable = "apps/scheduler" },
     { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
+    { name = "tunnel-gateway-app", editable = "apps/tunnel-gateway" },
     { name = "worker", editable = "packages/worker" },
     { name = "worker-bootstrap-app", editable = "apps/worker-bootstrap" },
     { name = "worker-repository", editable = "packages/worker-repository" },

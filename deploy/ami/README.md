@@ -6,9 +6,9 @@ boots from. For each requested region it:
 1. resolves the latest Amazon Linux 2023 x86_64 AMI from the public SSM
    parameter `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64`;
 2. launches one temporary `t3.small` (account default VPC unless `--subnet-id`
-   is given) whose user data installs Docker, the pinned Tailscale build from
-   `shared.tailscale_install`, the sha-verified release agent executable at its
-   production path, pre-pulls the container-worker image by digest, writes
+   is given) whose user data installs Docker, WireGuard tools, the sha-verified
+   release agent executable at its production path, pre-pulls the
+   container-worker image by digest, writes
    `/etc/lazycloud-node-image.json`, and powers the instance off;
 3. waits for the instance to stop, registers the image as
    `lazycloud-node-<release-version>-amd64` (image, snapshot, instance, and

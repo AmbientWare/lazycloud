@@ -4,7 +4,6 @@ from datetime import datetime
 
 from pydantic import Field
 
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -26,11 +25,10 @@ class AgentCapacityState(StringEnum):
     Cordoned = "cordoned"
 
 
-class TailnetEnrollmentPhase(StringEnum):
+class PrivateNetworkEnrollmentPhase(StringEnum):
     Unconfigured = "unconfigured"
-    Rotating = "rotating"
-    AwaitingDevice = "awaiting_device"
-    Bound = "bound"
+    AwaitingHandshake = "awaiting_handshake"
+    Connected = "connected"
     Failed = "failed"
     Revoked = "revoked"
 
@@ -97,21 +95,29 @@ class MachineBootstrapFailureReason(StringEnum):
     Unknown = "unknown"
 
 
-class TailnetCleanupTombstone(ContractModel):
+class WireGuardPeerStatus(StringEnum):
+    Active = "active"
+    Revoked = "revoked"
+
+
+class WireGuardGateway(ContractModel):
     id: str
+    public_key: str = Field(min_length=44, max_length=44)
+    endpoint: str = Field(min_length=3, max_length=512)
+    updated_at: datetime
+
+
+class WireGuardPeer(ContractModel):
+    id: str
+    enrollment_id: str
     workspace_id: str
-    pool: MachinePool
     machine_id: str
-    generations: list[int] = Field(default_factory=list)
-    auth_key_ids: list[str] = Field(default_factory=list)
-    device_ids: list[str] = Field(default_factory=list)
-    not_before: datetime
-    next_attempt_at: datetime
-    revision: int = Field(default=1, ge=1)
-    attempt_count: int = Field(default=0, ge=0)
-    last_error: str = ""
-    claim_token: str = ""
-    claimed_until: datetime | None = None
+    public_key: str = Field(min_length=44, max_length=44)
+    address: str = Field(min_length=9, max_length=18)
+    generation: int = Field(ge=1)
+    status: WireGuardPeerStatus = WireGuardPeerStatus.Active
+    last_handshake_at: datetime | None = None
+    revoked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -143,6 +149,8 @@ __all__ = [
     "MachineBootstrapPhase",
     "MachineReadinessPhase",
     "PreflightSeverity",
-    "TailnetCleanupTombstone",
-    "TailnetEnrollmentPhase",
+    "PrivateNetworkEnrollmentPhase",
+    "WireGuardGateway",
+    "WireGuardPeer",
+    "WireGuardPeerStatus",
 ]

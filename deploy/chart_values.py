@@ -75,6 +75,9 @@ REQUIRED_RUNTIME_VARIABLES = {
         "the coordination Redis; without it the scheduler holds no lease and the "
         "control plane publishes no origin for a worker to dial"
     ),
+    "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT": (
+        "the stable UDP host and port agents use to reach the WireGuard gateway"
+    ),
 }
 
 
@@ -137,6 +140,9 @@ def render(args: argparse.Namespace) -> None:
             "apex": runtime["LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"].removeprefix("https://"),
             "tunnelId": args.tunnel_id,
         },
+        "wireguard": {
+            "secretId": args.wireguard_secret,
+        },
     }
     Path(args.output).write_text(yaml.safe_dump(values, sort_keys=True))
     print(json.dumps({"output": args.output, "tag": args.tag}, indent=2))
@@ -169,6 +175,11 @@ def _parser() -> argparse.ArgumentParser:
         help="JSON file of variable to secret name, for entries mounted rather than exported.",
     )
     parser.add_argument("--tunnel-id", default="", help="Cloudflare tunnel the ingress runs.")
+    parser.add_argument(
+        "--wireguard-secret",
+        required=True,
+        help="Secrets Manager document holding gateway and platform peer keys.",
+    )
     parser.add_argument("--release-manifest-url", default="", help="Release this deployment runs.")
     parser.add_argument("--output", required=True, help="Where to write the rendered values.")
     return parser

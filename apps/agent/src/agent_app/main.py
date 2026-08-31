@@ -36,7 +36,6 @@ from agent.service_manager import (
     resolve_service_platform,
 )
 from gateway.http import LeaveAgentRequest
-from networking.tailnet import TailnetRuntimeMode
 from provider_clients import ProviderNodeIdentityEvidenceProvider
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
@@ -60,8 +59,8 @@ from agent_app.daemon import (
     AgentDaemonRunResult,
     AgentGatewayClient,
     AgentLeaveClient,
+    AgentPrivateNetworkRuntime,
     AgentProcessLock,
-    AgentTailnetRuntime,
     DockerAgentWorkerController,
     HttpAgentGatewayClient,
     ProviderInstanceIdentityMode,
@@ -100,12 +99,6 @@ class AgentCommandArgs(argparse.Namespace):
     route_proxy_bind_host: str
     route_proxy_bind_port: int
     route_proxy_advertise_host: str
-    tailnet_mode: str
-    tailnet_state_dir: str
-    tailnet_socket: str
-    tailscale_binary: str
-    tailscaled_binary: str
-    tailnet_userspace_networking: bool
     once: bool
     target: str
     service_name: str
@@ -189,7 +182,7 @@ def run_agent_daemon(
     client: AgentGatewayClient | None = None,
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: Callable[[], AgentResourceDetection] | None = None,
-    tailnet_runtime: AgentTailnetRuntime | None = None,
+    private_network_runtime: AgentPrivateNetworkRuntime | None = None,
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
 ) -> AgentDaemonRunResult:
     _configure_daemon_logging()
@@ -198,7 +191,7 @@ def run_agent_daemon(
         client=client,
         worker_controller=worker_controller,
         resource_detector=resource_detector,
-        tailnet_runtime=tailnet_runtime,
+        private_network_runtime=private_network_runtime,
         provider_identity=provider_identity,
     )
     with AgentProcessLock.acquire(Path(options.state_dir)):
@@ -271,18 +264,6 @@ def _add_daemon_options(
     parser.add_argument("--route-proxy-bind-host", default="127.0.0.1")
     parser.add_argument("--route-proxy-bind-port", type=int, default=DEFAULT_ROUTE_PROXY_PORT)
     parser.add_argument("--route-proxy-advertise-host", default="")
-    parser.add_argument(
-        "--tailnet-mode",
-        choices=[
-            item.value for item in TailnetRuntimeMode if item is not TailnetRuntimeMode.Disabled
-        ],
-        default=TailnetRuntimeMode.Managed.value,
-    )
-    parser.add_argument("--tailnet-state-dir", default="")
-    parser.add_argument("--tailnet-socket", default="")
-    parser.add_argument("--tailscale-binary", default="tailscale")
-    parser.add_argument("--tailscaled-binary", default="tailscaled")
-    parser.add_argument("--tailnet-userspace-networking", action="store_true")
     if include_run_flags:
         parser.add_argument("--once", action="store_true")
 
@@ -333,12 +314,6 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
             bind_port=args.route_proxy_bind_port,
             advertise_host=args.route_proxy_advertise_host,
         ),
-        tailnet_mode=TailnetRuntimeMode(args.tailnet_mode),
-        tailnet_state_dir=args.tailnet_state_dir,
-        tailnet_socket_path=args.tailnet_socket,
-        tailnet_tailscale_binary=args.tailscale_binary,
-        tailnet_tailscaled_binary=args.tailscaled_binary,
-        tailnet_userspace_networking=args.tailnet_userspace_networking,
         capacity=AgentCapacityOptions(
             max_cpu=args.max_cpu,
             max_memory=args.max_memory,
@@ -463,18 +438,6 @@ def _install_service_command(
         command.extend(["--route-proxy-bind-port", str(args.route_proxy_bind_port)])
     if args.route_proxy_advertise_host:
         command.extend(["--route-proxy-advertise-host", args.route_proxy_advertise_host])
-    if args.tailnet_mode != TailnetRuntimeMode.Managed.value:
-        command.extend(["--tailnet-mode", args.tailnet_mode])
-    if args.tailnet_state_dir:
-        command.extend(["--tailnet-state-dir", args.tailnet_state_dir])
-    if args.tailnet_socket:
-        command.extend(["--tailnet-socket", args.tailnet_socket])
-    if args.tailscale_binary != "tailscale":
-        command.extend(["--tailscale-binary", args.tailscale_binary])
-    if args.tailscaled_binary != "tailscaled":
-        command.extend(["--tailscaled-binary", args.tailscaled_binary])
-    if args.tailnet_userspace_networking:
-        command.append("--tailnet-userspace-networking")
     return command
 
 
