@@ -13,7 +13,6 @@ NEWT_CONFIG_FILE = "newt.json"
 NEWT_CONNECTION_FILE = "connection.json"
 NEWT_HEALTH_FILE = "healthy"
 NEWT_LOG_FILE = "newt.log"
-NEWT_INTERFACE_NAME = "lazycloud0"
 
 
 class NewtConnection(BaseModel):
@@ -75,10 +74,7 @@ class NewtRuntime:
             "name": connection.site_name,
             "id": connection.connector_id,
             "secret": connection.secret.get_secret_value(),
-            "nativeMain": True,
-            "interfaceMain": NEWT_INTERFACE_NAME,
             "disableSsh": True,
-            "noCloud": True,
             "healthFile": str(self.health_path),
             "logLevel": "INFO",
         }
@@ -168,7 +164,6 @@ def _write_json_atomic(path: Path, payload: dict[str, JsonValue], *, permissions
 
 
 __all__ = [
-    "NEWT_INTERFACE_NAME",
     "NewtConnection",
     "NewtRuntime",
     "NewtRuntimeStatus",

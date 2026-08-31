@@ -138,8 +138,7 @@ class PangolinResource(_Model):
     name: str
     subdomain: str | None = None
     full_domain: str | None = Field(default=None, alias="fullDomain")
-    http: bool
-    protocol: Literal["tcp", "udp"]
+    mode: Literal["http", "ssh", "rdp", "vnc", "tcp", "udp"]
     sso: bool
     enabled: bool
 
@@ -466,11 +465,7 @@ class PangolinClient:
             raise InvalidInputError("Pangolin has duplicate LazyCloud platform resources")
         if resources:
             resource = resources[0]
-            if (
-                resource.full_domain != normalized
-                or not resource.http
-                or resource.protocol != "tcp"
-            ):
+            if resource.full_domain != normalized or resource.mode != "http":
                 raise InvalidInputError(
                     "Pangolin platform resource does not match the configured hostname"
                 )
@@ -655,8 +650,7 @@ class PangolinClient:
             if (
                 resource.domain_id != domain.domain_id
                 or resource.full_domain != expected_full_domain
-                or not resource.http
-                or resource.protocol != "tcp"
+                or resource.mode != "http"
             ):
                 raise InvalidInputError(
                     f"Pangolin resource {resource.resource_id} no longer matches "

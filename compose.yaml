@@ -618,7 +618,7 @@ services:
       - |
         export CLIENT_ID="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_0_ID)"
         export CLIENT_SECRET="$$(cat /var/lib/lazycloud/pangolin/LAZYCLOUD_PANGOLIN_PLATFORM_CLIENT_0_SECRET)"
-        exec /entrypoint.sh
+        exec /entrypoint.sh --override-dns=false
     environment:
       PANGOLIN_ENDPOINT: "${LAZYCLOUD_PANGOLIN_ENDPOINT:-http://pangolin:3000}"
     cap_add:

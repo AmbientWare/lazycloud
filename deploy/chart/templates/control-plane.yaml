@@ -133,7 +133,7 @@ spec:
               test -s /run/lazycloud/pangolin-client/secret
               export CLIENT_ID="$(cat /run/lazycloud/pangolin-client/id)"
               export CLIENT_SECRET="$(cat /run/lazycloud/pangolin-client/secret)"
-              exec /entrypoint.sh
+              exec /entrypoint.sh --override-dns=false
           env:
             - name: PANGOLIN_ENDPOINT
               value: {{ required "runtime.LAZYCLOUD_PANGOLIN_ENDPOINT is required" $root.Values.runtime.LAZYCLOUD_PANGOLIN_ENDPOINT | quote }}
