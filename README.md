@@ -59,7 +59,7 @@ task and the production boundaries changed since the previous release.
 ## CLI Examples
 
 ```bash
-lazycloud login --endpoint http://127.0.0.1:8000   # approve the code in the web app
+lazycloud login --endpoint http://lazycloud.localhost:8000   # approve the code in the web app
 lazycloud quickstart                               # write quickstart.py
 lazycloud deploy quickstart.py:hello               # deploy the starter function
 lazycloud run quickstart.py:hello 'LazyCloud'         # invoke it
