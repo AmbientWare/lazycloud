@@ -225,7 +225,7 @@ def test_daemon_cordons_current_session_before_bounded_worker_shutdown(
             state_dir=str(tmp_path),
             executor=WorkerExecutor.External,
             interruption_grace_seconds=90,
-            route_proxy=AgentRouteProxyConfig(enabled=False),
+            route_proxy=AgentRouteProxyConfig(bind_port=0),
         ),
         client=gateway,
         worker_controller=_InterruptionWorkerController(tmp_path, events),

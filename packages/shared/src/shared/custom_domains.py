@@ -15,8 +15,7 @@ _UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
 MAX_HOSTNAME_LENGTH = 253
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _DOMAIN = rf"{_LABEL}(?:\.{_LABEL})+"
-_REGISTRABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
-_ASSIGNABLE_PATTERN = re.compile(rf"^{_DOMAIN}$")
+_EXACT_HOSTNAME_PATTERN = re.compile(rf"^{_DOMAIN}$")
 
 
 class CustomDomainPhase(StringEnum):
@@ -121,7 +120,7 @@ def normalize_registrable_domain(value: str) -> str:
     hostname = value.strip().rstrip(".").lower()
     if len(hostname) > MAX_HOSTNAME_LENGTH:
         raise ValueError(f"domain must be at most {MAX_HOSTNAME_LENGTH} characters")
-    if not _REGISTRABLE_PATTERN.fullmatch(hostname):
+    if not _EXACT_HOSTNAME_PATTERN.fullmatch(hostname):
         raise ValueError("domain must be an exact hostname such as app.acme.com")
     return hostname
 
@@ -132,7 +131,7 @@ def normalize_assignable_hostname(value: str) -> str:
     hostname = value.strip().rstrip(".").lower()
     if len(hostname) > MAX_HOSTNAME_LENGTH:
         raise ValueError(f"hostname must be at most {MAX_HOSTNAME_LENGTH} characters")
-    if not _ASSIGNABLE_PATTERN.fullmatch(hostname):
+    if not _EXACT_HOSTNAME_PATTERN.fullmatch(hostname):
         raise ValueError(f"hostname must be a concrete domain name: {value!r}")
     return hostname
 
