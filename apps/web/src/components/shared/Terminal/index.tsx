@@ -172,7 +172,7 @@ export function Terminal({
           )}
         />
         <span>{connectionLabel(state)}</span>
-        {errorMessage ? <span className="text-destructive">— {errorMessage}</span> : null}
+        {errorMessage ? <span className="text-destructive">{errorMessage}</span> : null}
       </div>
       <div
         ref={containerRef}

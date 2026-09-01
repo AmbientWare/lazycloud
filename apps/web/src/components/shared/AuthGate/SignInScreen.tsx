@@ -25,14 +25,14 @@ export function SignInScreen({ error }: { error?: string }) {
         </div>
         <h1 className="mt-3 text-xl font-semibold">Sign in</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Continue with GitHub to reach the control plane. New installations create the first
-          administrator offline.
+          Continue with GitHub. The first administrator for a new installation must be created
+          offline.
         </p>
       </div>
 
       {approvingDevice ? (
         <div className="mb-3 rounded border border-border bg-muted/40 p-2 text-sm text-muted-foreground">
-          A CLI is waiting for approval. Sign in to continue to the device-approval step.
+          A CLI is waiting. Sign in to approve it.
         </div>
       ) : null}
 

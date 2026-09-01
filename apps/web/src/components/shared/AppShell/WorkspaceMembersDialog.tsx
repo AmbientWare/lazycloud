@@ -35,13 +35,10 @@ export function WorkspaceMembersDialog({
           <DialogDescription>People who can access this workspace.</DialogDescription>
         </DialogHeader>
         {owner && billing.data?.entitlements ? (
-          <p className="border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            {billing.data.usage.members}{" "}
-            {billing.data.usage.members === 1 ? "distinct member" : "distinct members"} across this
-            account
+          <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
             {billing.data.entitlements.max_members === "unlimited"
-              ? " · unlimited seats"
-              : ` · ${billing.data.entitlements.max_members} allowed`}
+              ? `${billing.data.usage.members} account members`
+              : `${billing.data.usage.members}/${billing.data.entitlements.max_members} account members`}
           </p>
         ) : null}
         {members.isPending ? (

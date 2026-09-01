@@ -5,13 +5,14 @@ import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/Conta
 import { CopyId } from "@/components/shared/CopyId";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StopCause } from "@/components/shared/StopCause";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, ContainerMetricsPoint, Task } from "@/lib/api/schemas";
-import { durationBetween, exactTime, formatBytes, relativeTime } from "@/lib/format";
+import { formatBytes } from "@/lib/format";
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
@@ -100,17 +101,25 @@ function ContainerDetails({
     },
     {
       label: "Created",
-      value: relativeTime(container.created_at),
-      title: exactTime(container.created_at),
+      value: <LiveRelativeTime value={container.created_at} />,
     },
     {
       label: "Started",
-      value: container.started_at ? relativeTime(container.started_at) : "Not started",
-      title: container.started_at ? exactTime(container.started_at) : undefined,
+      value: container.started_at ? (
+        <LiveRelativeTime value={container.started_at} />
+      ) : (
+        "Not started"
+      ),
     },
     {
       label: "Uptime",
-      value: durationBetween(container.started_at, container.finished_at) ?? "Not started",
+      value: (
+        <LiveDuration
+          startedAt={container.started_at}
+          finishedAt={container.finished_at}
+          fallback="Not started"
+        />
+      ),
     },
   ];
   const latest = latestSample(metrics.data?.points);
@@ -126,13 +135,7 @@ function ContainerDetails({
         </div>
         <FactGrid columns={3} className="mt-4">
           {facts.map((fact) => (
-            <Fact
-              key={fact.label}
-              label={fact.label}
-              value={fact.value}
-              mono={fact.mono}
-              title={fact.title}
-            />
+            <Fact key={fact.label} label={fact.label} value={fact.value} mono={fact.mono} />
           ))}
         </FactGrid>
         <StopCause

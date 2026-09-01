@@ -3,6 +3,7 @@ import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
@@ -18,7 +19,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AuthToken } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 
 import {
   useAccessTokensController,
@@ -64,11 +64,11 @@ export function AccessTokens() {
         {controller.isLoading ? (
           <TokenTableSkeleton />
         ) : controller.loadError ? (
-          <PanelError message="Access tokens could not be loaded. Try again shortly." />
+          <PanelError message="Couldn't load access tokens. Try again." />
         ) : controller.tokens.length === 0 ? (
           <PanelEmpty
             message="No tokens yet"
-            detail="Create one to reach this account from the CLI, CI, or the API."
+            detail="Create a token for CLI, CI, or API access."
             className="min-h-32 p-8"
           />
         ) : (
@@ -129,13 +129,9 @@ function TokenRow({ token, controller }: { token: AuthToken; controller: AccessT
         <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <code className="mono shrink-0">{token.prefix}...</code>
           <span aria-hidden="true">/</span>
-          <time
-            dateTime={token.created_at}
-            title={new Date(token.created_at).toLocaleString()}
-            className="truncate"
-          >
-            Created {relativeTime(token.created_at)}
-          </time>
+          <span className="truncate">
+            Created <LiveRelativeTime value={token.created_at} />
+          </span>
         </div>
       </div>
       <div className="min-w-0 lg:col-span-2">
@@ -195,13 +191,7 @@ function TokenTime({
   return (
     <div className="min-w-0 text-xs text-muted-foreground lg:col-span-2">
       <div className="micro-label mb-1 lg:hidden">{label}</div>
-      {value ? (
-        <time dateTime={value} title={new Date(value).toLocaleString()}>
-          {relativeTime(value)}
-        </time>
-      ) : (
-        fallback
-      )}
+      {value ? <LiveRelativeTime value={value} /> : fallback}
     </div>
   );
 }
@@ -225,8 +215,7 @@ function IssuedTokenNotice({ issued, onDismiss }: { issued: IssuedToken; onDismi
         <span className="min-w-0 truncate text-xs text-muted-foreground">{issued.name}</span>
       </div>
       <p className="mt-0.5 text-[11px] text-muted-foreground">
-        This is the only time the value is shown. Copy it now — dismissing this clears it from the
-        browser. Store it on the machine that needs it with{" "}
+        Copy this token now. Dismissing it clears the value from this browser. Store it with{" "}
         <code className="mono">lazycloud token set</code>.
       </p>
       <div className="mt-2.5 flex flex-wrap items-center gap-2">

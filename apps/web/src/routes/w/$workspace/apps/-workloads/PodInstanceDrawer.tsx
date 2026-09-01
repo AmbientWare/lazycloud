@@ -4,6 +4,7 @@ import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CliHint } from "@/components/shared/CliHint";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { PanelError } from "@/components/shared/PanelError";
@@ -14,7 +15,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ContainerDetail, ContainerMetricsTimeseries, Deployment } from "@/lib/api/schemas";
 import { StopCause } from "@/components/shared/StopCause";
-import { exactTime, relativeTime, resourceAllocation } from "@/lib/format";
+import { resourceAllocation } from "@/lib/format";
 import {
   containerMetricsTimeseriesQueryOptions,
   containerQueryOptions,
@@ -133,9 +134,9 @@ function PodInstanceDrawerBody({
           {record.started_at ? (
             <>
               <span aria-hidden="true"> · </span>
-              <time dateTime={record.started_at} title={exactTime(record.started_at)}>
-                Started {relativeTime(record.started_at)}
-              </time>
+              <span>
+                Started <LiveRelativeTime value={record.started_at} />
+              </span>
             </>
           ) : null}
         </p>
@@ -199,13 +200,9 @@ function PodInstanceDrawerBody({
               <h3 className="text-sm font-medium">Compute</h3>
             </div>
             {latestTimestamp ? (
-              <time
-                dateTime={latestTimestamp}
-                title={exactTime(latestTimestamp)}
-                className="text-[11px] text-muted-foreground"
-              >
-                Updated {relativeTime(latestTimestamp)}
-              </time>
+              <span className="text-[11px] text-muted-foreground">
+                Updated <LiveRelativeTime value={latestTimestamp} />
+              </span>
             ) : null}
           </div>
           <div className="p-4">

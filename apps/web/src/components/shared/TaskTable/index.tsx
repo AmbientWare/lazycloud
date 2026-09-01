@@ -3,6 +3,7 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import {
@@ -14,7 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { Task } from "@/lib/api/schemas";
-import { durationBetween, exactTime, relativeTime, startupBetween } from "@/lib/format";
+import { startupBetween } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -23,6 +24,7 @@ export function TaskTable({
   taskLink,
   showApp = true,
   showWorkload = true,
+  compact = false,
   emptyMessage = "No tasks",
   className,
   continuation,
@@ -33,6 +35,8 @@ export function TaskTable({
   showApp?: boolean;
   /** Off where every row belongs to the same workload and the page names it. */
   showWorkload?: boolean;
+  /** Keeps workload-local activity readable without the full task inventory columns. */
+  compact?: boolean;
   emptyMessage?: string;
   className?: string;
   continuation?: ReactNode;
@@ -50,17 +54,17 @@ export function TaskTable({
 
   return (
     <div data-task-table-scroll="" className={cn("overflow-auto", className)}>
-      <Table className="min-w-[820px]">
+      <Table className={compact ? "table-fixed" : "min-w-[820px]"}>
         <TableHeader className="sticky top-0 z-10 bg-card">
           <TableRow className="border-b border-border hover:bg-transparent">
-            <TableHead>Task</TableHead>
+            <TableHead className={compact ? "w-[38%]" : undefined}>Task</TableHead>
             {showWorkload ? <TableHead>Workload</TableHead> : null}
             {showApp ? <TableHead>App</TableHead> : null}
-            <TableHead>Status</TableHead>
-            <TableHead>Requested</TableHead>
-            <TableHead>Started</TableHead>
-            <TableHead>Startup</TableHead>
-            <TableHead>Duration</TableHead>
+            <TableHead className={compact ? "w-[22%]" : undefined}>Status</TableHead>
+            <TableHead className={compact ? "w-[24%]" : undefined}>Requested</TableHead>
+            {!compact ? <TableHead>Started</TableHead> : null}
+            {!compact ? <TableHead>Startup</TableHead> : null}
+            <TableHead className={compact ? "w-[16%]" : undefined}>Duration</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -124,24 +128,20 @@ export function TaskTable({
                   <StatusChip status={task.status} live={task.status === "running"} />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  <time dateTime={task.created_at} title={exactTime(task.created_at)}>
-                    {relativeTime(task.created_at)}
-                  </time>
+                  <LiveRelativeTime value={task.created_at} />
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {task.started_at ? (
-                    <time dateTime={task.started_at} title={exactTime(task.started_at)}>
-                      {relativeTime(task.started_at)}
-                    </time>
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
+                {!compact ? (
+                  <TableCell className="text-xs text-muted-foreground">
+                    {task.started_at ? <LiveRelativeTime value={task.started_at} /> : "—"}
+                  </TableCell>
+                ) : null}
+                {!compact ? (
+                  <TableCell className="text-xs tabular-nums text-muted-foreground">
+                    {startupBetween(task.created_at, task.started_at) ?? "—"}
+                  </TableCell>
+                ) : null}
                 <TableCell className="text-xs tabular-nums text-muted-foreground">
-                  {startupBetween(task.created_at, task.started_at) ?? "—"}
-                </TableCell>
-                <TableCell className="text-xs tabular-nums text-muted-foreground">
-                  {durationBetween(task.started_at, task.finished_at) ?? "—"}
+                  <LiveDuration startedAt={task.started_at} finishedAt={task.finished_at} />
                 </TableCell>
               </TableRow>
             );

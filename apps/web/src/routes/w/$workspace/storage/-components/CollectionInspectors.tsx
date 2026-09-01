@@ -167,9 +167,7 @@ function InspectorHeader({
   return (
     <div className="flex min-w-0 items-center justify-between gap-3">
       <p className="micro-label truncate">{label}</p>
-      <p className="shrink-0 text-[11px] text-muted-foreground">
-        {countLabel(count, singular)} · live
-      </p>
+      <p className="shrink-0 text-[11px] text-muted-foreground">{countLabel(count, singular)}</p>
     </div>
   );
 }

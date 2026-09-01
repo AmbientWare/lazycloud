@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Link, useNavigate, type LinkProps } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Loader2, RotateCcw } from "lucide-react";
@@ -6,6 +5,7 @@ import { Ban, Loader2, RotateCcw } from "lucide-react";
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { ShellButton } from "@/components/shared/ShellDialog";
 import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
 import { StatusChip } from "@/components/shared/StatusChip";
@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { postJson, withWorkspace } from "@/lib/api/client";
 import { isTerminalTaskStatus, taskSchema, type Task } from "@/lib/api/schemas";
-import { durationBetween, exactTime, relativeTime, startupBetween } from "@/lib/format";
+import { startupBetween } from "@/lib/format";
 import { rerunTask, taskQueryOptions } from "@/lib/queries/tasks";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
@@ -190,15 +190,6 @@ function TaskDrawerBody({
   refreshPending: boolean;
   onRefresh: () => void;
 }) {
-  // Re-render each second while live so duration and relative time keep
-  // moving between query refetches.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (terminal) return;
-    const timer = setInterval(() => setTick((value) => value + 1), 1_000);
-    return () => clearInterval(timer);
-  }, [terminal]);
-
   const kind = record.workload?.kind;
 
   return (
@@ -303,9 +294,9 @@ function TaskDrawerBody({
               </Link>
             ) : null}
             {record.deployment ? <span>v{record.deployment.version}</span> : null}
-            <time dateTime={record.created_at} title={exactTime(record.created_at)}>
-              Requested {relativeTime(record.created_at)}
-            </time>
+            <span>
+              Requested <LiveRelativeTime value={record.created_at} />
+            </span>
             {record.exit_code !== null && record.exit_code !== undefined ? (
               <span>Exit {record.exit_code}</span>
             ) : null}
@@ -319,12 +310,12 @@ function TaskDrawerBody({
             />
             <StatCell
               label="Execution"
-              value={durationBetween(record.started_at, record.finished_at) ?? "—"}
+              value={<LiveDuration startedAt={record.started_at} finishedAt={record.finished_at} />}
               className="border-b border-border sm:border-b-0 sm:border-r"
             />
             <StatCell
               label="Total"
-              value={durationBetween(record.created_at, record.finished_at) ?? "—"}
+              value={<LiveDuration startedAt={record.created_at} finishedAt={record.finished_at} />}
               className="border-r border-border"
             />
             <StatCell

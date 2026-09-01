@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Cloud,
   ExternalLink,
@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import {
   AlertDialog,
@@ -31,7 +32,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { AwsConnection } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 
 import { useAwsConnectionController } from "./controller";
 import {
@@ -188,16 +188,17 @@ function ConnectForm({
           autoFocus
         />
         <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-          Resources stay in this account and are billed directly by AWS.
+          Resources stay in your AWS account, and AWS bills you directly.
         </p>
       </div>
 
-      <div className="flex items-start gap-3 border border-border bg-card p-3">
+      <div className="flex items-start gap-3 rounded-md border border-border bg-card p-3">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
         <div>
           <h3 className="text-sm font-medium">One-time AWS authorization</h3>
           <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-            You will review the requested access in AWS. Access and secret keys are never requested.
+            You&apos;ll review the requested access in AWS. LazyCloud never asks for access or
+            secret keys.
           </p>
         </div>
       </div>
@@ -260,7 +261,7 @@ function ConnectionActions({
           />
           <ConnectionDetail
             label="Last validated"
-            value={lastValidatedAt ? relativeTime(lastValidatedAt) : "Not yet"}
+            value={lastValidatedAt ? <LiveRelativeTime value={lastValidatedAt} /> : "Not yet"}
           />
         </dl>
       ) : null}
@@ -404,7 +405,7 @@ function RemoveConnectionDialog({
   );
 }
 
-function ConnectionDetail({ label, value }: { label: string; value: string }) {
+function ConnectionDetail({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="grid gap-1 border-b border-border px-3 py-2.5 last:border-b-0 sm:grid-cols-[8rem_minmax(0,1fr)]">
       <dt className="text-muted-foreground">{label}</dt>

@@ -84,8 +84,7 @@ export function AppCardActions({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {app.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops its deployments and containers and removes the app from this workspace.
-              This action cannot be undone.
+              This permanently deletes the app and stops its deployments and containers.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {remove.error ? (

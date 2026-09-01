@@ -19,6 +19,7 @@ import {
 import { Panel } from "@/components/shared/Panel";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AwsConnection, CustomerComputeInstance, UnitMachine } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 import {
   awsConnectionQueryOptions,
   computeCatalogQueryOptions,
@@ -142,7 +142,7 @@ function ConnectedCloudsPanel({
   return (
     <Panel
       title="Connected clouds"
-      description="Connected once for your account, and reachable from every workspace in it"
+      description="Available to every workspace in this account"
       action={
         <AddCloudMenu
           connection={connection}
@@ -163,7 +163,7 @@ function ConnectedCloudsPanel({
             billingError
               ? billingError.message
               : connectedCloudEnabled
-                ? "Connect an AWS account once. Capacity is provisioned there only when a workload requests AWS placement."
+                ? "Connect AWS. Capacity is created only when a workload uses AWS."
                 : "Connected cloud accounts are available on the Team plan."
           }
           className="min-h-64 px-6"
@@ -562,9 +562,7 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
       <div className="mb-3 flex items-end justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium">AWS instances</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Capacity currently provisioned in this account
-          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Current capacity</p>
         </div>
         <span className="mono text-xs text-muted-foreground">{instances.length}</span>
       </div>
@@ -606,12 +604,7 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
                     {instance.bootstrap_failure_detail}
                   </p>
                 ) : null}
-                <time
-                  dateTime={instance.created_at}
-                  title={new Date(instance.created_at).toLocaleString()}
-                >
-                  {relativeTime(instance.created_at)}
-                </time>
+                <LiveRelativeTime value={instance.created_at} />
               </div>
             </li>
           ))}

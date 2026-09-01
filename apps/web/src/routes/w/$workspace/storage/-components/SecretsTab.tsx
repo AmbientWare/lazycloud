@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,6 @@ import {
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import type { SecretMasked } from "@/lib/api/schemas";
-import { displayValue } from "@/lib/format";
 import { ResourceWorkloadLinks } from "./ResourceWorkloadLinks";
 
 /**
@@ -62,10 +62,7 @@ export function SecretsTab({
         ) : query.isError ? (
           <PanelError message={query.error.message} />
         ) : query.data.secrets.length === 0 && !creating ? (
-          <PanelEmpty
-            message="No secrets yet. Create one to inject it into a workload."
-            className="p-6"
-          />
+          <PanelEmpty message="No secrets. Create one to inject into a workload." className="p-6" />
         ) : (
           query.data.secrets.map((secret) =>
             editing === secret.name ? (
@@ -172,11 +169,8 @@ function SecretRow({
             {secret.name}
           </span>
         </div>
-        <p
-          className="mt-1 pl-5.5 text-[11px] text-muted-foreground"
-          title={secret.updated_at ?? secret.created_at ?? undefined}
-        >
-          Rotated {displayValue(secret.updated_at ?? secret.created_at)}
+        <p className="mt-1 pl-5.5 text-[11px] text-muted-foreground">
+          Rotated <LiveRelativeTime value={secret.updated_at ?? secret.created_at ?? undefined} />
         </p>
         <div className="mt-1 pl-5.5">
           <ResourceWorkloadLinks workspaceName={workspaceName} workloads={secret.workloads} />

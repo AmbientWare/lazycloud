@@ -1,5 +1,6 @@
 import { Check, CreditCard, LoaderCircle } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -18,7 +19,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { BillingSummary } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 import { exactDollars, formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -53,26 +53,24 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
           <DialogTitle className="text-base">Subscription</DialogTitle>
           <DialogDescription>
-            Included compute is issued each period. Usage beyond it is metered at the same rates on
-            every plan and billed to the card on file.
+            Each plan includes monthly compute. Additional usage is billed at the same rates.
           </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {controller.settling ? (
-            <p className="mb-4 border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
-              A change of plan for this account is still being settled with the payment provider.
-              Nothing else can be changed until it finishes.
+            <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
+              Your plan change is processing. You can make another change when it finishes.
             </p>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid items-stretch gap-4 sm:grid-cols-2">
             {controller.offers.map((offer) => (
               <PlanCard key={offer.id} offer={offer} controller={controller} />
             ))}
           </div>
           {controller.changeError ? (
             <p
-              className="mt-4 border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive"
+              className="mt-4 rounded-sm border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive"
               role="alert"
             >
               {controller.changeError.message}
@@ -107,20 +105,21 @@ function PlanCard({
   return (
     <section
       className={cn(
-        "flex flex-col border p-4",
-        current ? "border-brand bg-brand/[0.04]" : "border-border bg-card",
+        "flex h-full flex-col rounded-md border bg-card p-5",
+        current ? "border-brand/70 bg-brand/[0.05]" : "border-border",
       )}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-sm font-medium">{offer.name}</h3>
-        <p className="font-mono text-sm">
-          {exactDollars(offer.monthly_nanos)}
-          <span className="text-xs text-muted-foreground"> / month</span>
-        </p>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-base font-semibold">{offer.name}</h3>
+        {current ? <span className="text-xs font-medium text-brand">Current</span> : null}
       </div>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
-      <ul className="mt-3 space-y-1.5 text-xs leading-5">
-        <PlanPoint>{exactDollars(offer.included_nanos)} of compute included each period</PlanPoint>
+      <p className="mt-3 font-mono text-2xl font-semibold tracking-tight">
+        {exactDollars(offer.monthly_nanos)}
+        <span className="ml-1 font-sans text-xs font-normal text-muted-foreground">/ month</span>
+      </p>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
+      <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
+        <PlanPoint>{exactDollars(offer.included_nanos)} compute included each month</PlanPoint>
         <PlanPoint>{offer.entitlements.max_apps} apps</PlanPoint>
         <PlanPoint>
           {offer.entitlements.max_concurrent_containers} containers running at once
@@ -139,10 +138,8 @@ function PlanCard({
           <PlanPoint key={term}>{term}</PlanPoint>
         ))}
       </ul>
-      <div className="mt-4 pt-1">
-        {current ? (
-          <p className="text-xs font-medium text-brand">Current plan</p>
-        ) : (
+      {!current ? (
+        <div className="mt-5 border-t border-border/80 pt-4">
           <Button
             size="sm"
             variant={offer.action === "cancel" ? "outline" : "default"}
@@ -156,13 +153,13 @@ function PlanCard({
               <CreditCard className="size-4" />
             ) : null}
             {offer.action === "card"
-              ? `Add a card to switch to ${offer.name}`
+              ? `Add payment method for ${offer.name}`
               : offer.action === "cancel"
                 ? `Move to ${offer.name}`
                 : `Switch to ${offer.name}`}
           </Button>
-        )}
-      </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -208,8 +205,8 @@ function ChangeConfirmation({
           <AlertDialogTitle>Move to the {offer.name} plan?</AlertDialogTitle>
           <AlertDialogDescription>
             {movingDown
-              ? "Your subscription is not ended and your work is not stopped. The monthly price changes."
-              : `Switching now charges the rest of this month at the ${offer.name} price, to the card on file.`}
+              ? "Your workloads keep running. Only the monthly price changes."
+              : `The card on file will be charged at the ${offer.name} rate for the rest of this month.`}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <ul className="space-y-2 text-xs leading-5 text-muted-foreground">
@@ -219,35 +216,30 @@ function ChangeConfirmation({
               would be a promise made while asking somebody to commit. */}
           {allowance ? (
             <li>
-              You keep the {formatCostNanos(allowance.allowance_nanos, summary?.currency)} included
-              for the rest of this period, which ends{" "}
-              <time dateTime={allowance.period_ended_at}>
-                {relativeTime(allowance.period_ended_at)}
-              </time>
-              .
+              You keep {formatCostNanos(allowance.allowance_nanos, summary?.currency)} of included
+              compute through <LiveRelativeTime value={allowance.period_ended_at} />.
             </li>
           ) : null}
           {movingDown ? (
             <>
               <li>
-                You will not be charged the monthly subscription again. This period&apos;s
-                subscription is not refunded.
+                You won&apos;t be charged another monthly fee. This period isn&apos;t refunded.
               </li>
               <li>
-                Moving back to {summary?.plan?.name} before this period ends costs nothing more —
-                these days are already paid for.
+                Moving back to {summary?.plan?.name} before this period ends won&apos;t add another
+                charge.
               </li>
             </>
           ) : (
-            <li>Each following month is charged in full at the {offer.name} price.</li>
+            <li>Future months are billed at the full {offer.name} price.</li>
           )}
           {summary ? (
             <li>
-              New containers are limited to {offer.entitlements.max_concurrent_containers} at once
-              as soon as the plan changes.
+              The container limit changes immediately to{" "}
+              {offer.entitlements.max_concurrent_containers}.
             </li>
           ) : null}
-          <li>Your work keeps running and keeps being invoiced.</li>
+          <li>Your workloads keep running and usage remains billable.</li>
         </ul>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Keep my plan</AlertDialogCancel>

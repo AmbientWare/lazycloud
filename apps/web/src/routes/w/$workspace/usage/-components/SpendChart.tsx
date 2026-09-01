@@ -63,8 +63,8 @@ export function SpendChart({
   if (series.data.cost_nanos === 0) {
     return (
       <PanelEmpty
-        message={`Nothing was billed over ${caption}`}
-        detail="Spend appears here within a few minutes of a workload running."
+        message={`Nothing was billed during ${caption}`}
+        detail="Spend appears a few minutes after a workload runs."
         className="h-full min-h-40"
       />
     );

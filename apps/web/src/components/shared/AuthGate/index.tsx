@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { ApiError, clearAuthToken } from "@/lib/api/client";
-import { getStoredAuthToken } from "@/lib/auth";
+import { useAuthToken } from "@/hooks/use-auth-token";
 import { currentSessionQueryOptions, signOut } from "@/lib/queries/auth";
 import { SessionContext, type SessionContextValue } from "@/components/shared/AuthGate/session";
 import { SignInScreen } from "@/components/shared/AuthGate/SignInScreen";
@@ -25,7 +25,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 function AuthenticatedSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [token, setToken] = useState<string | null>(() => getStoredAuthToken());
+  const token = useAuthToken();
   // One request answers both questions the shell needs: who is signed in, and which
   // workspaces they reach. Resolving them separately would let the two disagree.
   const session = useQuery({
@@ -39,7 +39,6 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
     // server still signs the person out here; the session then ends at expiry.
     void signOut().catch(() => undefined);
     clearAuthToken();
-    setToken(null);
     queryClient.clear();
     // Out to the public landing page rather than the sign-in screen. Signing out
     // is leaving, and being handed the way back in is the one thing somebody who
@@ -58,6 +57,10 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
         : null,
     [logout, session.data],
   );
+
+  if (token === undefined) {
+    return <LoadingScreen />;
+  }
 
   if (!token) {
     return <SignInScreen />;
@@ -92,10 +95,10 @@ function loginErrorMessage(error: unknown): string {
     return "Your session expired. Sign in again.";
   }
   if (error instanceof ApiError) {
-    return `The control plane rejected the request (${error.status} ${error.statusText}).`;
+    return `Sign-in failed (${error.status} ${error.statusText}).`;
   }
   if (error instanceof Error && error.message) {
-    return "The control plane is unreachable. Check that the API is running, then retry.";
+    return "Cannot reach the LazyCloud API. Check that it is running, then retry.";
   }
-  return "The session could not be validated.";
+  return "Could not validate the session.";
 }

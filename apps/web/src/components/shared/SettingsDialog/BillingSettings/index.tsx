@@ -1,11 +1,11 @@
 import { CreditCard, ExternalLink, LoaderCircle, Sparkles } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingPlan, BillingSummary } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 import { exactDollars, formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -46,14 +46,10 @@ export function BillingSettings({
           ) : (
             <>
               {!summary.plan ? (
-                <p className="text-sm text-muted-foreground">
-                  This account is not on a plan, so nothing can be started on it. Choose one to put
-                  it back on a subscription.
-                </p>
+                <p className="text-sm text-muted-foreground">Choose a plan to start workloads.</p>
               ) : !summary.plan.allowance ? (
                 <p className="text-sm text-muted-foreground">
-                  This period is being renewed. The next allowance opens when the provider confirms
-                  it.
+                  Your next usage allowance will appear when renewal finishes.
                 </p>
               ) : (
                 <AllowanceMeter allowance={summary.plan.allowance} currency={summary.currency} />
@@ -68,14 +64,13 @@ export function BillingSettings({
               <RetainedTermsLine summary={summary} offers={controller.offers} />
               {controller.settling ? (
                 <p className="text-sm text-warning">
-                  A change of plan is being settled with the payment provider. It finishes on its
-                  own; the plan above is what this account is on until it does.
+                  Your plan change is processing. The current plan stays active until it finishes.
                 </p>
               ) : null}
               <p className="text-sm text-muted-foreground">
                 {summary.payment_method_on_file
                   ? "Usage beyond the included amount is invoiced monthly and charged to the card on file."
-                  : "Without a card, this account gets a small amount of compute and its work is stopped once that is spent. Adding one raises the included amount immediately and lets usage beyond it be invoiced instead of stopped. Cards are held by our payment provider and never reach LazyCloud."}
+                  : "Add a payment method to increase included compute and bill overages instead of stopping workloads. Payment details are stored by our payment provider, not LazyCloud."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -126,7 +121,7 @@ export function BillingSettings({
               </div>
               {!summary.payment_method_on_file ? (
                 <p className="text-xs text-muted-foreground">
-                  A card saved just now can take a few seconds to appear here.
+                  New payment methods may take a few seconds to appear.
                 </p>
               ) : null}
             </>
@@ -150,8 +145,8 @@ function ConcurrencyLine({ running, limit }: { running: number; limit: number })
   const atLimit = running >= limit;
   return (
     <p className={cn("text-sm", atLimit ? "text-warning" : "text-muted-foreground")}>
-      {running} of {limit} containers running or queued across this account
-      {atLimit ? " — nothing new will start until one finishes" : null}
+      {running} of {limit} containers running or queued
+      {atLimit ? ". New containers will start when capacity is available." : null}
     </p>
   );
 }
@@ -192,9 +187,9 @@ function RetainedTermsLine({
   if (!published || allowance.allowance_nanos <= published.included_nanos) return null;
   return (
     <p className="text-sm text-muted-foreground">
-      This period keeps the allowance it opened with. The {published.name} plan&apos;s{" "}
-      {exactDollars(published.included_nanos)} applies when it ends,{" "}
-      <time dateTime={allowance.period_ended_at}>{relativeTime(allowance.period_ended_at)}</time>.
+      This period keeps its current allowance. The {published.name} plan&apos;s{" "}
+      {exactDollars(published.included_nanos)} allowance starts{" "}
+      <LiveRelativeTime value={allowance.period_ended_at} />.
     </p>
   );
 }
@@ -235,10 +230,7 @@ function AllowanceMeter({
           </span>
         </p>
         <p className="text-xs text-muted-foreground">
-          Period ends{" "}
-          <time dateTime={allowance.period_ended_at}>
-            {relativeTime(allowance.period_ended_at)}
-          </time>
+          Ends <LiveRelativeTime value={allowance.period_ended_at} />
         </p>
       </div>
       <div
@@ -264,8 +256,8 @@ function AllowanceMeter({
           little past the line. The invoice itself is one button away. */}
       <p className="text-xs text-muted-foreground">
         {overspent
-          ? `${formatCostNanos(-allowance.remaining_nanos, currency)} of usage beyond the included amount this period. Your invoice is the final amount.`
-          : `${formatCostNanos(allowance.remaining_nanos, currency)} of included usage left in this period.`}
+          ? `${formatCostNanos(-allowance.remaining_nanos, currency)} over the included amount this period. Your invoice shows the final total.`
+          : `${formatCostNanos(allowance.remaining_nanos, currency)} of included usage remaining.`}
       </p>
     </div>
   );

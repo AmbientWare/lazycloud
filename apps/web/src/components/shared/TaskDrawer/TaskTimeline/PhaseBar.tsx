@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { useLiveNow } from "@/hooks/use-live-now";
 import { executionPhaseDomain, executionPhases, type ExecutionPhase } from "./phases";
 import { axisTicks, elapsedLabel } from "./timeline";
 import { isTerminalTaskStatus, type Task } from "@/lib/api/schemas";
@@ -16,13 +17,8 @@ export function PhaseBar({ workspaceId, task }: { workspaceId: string; task: Tas
   });
 
   const live = !isTerminalTaskStatus(task.status);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const nowMs = useLiveNow(live);
   const [activePhaseKey, setActivePhaseKey] = useState<string | null>(null);
-  useEffect(() => {
-    if (!live) return;
-    const timer = setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [live]);
 
   const domain = executionPhaseDomain(task, nowMs);
   const phases = executionPhases(task, summary.data?.lifecycle ?? [], nowMs);

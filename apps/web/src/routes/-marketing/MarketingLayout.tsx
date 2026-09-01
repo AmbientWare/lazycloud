@@ -144,7 +144,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
               <span>LazyCloud</span>
             </Link>
             <p className="mt-4.5 max-w-[310px] text-[13px] text-muted-foreground">
-              A complete cloud platform for developers and agents building at AI speed.
+              A cloud platform for developers and coding agents.
             </p>
           </div>
           <nav
@@ -187,7 +187,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
           )}
         >
           <span>© 2026 LazyCloud</span>
-          <span>Built for the compute you control.</span>
+          <span>Run on LazyCloud, AWS, or your own Linux machines.</span>
         </div>
       </footer>
     </Clouds>

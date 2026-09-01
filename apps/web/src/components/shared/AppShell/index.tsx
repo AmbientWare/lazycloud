@@ -202,21 +202,19 @@ function DesktopRail({
         </Link>
       </div>
 
-      {/* Three weights for three kinds of thing, because a column of one weight
-          reads as one thing. These two open something over the page and are
-          drawn as controls; the workspace below them is a surface, because it is
-          what everything under it is scoped to; the sections are quietest, since
-          a destination you are already looking at needs no emphasis to be found. */}
-      <div className="space-y-1.5 px-3">
-        <AccountMetricsControl />
+      <div className="flex items-center gap-1.5 px-3">
+        <AccountMetricsControl className="min-w-0 flex-1" />
         <button
           type="button"
           onClick={onOpenSearch}
-          className="flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Search workspace"
+          title="Search workspace"
+          className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Search className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="flex-1 truncate">Search</span>
-          <kbd className="mono shrink-0 text-[10px] text-muted-foreground">⌘K</kbd>
+          <kbd className="mono shrink-0 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+            ⌘ K
+          </kbd>
         </button>
       </div>
 
@@ -426,7 +424,7 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
  * with instruments — a live count, a figure against the ceiling it is refused
  * at — which is what a dial says and a bar chart does not.
  */
-function AccountMetricsControl() {
+function AccountMetricsControl({ className }: { className?: string } = {}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -435,7 +433,10 @@ function AccountMetricsControl() {
         aria-label="Account metrics"
         title="Account metrics"
         onClick={() => setOpen(true)}
-        className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+          className,
+        )}
       >
         <Gauge className="size-3.5 shrink-0" aria-hidden="true" />
         <span className="flex-1 truncate">Metrics</span>

@@ -56,7 +56,10 @@ export function AppWorkloadCosts({
   }
   if (rows.length === 0) {
     return (
-      <PanelEmpty message="No workload in this app was billed over this range" className="py-8" />
+      <PanelEmpty
+        message="No workloads in this app were billed during this range"
+        className="py-8"
+      />
     );
   }
 

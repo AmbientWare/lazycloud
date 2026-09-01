@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, Circle, Loader2, Server } from "lucide-react";
 
 import { CliHint } from "@/components/shared/CliHint";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { UnitMachine } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/compute";
 import { cn } from "@/lib/utils";
 
@@ -56,9 +56,7 @@ function JoinMachineFlow() {
           <Server className="size-4 text-brand" />
           Join a machine
         </DialogTitle>
-        <DialogDescription>
-          Connect a prepared Linux amd64 or arm64 host to your account.
-        </DialogDescription>
+        <DialogDescription>Connect a Linux amd64 or arm64 host to your account.</DialogDescription>
       </DialogHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -104,7 +102,7 @@ function GenerateCommandStep({
         Prepare the host
       </h3>
       <p className="mt-1 text-xs text-muted-foreground">
-        Generate a short-lived install command for one prepared Linux machine.
+        Generate a short-lived install command for one Linux machine.
       </p>
       <div className="mt-4 border border-border bg-muted/20 p-3 text-xs">
         <p className="font-medium">Host requirements</p>
@@ -135,8 +133,8 @@ function GenerateCommandStep({
         </Button>
       </div>
       <div className="mt-5 border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs text-muted-foreground">
-        Run the command only on the machine you intend to connect. Closing this dialog clears the
-        command from the browser.
+        Run this command only on the machine you want to connect. Closing the dialog clears it from
+        this browser.
       </div>
       {error ? <p className="mt-2 text-xs text-destructive">{error.message}</p> : null}
     </section>
@@ -169,14 +167,14 @@ function JoinProgress({
               Run on the host
             </h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Credential expires {relativeTime(expiresAt)}
+              Credential expires <LiveRelativeTime value={expiresAt} />
             </p>
           </div>
           <StatusChip status={ready ? "Ready" : blocked ? "Failed" : "Pending"} live={ready} />
         </div>
         <CliHint command={command} className="mt-3 bg-muted/30" />
         <p className="mt-2 text-[11px] text-muted-foreground">
-          This command contains a temporary credential. It is shown only in this dialog.
+          This command includes a temporary credential and appears only in this dialog.
         </p>
       </section>
 

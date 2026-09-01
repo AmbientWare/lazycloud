@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
+import { countLabel } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { cn } from "@/lib/utils";
@@ -26,8 +27,7 @@ export function AccountCeilingLine() {
     // is exactly when the line has to say something.
     return (
       <p className="text-xs text-warning">
-        This account is on no plan, so nothing can be started on it. Open account settings to
-        subscribe.
+        No active plan. Subscribe in account settings to start containers.
       </p>
     );
   }
@@ -37,9 +37,10 @@ export function AccountCeilingLine() {
 
   return (
     <p className={cn("text-xs", atLimit || overspent ? "text-warning" : "text-muted-foreground")}>
-      {data.usage.concurrent_containers} of {limit} containers running or queued across this account
+      {data.usage.concurrent_containers}/{countLabel(limit, "container")} running or queued
+      account-wide
       {overspent && data.plan.allowance
-        ? ` — ${formatCostNanos(-data.plan.allowance.remaining_nanos, data.currency)} of usage beyond the included amount this period`
+        ? ` · ${formatCostNanos(-data.plan.allowance.remaining_nanos, data.currency)} over included usage this period`
         : null}
       {". "}
       <Link
@@ -47,7 +48,7 @@ export function AccountCeilingLine() {
         search={(previous) => ({ ...previous, settings: "general" as const })}
         className="underline underline-offset-2 hover:text-foreground"
       >
-        Manage the {data.plan.name} plan
+        Manage {data.plan.name} plan
       </Link>
     </p>
   );

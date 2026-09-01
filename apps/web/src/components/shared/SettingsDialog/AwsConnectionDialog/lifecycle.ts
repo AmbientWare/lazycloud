@@ -48,19 +48,19 @@ export function awsConnectionDialogDescription(connection: AwsConnection): strin
     case "awaiting_authorization":
       return "Complete authorization in AWS or cancel this unfinished setup.";
     case "validating":
-      return "AWS authorization is being checked in the background.";
+      return "Checking AWS authorization.";
     case "ready":
-      return "AWS compute placement is active for this workspace.";
+      return "AWS compute placement is active for this account.";
     case "degraded":
       return "Check existing access or start a replacement authorization.";
     case "reconnect_pending":
-      return "Current capacity remains active while replacement access is authorized.";
+      return "Current capacity stays active while you authorize replacement access.";
     case "retiring_authorization":
-      return "Replacement access is active while previous authorization is removed.";
+      return "Replacement access is active. Removing the previous authorization.";
     case "disconnect_draining":
     case "revoking":
     case "verifying_revocation":
-      return "AWS resources and authorization are being removed in the background.";
+      return "Removing AWS resources and authorization.";
     case "action_required":
       return "Automatic AWS cleanup needs a recovery action.";
   }

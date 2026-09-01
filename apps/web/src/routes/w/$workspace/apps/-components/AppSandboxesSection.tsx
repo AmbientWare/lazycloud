@@ -1,12 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import type { SandboxRow } from "@/lib/api/schemas";
-import { countLabel, exactTime, formatDuration, relativeTime } from "@/lib/format";
+import { countLabel, formatDuration } from "@/lib/format";
 
 export function AppSandboxesSection({
   workspaceName,
@@ -107,10 +108,7 @@ function SandboxRowContent({ sandbox, linked }: { sandbox: SandboxRow; linked: b
         <span>Lifetime {lifetime}</span>
         <span aria-hidden="true">·</span>
         <span>
-          Created{" "}
-          <time dateTime={sandbox.created_at} title={exactTime(sandbox.created_at)}>
-            {relativeTime(sandbox.created_at)}
-          </time>
+          Created <LiveRelativeTime value={sandbox.created_at} />
         </span>
       </span>
     </>

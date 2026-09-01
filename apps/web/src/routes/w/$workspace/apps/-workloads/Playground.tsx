@@ -1,24 +1,19 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Loader2, Play } from "lucide-react";
+import { ArrowUpRight, Loader2, Play } from "lucide-react";
 
-import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelError } from "@/components/shared/PanelError";
+import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
+import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { invokeDeployment, type InvokeResult } from "@/lib/api/invoke";
 import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
+import { taskQueryOptions } from "@/lib/queries/tasks";
 
-import {
-  buildBody,
-  curlSnippet,
-  exampleBody,
-  playgroundFields,
-  pythonSnippet,
-  type PlaygroundField,
-} from "./playground-form";
+import { buildBody, exampleBody, playgroundFields, type PlaygroundField } from "./playground-form";
 
 /**
  * In-UI invoke for a deployed function or endpoint. The form is built
@@ -56,6 +51,7 @@ export function Playground({
   return (
     <PlaygroundForm
       manifest={manifest.data}
+      workspaceId={workspaceId}
       workspaceName={workspaceName}
       appId={appId}
       workloadName={workloadName}
@@ -65,11 +61,13 @@ export function Playground({
 
 function PlaygroundForm({
   manifest,
+  workspaceId,
   workspaceName,
   appId,
   workloadName,
 }: {
   manifest: DeploymentManifest;
+  workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
@@ -111,14 +109,9 @@ function PlaygroundForm({
     invoke.mutate(parsed.body);
   };
 
-  // Snippets mirror what invoke will actually send right now; fall back to the
-  // seeded example while the typed form is invalid or empty.
-  const snippetParsed = currentBody();
-  const snippetBody: JsonValue = snippetParsed.ok ? snippetParsed.body : exampleBody(manifest);
-
   return (
-    <div className="flex h-full min-h-0 flex-col lg:flex-row lg:overflow-hidden">
-      <div className="min-w-0 space-y-3 p-4 lg:min-h-0 lg:w-1/2 lg:overflow-y-auto">
+    <div className="min-w-0 space-y-4 p-4">
+      <div className="min-w-0 space-y-3">
         {fields !== null && fields.length > 0 ? (
           <div className="space-y-2.5">
             {fields.map((field) => (
@@ -156,28 +149,12 @@ function PlaygroundForm({
           {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
         </div>
         <InvokeOutcome
-          kind={manifest.kind}
           result={invoke.data}
           error={invoke.isError ? invoke.error : null}
+          workspaceId={workspaceId}
           workspaceName={workspaceName}
           appId={appId}
           workloadName={workloadName}
-        />
-      </div>
-
-      {/* Both snippets are shown rather than switched between: each is a dozen
-          lines, and the tab strip that hid one of them was also what pinned the
-          other to a height it did not fit in. */}
-      <div className="min-w-0 space-y-4 border-t border-border/80 bg-muted/10 p-4 lg:min-h-0 lg:w-1/2 lg:overflow-y-auto lg:border-t-0 lg:border-l">
-        <Snippet
-          title="curl"
-          text={curlSnippet(manifest.invoke_url, snippetBody)}
-          label="curl snippet"
-        />
-        <Snippet
-          title="Python"
-          text={pythonSnippet(manifest.invoke_url, snippetBody)}
-          label="Python snippet"
         />
       </div>
     </div>
@@ -229,16 +206,16 @@ function FieldInput({
 }
 
 function InvokeOutcome({
-  kind,
   result,
   error,
+  workspaceId,
   workspaceName,
   appId,
   workloadName,
 }: {
-  kind: string;
   result: InvokeResult | undefined;
   error: Error | null;
+  workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
@@ -254,68 +231,85 @@ function InvokeOutcome({
     </span>
   );
 
-  if (!result.ok) {
+  if (result.ok && result.taskId) {
     return (
-      <div className="space-y-1">
-        {meta}
-        <pre className="mono max-h-48 overflow-auto rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs whitespace-pre-wrap text-destructive">
-          {result.bodyText || "request failed"}
-        </pre>
-      </div>
+      <TaskInvokeOutcome
+        taskId={result.taskId}
+        meta={meta}
+        workspaceId={workspaceId}
+        workspaceName={workspaceName}
+        appId={appId}
+        workloadName={workloadName}
+      />
     );
   }
 
-  // A function invoke creates a task; link it.
-  if (result.taskId && kind !== "endpoint") {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        {meta}
-        <Link
-          to="/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
-          params={{
-            workspace: workspaceName,
-            appId,
-            name: workloadName,
-            taskId: result.taskId,
-          }}
-          className="text-xs text-brand hover:underline"
-        >
-          View task
-        </Link>
-      </div>
-    );
-  }
+  return <DirectInvokeOutcome result={result} meta={meta} />;
+}
 
+function DirectInvokeOutcome({ result, meta }: { result: InvokeResult; meta: ReactNode }) {
+  const response = result.json !== undefined ? result.json : result.bodyText || null;
   return (
-    <div className="space-y-1">
-      {meta}
-      <pre className="mono max-h-48 overflow-auto rounded-md border border-border bg-muted/40 p-2.5 text-xs whitespace-pre-wrap">
-        {prettyBody(result)}
-      </pre>
-    </div>
+    <section className="overflow-hidden rounded-md border border-border bg-muted/20">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {meta}
+        <StatusChip status={result.ok ? "complete" : "failed"} />
+      </div>
+      <ResultBody
+        error={result.ok ? null : result.bodyText || "Request failed"}
+        result={result.ok ? response : null}
+      />
+    </section>
   );
 }
 
-function prettyBody(result: InvokeResult): string {
-  if (result.json !== undefined) return JSON.stringify(result.json, null, 2);
-  return result.bodyText || "(empty response)";
-}
+function TaskInvokeOutcome({
+  taskId,
+  meta,
+  workspaceId,
+  workspaceName,
+  appId,
+  workloadName,
+}: {
+  taskId: string;
+  meta: ReactNode;
+  workspaceId: string;
+  workspaceName: string;
+  appId: string;
+  workloadName: string;
+}) {
+  const task = useQuery(taskQueryOptions(workspaceId, taskId));
 
-/**
- * A snippet is sized by the code in it. Python indentation carries meaning, so
- * a long line scrolls sideways in its own region rather than wrapping into
- * something that would not run if it were pasted.
- */
-function Snippet({ title, text, label }: { title: string; text: string; label: string }) {
   return (
-    <section className="min-w-0">
-      <div className="micro-label mb-1.5">{title}</div>
-      <div className="relative min-w-0">
-        <pre className="mono overflow-x-auto rounded-md border border-border bg-card p-2.5 pr-9 text-xs leading-relaxed">
-          {text}
-        </pre>
-        <CopyButton value={text} label={label} className="absolute top-1.5 right-1.5 size-7" />
+    <section className="overflow-hidden rounded-md border border-border bg-muted/20">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {meta}
+        {task.data ? (
+          <StatusChip status={task.data.status} live={task.data.status === "running"} />
+        ) : null}
+        <Link
+          to="/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
+          params={{ workspace: workspaceName, appId, name: workloadName, taskId }}
+          className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"
+        >
+          Open task
+          <ArrowUpRight className="size-3" aria-hidden="true" />
+        </Link>
       </div>
+      {task.isPending ? (
+        <div className="space-y-2 p-3" aria-label="Loading task result">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-16 w-full" />
+        </div>
+      ) : task.isError ? (
+        <PanelError message={task.error.message} />
+      ) : task.data.error || (task.data.result !== null && task.data.result !== undefined) ? (
+        <ResultBody error={task.data.error} result={task.data.result} />
+      ) : (
+        <p className="p-3 text-xs text-muted-foreground">
+          {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
+        </p>
+      )}
     </section>
   );
 }

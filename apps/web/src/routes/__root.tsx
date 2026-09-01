@@ -74,7 +74,7 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
             <p className="mt-1 break-words text-sm text-muted-foreground">
               {error instanceof Error && error.message
                 ? error.message
-                : "The dashboard hit an unexpected error."}
+                : "An unexpected error stopped this page."}
             </p>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { formatDistanceToNowStrict, parseISO } from "date-fns";
+import { formatDistanceStrict, parseISO } from "date-fns";
 import {
   resourceLimit,
   resourceRequest,
@@ -18,10 +18,10 @@ export function displayValue(value: RowValue): string {
   return value;
 }
 
-export function relativeTime(value: string | undefined): string {
+export function relativeTime(value: string | undefined, now = Date.now()): string {
   if (!value) return "None";
   try {
-    return `${formatDistanceToNowStrict(parseISO(value), { addSuffix: true })}`;
+    return formatDistanceStrict(parseISO(value), now, { addSuffix: true });
   } catch {
     return value;
   }
@@ -147,9 +147,10 @@ export function formatBytes(size: number): string {
 export function durationBetween(
   startedAt: string | null | undefined,
   finishedAt: string | null | undefined,
+  now = Date.now(),
 ): string | null {
   if (!startedAt) return null;
-  const end = finishedAt ? Date.parse(finishedAt) : Date.now();
+  const end = finishedAt ? Date.parse(finishedAt) : now;
   const start = Date.parse(startedAt);
   if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
   return formatDuration(end - start);

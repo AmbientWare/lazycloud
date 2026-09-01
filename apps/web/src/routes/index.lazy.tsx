@@ -204,7 +204,7 @@ function ParitySection() {
               One function. <em>Three ways to run it.</em>
             </>
           }
-          body="Call it in-process for local debugging. Run it remotely for more CPU or a GPU. Deploy it when you need a stable endpoint."
+          body="Call it locally for debugging, remotely for more CPU or a GPU, or deploy it as a stable endpoint."
         />
 
         <div className="max-w-[820px]">
@@ -254,9 +254,8 @@ function MarketingHome() {
                 Deploy as fast as you <em>develop.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Code arrives in seconds, then waits on Dockerfiles, registries, load balancers, IAM.
-                One decorator makes a Python function a deployed API, job, queue, or GPU workload.
-                It still runs on your laptop.
+                One decorator turns a Python function into a deployed API, job, queue, or GPU
+                workload. The same function still runs on your laptop.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
@@ -401,7 +400,7 @@ function MarketingHome() {
               Keep building. <em>Don&apos;t stop for infrastructure.</em>
             </>
           }
-          body="Test locally, reach for remote compute, and deploy APIs or workers without changing tools or repackaging the workload."
+          body="Test locally, use remote compute, and deploy APIs or workers without repackaging the workload."
         />
       </main>
     </MarketingLayout>
@@ -549,7 +548,7 @@ function PlatformStoryRail() {
                 The whole platform, <em>available from code.</em>
               </>
             }
-            body="Define APIs, jobs, queues, schedules, and sandboxes in Python. The SDK is typed, and the CLI can return JSON for agent workflows."
+            body="Define APIs, jobs, queues, schedules, and sandboxes in Python. Use the typed SDK or JSON output from the CLI."
           />
           <nav aria-label="Platform use cases" className="border-t border-border">
             <ol className="m-0 list-none p-0">

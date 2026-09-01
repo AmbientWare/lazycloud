@@ -52,7 +52,7 @@ Deploy all workload kinds:
 uv run lazycloud deploy examples.all_workloads:app --workspace default
 ```
 
-Create successful, failed, nested, and spawned Tasks:
+Create successful, failed, nested, artifact-producing, and spawned Tasks:
 
 ```sh
 uv run lazycloud run examples.all_workloads:exercise_runs 7
@@ -64,6 +64,7 @@ Each Task-producing path is also callable independently:
 uv run lazycloud run examples.all_workloads:run_function 7
 uv run lazycloud run examples.all_workloads:run_function_failure 13
 uv run lazycloud run examples.all_workloads:run_nested_function 6
+uv run lazycloud run examples.all_workloads:run_artifacts "dashboard sample"
 uv run lazycloud run examples.all_workloads:run_background_job 5
 uv run lazycloud run examples.all_workloads:run_background_job_failure 17
 ```
