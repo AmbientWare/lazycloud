@@ -10,15 +10,14 @@ import typer
 from lazycloud.cli.apps import app_app
 from lazycloud.cli.client import client_app
 from lazycloud.cli.components.errors import (
-    debug_errors_enabled,
-    json_errors_enabled,
-    render_exception,
+    CLIENT_ERROR_POLICY,
 )
 from lazycloud.cli.components.output import (
     CliContextState,
     json_output_active,
     set_json_output,
 )
+from lazycloud.cli.components.runner import run_cli
 from lazycloud.cli.development import dev
 from lazycloud.cli.domains import domain_app
 from lazycloud.cli.examples import create_app, example_app, quickstart
@@ -139,15 +138,12 @@ def build_public_cli(
 
 def start(args: list[str] | None = None, prog_name: str | None = None) -> None:
     effective_args = normalize_global_flags(list(sys.argv[1:] if args is None else args))
-    try:
-        build_public_cli()(args=effective_args, prog_name=prog_name)
-    except SystemExit:
-        raise
-    except Exception as exc:
-        if debug_errors_enabled(effective_args):
-            raise
-        exit_code = render_exception(exc, json_output=json_errors_enabled(effective_args))
-        raise SystemExit(exit_code) from None
+    run_cli(
+        build_public_cli(),
+        args=effective_args,
+        prog_name=prog_name,
+        policy=CLIENT_ERROR_POLICY,
+    )
 
 
 def normalize_global_flags(args: list[str]) -> list[str]:

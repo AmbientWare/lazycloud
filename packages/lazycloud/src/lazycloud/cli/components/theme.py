@@ -21,6 +21,9 @@ INFO = Style(color="blue")
 MUTED = Style(dim=True)
 EMPHASIS = Style(bold=True)
 PLAIN = Style()
+BORDER = Style(color="bright_black")
+TABLE_HEADER = Style(color="cyan", bold=True)
+ROW_ALT = Style(dim=True)
 
 _STATE_STYLES: dict[str, Style] = {
     # Terminal success.
@@ -81,14 +84,17 @@ def styled(message: str, style: Style = PLAIN) -> Text:
 
 
 __all__ = [
+    "BORDER",
     "EMPHASIS",
     "ERROR",
     "INFO",
     "MUTED",
     "PENDING",
     "PLAIN",
+    "ROW_ALT",
     "RUNNING",
     "SUCCESS",
+    "TABLE_HEADER",
     "WARNING",
     "state_style",
     "styled",

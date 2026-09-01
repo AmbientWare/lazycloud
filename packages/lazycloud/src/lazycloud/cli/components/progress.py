@@ -1,11 +1,23 @@
+"""CLI progress backed by the shared output streams and semantic theme."""
+
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from lazycloud.cli.components import output, theme
-from lazycloud.terminal import Terminal
-from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TransferSpeedColumn,
+)
 from rich.style import Style
+
+from lazycloud.cli.components import output, theme
+from lazycloud.terminal import ProgressCallback, Terminal
 
 _BUILD_PREFIXES = (
     "archive progress:",
@@ -29,9 +41,7 @@ _BUILD_PREFIXES = (
 
 @dataclass
 class CliTerminal(Terminal):
-    console: Console = field(default_factory=lambda: output.console)
-    error_console: Console = field(default_factory=lambda: output.error_console)
-    _pending: str = ""
+    _pending: str = field(default="", init=False)
 
     def write(self, message: str) -> None:
         if self.quiet or not message:
@@ -39,19 +49,19 @@ class CliTerminal(Terminal):
         self._pending += message.replace("\r", "\n")
         while "\n" in self._pending:
             line, self._pending = self._pending.split("\n", maxsplit=1)
-            self._print_cli_line(line)
+            self._print_line(line)
 
     def line(self, message: str = "") -> None:
         if self.quiet:
             return
         self._flush_pending()
-        self._print_cli_line(message)
+        self._print_line(message)
 
     def error(self, message: str) -> None:
         if self.quiet:
             return
         self._flush_pending()
-        self.error_console.print(theme.styled(message, theme.ERROR + theme.EMPHASIS))
+        output.error_console.print(theme.styled(message, theme.ERROR + theme.EMPHASIS))
 
     def header(self, message: str) -> None:
         self.line(message)
@@ -63,27 +73,49 @@ class CliTerminal(Terminal):
         if self.quiet:
             return
         self._flush_pending()
-        self.console.print(theme.styled(message, theme.WARNING))
+        output.console.print(theme.styled(message, theme.WARNING))
 
     def success(self, message: str) -> None:
         if self.quiet:
             return
         self._flush_pending()
-        self.console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
+        output.console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
+
+    @contextmanager
+    def progress_bytes(self, description: str, *, total: int) -> Iterator[ProgressCallback]:
+        if self.quiet or total <= 0:
+            yield lambda _completed: None
+            return
+        progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(binary_units=True),
+            TransferSpeedColumn(),
+            TimeElapsedColumn(),
+            console=output.console,
+            transient=False,
+        )
+        with progress:
+            task_id = progress.add_task(description, total=total)
+
+            def update(completed: int) -> None:
+                progress.update(task_id, completed=max(0, min(completed, total)))
+
+            yield update
 
     def _flush_pending(self) -> None:
         if self._pending:
             pending, self._pending = self._pending, ""
-            self._print_cli_line(pending)
+            self._print_line(pending)
 
-    def _print_cli_line(self, message: str) -> None:
+    def _print_line(self, message: str) -> None:
         if not message:
-            self.console.print()
+            output.console.print()
             return
-        self.console.print(theme.styled(message, cli_output_style(message)))
+        output.console.print(theme.styled(message, output_style(message)))
 
 
-def cli_output_style(message: str) -> Style:
+def output_style(message: str) -> Style:
     text = message.strip()
     lower = text.lower()
     if not text:
@@ -109,20 +141,11 @@ def cli_output_style(message: str) -> Style:
     return theme.PLAIN
 
 
-def print_stream_message(
-    stream: str,
-    message: str,
-    *,
-    console: Console,
-) -> None:
-    style = theme.ERROR if stream == "stderr" else theme.PLAIN
-    lines = message.splitlines() or [""]
-    for line in lines:
-        console.print(theme.styled(line, style))
+def print_stream_message(stream: str, message: str) -> None:
+    output.write_stream(
+        message if message.endswith("\n") else f"{message}\n",
+        error=stream == "stderr",
+    )
 
 
-__all__ = [
-    "CliTerminal",
-    "cli_output_style",
-    "print_stream_message",
-]
+__all__ = ["CliTerminal", "output_style", "print_stream_message"]

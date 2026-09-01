@@ -18,11 +18,12 @@ from typing import IO, Any, Protocol, runtime_checkable
 
 import typer
 from pydantic import JsonValue
-from rich.console import Console
-from rich.table import Table
+from rich.console import Console, RenderableType
 from shared.events import Event
 from shared.serialization import to_json_value
 
+from lazycloud.cli.components.cards import CardTone, result_card
+from lazycloud.cli.components.tables import resource_table
 from lazycloud.json_contracts import parse_json_value
 
 _json_output_active = ContextVar("lazycloud_cli_json_output_active", default=False)
@@ -106,11 +107,50 @@ def print_json_line(payload: Any, *, file: IO[str]) -> None:
     file.flush()
 
 
-def print_payload(ctx: typer.Context, payload: Any) -> None:
+def emit(ctx: typer.Context, *, payload: Any, view: RenderableType) -> None:
     if json_output_enabled(ctx):
         print_json_line(payload, file=sys.stdout)
         return
-    console.print(payload)
+    console.print(view)
+
+
+def print_payload(
+    ctx: typer.Context,
+    payload: Any,
+    *,
+    title: str = "Result",
+    tone: CardTone = "neutral",
+    message: str = "",
+) -> None:
+    normalized = json_default(payload)
+    emit(
+        ctx,
+        payload=normalized,
+        view=result_card(title, normalized, tone=tone, message=message),
+    )
+
+
+def print_collection(
+    ctx: typer.Context,
+    payload: Any,
+    *,
+    title: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[object]],
+    empty: str,
+) -> None:
+    emit(
+        ctx,
+        payload=payload,
+        view=resource_table(title, columns, rows, empty=empty),
+    )
+
+
+def write_stream(value: str, *, error: bool = False) -> None:
+    """Write stream content exactly, without Rich markup or highlighting."""
+    target = error_console if error else console
+    target.file.write(value)
+    target.file.flush()
 
 
 def payload_data(value: object) -> object:
@@ -125,16 +165,11 @@ def payload_data(value: object) -> object:
     return value
 
 
-def table(title: str, columns: list[str], rows: list[list[Any]]) -> Table:
-    output = Table(title=title)
-    for column in columns:
-        output.add_column(column)
-    for row in rows:
-        output.add_row(*(str(item) for item in row))
-    return output
+def table(title: str, columns: list[str], rows: list[list[Any]]) -> RenderableType:
+    return resource_table(title, columns, rows)
 
 
-def event_table(title: str, events: Sequence[Event]) -> Table:
+def event_table(title: str, events: Sequence[Event]) -> RenderableType:
     rows = [
         [
             item.created_at.isoformat(),
@@ -160,6 +195,7 @@ __all__ = [
     "CliConsole",
     "command_from_args",
     "console",
+    "emit",
     "error_console",
     "event_table",
     "json_default",
@@ -167,9 +203,11 @@ __all__ = [
     "json_output_enabled",
     "parse_json_argument",
     "payload_data",
+    "print_collection",
     "print_events_table",
     "print_json_line",
     "print_payload",
     "set_json_output",
     "table",
+    "write_stream",
 ]

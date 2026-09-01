@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import typer
@@ -106,6 +107,45 @@ def test_interactive_shell_rejects_json_output_before_creating_a_session() -> No
 
     assert result.exit_code != 0
     assert "--json cannot be used with an interactive shell" in result.output
+
+
+def test_public_entrypoint_formats_usage_errors_as_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        client_start(args=["--json", "does-not-exist"], prog_name="lazycloud")
+
+    assert raised.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"]["type"] == "invalid_usage"
+    assert "does-not-exist" in payload["error"]["message"]
+
+
+def test_handler_argument_named_json_does_not_enable_machine_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = tmp_path / "handler_args.py"
+    module.write_text(
+        "def inspect(*args):\n    raise RuntimeError(f'handler args: {args!r}')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        client_start(
+            args=["run", "handler_args:inspect", "--", "--json"],
+            prog_name="lazycloud",
+        )
+
+    assert raised.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Error · Unexpected error" in captured.err
+    assert "handler args" in captured.err
 
 
 def test_secret_show_masks_secret_value_by_default(

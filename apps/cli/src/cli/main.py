@@ -4,11 +4,7 @@ import sys
 
 import typer
 from foundation.environment_file import load_environment_file
-from lazycloud.cli.components.errors import (
-    debug_errors_enabled,
-    json_errors_enabled,
-    render_exception,
-)
+from lazycloud.cli.components.runner import run_cli
 from lazycloud.cli.main import (
     PublicCliRegistry,
     build_public_cli,
@@ -107,19 +103,12 @@ def build_admin_cli() -> typer.Typer:
 def start(args: list[str] | None = None, prog_name: str | None = None) -> None:
     load_environment_file()
     effective_args = normalize_global_flags(list(sys.argv[1:] if args is None else args))
-    try:
-        build_admin_cli()(args=effective_args, prog_name=prog_name)
-    except SystemExit:
-        raise
-    except Exception as exc:
-        if debug_errors_enabled(effective_args):
-            raise
-        exit_code = render_exception(
-            exc,
-            json_output=json_errors_enabled(effective_args),
-            policy=ADMIN_ERROR_POLICY,
-        )
-        raise SystemExit(exit_code) from None
+    run_cli(
+        build_admin_cli(),
+        args=effective_args,
+        prog_name=prog_name,
+        policy=ADMIN_ERROR_POLICY,
+    )
 
 
 def _register_operator_cli(registry: PublicCliRegistry) -> None:
