@@ -27,6 +27,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
+from lazycloud.clients.workspace import WorkspaceControlClient
 from lazycloud.config import (
     DEFAULT_PROFILE,
     ClientProfile,
@@ -87,7 +88,6 @@ def resolve_login_endpoint(endpoint: str | None, existing: ClientProfile) -> str
 
 def resolve_login_token(
     token: str | None,
-    existing: ClientProfile,
 ) -> tuple[str, str]:
     """Resolve the login credential without requiring a secret command argument.
 
@@ -95,14 +95,16 @@ def resolve_login_token(
     value that requests device authorization. Otherwise the canonical
     ``LAZYCLOUD_TOKEN`` setting wins over the stored profile so self-hosted
     bootstrap credentials can enter through the process environment instead of
-    argv.
+    argv. A stored token is not a login credential: with no provided or
+    environment token, login starts device authorization and replaces the old
+    credential only after the new one works.
     """
     if token is not None:
         return token, "provided"
     environment_token = settings().token.strip()
     if environment_token:
         return environment_token, "environment"
-    return existing.token, "stored"
+    return "", "device"
 
 
 def device_login_client_name() -> str:
@@ -208,11 +210,12 @@ def login(
     selected_endpoint = resolve_login_endpoint(endpoint, existing)
     selected_workspace = workspace or existing.workspace
     selected_tls = tls if tls is not None else existing.tls
-    selected_token, token_source = resolve_login_token(token, existing)
+    selected_token, token_source = resolve_login_token(token)
+    selected_endpoint_url = endpoint_url(selected_endpoint, tls=selected_tls)
     if not selected_token:
         try:
             result = device_login(
-                endpoint_url(selected_endpoint, tls=selected_tls),
+                selected_endpoint_url,
                 client_name=device_login_client_name(),
                 announce=announce_device_login,
             )
@@ -225,6 +228,11 @@ def login(
         selected_token = result.token
         token_source = "device"
 
+    WorkspaceControlClient.from_endpoint(
+        selected_endpoint_url,
+        token=selected_token,
+        workspace=selected_workspace,
+    ).current()
     saved = set_profile(
         ClientProfile(
             name=profile_name,
