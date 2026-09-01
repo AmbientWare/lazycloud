@@ -18,7 +18,7 @@ import time
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload
+from lazycloud.cli.components.output import print_payload
 from lazycloud.cli.control import compute_client
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
 from shared.contracts import ContractModel
@@ -77,12 +77,17 @@ def fleet_ensure(
         # the platform could say which account was its own still describes itself
         # as a customer's, and its machines would serve nobody but us.
         adopted = client.adopt_fleet_account()
-        if json_output_enabled(ctx):
-            print_payload(ctx, adopted.model_dump(mode="json"))
-            return
-        console.print(f"AWS account {adopted.account_id} is already connected ({adopted.phase}).")
-        if adopted.phase is not AwsAccountConnectionPhase.Ready:
-            console.print("Run `cloud validate` to advance it.")
+        print_payload(
+            ctx,
+            adopted.model_dump(mode="json"),
+            title="Fleet account connected",
+            tone="success" if adopted.phase is AwsAccountConnectionPhase.Ready else "info",
+            message=(
+                "Run `cloud validate` to advance the connection."
+                if adopted.phase is not AwsAccountConnectionPhase.Ready
+                else ""
+            ),
+        )
         return
 
     response = client.connect_account(
@@ -102,10 +107,13 @@ def fleet_ensure(
         # serves every customer and bills to the fleet.
         platform_fleet=True,
     )
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-        return
-    console.print(f"connected AWS account {account_id}; run `cloud validate` to activate it.")
+    print_payload(
+        ctx,
+        response.model_dump(mode="json"),
+        title="Fleet account connected",
+        tone="success",
+        message="Run `cloud validate` to activate the connection.",
+    )
 
 
 __all__ = ["fleet_app"]
@@ -196,20 +204,15 @@ def fleet_destroy(
         for workspace_id, unit in _every_unit()
     ]
     remaining = [outcome for outcome in outcomes if not outcome.deleted]
-    if json_output_enabled(ctx):
-        print_payload(
-            ctx,
-            {
-                "units": [outcome.model_dump(mode="json") for outcome in outcomes],
-                "remaining": len(remaining),
-            },
-        )
-    else:
-        for outcome in outcomes:
-            state = "deleted" if outcome.deleted else f"NOT DELETED ({outcome.reason})"
-            console.print(f"{outcome.name}: {state}")
-        if not outcomes:
-            console.print("no units to delete.")
+    print_payload(
+        ctx,
+        {
+            "units": [outcome.model_dump(mode="json") for outcome in outcomes],
+            "remaining": len(remaining),
+        },
+        title="Fleet units removed" if not remaining else "Fleet teardown incomplete",
+        tone="success" if not remaining else "warning",
+    )
     if remaining:
         # Named, and the command fails. A teardown that reported success with a
         # unit still standing is the one outcome worth preventing, because the

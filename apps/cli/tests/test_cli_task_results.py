@@ -7,10 +7,11 @@ from typing import Never, Protocol
 
 import pytest
 import shared.tasks
-from cli.main import build_admin_cli
+from cli.main import build_admin_cli, start
 from lazycloud.json_contracts import parse_json_object
 from lazycloud.session.task import TaskResult
 from pydantic import JsonValue
+from shared.app_identity import ADMIN_CLI_NAME
 from shared.deployments import StubKind
 from shared.function_payloads import FunctionCloudpickleResult, FunctionJsonResult
 from shared.http.tasks import TaskResponse, TaskWorkloadReferenceResponse
@@ -47,6 +48,7 @@ class _TaskClient:
                 name=self.response.name,
                 status=self.response.status,
                 result=self.response.result,
+                error=self.response.error,
                 exit_code=self.response.exit_code,
             )
         )
@@ -134,6 +136,31 @@ def test_task_result_inspection_never_deserializes_cloudpickle(
     assert parse_json_object(machine.stdout)["result"] == encoded
 
 
+def test_failed_task_result_returns_a_formatted_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    response = _task_response(
+        None,
+        status=TaskStatus.Failed,
+        error="worker exited before producing a result",
+        exit_code=17,
+    )
+    monkeypatch.setattr(TASK_CLIENT_TARGET, _task_client_factory(response))
+
+    with pytest.raises(SystemExit) as raised:
+        start(
+            args=["task", "result", response.id, "--no-wait"],
+            prog_name=ADMIN_CLI_NAME,
+        )
+
+    assert raised.value.code == 17
+    captured = capsys.readouterr()
+    assert "Task failed" in captured.err
+    assert "worker exited before producing a result" in captured.err
+    assert captured.out == ""
+
+
 def _task_client_factory(response: TaskResponse) -> _TaskClientFactory:
     def build_task_client(
         *,
@@ -150,14 +177,18 @@ def _task_response(
     result: JsonValue,
     *,
     kind: StubKind = StubKind.Function,
+    status: TaskStatus = TaskStatus.Complete,
+    error: str | None = None,
+    exit_code: int | None = 0,
 ) -> TaskResponse:
     created_at = datetime(2026, 7, 11, tzinfo=UTC)
     return TaskResponse(
         id="task-result",
         name="function-result",
-        status=TaskStatus.Complete,
+        status=status,
         result=result,
-        exit_code=0,
+        error=error,
+        exit_code=exit_code,
         created_at=created_at,
         workload=TaskWorkloadReferenceResponse(name="function-result", kind=kind),
     )

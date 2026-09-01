@@ -149,9 +149,14 @@ def cron_list(ctx: typer.Context) -> None:
 
 
 @cron_app.command("delete")
-def cron_delete(name: str) -> None:
+def cron_delete(ctx: typer.Context, name: str) -> None:
     admin_api_client().delete_cron_job(name)
-    console.print(f"deleted cron job {name}")
+    print_payload(
+        ctx,
+        {"name": name, "deleted": True},
+        title="Cron job deleted",
+        tone="success",
+    )
 
 
 @cron_app.command("runs")

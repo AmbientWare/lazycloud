@@ -195,6 +195,11 @@ def agent_release(ctx: typer.Context, lease_id: str) -> None:
 
 
 @agent_app.command("delete")
-def agent_delete(agent_id: str) -> None:
+def agent_delete(ctx: typer.Context, agent_id: str) -> None:
     admin_api_client().delete_agent(agent_id)
-    console.print(f"deleted agent {agent_id}")
+    print_payload(
+        ctx,
+        {"agent_id": agent_id, "deleted": True},
+        title="Agent deleted",
+        tone="success",
+    )

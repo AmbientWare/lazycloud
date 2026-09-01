@@ -73,10 +73,7 @@ def object_read(
 def object_delete(ctx: typer.Context, bucket: str, key: str) -> None:
     admin_api_client().delete_object(bucket, key)
     payload: dict[str, JsonValue] = {"bucket": bucket, "key": key, "deleted": True}
-    if json_output_enabled(ctx):
-        print_payload(ctx, payload)
-    else:
-        console.print(f"deleted object {bucket}/{key}")
+    print_payload(ctx, payload, title="Object deleted", tone="success")
 
 
 @cache_app.command("put")
@@ -122,15 +119,12 @@ def cache_get(
             ctx,
             {**response.entry.model_dump(mode="json"), "destination": str(target)},
         )
-    else:
-        console.print(str(target), highlight=False, markup=False, soft_wrap=True)
+        return
+    console.print(str(target), highlight=False, markup=False, soft_wrap=True)
 
 
 @cache_app.command("delete")
 def cache_delete(ctx: typer.Context, namespace: str, key: str) -> None:
     admin_api_client().delete_cache_entry(namespace, key)
     payload: dict[str, JsonValue] = {"namespace": namespace, "key": key, "deleted": True}
-    if json_output_enabled(ctx):
-        print_payload(ctx, payload)
-    else:
-        console.print("deleted cache entry")
+    print_payload(ctx, payload, title="Cache entry deleted", tone="success")
