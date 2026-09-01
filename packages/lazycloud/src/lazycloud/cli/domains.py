@@ -6,8 +6,15 @@ import typer
 from shared.custom_domains import CustomDomainPhase
 from shared.http.custom_domains import CustomDomainResponse
 
-from lazycloud.cli.components.cards import notice_card
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_default,
+    json_output_enabled,
+    print_payload,
+    table,
+)
 from lazycloud.cli.control import domain_client
 
 domain_app = typer.Typer(help="Manage the domains this workspace can serve from.")
@@ -25,7 +32,17 @@ def _payload(domain: CustomDomainResponse) -> dict[str, object]:
 
 
 def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
-    print_payload(ctx, _payload(domain), title="Domain")
+    summary: dict[str, object] = {
+        "hostname": domain.hostname,
+        "status": domain.phase.value,
+    }
+    if domain.verified_at is not None:
+        summary["verified"] = domain.verified_at.isoformat()
+    emit(
+        ctx,
+        payload=_payload(domain),
+        view=result_card("Domain", json_default(summary)),
+    )
     if json_output_enabled(ctx):
         return
     if domain.error_message:
@@ -111,11 +128,10 @@ def domain_remove(
     """Retire a domain, discarding its certificate."""
 
     domain_client(workspace=workspace).remove(hostname)
-    print_payload(
+    emit(
         ctx,
-        {"hostname": hostname, "removed": True},
-        title="Domain removed",
-        tone="success",
+        payload={"hostname": hostname, "removed": True},
+        view=notice_card("Domain removed", f"Removed {hostname}.", tone="success"),
     )
 
 

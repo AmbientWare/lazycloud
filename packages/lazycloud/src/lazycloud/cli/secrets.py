@@ -5,8 +5,16 @@ from typing import Annotated
 import typer
 from shared.http.secrets import SecretWireRecord
 
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.formatting import timestamp
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_default,
+    json_output_enabled,
+    print_payload,
+    table,
+)
 from lazycloud.cli.control import secret_client
 
 MASKED_SECRET_VALUE = "********"
@@ -27,11 +35,10 @@ def secret_list(
         [
             item.name,
             timestamp(item.updated_at),
-            timestamp(item.created_at),
         ]
         for item in response.secrets
     ]
-    console.print(table("Secrets", ["name", "updated", "created"], rows))
+    console.print(table("Secrets", ["name", "updated"], rows))
 
 
 @secret_app.command("create", help="Create a secret.")
@@ -42,11 +49,10 @@ def secret_create(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = secret_client(workspace=workspace).create(name, value)
-    print_payload(
+    emit(
         ctx,
-        {"id": response.id, "name": response.name},
-        title="Secret created",
-        tone="success",
+        payload={"id": response.id, "name": response.name},
+        view=notice_card("Secret created", f"Created {response.name}.", tone="success"),
     )
 
 
@@ -58,11 +64,10 @@ def secret_modify(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     secret_client(workspace=workspace).update(name, value)
-    print_payload(
+    emit(
         ctx,
-        {"name": name, "updated": True},
-        title="Secret updated",
-        tone="success",
+        payload={"name": name, "updated": True},
+        view=notice_card("Secret updated", f"Updated {name}.", tone="success"),
     )
 
 
@@ -73,11 +78,10 @@ def secret_delete(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     secret_client(workspace=workspace).delete(name)
-    print_payload(
+    emit(
         ctx,
-        {"name": name, "deleted": True},
-        title="Secret deleted",
-        tone="success",
+        payload={"name": name, "deleted": True},
+        view=notice_card("Secret deleted", f"Deleted {name}.", tone="success"),
     )
 
 
@@ -95,7 +99,20 @@ def secret_show(
     if response.secret is None:
         raise typer.BadParameter(f"secret not found: {name}")
     payload = _secret_payload(response.secret, reveal=reveal)
-    print_payload(ctx, payload, title="Secret")
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Secret",
+            json_default(
+                {
+                    "name": response.secret.name,
+                    "value": payload["value"],
+                    "updated": timestamp(response.secret.updated_at),
+                }
+            ),
+        ),
+    )
 
 
 def _secret_payload(record: SecretWireRecord, *, reveal: bool = False) -> dict[str, object]:

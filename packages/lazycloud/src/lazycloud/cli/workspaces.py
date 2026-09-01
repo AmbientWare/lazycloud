@@ -5,8 +5,15 @@ from typing import Annotated
 import typer
 
 from lazycloud.cli.components import theme
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.formatting import timestamp
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_output_enabled,
+    print_payload,
+    table,
+)
 from lazycloud.clients.workspace import WorkspaceControlClient
 from lazycloud.config import ClientProfile, get_profile, set_profile
 
@@ -24,7 +31,15 @@ def _client(profile: ClientProfile) -> WorkspaceControlClient:
 @workspace_app.command("show", help="Show the active workspace.")
 def workspace_show(ctx: typer.Context) -> None:
     profile = get_profile()
-    print_payload(ctx, _client(profile).current().model_dump(mode="json"), title="Workspace")
+    workspace = _client(profile).current()
+    emit(
+        ctx,
+        payload=workspace.model_dump(mode="json"),
+        view=result_card(
+            "Workspace",
+            {"name": workspace.name, "status": workspace.status.value},
+        ),
+    )
 
 
 @workspace_app.command("rename", help="Rename the active workspace.")
@@ -36,11 +51,14 @@ def workspace_rename(ctx: typer.Context, name: str) -> None:
         activate=True,
         replace_legacy=True,
     )
-    print_payload(
+    emit(
         ctx,
-        workspace.model_dump(mode="json"),
-        title="Workspace renamed",
-        tone="success",
+        payload=workspace.model_dump(mode="json"),
+        view=notice_card(
+            "Workspace renamed",
+            f"Using workspace {workspace.name}.",
+            tone="success",
+        ),
     )
 
 

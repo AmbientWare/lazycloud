@@ -5,8 +5,9 @@ from typing import Annotated
 
 import typer
 
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.output import print_payload
+from lazycloud.cli.components.output import emit
 from lazycloud.client_codegen import (
     CLIENT_PACKAGE_ROOT,
     remove_client_package,
@@ -32,7 +33,21 @@ def get_client(
         )
     except ClientGenerationError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    print_payload(ctx, payload, title="Client generated", tone="success")
+    resources = payload.get("resources")
+    resource_count = len(resources) if isinstance(resources, list) else 0
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Client generated",
+            {
+                "package": payload.get("package"),
+                "path": payload.get("path"),
+                "resources": resource_count,
+            },
+            tone="success",
+        ),
+    )
 
 
 @client_app.command("remove", help="Remove a generated app client.")
@@ -41,11 +56,15 @@ def remove_client(
     app: Annotated[str, typer.Argument(help="App slug to remove.")],
     output: Annotated[Path, typer.Option("--output", "-o")] = CLIENT_PACKAGE_ROOT,
 ) -> None:
-    print_payload(
+    payload = remove_client_package(app=app, output=output)
+    emit(
         ctx,
-        remove_client_package(app=app, output=output),
-        title="Client removed",
-        tone="success",
+        payload=payload,
+        view=notice_card(
+            "Client removed",
+            f"Removed {payload['app']}.",
+            tone="success",
+        ),
     )
 
 

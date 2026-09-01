@@ -6,8 +6,9 @@ from typing import Annotated
 
 import typer
 
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.formatting import bytes_count
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import console, emit, json_output_enabled, print_payload, table
 
 example_app = typer.Typer(help="Manage example apps.")
 
@@ -60,11 +61,14 @@ def quickstart(
     force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
 ) -> None:
     _write_file(output, QUICKSTART_TEMPLATE, force=force)
-    print_payload(
+    emit(
         ctx,
-        {"path": str(output), "written": True},
-        title="Quickstart written",
-        tone="success",
+        payload={"path": str(output), "written": True},
+        view=notice_card(
+            "Quickstart written",
+            f"Created {output}.",
+            tone="success",
+        ),
     )
 
 
@@ -76,11 +80,14 @@ def create_app(
 ) -> None:
     target = output or Path(name)
     written = _write_template(name, target, force=force)
-    print_payload(
+    emit(
         ctx,
-        {"name": name, "path": str(target), "files": written},
-        title="App scaffold created",
-        tone="success",
+        payload={"name": name, "path": str(target), "files": written},
+        view=result_card(
+            "App scaffold created",
+            {"path": str(target), "files": len(written)},
+            tone="success",
+        ),
     )
 
 
@@ -100,11 +107,31 @@ def example_download(
                 base / template_name,
                 force=force,
             )
-        print_payload(ctx, {"name": name, "path": str(base), "files": files})
+        emit(
+            ctx,
+            payload={"name": name, "path": str(base), "files": files},
+            view=result_card(
+                "Examples downloaded",
+                {
+                    "path": str(base),
+                    "examples": len(files),
+                    "files": sum(len(paths) for paths in files.values()),
+                },
+                tone="success",
+            ),
+        )
         return
     target = output or Path(name)
     written = _write_template(name, target, force=force)
-    print_payload(ctx, {"name": name, "path": str(target), "files": written})
+    emit(
+        ctx,
+        payload={"name": name, "path": str(target), "files": written},
+        view=result_card(
+            "Example downloaded",
+            {"path": str(target), "files": len(written)},
+            tone="success",
+        ),
+    )
 
 
 @example_app.command("list", help="List available example apps.")

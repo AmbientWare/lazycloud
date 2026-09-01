@@ -158,7 +158,14 @@ def compute_policy_show(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = compute_client(workspace=workspace).policy()
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "Compute policy",
+            {"default_pool": response.default_pool, "revision": response.revision},
+        ),
+    )
 
 
 @compute_policy_app.command("update", help="Update the workspace compute policy.")
@@ -176,7 +183,15 @@ def compute_policy_update(
             default_pool=default_pool,
         )
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Compute policy updated",
+            f"New workloads will use pool {response.default_pool} by default.",
+            tone="success",
+        ),
+    )
 
 
 @cloud_compute_app.command("show", help="Show connected-account compute settings.")
@@ -446,7 +461,15 @@ def cloud_status(
     client = compute_client()
     response = client.current_connection()
     if response is None:
-        print_payload(ctx, {"connection": None}, title="Cloud connection")
+        emit(
+            ctx,
+            payload={"connection": None},
+            view=notice_card(
+                "Cloud connection",
+                "No cloud account is connected.",
+                tone="neutral",
+            ),
+        )
         return
     account_id = response.account_id
     if watch:
@@ -554,7 +577,15 @@ def cloud_cancel_reconnect(
 ) -> None:
     """Cancel a pending replacement authorization."""
     response = compute_client().cancel_reconnect()
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "Reconnect cancelled",
+            json_default(_connection_summary(response)),
+            tone="success",
+        ),
+    )
 
 
 @cloud_app.command("retry")
@@ -563,7 +594,15 @@ def cloud_retry(
 ) -> None:
     """Retry the connection's current pending action."""
     response = compute_client().retry_connection()
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "Cloud action retried",
+            json_default(_connection_summary(response)),
+            tone="info",
+        ),
+    )
 
 
 def _aws_validation_failure(response: AwsConnectionResponse) -> tuple[str, str] | None:
@@ -577,8 +616,9 @@ def _connection_summary(response: AwsConnectionResponse) -> dict[str, object]:
     summary: dict[str, object] = {
         "account_id": response.account_id,
         "phase": response.phase.value,
-        "detail": response.detail,
     }
+    if response.detail:
+        summary["detail"] = response.detail
     if response.customer_action is not None:
         summary["action"] = response.customer_action.label
         summary["action_url"] = response.customer_action.url
@@ -626,7 +666,27 @@ def task_show(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     task = task_client(workspace=workspace).detail(task_id)
-    print_payload(ctx, task.model_dump(mode="json"), title="Task")
+    task_name = task.workload.name if task.workload is not None else task.name
+    summary: dict[str, object] = {
+        "workload": task_name,
+        "status": task.status.value,
+        "requested": timestamp(task.created_at),
+    }
+    if task.max_attempts > 1:
+        summary["attempt"] = f"{max(task.attempt_number, 1)} of {task.max_attempts}"
+    if task.started_at is not None:
+        summary["started"] = timestamp(task.started_at)
+    if task.finished_at is not None:
+        summary["finished"] = timestamp(task.finished_at)
+    if task.container_id:
+        summary["container"] = task.container_id
+    if task.error:
+        summary["error"] = task.error
+    emit(
+        ctx,
+        payload=task.model_dump(mode="json"),
+        view=result_card("Task", json_default(summary)),
+    )
 
 
 @task_app.command("result", help="Wait for and display a task result.")
@@ -668,7 +728,15 @@ def task_result(
             title="Task failed",
             exit_code=result.exit_code or 1,
         )
-    print_payload(ctx, task.model_dump(mode="json"), title="Task pending", tone="info")
+    emit(
+        ctx,
+        payload=task.model_dump(mode="json"),
+        view=notice_card(
+            "Task pending",
+            f"Task {task_id} is {task.status.value.replace('_', ' ')}.",
+            hint=f"Run `lazycloud task result {task_id}` to wait for it.",
+        ),
+    )
 
 
 @task_app.command("logs", help="Print logs for one task.")
@@ -696,7 +764,15 @@ def task_cancel(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = task_client(workspace=workspace).cancel(task_id)
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Task cancelled",
+            f"Cancelled task {task_id}.",
+            tone="success",
+        ),
+    )
 
 
 @container_app.command("list", help="List recent containers.")
@@ -773,7 +849,15 @@ def container_checkpoint(
     response = gateway_client(workspace=workspace).checkpoint_container(
         CheckpointContainerRequest(container_id=container_id, checkpoint_id=checkpoint_id)
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Checkpoint created",
+            f"Created checkpoint {response.checkpoint_id}.",
+            tone="success",
+        ),
+    )
 
 
 @container_app.command("stop", help="Stop one or more containers.")
@@ -787,7 +871,15 @@ def container_stop(
     for container_id in container_ids:
         client.stop_container(container_id)
         results.append({"container_id": container_id})
-    print_payload(ctx, results, title="Containers stopped", tone="success")
+    emit(
+        ctx,
+        payload=results,
+        view=notice_card(
+            "Containers stopped",
+            f"Stopped {len(results)} container{'s' if len(results) != 1 else ''}.",
+            tone="success",
+        ),
+    )
 
 
 @machine_app.command("list", help="List joined machines.")
@@ -905,11 +997,10 @@ def machine_join(
         return
     if exit_code:
         raise typer.Exit(exit_code)
-    print_payload(
+    emit(
         ctx,
-        {"status": "running"},
-        title="Agent is running",
-        tone="success",
+        payload={"status": "running"},
+        view=notice_card("Machine joined", "The agent is running.", tone="success"),
     )
 
 
@@ -921,9 +1012,8 @@ def machine_remove(
 ) -> None:
     """Remove a machine this account joined."""
     compute_client(workspace=workspace).remove_machine(machine_id)
-    print_payload(
+    emit(
         ctx,
-        {"machine_id": machine_id, "removed": True},
-        title="Machine removed",
-        tone="success",
+        payload={"machine_id": machine_id, "removed": True},
+        view=notice_card("Machine removed", f"Removed {machine_id}.", tone="success"),
     )

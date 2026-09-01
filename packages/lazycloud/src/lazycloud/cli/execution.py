@@ -12,9 +12,11 @@ from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
+from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.context import current_workspace
 from lazycloud.cli.components.output import (
     console,
+    emit,
     json_output_enabled,
     parse_json_argument,
     payload_data,
@@ -394,10 +396,10 @@ def deployment_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in deployments])
         return
     rows: list[list[Any]] = [
-        [item.name, item.kind.value, item.version, item.active, item.app_id or "", item.id]
+        [item.name, item.kind.value, item.version, "active" if item.active else "stopped"]
         for item in deployments
     ]
-    console.print(table("Deployments", ["name", "kind", "version", "active", "app", "id"], rows))
+    console.print(table("Deployments", ["name", "kind", "version", "status"], rows))
 
 
 @deployment_app.command("stop", help="Stop one or more deployments.")
@@ -412,7 +414,15 @@ def deployment_stop(
     for deployment_id in deployment_ids_or_names:
         response = client.stop(deployment_id, workspace=selected_workspace)
         responses.append(response.model_dump(mode="json"))
-    print_payload(ctx, responses, title="Deployments stopped", tone="success")
+    emit(
+        ctx,
+        payload=responses,
+        view=notice_card(
+            "Deployments stopped",
+            f"Stopped {len(responses)} deployment{'s' if len(responses) != 1 else ''}.",
+            tone="success",
+        ),
+    )
 
 
 @deployment_app.command("start", help="Start a stopped deployment.")
@@ -422,11 +432,14 @@ def deployment_start(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = DeploymentClient(workspace=current_workspace(workspace)).start(deployment_id_or_name)
-    print_payload(
+    emit(
         ctx,
-        response.model_dump(mode="json"),
-        title="Deployment started",
-        tone="success",
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Deployment started",
+            f"Started {response.name}.",
+            tone="success",
+        ),
     )
 
 
@@ -441,11 +454,14 @@ def deployment_scale(
         deployment_id_or_name,
         containers,
     )
-    print_payload(
+    emit(
         ctx,
-        response.model_dump(mode="json"),
-        title="Deployment scaled",
-        tone="success",
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Deployment scaled",
+            f"Set {response.name} to {containers} containers.",
+            tone="success",
+        ),
     )
 
 
@@ -456,11 +472,14 @@ def deployment_delete(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     DeploymentClient(workspace=current_workspace(workspace)).delete(deployment_id_or_name)
-    print_payload(
+    emit(
         ctx,
-        {"deployment_id": deployment_id_or_name, "deleted": True},
-        title="Deployment deleted",
-        tone="success",
+        payload={"deployment_id": deployment_id_or_name, "deleted": True},
+        view=notice_card(
+            "Deployment deleted",
+            f"Deleted {deployment_id_or_name}.",
+            tone="success",
+        ),
     )
 
 

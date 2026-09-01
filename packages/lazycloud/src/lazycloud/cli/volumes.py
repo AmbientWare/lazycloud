@@ -9,8 +9,15 @@ import typer
 from shared.http.volumes import DeletePathRequest, ListPathRequest, MovePathRequest
 
 from lazycloud.abstractions.volume import Volume, VolumeOperationError
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.formatting import bytes_count, timestamp
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_output_enabled,
+    print_payload,
+    table,
+)
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import volume_client
 
@@ -32,12 +39,11 @@ def volume_list(
         [
             item.name,
             bytes_count(item.size),
-            item.workspace_name,
             timestamp(item.updated_at),
         ]
         for item in response.volumes
     ]
-    console.print(table("Volumes", ["name", "size", "workspace", "updated"], rows))
+    console.print(table("Volumes", ["name", "size", "updated"], rows))
 
 
 @volume_app.command("create", help="Create a volume.")
@@ -49,11 +55,14 @@ def volume_create(
     response = volume_client(workspace=workspace).create(name)
     if response.volume is None:
         raise typer.BadParameter("volume create failed")
-    print_payload(
+    emit(
         ctx,
-        response.volume.model_dump(mode="json"),
-        title="Volume created",
-        tone="success",
+        payload=response.volume.model_dump(mode="json"),
+        view=notice_card(
+            "Volume created",
+            f"Created {response.volume.name}.",
+            tone="success",
+        ),
     )
 
 
@@ -71,7 +80,11 @@ def volume_delete(
         yes=yes,
     )
     volume_client(workspace=workspace).delete(name)
-    print_payload(ctx, {"name": name}, title="Volume deleted", tone="success")
+    emit(
+        ctx,
+        payload={"name": name},
+        view=notice_card("Volume deleted", f"Deleted {name}.", tone="success"),
+    )
 
 
 def volume_ls(
@@ -120,20 +133,26 @@ def volume_cp(
             source_remote.relative_path,
             target,
         )
-        print_payload(
+        emit(
             ctx,
-            {"source": source_remote.full_path, "destination": str(result)},
-            title="Download complete",
-            tone="success",
+            payload={"source": source_remote.full_path, "destination": str(result)},
+            view=result_card(
+                "Download complete",
+                {"saved_to": str(result)},
+                tone="success",
+            ),
         )
         return
     selected_destination = destination_remote or parse_remote_path(destination)
     copied = _upload_to_remote(source, selected_destination, workspace=workspace)
-    print_payload(
+    emit(
         ctx,
-        {"source": source, "destination": selected_destination.full_path, "copied": copied},
-        title="Upload complete",
-        tone="success",
+        payload={"source": source, "destination": selected_destination.full_path, "copied": copied},
+        view=result_card(
+            "Upload complete",
+            {"destination": selected_destination.full_path, "files": len(copied)},
+            tone="success",
+        ),
     )
 
 
@@ -146,11 +165,14 @@ def volume_rm(
     response = volume_client(workspace=workspace).delete_path(
         DeletePathRequest(path=selected.full_path)
     )
-    print_payload(
+    emit(
         ctx,
-        {"deleted": list(response.deleted)},
-        title="Paths deleted",
-        tone="success",
+        payload={"deleted": list(response.deleted)},
+        view=notice_card(
+            "Paths deleted",
+            f"Deleted {len(response.deleted)} path{'s' if len(response.deleted) != 1 else ''}.",
+            tone="success",
+        ),
     )
 
 
@@ -167,11 +189,14 @@ def volume_mv(
     response = volume_client(workspace=workspace).move_path(
         MovePathRequest(original_path=original.full_path, new_path=new.full_path)
     )
-    print_payload(
+    emit(
         ctx,
-        {"new_path": response.new_path or new.full_path},
-        title="Path moved",
-        tone="success",
+        payload={"new_path": response.new_path or new.full_path},
+        view=notice_card(
+            "Path moved",
+            f"Moved to {response.new_path or new.full_path}.",
+            tone="success",
+        ),
     )
 
 

@@ -17,7 +17,7 @@ from shared.http.device_auth import (
 from shared.http_transport import HttpChannel
 from shared.identity import DeviceAuthorizationStatus
 
-from lazycloud.cli.components.cards import notice_card
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
     console,
@@ -271,10 +271,8 @@ def profile_list(ctx: typer.Context) -> None:
         [
             item.name,
             "yes" if item.name == active else "",
-            item.endpoint,
+            item.resolved_endpoint(),
             item.workspace,
-            "yes" if item.tls else "no",
-            "set" if item.token else "",
         ]
         for item in profiles
     ]
@@ -287,7 +285,7 @@ def profile_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Profiles",
-            ["name", "active", "endpoint", "workspace", "tls", "token"],
+            ["name", "active", "endpoint", "workspace"],
             rows,
         )
     )
@@ -296,7 +294,19 @@ def profile_list(ctx: typer.Context) -> None:
 @profile_app.command("current", help="Show the active client profile.")
 def profile_current(ctx: typer.Context) -> None:
     profile = get_profile(apply_env=False)
-    print_payload(ctx, {**profile_payload(profile), "active": True})
+    payload: dict[str, object] = {**profile_payload(profile), "active": True}
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Current profile",
+            {
+                "name": profile.name,
+                "endpoint": profile.resolved_endpoint(),
+                "workspace": profile.workspace,
+            },
+        ),
+    )
 
 
 @profile_app.command("show", help="Show a client profile.")
@@ -305,7 +315,18 @@ def profile_show(
     profile: Annotated[str | None, typer.Option("--profile")] = None,
 ) -> None:
     selected = get_profile(profile)
-    print_payload(ctx, profile_payload(selected))
+    emit(
+        ctx,
+        payload=profile_payload(selected),
+        view=result_card(
+            "Profile",
+            {
+                "name": selected.name,
+                "endpoint": selected.resolved_endpoint(),
+                "workspace": selected.workspace,
+            },
+        ),
+    )
 
 
 @profile_app.command("set", help="Create or update a client profile.")
@@ -409,10 +430,15 @@ def token_show(
     profile: Annotated[str | None, typer.Option("--profile")] = None,
 ) -> None:
     selected = get_profile(profile)
-    print_payload(
+    emit(
         ctx,
-        {"profile": selected.name, "token": "set" if selected.token else "not set"},
-        title="Token status",
+        payload={"profile": selected.name, "token": "set" if selected.token else "not set"},
+        view=notice_card(
+            "Token status",
+            f"Profile {selected.name} has "
+            f"{'a saved token.' if selected.token else 'no saved token.'}",
+            tone="neutral",
+        ),
     )
 
 

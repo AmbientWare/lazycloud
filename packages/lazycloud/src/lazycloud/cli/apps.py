@@ -4,7 +4,14 @@ from typing import Annotated
 
 import typer
 
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_output_enabled,
+    print_payload,
+    table,
+)
 from lazycloud.cli.control import resource_client
 
 app_app = typer.Typer(help="Manage deployed applications.")
@@ -45,7 +52,19 @@ def app_show(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).app(app_id)
-    print_payload(ctx, response.model_dump(mode="json"), title="App")
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "App",
+            {
+                "name": response.name,
+                "state": response.lifecycle_state.value,
+                "version": response.version,
+                "public": response.public,
+            },
+        ),
+    )
 
 
 @app_app.command("pause", help="Pause an application's workloads.")
@@ -55,7 +74,15 @@ def app_pause(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).pause_app(app_id)
-    print_payload(ctx, response.model_dump(mode="json"), title="App paused", tone="success")
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "App paused",
+            f"Paused {response.name}.",
+            tone="success",
+        ),
+    )
 
 
 @app_app.command("resume", help="Resume a paused application.")
@@ -65,7 +92,15 @@ def app_resume(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).resume_app(app_id)
-    print_payload(ctx, response.model_dump(mode="json"), title="App resumed", tone="success")
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "App resumed",
+            f"Resumed {response.name}.",
+            tone="success",
+        ),
+    )
 
 
 @app_app.command("delete", help="Delete a deployed application.")
@@ -75,11 +110,10 @@ def app_delete(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     resource_client(workspace=workspace).delete_app(app_id)
-    print_payload(
+    emit(
         ctx,
-        {"app_id": app_id, "deleted": True},
-        title="App deleted",
-        tone="success",
+        payload={"app_id": app_id, "deleted": True},
+        view=notice_card("App deleted", f"Deleted {app_id}.", tone="success"),
     )
 
 
