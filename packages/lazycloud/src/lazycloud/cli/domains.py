@@ -47,7 +47,7 @@ def _print_dns_record(domain: CustomDomainResponse) -> None:
     if domain.required_records:
         console.print(
             table(
-                "Also add these, to prove you own the domain",
+                "Ownership records",
                 ["type", "name", "value"],
                 [[r.type, r.name, r.value] for r in domain.required_records],
             )
@@ -67,8 +67,8 @@ def domain_add(
     if not json_output_enabled(ctx):
         console.print(
             notice_card(
-                "Next step",
-                "Wait for DNS to propagate, then check the domain status.",
+                "DNS pending",
+                "Wait for the new records to appear.",
                 hint=f"Run lazycloud domain status {registered.hostname}",
             )
         )

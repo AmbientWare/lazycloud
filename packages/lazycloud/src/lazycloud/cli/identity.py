@@ -21,6 +21,7 @@ from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
     console,
+    emit,
     error_console,
     json_output_enabled,
     print_payload,
@@ -59,7 +60,7 @@ class DeviceLoginResult:
 def endpoint_url(endpoint: str, *, tls: bool) -> str:
     selected = endpoint.strip()
     if not selected:
-        msg = "control plane endpoint must not be empty"
+        msg = "Control plane endpoint cannot be empty."
         raise ConfigError(msg)
     if "://" in selected:
         return selected.rstrip("/")
@@ -149,9 +150,13 @@ def device_login(
             continue
         if claim.status is DeviceAuthorizationStatus.Approved:
             return DeviceLoginResult(token=claim.token)
-        msg = f"device login {claim.status.value}"
+        msg = (
+            "The sign-in request was denied."
+            if claim.status is DeviceAuthorizationStatus.Denied
+            else "The sign-in code expired."
+        )
         raise DeviceLoginError(msg)
-    msg = "device login expired before it was approved"
+    msg = "The sign-in code expired."
     raise DeviceLoginError(msg)
 
 
@@ -163,18 +168,18 @@ def _device_request(
     try:
         return channel.post(path, payload)
     except urllib.error.URLError as exc:
-        msg = f"control plane unreachable at {channel.endpoint}: {exc.reason}"
+        msg = f"Could not reach {channel.endpoint}: {exc.reason}"
         raise DeviceLoginError(msg) from exc
 
 
 def announce_device_login(started: DeviceCodeCreateResponse) -> None:
     error_console.print(
         notice_card(
-            "Device sign-in",
-            (f"Open {started.verification_uri_complete} and confirm code {started.user_code}."),
+            "Sign in to lazycloud",
+            f"Open {started.verification_uri_complete}",
             hint=(
-                "Approve the request in your browser. "
-                f"This code expires in {started.expires_in_seconds // 60} minutes."
+                f"Confirm code {started.user_code}. "
+                f"It expires in {started.expires_in_seconds // 60} minutes."
             ),
         )
     )
@@ -231,15 +236,24 @@ def login(
         activate=activate,
         replace_legacy=True,
     )
-    print_payload(
+    payload: dict[str, object] = {
+        **profile_payload(saved),
+        "activated": activate,
+        "token_source": token_source,
+    }
+    emit(
         ctx,
-        {
-            **profile_payload(saved),
-            "activated": activate,
-            "token_source": token_source,
-        },
-        title="Signed in",
-        tone="success",
+        payload=payload,
+        view=notice_card(
+            "Signed in" if activate else "Profile saved",
+            (
+                f"Profile {saved.name} is active."
+                if activate
+                else f"Saved profile {saved.name} without making it active."
+            ),
+            hint=("" if activate else f"Run `lazycloud profile activate {saved.name}` to use it."),
+            tone="success",
+        ),
     )
 
 
@@ -314,28 +328,48 @@ def profile_set(
         activate=activate,
         replace_legacy=True,
     )
-    print_payload(ctx, profile_payload(saved))
+    payload = profile_payload(saved)
+    emit(
+        ctx,
+        payload=payload,
+        view=notice_card(
+            "Profile saved",
+            (
+                f"Profile {saved.name} is active."
+                if activate
+                else f"Saved profile {saved.name} without making it active."
+            ),
+            tone="success",
+        ),
+    )
 
 
 @profile_app.command("activate", help="Make a profile active.")
 def profile_activate(ctx: typer.Context, name: str) -> None:
     profile = activate_profile(name)
-    print_payload(
+    payload: dict[str, object] = {**profile_payload(profile), "active": True}
+    emit(
         ctx,
-        {**profile_payload(profile), "active": True},
-        title="Profile activated",
-        tone="success",
+        payload=payload,
+        view=notice_card(
+            "Profile activated",
+            f"Using profile {profile.name}.",
+            tone="success",
+        ),
     )
 
 
 @profile_app.command("delete", help="Delete a client profile.")
 def profile_delete(ctx: typer.Context, name: str) -> None:
     delete_profile(name)
-    print_payload(
+    emit(
         ctx,
-        {"name": name, "deleted": True},
-        title="Profile deleted",
-        tone="success",
+        payload={"name": name, "deleted": True},
+        view=notice_card(
+            "Profile deleted",
+            f"Deleted profile {name}.",
+            tone="success",
+        ),
     )
 
 
@@ -352,11 +386,14 @@ def token_set(
         activate=profile_name == _active_profile_name_or_default(),
         replace_legacy=True,
     )
-    print_payload(
+    emit(
         ctx,
-        {"profile": profile_name, "token": "set"},
-        title="Token saved",
-        tone="success",
+        payload={"profile": profile_name, "token": "set"},
+        view=notice_card(
+            "Token saved",
+            f"Saved the token for profile {profile_name}.",
+            tone="success",
+        ),
     )
 
 
