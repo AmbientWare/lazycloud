@@ -18,8 +18,11 @@ import time
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload
-from lazycloud.cli.control import compute_client
+from lazycloud.cli.components.cards import result_card
+from lazycloud.cli.components.output import console, emit
+from lazycloud.cli.components.results import emit_result
+from lazycloud.cli.control import compute_client, workspace_client
+from lazycloud.json_contracts import validate_json_object
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
 from shared.contracts import ContractModel
 from shared.http.compute import UnitResponse
@@ -73,16 +76,26 @@ def fleet_ensure(
 
     existing = client.current_connection()
     if existing is not None:
-        # Restated on every deploy, not just the first: a connection made before
-        # the platform could say which account was its own still describes itself
+        # Restated on every deploy. A connection made before the platform could
+        # say which account was its own still describes itself
         # as a customer's, and its machines would serve nobody but us.
         adopted = client.adopt_fleet_account()
-        if json_output_enabled(ctx):
-            print_payload(ctx, adopted.model_dump(mode="json"))
-            return
-        console.print(f"AWS account {adopted.account_id} is already connected ({adopted.phase}).")
-        if adopted.phase is not AwsAccountConnectionPhase.Ready:
-            console.print("Run `cloud validate` to advance it.")
+        emit_result(
+            ctx,
+            payload=adopted.model_dump(mode="json"),
+            title="Fleet account connected",
+            fields={
+                "account": adopted.account_id,
+                "phase": adopted.phase.value,
+                "detail": adopted.detail,
+            },
+            tone="success" if adopted.phase is AwsAccountConnectionPhase.Ready else "info",
+            message=(
+                "Run `cloud validate` to advance the connection."
+                if adopted.phase is not AwsAccountConnectionPhase.Ready
+                else ""
+            ),
+        )
         return
 
     response = client.connect_account(
@@ -102,10 +115,19 @@ def fleet_ensure(
         # serves every customer and bills to the fleet.
         platform_fleet=True,
     )
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-        return
-    console.print(f"connected AWS account {account_id}; run `cloud validate` to activate it.")
+    connection = response.connection
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Fleet account connected",
+        fields={
+            "account": connection.account_id,
+            "phase": connection.phase.value,
+            "detail": connection.detail,
+        },
+        tone="success",
+        message="Run `cloud validate` to activate the connection.",
+    )
 
 
 __all__ = ["fleet_app"]
@@ -177,8 +199,8 @@ def fleet_destroy(
     unit is gone is named in the output and left alone: this cannot prove an
     unclaimed resource is one the platform made, and an operator can. Reaching
     past the control plane to delete one is what recreated two of them the last
-    time this was done by hand — the units still existed, so the scheduler
-    rebuilt their groups minutes later.
+    time this was done by hand. The units still existed, so the scheduler rebuilt
+    their groups minutes later.
     """
     if timeout_seconds <= 0:
         raise typer.BadParameter("--timeout must be greater than zero")
@@ -196,20 +218,27 @@ def fleet_destroy(
         for workspace_id, unit in _every_unit()
     ]
     remaining = [outcome for outcome in outcomes if not outcome.deleted]
-    if json_output_enabled(ctx):
-        print_payload(
-            ctx,
+    payload = validate_json_object(
+        {
+            "units": [outcome.model_dump(mode="json") for outcome in outcomes],
+            "remaining": len(remaining),
+        }
+    )
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Fleet units removed" if not remaining else "Fleet teardown incomplete",
             {
-                "units": [outcome.model_dump(mode="json") for outcome in outcomes],
+                "removed": sum(outcome.deleted for outcome in outcomes),
                 "remaining": len(remaining),
+                "failures": [
+                    f"{outcome.name}: {outcome.reason or 'not removed'}" for outcome in remaining
+                ],
             },
-        )
-    else:
-        for outcome in outcomes:
-            state = "deleted" if outcome.deleted else f"NOT DELETED ({outcome.reason})"
-            console.print(f"{outcome.name}: {state}")
-        if not outcomes:
-            console.print("no units to delete.")
+            tone="success" if not remaining else "warning",
+        ),
+    )
     if remaining:
         # Named, and the command fails. A teardown that reported success with a
         # unit still standing is the one outcome worth preventing, because the
@@ -226,7 +255,7 @@ def _every_unit() -> list[tuple[str, UnitResponse]]:
     provisioning.
     """
     found: list[tuple[str, UnitResponse]] = []
-    for workspace in admin_api_client().list_workspaces().workspaces:
+    for workspace in workspace_client().list().workspaces:
         for unit in admin_api_client(workspace.id).list_units().pools:
             found.append((workspace.id, unit))
     return found
@@ -246,6 +275,11 @@ def _destroy_unit(
     reason = ""
     while True:
         attempts += 1
+        console.print(
+            f"Removing {unit_name}, attempt {attempts}.",
+            highlight=False,
+            markup=False,
+        )
         try:
             client.delete_unit(unit_id)
         except HttpApiError as error:
@@ -255,6 +289,11 @@ def _destroy_unit(
             reason = error.code or str(error.status_code)
             if error.code not in _RETRYABLE_CODES:
                 return _outcome(workspace_id, unit_id, unit_name, False, attempts, reason)
+            console.print(
+                f"{unit_name} is still pending: {reason}.",
+                highlight=False,
+                markup=False,
+            )
         else:
             return _outcome(workspace_id, unit_id, unit_name, True, attempts, "")
         if time.monotonic() + interval_seconds >= deadline:

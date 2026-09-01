@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from lazycloud.cli.components.cards import empty_state, notice_card
 from lazycloud.cli.components.context import current_workspace
+from lazycloud.cli.components.formatting import bytes_count, duration, timestamp
 from lazycloud.cli.components.output import (
     command_from_args,
     console,
@@ -13,7 +15,10 @@ from lazycloud.cli.components.output import (
     print_events_table,
     print_payload,
     table,
+    write_stream,
 )
+from lazycloud.cli.components.progress import print_stream_message
+from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.cli.control import compute_client, control_config
 from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
 from lazycloud.cli.resources import container_attach, container_checkpoint
@@ -35,7 +40,6 @@ from shared.http.compute import (
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
 from cli.api_client import admin_api_client
-from cli.components.terminal import print_stream_message
 
 queue_app = typer.Typer(help="Manage queues.")
 map_app = typer.Typer(help="Manage durable maps.")
@@ -78,7 +82,11 @@ def queue_list(ctx: typer.Context) -> None:
                 [
                     item.name,
                     str(item.size),
-                    str(item.oldest_message_age_seconds or ""),
+                    (
+                        duration(item.oldest_message_age_seconds)
+                        if item.oldest_message_age_seconds is not None
+                        else "none"
+                    ),
                     str(item.put_rate_per_minute),
                 ]
                 for item in records
@@ -90,7 +98,13 @@ def queue_list(ctx: typer.Context) -> None:
 @queue_app.command("put")
 def queue_put(ctx: typer.Context, name: str, value: str) -> None:
     response = _queue_client().put(name, value.encode())
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Value queued",
+        fields={"queue": name},
+        tone="success",
+    )
 
 
 @queue_app.command("pop")
@@ -99,7 +113,8 @@ def queue_pop(ctx: typer.Context, name: str) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    console.print(response.bytes_value().decode(errors="replace"))
+    value = response.bytes_value().decode(errors="replace")
+    write_stream(value if value.endswith("\n") else f"{value}\n")
 
 
 @queue_app.command("peek")
@@ -108,18 +123,30 @@ def queue_peek(ctx: typer.Context, name: str) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    console.print(response.bytes_value().decode(errors="replace"))
+    value = response.bytes_value().decode(errors="replace")
+    write_stream(value if value.endswith("\n") else f"{value}\n")
 
 
 @queue_app.command("size")
 def queue_size(ctx: typer.Context, name: str) -> None:
-    print_payload(ctx, _queue_client().size(name).model_dump(mode="json"))
+    response = _queue_client().size(name)
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Queue size",
+        fields={"queue": name, "messages": response.size},
+    )
 
 
 @queue_app.command("delete")
-def queue_delete(name: str) -> None:
+def queue_delete(ctx: typer.Context, name: str) -> None:
     _queue_client().delete(name)
-    console.print(f"deleted queue {name}")
+    emit_notice(
+        ctx,
+        payload={"name": name, "deleted": True},
+        title="Queue deleted",
+        message=f"Deleted {name}.",
+    )
 
 
 @map_app.command("list")
@@ -133,7 +160,7 @@ def map_list(ctx: typer.Context) -> None:
             "Maps",
             ["name", "keys", "bytes", "expiring"],
             [
-                [item.name, str(item.count), str(item.size_bytes), str(item.expiring_keys)]
+                [item.name, str(item.count), bytes_count(item.size_bytes), str(item.expiring_keys)]
                 for item in records
             ],
         )
@@ -149,7 +176,13 @@ def map_set(
     ttl_seconds: Annotated[int, typer.Option("--ttl", min=0)] = MAX_MAP_TTL_SECONDS,
 ) -> None:
     response = _map_client().set(name, key, value.encode(), ttl_seconds=ttl_seconds)
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Map value saved",
+        fields={"map": name, "key": key, "expires in": duration(ttl_seconds)},
+        tone="success",
+    )
 
 
 @map_app.command("get")
@@ -158,24 +191,46 @@ def map_get(ctx: typer.Context, name: str, key: str) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    console.print(response.bytes_value().decode(errors="replace"))
+    value = response.bytes_value().decode(errors="replace")
+    write_stream(value if value.endswith("\n") else f"{value}\n")
 
 
 @map_app.command("keys")
 def map_keys(ctx: typer.Context, name: str) -> None:
-    print_payload(ctx, _map_client().keys(name).model_dump(mode="json"))
+    response = _map_client().keys(name)
+    if json_output_enabled(ctx):
+        print_payload(ctx, response.model_dump(mode="json"))
+        return
+    console.print(
+        table(
+            "Map keys",
+            ["key"],
+            [[key] for key in response.keys],
+            empty=f"No keys in {name}.",
+        )
+    )
 
 
 @map_app.command("delete-key")
-def map_delete_key(name: str, key: str) -> None:
+def map_delete_key(ctx: typer.Context, name: str, key: str) -> None:
     _map_client().delete(name, key)
-    console.print(f"deleted key {key} from map {name}")
+    emit_notice(
+        ctx,
+        payload={"map": name, "key": key, "deleted": True},
+        title="Map key deleted",
+        message=f"Deleted {key} from {name}.",
+    )
 
 
 @map_app.command("delete")
-def map_delete(name: str) -> None:
+def map_delete(ctx: typer.Context, name: str) -> None:
     _map_client().delete_map(name)
-    console.print(f"deleted map {name}")
+    emit_notice(
+        ctx,
+        payload={"name": name, "deleted": True},
+        title="Map deleted",
+        message=f"Deleted {name}.",
+    )
 
 
 def container_run(
@@ -192,7 +247,18 @@ def container_run(
             command=command_from_args(command or []),
         )
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Container started",
+        fields={
+            "name": response.name,
+            "status": response.status.value,
+            "image": response.image,
+            "id": response.id,
+        },
+        tone="success",
+    )
 
 
 def container_list(
@@ -218,10 +284,15 @@ def container_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in containers])
         return
     rows = [
-        [item.id, item.name, item.image, item.status.value, str(item.exit_code or "")]
+        [
+            item.name,
+            item.status.value,
+            str(item.exit_code) if item.exit_code is not None else "",
+            item.id,
+        ]
         for item in containers
     ]
-    console.print(table("Containers", ["id", "name", "image", "status", "exit"], rows))
+    console.print(table("Containers", ["name", "status", "exit", "id"], rows))
 
 
 def container_show(
@@ -273,10 +344,10 @@ def container_logs(
         print_payload(ctx, response.model_dump(mode="json"))
         return
     if not response.data:
-        console.print("No logs found.")
+        console.print(empty_state("Container logs", "No log entries found."))
         return
     for entry in response.data:
-        print_stream_message(entry.stream, entry.message, console=console)
+        print_stream_message(entry.stream, entry.message)
 
 
 def container_events(
@@ -298,15 +369,21 @@ def container_events(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    print_events_table("Container Events", list(response.data))
+    print_events_table("Container events", list(response.data))
 
 
 def container_delete(
+    ctx: typer.Context,
     container_id: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     admin_api_client(workspace).delete_container(container_id)
-    console.print(f"deleted container {container_id}")
+    emit_notice(
+        ctx,
+        payload={"container_id": container_id, "deleted": True},
+        title="Container deleted",
+        message=f"Deleted {container_id}.",
+    )
 
 
 def container_stop(
@@ -316,11 +393,13 @@ def container_stop(
 ) -> None:
     client = admin_api_client(workspace)
     stopped = [client.stop_container(container_id) for container_id in container_ids]
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in stopped])
-        return
-    for item in stopped:
-        console.print(f"stopped container {item.id}")
+    emit_result(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in stopped],
+        title="Containers stopped",
+        fields={"containers": len(stopped)},
+        tone="success",
+    )
 
 
 def unit_create(
@@ -385,7 +464,19 @@ def unit_create(
             registration_timeout_seconds=registration_timeout_seconds,
         )
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Unit created",
+        fields={
+            "name": response.name,
+            "pool": str(response.pool),
+            "provider": response.provider,
+            "scaling": response.scaling_enabled,
+            "id": response.id,
+        },
+        tone="success",
+    )
 
 
 def unit_ensure(
@@ -427,7 +518,18 @@ def unit_ensure(
         # An identifier, not a credential: it grants nothing without the worker
         # token that accompanies it, so it is written in the clear.
         capacity_owner_output.write_text(record.capacity_owner_id)
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Unit ready",
+        fields={
+            "name": record.name,
+            "pool": str(record.pool),
+            "provider": record.provider,
+            "id": record.id,
+        },
+        tone="success",
+    )
 
 
 def unit_list(ctx: typer.Context) -> None:
@@ -437,19 +539,19 @@ def unit_list(ctx: typer.Context) -> None:
         return
     console.print(
         table(
-            "Pools",
-            ["name", "pool", "provider", "owner", "initial", "min", "max", "scaling", "priority"],
+            "Units",
+            ["name", "pool", "provider", "machines", "scaling", "id"],
             [
                 [
                     item.name,
                     item.pool,
                     item.provider,
-                    item.capacity_owner_id,
-                    str(item.initial_machines),
-                    str(item.min_machines),
-                    str(item.max_machines),
-                    str(item.scaling_enabled),
-                    str(item.priority),
+                    (
+                        f"{item.min_machines} min, {item.initial_machines} initial, "
+                        f"{item.max_machines} max"
+                    ),
+                    item.scaling_enabled,
+                    item.id,
                 ]
                 for item in records
             ],
@@ -457,9 +559,14 @@ def unit_list(ctx: typer.Context) -> None:
     )
 
 
-def unit_delete(unit_id: str) -> None:
+def unit_delete(ctx: typer.Context, unit_id: str) -> None:
     admin_api_client().delete_unit(unit_id)
-    console.print(f"deleted unit {unit_id}")
+    emit_notice(
+        ctx,
+        payload={"unit_id": unit_id, "deleted": True},
+        title="Unit deleted",
+        message=f"Deleted {unit_id}.",
+    )
 
 
 def unit_clear_degraded(
@@ -468,13 +575,17 @@ def unit_clear_degraded(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = admin_api_client(workspace).clear_unit_degradation(unit_id)
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-        return
-    console.print(
-        f"Pool {response.name}: desired {response.desired_machines} nodes, "
-        f"observed {response.observed_machines}, maximum {response.max_machines} "
-        f"({response.phase.value}: {response.status})"
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Pool degradation cleared",
+        fields={
+            "unit": response.name,
+            "phase": response.phase.value,
+            "status": response.status,
+            "machines": response.observed_machines,
+        },
+        tone="success",
     )
 
 
@@ -491,7 +602,14 @@ def pool_join_token(
     response = admin_api_client().create_pool_join_token(
         MachineJoinCommandRequest(pool=MachinePool(pool), ttl=ttl)
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Pool join token",
+        fields={"token": response.token, "expires": timestamp(response.expires_at)},
+        tone="success",
+        message="Copy this token now. It grants one machine access to the pool.",
+    )
 
 
 def unit_join_token(
@@ -501,7 +619,14 @@ def unit_join_token(
 ) -> None:
     """Mint a single-use join credential for the unit's pool."""
     response = admin_api_client().create_unit_join_token(unit_id, UnitJoinTokenRequest(ttl=ttl))
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Unit join token",
+        fields={"token": response.token, "expires": timestamp(response.expires_at)},
+        tone="success",
+        message="Copy this token now. It grants one machine access to the pool.",
+    )
 
 
 def pool_join(
@@ -526,7 +651,14 @@ def pool_join(
         print_payload(ctx, payload)
         return
     if print_only:
-        console.print(command)
+        console.print(
+            notice_card(
+                "Unit join command",
+                command,
+                hint="This command contains a short-lived credential. Do not share it.",
+                tone="warning",
+            )
+        )
         return
     try:
         exit_code = subprocess.call(command, shell=True)
@@ -536,7 +668,12 @@ def pool_join(
         return
     if exit_code:
         raise typer.Exit(exit_code)
-    console.print("Agent is running.")
+    emit_notice(
+        ctx,
+        payload={"status": "running"},
+        title="Agent is running",
+        message="The unit joined successfully.",
+    )
 
 
 def machine_create(
@@ -554,12 +691,28 @@ def machine_create(
             gpu=gpu,
         )
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Machine created",
+        fields={
+            "provider": response.provider,
+            "pool": str(response.pool),
+            "status": response.status.value,
+            "id": response.id,
+        },
+        tone="success",
+    )
 
 
-def machine_delete(machine_id: str) -> None:
+def machine_delete(ctx: typer.Context, machine_id: str) -> None:
     admin_api_client().delete_machine(machine_id)
-    console.print(f"deleted machine {machine_id}")
+    emit_notice(
+        ctx,
+        payload={"machine_id": machine_id, "deleted": True},
+        title="Machine deleted",
+        message=f"Deleted {machine_id}.",
+    )
 
 
 def _machine_workers(machine_id: str, *, action: str) -> list[dict[str, JsonValue]]:
@@ -581,15 +734,31 @@ def _machine_workers(machine_id: str, *, action: str) -> list[dict[str, JsonValu
 
 
 def machine_cordon(ctx: typer.Context, machine_id: str) -> None:
-    print_payload(ctx, _machine_workers(machine_id, action="cordon"))
+    _show_machine_worker_action(ctx, machine_id, action="cordon")
 
 
 def machine_uncordon(ctx: typer.Context, machine_id: str) -> None:
-    print_payload(ctx, _machine_workers(machine_id, action="uncordon"))
+    _show_machine_worker_action(ctx, machine_id, action="uncordon")
 
 
 def machine_drain(ctx: typer.Context, machine_id: str) -> None:
-    print_payload(ctx, _machine_workers(machine_id, action="drain"))
+    _show_machine_worker_action(ctx, machine_id, action="drain")
+
+
+def _show_machine_worker_action(
+    ctx: typer.Context,
+    machine_id: str,
+    *,
+    action: str,
+) -> None:
+    payload = _machine_workers(machine_id, action=action)
+    emit_result(
+        ctx,
+        payload=payload,
+        title=f"Machine {action} complete",
+        fields={"machine": machine_id, "workers": len(payload)},
+        tone="success",
+    )
 
 
 @worker_app.command("list")
@@ -601,16 +770,16 @@ def worker_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Workers",
-            ["id", "pool", "machine", "status", "free cpu", "free mem", "free gpu"],
+            ["pool", "status", "free cpu", "free memory", "free gpu", "machine", "id"],
             [
                 [
-                    item.id,
                     item.pool,
-                    item.machine_id,
                     item.status,
                     str(item.free_cpu),
-                    str(item.free_memory),
+                    f"{item.free_memory} MiB",
                     str(item.free_gpu_count),
+                    item.machine_id,
+                    item.id,
                 ]
                 for item in records
             ],
@@ -619,24 +788,64 @@ def worker_list(ctx: typer.Context) -> None:
 
 
 @worker_app.command("delete")
-def worker_delete(worker_id: str) -> None:
+def worker_delete(ctx: typer.Context, worker_id: str) -> None:
     admin_api_client().delete_worker(worker_id)
-    console.print(f"deleted worker {worker_id}")
+    emit_notice(
+        ctx,
+        payload={"worker_id": worker_id, "deleted": True},
+        title="Worker deleted",
+        message=f"Deleted {worker_id}.",
+    )
 
 
 @worker_app.command("cordon")
 def worker_cordon(ctx: typer.Context, worker_id: str) -> None:
-    print_payload(ctx, compute_client().cordon_worker(worker_id).model_dump(mode="json"))
+    record = compute_client().cordon_worker(worker_id)
+    _show_worker_action(ctx, record.model_dump(mode="json"), record.id, record.status, "cordoned")
 
 
 @worker_app.command("uncordon")
 def worker_uncordon(ctx: typer.Context, worker_id: str) -> None:
-    print_payload(ctx, compute_client().uncordon_worker(worker_id).model_dump(mode="json"))
+    record = compute_client().uncordon_worker(worker_id)
+    _show_worker_action(
+        ctx,
+        record.model_dump(mode="json"),
+        record.id,
+        record.status,
+        "uncordoned",
+    )
 
 
 @worker_app.command("drain")
 def worker_drain(ctx: typer.Context, worker_id: str) -> None:
-    print_payload(ctx, compute_client().drain_worker(worker_id).model_dump(mode="json"))
+    response = compute_client().drain_worker(worker_id)
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Worker drained",
+        fields={
+            "worker": response.worker.id,
+            "status": response.worker.status,
+            "containers stopped": len(response.stopped_container_ids),
+        },
+        tone="success",
+    )
+
+
+def _show_worker_action(
+    ctx: typer.Context,
+    payload: dict[str, JsonValue],
+    worker_id: str,
+    status: str,
+    action: str,
+) -> None:
+    emit_result(
+        ctx,
+        payload=payload,
+        title=f"Worker {action}",
+        fields={"worker": worker_id, "status": status},
+        tone="success",
+    )
 
 
 container_app.command("list")(container_list)
@@ -661,7 +870,7 @@ unit_app.command("join")(pool_join)
 unit_app.command("join-token")(unit_join_token)
 unit_app.command(
     "clear-degraded",
-    help="Let a pool that exhausted its relaunch attempts buy machines again.",
+    help="Allow a pool that exhausted its retries to launch machines again.",
 )(unit_clear_degraded)
 
 

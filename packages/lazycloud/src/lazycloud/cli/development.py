@@ -8,7 +8,10 @@ from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
-from lazycloud.cli.components.output import print_payload
+from lazycloud.abstractions.shell import ShellSession
+from lazycloud.cli.components.output import json_output_enabled, print_payload
+from lazycloud.cli.components.progress import attach_terminal
+from lazycloud.cli.execution import open_shell_session
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
     apply_handler_reference,
@@ -49,6 +52,8 @@ def dev(
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
+    if json_output_enabled(ctx):
+        raise typer.BadParameter("--json cannot be used with an interactive development session")
     overrides = build_deployment_overrides(
         cpu=cpu,
         memory=memory,
@@ -69,17 +74,25 @@ def dev(
             user_object = apply_handler_reference(load_handler_object(handler), handler)
         except HandlerLoadError as exc:
             raise typer.BadParameter(str(exc)) from exc
+        attach_terminal(user_object)
         response = invoke_handler_method(
             user_object,
             "shell",
             kwargs=workflow_kwargs(overrides, workspace=workspace),
         )
+        if isinstance(response, ShellSession):
+            open_shell_session(ctx, response, workspace=workspace)
+            return
         print_payload(ctx, response)
         return
     pod = _default_dev_pod(overrides)
+    attach_terminal(pod)
     pod.workspace = workspace
     response = pod.shell(workspace=workspace, sync_dir=sync_dir)
-    print_payload(ctx, response)
+    if isinstance(response, ShellSession):
+        open_shell_session(ctx, response, workspace=workspace)
+        return
+    print_payload(ctx, response, title="Development session")
 
 
 def _default_dev_pod(overrides: DeploymentOverrides) -> Pod:

@@ -6,7 +6,8 @@ from typing import Annotated
 
 import typer
 
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud.cli.components.output import console, emit, json_output_enabled, print_payload, table
 
 example_app = typer.Typer(help="Manage example apps.")
 
@@ -59,7 +60,15 @@ def quickstart(
     force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
 ) -> None:
     _write_file(output, QUICKSTART_TEMPLATE, force=force)
-    print_payload(ctx, {"path": str(output), "written": True})
+    emit(
+        ctx,
+        payload={"path": str(output), "written": True},
+        view=notice_card(
+            "Quickstart written",
+            f"Created {output}.",
+            tone="success",
+        ),
+    )
 
 
 def create_app(
@@ -70,10 +79,18 @@ def create_app(
 ) -> None:
     target = output or Path(name)
     written = _write_template(name, target, force=force)
-    print_payload(ctx, {"name": name, "path": str(target), "files": written})
+    emit(
+        ctx,
+        payload={"name": name, "path": str(target), "files": written},
+        view=result_card(
+            "App scaffold created",
+            {"path": str(target), "files": len(written)},
+            tone="success",
+        ),
+    )
 
 
-@example_app.command("download")
+@example_app.command("download", help="Write an example app to disk.")
 def example_download(
     ctx: typer.Context,
     name: str,
@@ -89,19 +106,36 @@ def example_download(
                 base / template_name,
                 force=force,
             )
-        print_payload(ctx, {"name": name, "path": str(base), "files": files})
+        emit(
+            ctx,
+            payload={"name": name, "path": str(base), "files": files},
+            view=result_card(
+                "Examples downloaded",
+                {
+                    "path": str(base),
+                    "examples": len(files),
+                    "files": sum(len(paths) for paths in files.values()),
+                },
+                tone="success",
+            ),
+        )
         return
     target = output or Path(name)
     written = _write_template(name, target, force=force)
-    print_payload(ctx, {"name": name, "path": str(target), "files": written})
+    emit(
+        ctx,
+        payload={"name": name, "path": str(target), "files": written},
+        view=result_card(
+            "Example downloaded",
+            {"path": str(target), "files": len(written)},
+            tone="success",
+        ),
+    )
 
 
-@example_app.command("list")
+@example_app.command("list", help="List available example apps.")
 def example_list(ctx: typer.Context) -> None:
-    rows = [
-        [template.name, template.description, _format_bytes(template.size_bytes)]
-        for template in TEMPLATES.values()
-    ]
+    rows = [[template.name, template.description] for template in TEMPLATES.values()]
     if json_output_enabled(ctx):
         print_payload(
             ctx,
@@ -115,7 +149,7 @@ def example_list(ctx: typer.Context) -> None:
             ],
         )
         return
-    console.print(table("Examples", ["name", "description", "size"], rows))
+    console.print(table("Examples", ["name", "description"], rows))
 
 
 def _write_template(name: str, target: Path, *, force: bool) -> list[str]:
@@ -136,10 +170,6 @@ def _write_file(path: Path, content: str, *, force: bool) -> None:
         raise typer.BadParameter(f"file already exists: {selected}")
     selected.parent.mkdir(parents=True, exist_ok=True)
     selected.write_text(content, encoding="utf-8")
-
-
-def _format_bytes(value: int) -> str:
-    return f"{value} B"
 
 
 __all__ = ["create_app", "example_app", "quickstart"]

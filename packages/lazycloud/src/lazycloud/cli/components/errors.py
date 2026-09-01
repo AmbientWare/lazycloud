@@ -8,14 +8,16 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import typer
 from pydantic import JsonValue
 from rich.console import Console
-from rich.panel import Panel
 from rich.text import Text
 from shared.app_identity import ENV_PREFIX
 from shared.http.errors import HttpApiError
+from typer import _click as click
 
 from lazycloud.cli.components import theme
+from lazycloud.cli.components.cards import card
 from lazycloud.cli.components.output import error_console, print_json_line
 from lazycloud.json_contracts import parse_json_value
 
@@ -80,11 +82,11 @@ class CliErrorPolicy:
 def debug_errors_enabled(args: list[str] | None = None) -> bool:
     if _truthy(os.getenv(f"{ENV_PREFIX}_DEBUG", "")):
         return True
-    return bool(args and "--debug" in args)
+    return _root_flag_enabled(args, "--debug")
 
 
 def json_errors_enabled(args: list[str] | None = None) -> bool:
-    return bool(args and "--json" in args)
+    return _root_flag_enabled(args, "--json")
 
 
 def normalize_exception(
@@ -99,6 +101,14 @@ def normalize_exception(
     messages = [_message_from_exception(item) for item in exception_chain(exc)]
     combined = " ".join(item.lower() for item in messages if item)
     message = _first_message(messages) or _class_title(exc)
+
+    if _is_forbidden_error(exc):
+        return ClientErrorDetails(
+            type="permission_denied",
+            title="Access denied",
+            message=message,
+            hint="Check the selected workspace or ask an administrator for access.",
+        )
 
     if _is_auth_error(exc):
         return ClientErrorDetails(
@@ -190,8 +200,9 @@ def render_error(details: ClientErrorDetails, *, console: Console = error_consol
     body.append(mask_secrets(details.message), style=theme.EMPHASIS)
     if details.hint:
         body.append("\n\n")
-        body.append(mask_secrets(details.hint), style=theme.MUTED)
-    console.print(Panel(body, title=details.title, title_align="left", border_style=theme.ERROR))
+        body.append("Next step  ", style=theme.MUTED)
+        body.append(mask_secrets(details.hint))
+    console.print(card(details.title, body, tone="error"))
 
 
 def mask_secrets(value: str) -> str:
@@ -314,15 +325,34 @@ def _truthy(value: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def _root_flag_enabled(args: list[str] | None, flag: str) -> bool:
+    if not args:
+        return False
+    for arg in args:
+        if arg == "--":
+            return False
+        if arg == flag:
+            return True
+    return False
+
+
 def _is_auth_error(exc: BaseException) -> bool:
     for item in exception_chain(exc):
         if isinstance(item, PermissionError):
             return True
-        if isinstance(item, HttpApiError) and item.status_code in {401, 403}:
+        if isinstance(item, HttpApiError) and item.status_code == 401:
             return True
-        if isinstance(item, urllib.error.HTTPError) and item.code in {401, 403}:
+        if isinstance(item, urllib.error.HTTPError) and item.code == 401:
             return True
     return False
+
+
+def _is_forbidden_error(exc: BaseException) -> bool:
+    return any(
+        (isinstance(item, HttpApiError) and item.status_code == 403)
+        or (isinstance(item, urllib.error.HTTPError) and item.code == 403)
+        for item in exception_chain(exc)
+    )
 
 
 def _is_connection_error(exc: BaseException, message: str) -> bool:
@@ -339,6 +369,21 @@ def _client_operation_classifier(
     exc: BaseException,
     message: str,
 ) -> ClientErrorDetails | None:
+    if isinstance(exc, typer.Abort | KeyboardInterrupt):
+        return ClientErrorDetails(
+            type="cancelled",
+            title="Cancelled",
+            message="The command was cancelled.",
+            exit_code=130,
+        )
+    if isinstance(exc, click.ClickException):
+        return ClientErrorDetails(
+            type="invalid_usage",
+            title="Invalid command",
+            message=exc.format_message(),
+            hint="Run the command with --help to see the available arguments.",
+            exit_code=exc.exit_code,
+        )
     if isinstance(exc, ValueError):
         return ClientErrorDetails(
             type="operation_failed",
@@ -377,7 +422,7 @@ def _client_connection_hint(exc: BaseException) -> str:
 
 
 CLIENT_ERROR_POLICY = CliErrorPolicy(
-    auth_hint=f"Run `{CLIENT_CLI_NAME} login --token <token>` to refresh credentials.",
+    auth_hint=f"Run `{CLIENT_CLI_NAME} login` to sign in again.",
     connection_hint=_client_connection_hint,
     timeout_hint="Retry the command or check service logs if the operation keeps timing out.",
     debug_hint="Run the command again with `--debug` to see the full traceback.",

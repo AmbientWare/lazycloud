@@ -5,7 +5,7 @@ from typing import Annotated
 
 from control.service import ControlPlaneService
 from database.records.identity import DeviceAuthorizationRecord
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from identity.auth import AuthError
 from identity.authz import AuthzRequirement, AuthzResourceKind
 from identity.device_auth import DeviceAuthorizationService
@@ -262,12 +262,12 @@ def _device_code_response(record: DeviceAuthorizationRecord) -> DeviceCodeRespon
 )
 def start_device_authorization(
     request: DeviceCodeCreateRequest,
-    http_request: Request,
     services: ApiServices = Depends(current_services),
 ) -> DeviceCodeCreateResponse:
     started = DeviceAuthorizationService(services.context).start(client_name=request.client_name)
-    base_url = str(http_request.base_url).rstrip("/")
-    verification_uri = f"{base_url}/{DEVICE_AUTHORIZATION_VERIFICATION_PATH}"
+    verification_uri = (
+        f"{services.gateway_settings.public_http_url}/{DEVICE_AUTHORIZATION_VERIFICATION_PATH}"
+    )
     return DeviceCodeCreateResponse(
         device_code=started.device_code,
         user_code=started.record.user_code,

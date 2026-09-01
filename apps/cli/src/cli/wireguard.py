@@ -7,6 +7,7 @@ from typing import Protocol, TypeGuard
 import typer
 from boto3.session import Session
 from botocore.exceptions import ClientError
+from lazycloud.cli.components.results import emit_notice
 from networking.wireguard_keys import ensure_wireguard_key_document
 from provider_aws.boto3_clients import has_operations, is_boto3_client_factory
 from pydantic import TypeAdapter, ValidationError
@@ -34,6 +35,7 @@ def _is_secrets_manager_client(value: object) -> TypeGuard[_SecretsManagerClient
 
 @wireguard_app.command("bootstrap-aws")
 def bootstrap_aws(
+    ctx: typer.Context,
     secret_id: str = typer.Option(..., help="Secrets Manager key document name or ARN."),
     region: str = typer.Option(..., help="AWS region holding the key document."),
     platform_peers: int = typer.Option(2, min=1, max=32),
@@ -65,4 +67,9 @@ def bootstrap_aws(
             SecretId=secret_id,
             SecretString=json.dumps(values, sort_keys=True),
         )
-    typer.echo("WireGuard deployment keys are ready")
+    emit_notice(
+        ctx,
+        payload={"secret_id": secret_id, "region": region, "ready": True},
+        title="WireGuard keys ready",
+        message=f"Keys are ready in {secret_id}.",
+    )

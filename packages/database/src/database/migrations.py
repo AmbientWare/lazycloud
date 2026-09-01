@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -47,6 +48,15 @@ class DatabaseReadiness:
     revision: str
     attempts: int
     elapsed_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseReadinessProbe:
+    expected_revision: str
+    observed_revisions: tuple[str, ...]
+    attempt: int
+    elapsed_seconds: float
+    last_error_type: str | None
 
 
 class DatabaseReadinessTimeoutError(TimeoutError):
@@ -180,6 +190,7 @@ def wait_for_database_head(
     *,
     timeout_seconds: float,
     poll_interval_seconds: float,
+    on_poll: Callable[[DatabaseReadinessProbe], None] | None = None,
 ) -> DatabaseReadiness:
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
@@ -205,6 +216,16 @@ def wait_for_database_head(
             last_error_type = type(exc).__name__
 
         now = time.monotonic()
+        if on_poll is not None:
+            on_poll(
+                DatabaseReadinessProbe(
+                    expected_revision=expected_revision,
+                    observed_revisions=observed_revisions,
+                    attempt=attempts,
+                    elapsed_seconds=now - started_at,
+                    last_error_type=last_error_type,
+                )
+            )
         if observed_revisions == (expected_revision,):
             return DatabaseReadiness(
                 revision=expected_revision,
@@ -224,6 +245,7 @@ def wait_for_database_head(
 
 __all__ = [
     "DatabaseReadiness",
+    "DatabaseReadinessProbe",
     "DatabaseReadinessTimeoutError",
     "DatabaseSchemaInspection",
     "DatabaseSchemaMismatchError",

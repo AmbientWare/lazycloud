@@ -40,6 +40,7 @@ class _HttpResponse(Protocol):
 
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+HTTP_USER_AGENT = "lazycloud/0.1.0"
 
 
 def build_http_ssl_context() -> ssl.SSLContext:
@@ -63,9 +64,10 @@ class HttpChannel:
         payload: Mapping[str, JsonValue] | None = None,
     ) -> JsonValue:
         data = _encode_payload(payload)
-        headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        headers = _request_headers(
+            self.token,
+            {"Content-Type": "application/json"},
+        )
         request = urllib.request.Request(
             f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
             data=data,
@@ -89,9 +91,7 @@ class HttpChannel:
         return self.request("GET", path)
 
     def stream_get(self, path: str) -> Iterator[str]:
-        headers: dict[str, str] = {}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        headers = _request_headers(self.token)
         request = urllib.request.Request(
             f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
             headers=headers,
@@ -120,12 +120,13 @@ class HttpChannel:
         payload: Mapping[str, JsonValue] | None = None,
     ) -> Iterator[JsonValue]:
         data = _encode_payload(payload)
-        headers = {
-            "Accept": "application/x-ndjson",
-            "Content-Type": "application/json",
-        }
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        headers = _request_headers(
+            self.token,
+            {
+                "Accept": "application/x-ndjson",
+                "Content-Type": "application/json",
+            },
+        )
         request = urllib.request.Request(
             f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
             data=data,
@@ -172,6 +173,18 @@ def _encode_payload(payload: Mapping[str, JsonValue] | None) -> bytes | None:
         return None
     value = _JSON_VALUE_ADAPTER.validate_python(dict(payload))
     return json.dumps(value).encode("utf-8")
+
+
+def _request_headers(
+    token: str | None,
+    headers: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    merged = {"User-Agent": HTTP_USER_AGENT}
+    if token:
+        merged["Authorization"] = f"Bearer {token}"
+    if headers:
+        merged.update(headers)
+    return merged
 
 
 def _decode_json(raw: str | bytes) -> JsonValue:

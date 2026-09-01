@@ -18,11 +18,12 @@ from typing import IO, Any, Protocol, runtime_checkable
 
 import typer
 from pydantic import JsonValue
-from rich.console import Console
-from rich.table import Table
+from rich.console import Console, RenderableType
 from shared.events import Event
 from shared.serialization import to_json_value
 
+from lazycloud.cli.components.cards import CardTone, empty_state, result_card
+from lazycloud.cli.components.tables import resource_table
 from lazycloud.json_contracts import parse_json_value
 
 _json_output_active = ContextVar("lazycloud_cli_json_output_active", default=False)
@@ -106,11 +107,55 @@ def print_json_line(payload: Any, *, file: IO[str]) -> None:
     file.flush()
 
 
-def print_payload(ctx: typer.Context, payload: Any) -> None:
+def emit(ctx: typer.Context, *, payload: Any, view: RenderableType) -> None:
     if json_output_enabled(ctx):
         print_json_line(payload, file=sys.stdout)
         return
-    console.print(payload)
+    console.print(view)
+
+
+def print_payload(
+    ctx: typer.Context,
+    payload: Any,
+    *,
+    title: str | None = None,
+    tone: CardTone | None = None,
+    message: str = "",
+) -> None:
+    normalized = json_default(payload)
+    emit(
+        ctx,
+        payload=normalized,
+        view=result_card(
+            title or _command_title(ctx),
+            normalized,
+            tone=tone or _command_tone(ctx),
+            message=message,
+        ),
+    )
+
+
+def print_collection(
+    ctx: typer.Context,
+    payload: Any,
+    *,
+    title: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[object]],
+    empty: str,
+) -> None:
+    emit(
+        ctx,
+        payload=payload,
+        view=resource_table(title, columns, rows, empty=empty),
+    )
+
+
+def write_stream(value: str, *, error: bool = False) -> None:
+    """Write stream content exactly, without Rich markup or highlighting."""
+    target = error_console if error else console
+    target.file.write(value)
+    target.file.flush()
 
 
 def payload_data(value: object) -> object:
@@ -125,16 +170,67 @@ def payload_data(value: object) -> object:
     return value
 
 
-def table(title: str, columns: list[str], rows: list[list[Any]]) -> Table:
-    output = Table(title=title)
-    for column in columns:
-        output.add_column(column)
-    for row in rows:
-        output.add_row(*(str(item) for item in row))
-    return output
+def table(
+    title: str,
+    columns: list[str],
+    rows: list[list[Any]],
+    *,
+    expand: bool = False,
+    empty: str | None = None,
+) -> RenderableType:
+    return resource_table(
+        title,
+        columns,
+        rows,
+        empty=empty or f"No {title.lower()} found.",
+        expand=expand,
+    )
 
 
-def event_table(title: str, events: Sequence[Event]) -> Table:
+def _command_title(ctx: typer.Context) -> str:
+    names = [part.replace("-", " ") for part in ctx.command_path.split()[1:]]
+    if not names:
+        return "Result"
+    return " ".join(names).capitalize()
+
+
+def _command_tone(ctx: typer.Context) -> CardTone:
+    command = (ctx.info_name or "").replace("-", "_")
+    if command in {
+        "activate",
+        "add",
+        "cancel",
+        "checkpoint",
+        "connect",
+        "cp",
+        "create",
+        "create_app",
+        "delete",
+        "deploy",
+        "disconnect",
+        "download",
+        "get",
+        "modify",
+        "move",
+        "mv",
+        "pause",
+        "quickstart",
+        "remove",
+        "rename",
+        "resume",
+        "retry",
+        "rm",
+        "scale",
+        "set",
+        "start",
+        "stop",
+        "update",
+    }:
+        return "success"
+    return "neutral"
+
+
+def event_table(title: str, events: Sequence[Event]) -> RenderableType:
     rows = [
         [
             item.created_at.isoformat(),
@@ -146,12 +242,17 @@ def event_table(title: str, events: Sequence[Event]) -> Table:
         ]
         for item in events
     ]
-    return table(title, ["time", "level", "action", "type", "resource", "message"], rows)
+    return table(
+        title,
+        ["time", "level", "action", "type", "resource", "message"],
+        rows,
+        expand=True,
+    )
 
 
 def print_events_table(title: str, events: Sequence[Event]) -> None:
     if not events:
-        console.print("No events found.")
+        console.print(empty_state(title, "No events found."))
         return
     console.print(event_table(title, events))
 
@@ -160,6 +261,7 @@ __all__ = [
     "CliConsole",
     "command_from_args",
     "console",
+    "emit",
     "error_console",
     "event_table",
     "json_default",
@@ -167,9 +269,11 @@ __all__ = [
     "json_output_enabled",
     "parse_json_argument",
     "payload_data",
+    "print_collection",
     "print_events_table",
     "print_json_line",
     "print_payload",
     "set_json_output",
     "table",
+    "write_stream",
 ]

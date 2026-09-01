@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 from lazycloud.cli.components.context import current_workspace
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import (
     console,
     json_output_enabled,
@@ -13,6 +14,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
+from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.json_contracts import JsonValue
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.operations import ImageBuildRequest
@@ -123,7 +125,15 @@ def image_build(
         image_id=image_id,
     )
     record = admin_api_client().create_image_build(ImageBuildRequest(image=image, tag=tag))
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Image build queued",
+        fields={
+            "tag": record.tag or "untagged",
+        },
+        tone="success",
+    )
 
 
 @image_app.command("list")
@@ -133,25 +143,46 @@ def image_list(ctx: typer.Context) -> None:
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
         rows = [
-            [item.id, item.status.value, item.tag or "", item.fingerprint[:12]] for item in records
+            [item.tag or "untagged", item.status.value, timestamp(item.created_at)]
+            for item in records
         ]
-        console.print(table("Image Builds", ["id", "status", "tag", "fingerprint"], rows))
+        console.print(table("Image builds", ["tag", "status", "created"], rows))
 
 
 @cron_app.command("list")
 def cron_list(ctx: typer.Context) -> None:
-    cron_jobs = admin_api_client().list_cron_jobs().cron_jobs
+    client = admin_api_client()
+    cron_jobs = client.list_cron_jobs().cron_jobs
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in cron_jobs])
     else:
-        rows = [[item.name, item.cron, item.deployment_id, str(item.enabled)] for item in cron_jobs]
-        console.print(table("Cron Jobs", ["name", "cron", "deployment", "enabled"], rows))
+        deployment_names: dict[str, str] = {
+            item.id: item.name for item in client.list_deployments(limit=1_000).data
+        }
+        rows: list[list[JsonValue]] = [
+            [
+                item.name,
+                item.cron,
+                deployment_names.get(item.deployment_id, item.deployment_id),
+                timestamp(item.next_run_at) if item.next_run_at else "not scheduled",
+                item.enabled,
+            ]
+            for item in cron_jobs
+        ]
+        console.print(
+            table("Cron jobs", ["name", "schedule", "workload", "next run", "enabled"], rows)
+        )
 
 
 @cron_app.command("delete")
-def cron_delete(name: str) -> None:
+def cron_delete(ctx: typer.Context, name: str) -> None:
     admin_api_client().delete_cron_job(name)
-    console.print(f"deleted cron job {name}")
+    emit_notice(
+        ctx,
+        payload={"name": name, "deleted": True},
+        title="Cron job deleted",
+        message=f"Deleted {name}.",
+    )
 
 
 @cron_app.command("runs")
@@ -168,28 +199,36 @@ def cron_runs(
         rows = [
             [
                 item.cron_job,
-                str(item.enqueued),
+                "enqueued" if item.enqueued else "skipped",
                 item.task_id or "",
-                item.message_id or "",
                 item.reason or "",
             ]
             for item in runs
         ]
         console.print(
             table(
-                "Cron Job Runs",
-                ["cron job", "enqueued", "task", "message", "reason"],
+                "Cron job runs",
+                ["job", "outcome", "task", "reason"],
                 rows,
             )
         )
         if page.next:
-            console.print(f"Next cursor: {page.next}")
+            console.print(f"More results  --cursor {page.next}", highlight=False, markup=False)
 
 
 @scheduler_app.command("tick")
 def scheduler_tick(ctx: typer.Context) -> None:
     response = admin_api_client().tick_scheduler()
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Scheduler tick complete",
+        fields={
+            "enqueued": sum(item.enqueued for item in response.data),
+            "skipped": sum(not item.enqueued for item in response.data),
+        },
+        tone="success",
+    )
 
 
 @scheduler_app.command("dispatch-containers")
@@ -198,7 +237,16 @@ def scheduler_dispatch_containers(
     limit: Annotated[int, typer.Option("--limit")] = 100,
 ) -> None:
     response = admin_api_client().dispatch_scheduler_containers(limit=limit)
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Container dispatch complete",
+        fields={
+            "dispatched": sum(item.status == "dispatched" for item in response.dispatches),
+            "skipped": sum(item.status != "dispatched" for item in response.dispatches),
+        },
+        tone="success",
+    )
 
 
 @scheduler_app.command("run")
@@ -213,23 +261,39 @@ def scheduler_run(
     if interval_seconds <= 0:
         raise typer.BadParameter("--interval-seconds must be positive")
     client = admin_api_client()
+    if json_output_enabled(ctx) and not once:
+        raise typer.BadParameter("--json requires --once for scheduler run")
 
-    def run_pass() -> dict[str, JsonValue]:
+    def run_pass() -> tuple[dict[str, JsonValue], int, int]:
         payload: dict[str, JsonValue] = {}
+        cron_run_count = 0
+        dispatch_count = 0
         if include_cron_jobs:
-            payload["cron_jobs"] = client.tick_scheduler().model_dump(mode="json")
+            cron_response = client.tick_scheduler()
+            payload["cron_jobs"] = cron_response.model_dump(mode="json")
+            cron_run_count = len(cron_response.data)
         if include_containers:
-            payload["containers"] = client.dispatch_scheduler_containers(
-                limit=container_limit
-            ).model_dump(mode="json")
-        return payload
+            dispatch_response = client.dispatch_scheduler_containers(limit=container_limit)
+            payload["containers"] = dispatch_response.model_dump(mode="json")
+            dispatch_count = len(dispatch_response.dispatches)
+        return payload, cron_run_count, dispatch_count
 
     if once:
-        print_payload(ctx, run_pass())
+        payload, cron_run_count, dispatch_count = run_pass()
+        emit_result(
+            ctx,
+            payload=payload,
+            title="Scheduler pass complete",
+            fields={"cron runs": cron_run_count, "container dispatches": dispatch_count},
+            tone="success",
+        )
         return
     try:
         while True:
-            run_pass()
+            _, cron_run_count, dispatch_count = run_pass()
+            console.print(
+                f"Scheduler pass: {cron_run_count} cron runs, {dispatch_count} container dispatches"
+            )
             sleep(interval_seconds)
     except KeyboardInterrupt:
         return
@@ -284,7 +348,7 @@ def autoscaler_history(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    print_events_table("Autoscaler History", response.events)
+    print_events_table("Autoscaler history", response.events)
 
 
 @autoscaler_app.command("reconcile")
@@ -298,7 +362,13 @@ def autoscaler_reconcile(
         target_kind=target_kind,
         stub_id=stub_id,
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Autoscalers reconciled",
+        fields={"targets": len(response.results)},
+        tone="success",
+    )
 
 
 @autoscaler_app.command("pause")
@@ -311,7 +381,13 @@ def autoscaler_pause(
         stub_id_or_name,
         action="pause",
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Autoscaler paused",
+        fields={"workload": response.stub.name},
+        tone="success",
+    )
 
 
 @autoscaler_app.command("resume")
@@ -324,4 +400,10 @@ def autoscaler_resume(
         stub_id_or_name,
         action="resume",
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Autoscaler resumed",
+        fields={"workload": response.stub.name},
+        tone="success",
+    )

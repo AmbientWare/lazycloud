@@ -56,31 +56,25 @@ provider workflows are explicit feature or release acceptance, not blanket
 development checks. Release validation is defined by the release
 task and the production boundaries changed since the previous release.
 
-## CLI Examples
+## Local CLI examples
 
 ```bash
-lazycloud login --endpoint http://lazycloud.localhost:8000   # approve the code in the web app
-lazycloud quickstart                               # write quickstart.py
-lazycloud deploy quickstart.py:hello               # deploy the starter function
-lazycloud run quickstart.py:hello 'LazyCloud'         # invoke it
-lazycloud task list                                # find the Run id
-lazycloud task result <run-id>
-lazycloud task logs <run-id>
+uv run lazycloud-admin login --profile local
+uv run lazycloud-admin quickstart
+uv run lazycloud-admin deploy quickstart.py:hello
+uv run lazycloud-admin run quickstart.py:hello 'LazyCloud'
+uv run lazycloud-admin task list
+uv run lazycloud-admin task result <run-id>
+uv run lazycloud-admin task logs <run-id>
 ```
 
-`lazycloud login` resolves its endpoint from `--endpoint <url>`, then
-`LAZYCLOUD_ENDPOINT`, then the stored profile, then the packaged hosted default;
-a local stack needs the flag or the variable. Without `--token` it starts a
-device-code flow: the CLI prints a verification URL and confirmation code, you
-sign in to the web dashboard with GitHub to approve it, and
-the CLI stores the token it mints in its profile. That token belongs to the
-approving account and reaches every workspace that account belongs to, so
-`--workspace` selects which one the profile acts in. Pass `--token` for
-non-interactive logins.
+`lazycloud-admin` loads the repository's `.env`. The example configuration points
+it at the Compose control plane, stores its profile under `.lazycloud/local`, and
+uses the administrator token that bootstrapped the stack. The command validates
+that token before saving the `local` profile.
 
-Signing in needs both `LAZYCLOUD_GITHUB_*` and `LAZYCLOUD_STRIPE_API_KEY`, which
-the shipped defaults leave empty: a session is minted only once the account is
-registered with the payment provider, so the callback refuses and names whichever
-is missing. A local stack that has not set them is driven with `--token` and the
-bootstrap administrator credential instead, which is what every Compose step
-does.
+The public `lazycloud` command does not read `.env` from the current directory.
+It uses exported `LAZYCLOUD_*` variables and its active profile, so entering a
+repository cannot silently redirect commands to another control plane. Export
+`LAZYCLOUD_HOME`, `LAZYCLOUD_ENDPOINT`, and `LAZYCLOUD_TOKEN` when you need the
+public CLI to use this local stack.

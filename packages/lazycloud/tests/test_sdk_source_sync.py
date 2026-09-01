@@ -84,9 +84,9 @@ def test_source_package_sync_reports_terminal_progress(tmp_path: Path) -> None:
     ).sync()
 
     assert result.object_id == "obj-source"
-    assert "Syncing files" in terminal.headers
-    assert "Uploading" in terminal.headers
-    assert "Files synced" in terminal.headers
+    assert terminal.headers[0].startswith("Packaging 1 files")
+    assert "Uploading source" in terminal.headers
+    assert "Source uploaded" in terminal.headers
     assert terminal.progress_updates[-1] == result.size
 
 

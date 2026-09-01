@@ -5,6 +5,8 @@ from typing import Annotated
 import typer
 from shared.compute_policy import MachinePool
 
+from lazycloud.cli.components.output import json_output_enabled
+from lazycloud.cli.components.progress import attach_terminal
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
     apply_handler_reference,
@@ -15,6 +17,7 @@ from lazycloud.cli.workflow_options import build_deployment_overrides, workflow_
 
 
 def serve(
+    ctx: typer.Context,
     handler: Annotated[str, typer.Argument()],
     timeout: Annotated[int, typer.Option("--timeout")] = 0,
     resource: Annotated[str | None, typer.Option("--resource")] = None,
@@ -38,6 +41,8 @@ def serve(
     sync_dir: Annotated[str | None, typer.Option("--sync-dir", "--sync")] = None,
     container_id: Annotated[str | None, typer.Option("--container-id")] = None,
 ) -> None:
+    if json_output_enabled(ctx):
+        raise typer.BadParameter("--json cannot be used with the live serve stream")
     overrides = build_deployment_overrides(
         resource=resource,
         cpu=cpu,
@@ -61,6 +66,7 @@ def serve(
         user_object = apply_handler_reference(load_handler_object(handler), handler)
     except HandlerLoadError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    attach_terminal(user_object)
     invoke_handler_method(
         user_object,
         "serve",

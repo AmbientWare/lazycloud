@@ -53,15 +53,23 @@ def _signed_in_user(
 def test_device_login_flow_approves_and_mints_account_token(
     isolated_services: ApiServices,
     client_stack: ExitStack,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        isolated_services.gateway_settings,
+        "public_http_url",
+        "https://control.example.com",
+    )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     _user, headers = _signed_in_user(isolated_services)
 
     started = client.post("/auth/device", json={"client_name": "cli@laptop"})
     assert started.status_code == 201
     start = started.json()
-    assert start["verification_uri"].endswith("/activate")
-    assert start["verification_uri_complete"].endswith(f"/activate?code={start['user_code']}")
+    assert start["verification_uri"] == "https://control.example.com/activate"
+    assert start["verification_uri_complete"] == (
+        f"https://control.example.com/activate?code={start['user_code']}"
+    )
     assert start["expires_in_seconds"] == DEVICE_CODE_TTL_SECONDS
     assert start["poll_interval_seconds"] >= 1
 
