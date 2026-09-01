@@ -52,6 +52,27 @@ def test_http_channel_uses_its_strict_ssl_context(monkeypatch: pytest.MonkeyPatc
     assert channel.ssl_context.check_hostname is True
 
 
+def test_http_channel_sends_the_lazycloud_user_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def urlopen(
+        request: urllib.request.Request,
+        *,
+        timeout: float,
+        context: ssl.SSLContext,
+    ) -> _NoContentResponse:
+        _ = timeout, context
+        assert request.get_header("User-agent") == "lazycloud/0.1.0"
+        assert request.get_header("Authorization") == "Bearer test-token"
+        assert request.get_header("Content-type") == "application/json"
+        return _NoContentResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    channel = HttpChannel(endpoint="https://control.example.com", token="test-token")
+
+    assert channel.post("/auth/device/token", {}) is None
+
+
 def test_http_channel_uses_the_shared_no_response_network_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
