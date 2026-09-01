@@ -40,7 +40,6 @@ def usage_list(
     rows = [
         [
             record.created_at.isoformat(),
-            record.workspace_id,
             record.metric.value,
             str(record.quantity),
             record.unit.value,
@@ -52,7 +51,7 @@ def usage_list(
     console.print(
         table(
             "Usage records",
-            ["time", "workspace", "metric", "quantity", "unit", "type", "resource"],
+            ["time", "metric", "quantity", "unit", "type", "resource"],
             rows,
         )
     )
@@ -85,11 +84,8 @@ def usage_summary(
     console.print(
         table(
             "Usage summary",
-            ["workspace", "metric", "quantity", "unit"],
-            [
-                [row.workspace_id, row.metric.value, str(row.quantity), row.unit.value]
-                for row in rows
-            ],
+            ["metric", "quantity", "unit"],
+            [[row.metric.value, str(row.quantity), row.unit.value] for row in rows],
         )
     )
 

@@ -18,7 +18,7 @@ from lazycloud.cli.components.output import (
     write_stream,
 )
 from lazycloud.cli.components.progress import print_stream_message
-from lazycloud.cli.components.results import emit_result
+from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.cli.control import compute_client, control_config
 from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
 from lazycloud.cli.resources import container_attach, container_checkpoint
@@ -141,7 +141,12 @@ def queue_size(ctx: typer.Context, name: str) -> None:
 @queue_app.command("delete")
 def queue_delete(ctx: typer.Context, name: str) -> None:
     _queue_client().delete(name)
-    print_payload(ctx, {"name": name, "deleted": True}, title="Queue deleted", tone="success")
+    emit_notice(
+        ctx,
+        payload={"name": name, "deleted": True},
+        title="Queue deleted",
+        message=f"Deleted {name}.",
+    )
 
 
 @map_app.command("list")
@@ -193,29 +198,39 @@ def map_get(ctx: typer.Context, name: str, key: str) -> None:
 @map_app.command("keys")
 def map_keys(ctx: typer.Context, name: str) -> None:
     response = _map_client().keys(name)
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Map keys",
-        fields={"map": name, "keys": ", ".join(response.keys)},
+    if json_output_enabled(ctx):
+        print_payload(ctx, response.model_dump(mode="json"))
+        return
+    console.print(
+        table(
+            "Map keys",
+            ["key"],
+            [[key] for key in response.keys],
+            empty=f"No keys in {name}.",
+        )
     )
 
 
 @map_app.command("delete-key")
 def map_delete_key(ctx: typer.Context, name: str, key: str) -> None:
     _map_client().delete(name, key)
-    print_payload(
+    emit_notice(
         ctx,
-        {"map": name, "key": key, "deleted": True},
+        payload={"map": name, "key": key, "deleted": True},
         title="Map key deleted",
-        tone="success",
+        message=f"Deleted {key} from {name}.",
     )
 
 
 @map_app.command("delete")
 def map_delete(ctx: typer.Context, name: str) -> None:
     _map_client().delete_map(name)
-    print_payload(ctx, {"name": name, "deleted": True}, title="Map deleted", tone="success")
+    emit_notice(
+        ctx,
+        payload={"name": name, "deleted": True},
+        title="Map deleted",
+        message=f"Deleted {name}.",
+    )
 
 
 def container_run(
@@ -272,13 +287,12 @@ def container_list(
         [
             item.name,
             item.status.value,
-            item.image,
             str(item.exit_code) if item.exit_code is not None else "",
             item.id,
         ]
         for item in containers
     ]
-    console.print(table("Containers", ["name", "status", "image", "exit", "id"], rows))
+    console.print(table("Containers", ["name", "status", "exit", "id"], rows))
 
 
 def container_show(
@@ -364,11 +378,11 @@ def container_delete(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     admin_api_client(workspace).delete_container(container_id)
-    print_payload(
+    emit_notice(
         ctx,
-        {"container_id": container_id, "deleted": True},
+        payload={"container_id": container_id, "deleted": True},
         title="Container deleted",
-        tone="success",
+        message=f"Deleted {container_id}.",
     )
 
 
@@ -383,10 +397,7 @@ def container_stop(
         ctx,
         payload=[item.model_dump(mode="json") for item in stopped],
         title="Containers stopped",
-        fields={
-            "containers": len(stopped),
-            "ids": [item.id for item in stopped],
-        },
+        fields={"containers": len(stopped)},
         tone="success",
     )
 
@@ -528,18 +539,18 @@ def unit_list(ctx: typer.Context) -> None:
         return
     console.print(
         table(
-            "Pools",
-            ["name", "pool", "provider", "initial", "min", "max", "scaling", "priority", "id"],
+            "Units",
+            ["name", "pool", "provider", "machines", "scaling", "id"],
             [
                 [
                     item.name,
                     item.pool,
                     item.provider,
-                    str(item.initial_machines),
-                    str(item.min_machines),
-                    str(item.max_machines),
-                    str(item.scaling_enabled),
-                    str(item.priority),
+                    (
+                        f"{item.min_machines} min, {item.initial_machines} initial, "
+                        f"{item.max_machines} max"
+                    ),
+                    item.scaling_enabled,
                     item.id,
                 ]
                 for item in records
@@ -550,7 +561,12 @@ def unit_list(ctx: typer.Context) -> None:
 
 def unit_delete(ctx: typer.Context, unit_id: str) -> None:
     admin_api_client().delete_unit(unit_id)
-    print_payload(ctx, {"unit_id": unit_id, "deleted": True}, title="Unit deleted", tone="success")
+    emit_notice(
+        ctx,
+        payload={"unit_id": unit_id, "deleted": True},
+        title="Unit deleted",
+        message=f"Deleted {unit_id}.",
+    )
 
 
 def unit_clear_degraded(
@@ -652,7 +668,12 @@ def pool_join(
         return
     if exit_code:
         raise typer.Exit(exit_code)
-    print_payload(ctx, {"status": "running"}, title="Agent is running", tone="success")
+    emit_notice(
+        ctx,
+        payload={"status": "running"},
+        title="Agent is running",
+        message="The unit joined successfully.",
+    )
 
 
 def machine_create(
@@ -686,11 +707,11 @@ def machine_create(
 
 def machine_delete(ctx: typer.Context, machine_id: str) -> None:
     admin_api_client().delete_machine(machine_id)
-    print_payload(
+    emit_notice(
         ctx,
-        {"machine_id": machine_id, "deleted": True},
+        payload={"machine_id": machine_id, "deleted": True},
         title="Machine deleted",
-        tone="success",
+        message=f"Deleted {machine_id}.",
     )
 
 
@@ -769,11 +790,11 @@ def worker_list(ctx: typer.Context) -> None:
 @worker_app.command("delete")
 def worker_delete(ctx: typer.Context, worker_id: str) -> None:
     admin_api_client().delete_worker(worker_id)
-    print_payload(
+    emit_notice(
         ctx,
-        {"worker_id": worker_id, "deleted": True},
+        payload={"worker_id": worker_id, "deleted": True},
         title="Worker deleted",
-        tone="success",
+        message=f"Deleted {worker_id}.",
     )
 
 
@@ -849,7 +870,7 @@ unit_app.command("join")(pool_join)
 unit_app.command("join-token")(unit_join_token)
 unit_app.command(
     "clear-degraded",
-    help="Let a pool that exhausted its relaunch attempts buy machines again.",
+    help="Allow a pool that exhausted its retries to launch machines again.",
 )(unit_clear_degraded)
 
 

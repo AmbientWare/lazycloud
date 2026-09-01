@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 from lazycloud.cli.components.context import current_workspace
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import (
     console,
     json_output_enabled,
@@ -13,7 +14,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.cli.components.results import emit_result
+from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.json_contracts import JsonValue
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.operations import ImageBuildRequest
@@ -129,10 +130,7 @@ def image_build(
         payload=record.model_dump(mode="json"),
         title="Image build queued",
         fields={
-            "status": record.status.value,
-            "phase": record.phase.value,
             "tag": record.tag or "untagged",
-            "id": record.id,
         },
         tone="success",
     )
@@ -145,29 +143,45 @@ def image_list(ctx: typer.Context) -> None:
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
         rows = [
-            [item.id, item.status.value, item.tag or "", item.fingerprint[:12]] for item in records
+            [item.tag or "untagged", item.status.value, timestamp(item.created_at)]
+            for item in records
         ]
-        console.print(table("Image builds", ["id", "status", "tag", "fingerprint"], rows))
+        console.print(table("Image builds", ["tag", "status", "created"], rows))
 
 
 @cron_app.command("list")
 def cron_list(ctx: typer.Context) -> None:
-    cron_jobs = admin_api_client().list_cron_jobs().cron_jobs
+    client = admin_api_client()
+    cron_jobs = client.list_cron_jobs().cron_jobs
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in cron_jobs])
     else:
-        rows = [[item.name, item.cron, item.deployment_id, str(item.enabled)] for item in cron_jobs]
-        console.print(table("Cron jobs", ["name", "cron", "deployment", "enabled"], rows))
+        deployment_names: dict[str, str] = {
+            item.id: item.name for item in client.list_deployments(limit=1_000).data
+        }
+        rows: list[list[JsonValue]] = [
+            [
+                item.name,
+                item.cron,
+                deployment_names.get(item.deployment_id, item.deployment_id),
+                timestamp(item.next_run_at) if item.next_run_at else "not scheduled",
+                item.enabled,
+            ]
+            for item in cron_jobs
+        ]
+        console.print(
+            table("Cron jobs", ["name", "schedule", "workload", "next run", "enabled"], rows)
+        )
 
 
 @cron_app.command("delete")
 def cron_delete(ctx: typer.Context, name: str) -> None:
     admin_api_client().delete_cron_job(name)
-    print_payload(
+    emit_notice(
         ctx,
-        {"name": name, "deleted": True},
+        payload={"name": name, "deleted": True},
         title="Cron job deleted",
-        tone="success",
+        message=f"Deleted {name}.",
     )
 
 
@@ -185,9 +199,8 @@ def cron_runs(
         rows = [
             [
                 item.cron_job,
-                str(item.enqueued),
+                "enqueued" if item.enqueued else "skipped",
                 item.task_id or "",
-                item.message_id or "",
                 item.reason or "",
             ]
             for item in runs
@@ -195,7 +208,7 @@ def cron_runs(
         console.print(
             table(
                 "Cron job runs",
-                ["cron job", "enqueued", "task", "message", "reason"],
+                ["job", "outcome", "task", "reason"],
                 rows,
             )
         )
@@ -211,7 +224,6 @@ def scheduler_tick(ctx: typer.Context) -> None:
         payload=response.model_dump(mode="json"),
         title="Scheduler tick complete",
         fields={
-            "runs": len(response.data),
             "enqueued": sum(item.enqueued for item in response.data),
             "skipped": sum(not item.enqueued for item in response.data),
         },
@@ -230,8 +242,8 @@ def scheduler_dispatch_containers(
         payload=response.model_dump(mode="json"),
         title="Container dispatch complete",
         fields={
-            "containers": len(response.dispatches),
             "dispatched": sum(item.status == "dispatched" for item in response.dispatches),
+            "skipped": sum(item.status != "dispatched" for item in response.dispatches),
         },
         tone="success",
     )
@@ -249,6 +261,8 @@ def scheduler_run(
     if interval_seconds <= 0:
         raise typer.BadParameter("--interval-seconds must be positive")
     client = admin_api_client()
+    if json_output_enabled(ctx) and not once:
+        raise typer.BadParameter("--json requires --once for scheduler run")
 
     def run_pass() -> tuple[dict[str, JsonValue], int, int]:
         payload: dict[str, JsonValue] = {}
@@ -276,7 +290,10 @@ def scheduler_run(
         return
     try:
         while True:
-            run_pass()
+            _, cron_run_count, dispatch_count = run_pass()
+            console.print(
+                f"Scheduler pass: {cron_run_count} cron runs, {dispatch_count} container dispatches"
+            )
             sleep(interval_seconds)
     except KeyboardInterrupt:
         return
@@ -368,11 +385,7 @@ def autoscaler_pause(
         ctx,
         payload=response.model_dump(mode="json"),
         title="Autoscaler paused",
-        fields={
-            "workload": response.stub.name,
-            "kind": response.target_kind.value,
-            "enabled": response.autoscaling_enabled,
-        },
+        fields={"workload": response.stub.name},
         tone="success",
     )
 
@@ -391,10 +404,6 @@ def autoscaler_resume(
         ctx,
         payload=response.model_dump(mode="json"),
         title="Autoscaler resumed",
-        fields={
-            "workload": response.stub.name,
-            "kind": response.target_kind.value,
-            "enabled": response.autoscaling_enabled,
-        },
+        fields={"workload": response.stub.name},
         tone="success",
     )

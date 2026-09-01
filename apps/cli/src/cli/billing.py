@@ -25,7 +25,7 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 billing_app = typer.Typer(
     help=(
         "What the platform bills against: the rate card, where it is published, "
-        "and usage nothing has priced."
+        "and usage that still needs pricing."
     )
 )
 
@@ -349,13 +349,13 @@ def price_unpriced(
     try:
         with client.session() as session:
             ledger = BillingLedgerRepository(session)
+            priced, skipped = ledger.price_unpriced_between(
+                started_at=started_at, ended_at=ended_at
+            )
             if confirm:
-                priced, skipped = ledger.price_unpriced_between(
-                    started_at=started_at, ended_at=ended_at
-                )
                 session.commit()
             else:
-                priced, skipped = 0, 0
+                session.rollback()
         payload["priced"] = priced
         payload["skipped"] = skipped
     finally:

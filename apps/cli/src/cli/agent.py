@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
-from lazycloud.cli.components.results import emit_result
+from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.json_contracts import validate_json_object
 from shared.app_identity import AGENT_NAME, STATE_DIR
 from shared.compute_policy import MachinePool
@@ -294,9 +294,9 @@ def agent_release(ctx: typer.Context, lease_id: str) -> None:
 @agent_app.command("delete")
 def agent_delete(ctx: typer.Context, agent_id: str) -> None:
     admin_api_client().delete_agent(agent_id)
-    print_payload(
+    emit_notice(
         ctx,
-        {"agent_id": agent_id, "deleted": True},
+        payload={"agent_id": agent_id, "deleted": True},
         title="Agent deleted",
-        tone="success",
+        message=f"Deleted {agent_id}.",
     )

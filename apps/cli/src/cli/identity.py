@@ -63,12 +63,10 @@ def profile_export(
         title="Profile exported",
         fields={
             "profile": selected.name,
-            "endpoint": selected.endpoint,
-            "workspace": selected.workspace,
             "token": "included" if include_token else "omitted",
         },
         tone="success",
-        message="Use --json to write the complete export.",
+        message="Run this command with --json for the complete export.",
     )
 
 
@@ -244,7 +242,7 @@ def token_revoke(ctx: typer.Context, token_id_or_name: str) -> None:
         ctx,
         payload=record.model_dump(mode="json"),
         title="Token revoked",
-        fields={"name": record.name, "status": record.status.value},
+        fields={"name": record.name},
         tone="success",
     )
 

@@ -19,7 +19,7 @@ from typing import Annotated
 
 import typer
 from lazycloud.cli.components.cards import result_card
-from lazycloud.cli.components.output import emit
+from lazycloud.cli.components.output import console, emit
 from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.json_contracts import validate_json_object
@@ -275,6 +275,11 @@ def _destroy_unit(
     reason = ""
     while True:
         attempts += 1
+        console.print(
+            f"Removing {unit_name}, attempt {attempts}.",
+            highlight=False,
+            markup=False,
+        )
         try:
             client.delete_unit(unit_id)
         except HttpApiError as error:
@@ -284,6 +289,11 @@ def _destroy_unit(
             reason = error.code or str(error.status_code)
             if error.code not in _RETRYABLE_CODES:
                 return _outcome(workspace_id, unit_id, unit_name, False, attempts, reason)
+            console.print(
+                f"{unit_name} is still pending: {reason}.",
+                highlight=False,
+                markup=False,
+            )
         else:
             return _outcome(workspace_id, unit_id, unit_name, True, attempts, "")
         if time.monotonic() + interval_seconds >= deadline:

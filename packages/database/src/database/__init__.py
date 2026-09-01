@@ -1,6 +1,7 @@
 from database.client import AsyncDatabaseClient, DatabaseClient
 from database.migrations import (
     DatabaseReadiness,
+    DatabaseReadinessProbe,
     DatabaseReadinessTimeoutError,
     DatabaseSchemaInspection,
     DatabaseSchemaMismatchError,
@@ -25,6 +26,7 @@ __all__ = [
     "DatabaseBase",
     "DatabaseClient",
     "DatabaseReadiness",
+    "DatabaseReadinessProbe",
     "DatabaseReadinessTimeoutError",
     "DatabaseSchemaInspection",
     "DatabaseSchemaMismatchError",

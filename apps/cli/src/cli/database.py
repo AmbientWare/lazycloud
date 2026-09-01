@@ -3,11 +3,14 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from lazycloud.cli.components.formatting import duration
+from lazycloud.cli.components.output import console
 from lazycloud.cli.components.results import emit_result
 
 from database import (
     DatabaseApplicationName,
     DatabaseClient,
+    DatabaseReadinessProbe,
     DatabaseSchemaInspection,
     DatabaseSettings,
     bootstrap_database,
@@ -72,6 +75,7 @@ def database_wait(
             client,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
+            on_poll=_show_readiness_probe,
         )
         payload: dict[str, str | int | float | bool] = {
             "healthy": True,
@@ -91,6 +95,16 @@ def database_wait(
             "elapsed seconds": round(readiness.elapsed_seconds, 2),
         },
         tone="success",
+    )
+
+
+def _show_readiness_probe(probe: DatabaseReadinessProbe) -> None:
+    observed = ", ".join(probe.observed_revisions) or "none"
+    error = f"; error: {probe.last_error_type}" if probe.last_error_type else ""
+    console.print(
+        f"[{duration(probe.elapsed_seconds)}] database revisions: {observed}{error}",
+        highlight=False,
+        markup=False,
     )
 
 

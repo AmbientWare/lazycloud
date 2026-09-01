@@ -38,10 +38,8 @@ def _show_workspace(ctx: typer.Context, record: WorkspaceResponse, *, title: str
         title=title,
         fields={
             "name": record.name,
-            "status": record.status.value,
             "storage": record.storage.backend,
             "bucket": record.storage.bucket,
-            "id": record.id,
         },
         tone="success" if title != "Workspace" else "neutral",
     )
@@ -113,8 +111,6 @@ def stub_create(
         fields={
             "name": record.name,
             "kind": record.kind.value,
-            "workspace": record.workspace_id,
-            "deployment": record.deployment_id,
             "id": record.id,
         },
         tone="success",
@@ -130,8 +126,8 @@ def stub_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
         return
-    rows = [[item.name, item.kind.value, item.workspace_id, item.id] for item in records]
-    console.print(table("Stubs", ["name", "kind", "workspace", "id"], rows))
+    rows = [[item.name, item.kind.value, item.id] for item in records]
+    console.print(table("Stubs", ["name", "kind", "id"], rows))
 
 
 @concurrency_app.command("set")
@@ -163,10 +159,7 @@ def concurrency_set(
         title="Concurrency limit saved",
         fields={
             "name": record.name,
-            "used": record.in_flight,
-            "limit": record.limit,
-            "free": record.available,
-            "id": record.id,
+            "usage": f"{record.in_flight} / {record.limit}",
         },
         tone="success",
     )
@@ -184,18 +177,14 @@ def concurrency_list(
     rows = [
         [
             item.name,
-            str(item.in_flight),
-            str(item.limit),
-            str(item.available),
-            item.workspace_id,
-            item.id,
+            f"{item.in_flight} / {item.limit}",
         ]
         for item in records
     ]
     console.print(
         table(
             "Concurrency limits",
-            ["name", "used", "limit", "free", "workspace", "id"],
+            ["name", "usage"],
             rows,
         )
     )
@@ -214,7 +203,6 @@ def concurrency_acquire(
         title="Concurrency acquired" if result.acquired else "Concurrency unavailable",
         fields={
             "name": result.record.name,
-            "acquired": result.acquired,
             "free": result.available_after,
             "reason": result.reason,
         },
