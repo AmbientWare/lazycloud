@@ -169,7 +169,10 @@ spec:
             - name: LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY_FILE
               value: /var/lib/lazycloud/wireguard/server/public-key
             - name: LAZYCLOUD_WIREGUARD_GATEWAY_ENDPOINT
-              value: tunnel-gateway:51820
+              # The ClusterIP includes the standby pod, which deliberately has no
+              # WireGuard listener. The public load balancer's TCP target health
+              # sends both platform and agent UDP traffic to the lease holder.
+              value: {{ required "runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT is required" .Values.runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT | quote }}
             - name: LAZYCLOUD_WIREGUARD_POD_NAME
               valueFrom:
                 fieldRef:

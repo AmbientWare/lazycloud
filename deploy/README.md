@@ -116,8 +116,8 @@ derived on start, and its volumes hold only caches.
 
 ### WireGuard endpoint and keys
 
-Compose publishes gateway UDP port 51820. Agents on the Docker host use the
-default `host.docker.internal:51820`. Set
+Compose publishes gateway UDP port 51820. Its bundled agent uses the in-network
+default `tunnel-gateway:51820`. Set
 `LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT=<host>:51820` when agents reach the host by
 another address. The host may be a DNS name from any provider, but it must reach
 the gateway over UDP. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.

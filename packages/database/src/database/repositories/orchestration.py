@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
@@ -21,6 +22,7 @@ from database.tables.orchestration import (
     RouteTable,
     WorkerTable,
 )
+from pydantic import JsonValue, TypeAdapter
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,
@@ -33,8 +35,12 @@ from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.routing import AgentBackendRoute
 from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+
+_JSON_OBJECT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 
 
 @dataclass(slots=True)
@@ -54,13 +60,48 @@ class AutoscalerStateRepository:
 
     def upsert(self, state: AutoscalerStateRecord) -> AutoscalerStateRecord:
         WorkspaceRepository(self.session).lock_active_owner(state.workspace_id)
-        return self.records.upsert(
-            state,
-            key=state.name,
-            workspace_id=state.workspace_id,
-            name=state.name,
-            status=state.decision,
+        validated = AutoscalerStateRecord.model_validate(dict(state))
+        payload = _JSON_OBJECT_ADAPTER.validate_json(validated.model_dump_json())
+        now = datetime.now(UTC)
+        values: dict[str, str | datetime | dict[str, JsonValue]] = {
+            "id": str(uuid4()),
+            "workspace_id": validated.workspace_id,
+            "name": validated.name,
+            "source": validated.source,
+            "target_kind": validated.target_kind.value,
+            "target_id": validated.target_id,
+            "decision": validated.decision,
+            "payload": payload,
+            "created_at": now,
+            "updated_at": now,
+        }
+        dialect = self.session.get_bind().dialect.name
+        if dialect == "postgresql":
+            insert = postgresql_insert(AutoscalerStateTable).values(**values)
+        elif dialect == "sqlite":
+            insert = sqlite_insert(AutoscalerStateTable).values(**values)
+        else:
+            raise RuntimeError("autoscaler state requires PostgreSQL or SQLite")
+        statement = (
+            insert.on_conflict_do_update(
+                index_elements=[
+                    AutoscalerStateTable.workspace_id,
+                    AutoscalerStateTable.name,
+                ],
+                set_={
+                    "source": insert.excluded.source,
+                    "target_kind": insert.excluded.target_kind,
+                    "target_id": insert.excluded.target_id,
+                    "decision": insert.excluded.decision,
+                    "payload": insert.excluded.payload,
+                    "updated_at": insert.excluded.updated_at,
+                },
+            )
+            .returning(AutoscalerStateTable)
+            .execution_options(populate_existing=True)
         )
+        row = self.session.scalars(statement).one()
+        return AutoscalerStateRecord.model_validate(row.payload)
 
     def get(
         self,

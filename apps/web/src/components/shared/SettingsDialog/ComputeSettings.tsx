@@ -601,6 +601,11 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
                 {instance.bootstrap_failure_reason ? (
                   <p>{instance.bootstrap_failure_reason.replaceAll("_", " ")}</p>
                 ) : null}
+                {instance.bootstrap_failure_detail ? (
+                  <p className="max-w-80 text-balance" title={instance.bootstrap_failure_detail}>
+                    {instance.bootstrap_failure_detail}
+                  </p>
+                ) : null}
                 <time
                   dateTime={instance.created_at}
                   title={new Date(instance.created_at).toLocaleString()}

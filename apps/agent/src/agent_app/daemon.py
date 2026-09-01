@@ -167,6 +167,10 @@ class AgentCapacityInterruptionDetectionError(RuntimeError):
     pass
 
 
+class AgentStreamRetryableError(RuntimeError):
+    pass
+
+
 class AgentAuthorityRevokedError(RuntimeError):
     """Raised on startup when this machine's authority was already revoked.
 
@@ -830,6 +834,7 @@ class AgentDaemonService:
         self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
         private_network_runtime: AgentPrivateNetworkRuntime | None = None
         private_network_address = ""
+        private_network_configuration: WireGuardPeerConfiguration | None = None
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -840,7 +845,11 @@ class AgentDaemonService:
         runtime_ready = False
         try:
             try:
-                private_network_runtime, private_network_address = self._join_step(
+                (
+                    private_network_runtime,
+                    private_network_address,
+                    private_network_configuration,
+                ) = self._join_step(
                     "private-network.start",
                     lambda: self._start_private_network(state),
                 )
@@ -891,6 +900,12 @@ class AgentDaemonService:
                         )
                     if self.options.once or not _recoverable_stream_error(exc):
                         raise
+                    if (
+                        isinstance(exc, AgentStreamRetryableError)
+                        and private_network_runtime is not None
+                        and private_network_configuration is not None
+                    ):
+                        private_network_runtime.configure(private_network_configuration)
                     iterations = next_iteration
                     self.telemetry.enqueue_event(
                         event_type=AgentTelemetryEventType.Agent,
@@ -970,6 +985,8 @@ class AgentDaemonService:
         stream = self.client.stream_agent(StreamAgentRequest(agent_token=state.agent_token))
         if not stream.ok:
             msg = stream.err_msg or "agent stream rejected"
+            if stream.retryable:
+                raise AgentStreamRetryableError(msg)
             raise RuntimeError(msg)
         state = _agent_state_from_stream_response(state, stream)
         self.state_store.save(state)
@@ -1361,9 +1378,13 @@ class AgentDaemonService:
     def _start_private_network(
         self,
         state: AgentState,
-    ) -> tuple[AgentPrivateNetworkRuntime | None, str]:
+    ) -> tuple[
+        AgentPrivateNetworkRuntime | None,
+        str,
+        WireGuardPeerConfiguration | None,
+    ]:
         if not _agent_uses_private_network(state.bootstrap.transport):
-            return (None, "")
+            return (None, "", None)
         runtime = self.private_network_runtime or WireGuardClientRuntime(
             Path(self.options.state_dir) / "wireguard",
         )
@@ -1387,7 +1408,11 @@ class AgentDaemonService:
                     binding.peer_id,
                 )
                 if handshake is not None:
-                    return (runtime, _private_network_host(binding.address))
+                    return (
+                        runtime,
+                        _private_network_host(binding.address),
+                        configuration,
+                    )
                 time.sleep(PRIVATE_NETWORK_POLL_SECONDS)
             raise RuntimeError(
                 f"WireGuard did not handshake with {binding.endpoint}; verify outbound UDP"
@@ -1806,6 +1831,8 @@ def _recoverable_stream_error(exc: Exception) -> bool:
     # These arrive as HttpTransportError, which is a plain RuntimeError, so it
     # has to be named explicitly or every TLS reset reads as a fatal error.
     if isinstance(exc, HttpTransportError):
+        return True
+    if isinstance(exc, AgentStreamRetryableError):
         return True
     return isinstance(
         exc,

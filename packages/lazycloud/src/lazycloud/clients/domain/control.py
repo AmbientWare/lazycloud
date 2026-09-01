@@ -56,7 +56,6 @@ class DomainControlClient:
 
     @staticmethod
     def _path(hostname: str) -> str:
-        # A registered domain may be a wildcard, and `*` is not path-safe.
         return f"{COLLECTION_PATH}/{quote(hostname, safe='')}"
 
 
