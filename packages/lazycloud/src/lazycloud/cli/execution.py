@@ -377,7 +377,7 @@ def _resolve_app_id(app: str, *, workspace: str | None) -> str:
     return matches[0].id
 
 
-@deployment_app.command("list")
+@deployment_app.command("list", help="List deployments, optionally filtered by app.")
 def deployment_list(
     ctx: typer.Context,
     app: Annotated[str | None, typer.Option("--app")] = None,
@@ -400,7 +400,7 @@ def deployment_list(
     console.print(table("Deployments", ["name", "kind", "version", "active", "app", "id"], rows))
 
 
-@deployment_app.command("stop")
+@deployment_app.command("stop", help="Stop one or more deployments.")
 def deployment_stop(
     ctx: typer.Context,
     deployment_ids_or_names: Annotated[list[str], typer.Argument()],
@@ -415,7 +415,7 @@ def deployment_stop(
     print_payload(ctx, responses, title="Deployments stopped", tone="success")
 
 
-@deployment_app.command("start")
+@deployment_app.command("start", help="Start a stopped deployment.")
 def deployment_start(
     ctx: typer.Context,
     deployment_id_or_name: str,
@@ -430,7 +430,7 @@ def deployment_start(
     )
 
 
-@deployment_app.command("scale")
+@deployment_app.command("scale", help="Set a deployment's container count.")
 def deployment_scale(
     ctx: typer.Context,
     deployment_id_or_name: str,
@@ -449,7 +449,7 @@ def deployment_scale(
     )
 
 
-@deployment_app.command("delete")
+@deployment_app.command("delete", help="Delete a deployment.")
 def deployment_delete(
     ctx: typer.Context,
     deployment_id_or_name: str,

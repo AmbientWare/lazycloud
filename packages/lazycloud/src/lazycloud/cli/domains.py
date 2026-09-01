@@ -74,7 +74,7 @@ def domain_add(
         )
 
 
-@domain_app.command("list")
+@domain_app.command("list", help="List registered custom domains.")
 def domain_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,

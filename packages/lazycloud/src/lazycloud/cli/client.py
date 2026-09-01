@@ -17,7 +17,7 @@ from lazycloud.exceptions import ClientGenerationError
 client_app = typer.Typer(help="Generate typed clients for deployed apps.")
 
 
-@client_app.command("get")
+@client_app.command("get", help="Generate a typed client for an app.")
 def get_client(
     ctx: typer.Context,
     app: Annotated[str, typer.Argument(help="App slug to fetch.")],
@@ -35,7 +35,7 @@ def get_client(
     print_payload(ctx, payload, title="Client generated", tone="success")
 
 
-@client_app.command("remove")
+@client_app.command("remove", help="Remove a generated app client.")
 def remove_client(
     ctx: typer.Context,
     app: Annotated[str, typer.Argument(help="App slug to remove.")],

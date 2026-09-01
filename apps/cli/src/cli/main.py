@@ -97,7 +97,10 @@ _ADMIN_GROUP_ORDER = (
 
 
 def build_admin_cli() -> typer.Typer:
-    return build_public_cli((_register_operator_cli,))
+    return build_public_cli(
+        (_register_operator_cli,),
+        help="Operate lazycloud services, resources, and platform infrastructure.",
+    )
 
 
 def start(args: list[str] | None = None, prog_name: str | None = None) -> None:
@@ -154,13 +157,13 @@ def _register_events(application: typer.Typer) -> None:
 
 
 def _register_profile_extensions(group: typer.Typer) -> None:
-    group.command("export")(profile_export)
+    group.command("export", help="Export a profile for another environment.")(profile_export)
 
 
 def _register_token_extensions(group: typer.Typer) -> None:
-    group.command("create")(token_create)
-    group.command("list")(token_list)
-    group.command("revoke")(token_revoke)
+    group.command("create", help="Create an access token.")(token_create)
+    group.command("list", help="List access tokens.")(token_list)
+    group.command("revoke", help="Revoke an access token.")(token_revoke)
 
 
 if __name__ == "__main__":

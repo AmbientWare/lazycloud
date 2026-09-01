@@ -14,7 +14,7 @@ MASKED_SECRET_VALUE = "********"
 secret_app = typer.Typer(help="Manage secrets.")
 
 
-@secret_app.command("list")
+@secret_app.command("list", help="List secret names and update times.")
 def secret_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -34,7 +34,7 @@ def secret_list(
     console.print(table("Secrets", ["name", "updated", "created"], rows))
 
 
-@secret_app.command("create")
+@secret_app.command("create", help="Create a secret.")
 def secret_create(
     ctx: typer.Context,
     name: str,
@@ -50,7 +50,7 @@ def secret_create(
     )
 
 
-@secret_app.command("modify")
+@secret_app.command("modify", help="Replace a secret value.")
 def secret_modify(
     ctx: typer.Context,
     name: str,
@@ -66,7 +66,7 @@ def secret_modify(
     )
 
 
-@secret_app.command("delete")
+@secret_app.command("delete", help="Delete a secret.")
 def secret_delete(
     ctx: typer.Context,
     name: str,
@@ -81,7 +81,7 @@ def secret_delete(
     )
 
 
-@secret_app.command("show")
+@secret_app.command("show", help="Show a secret, masked unless explicitly revealed.")
 def secret_show(
     ctx: typer.Context,
     name: str,

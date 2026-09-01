@@ -10,7 +10,7 @@ from lazycloud.cli.control import resource_client
 app_app = typer.Typer(help="Manage deployed applications.")
 
 
-@app_app.command("list")
+@app_app.command("list", help="List deployed applications.")
 def app_list(
     ctx: typer.Context,
     active: Annotated[bool, typer.Option("--active")] = False,
@@ -38,7 +38,7 @@ def app_list(
     console.print(table("Apps", ["name", "state", "version", "public", "id"], rows))
 
 
-@app_app.command("show")
+@app_app.command("show", help="Show one deployed application.")
 def app_show(
     ctx: typer.Context,
     app_id: str,
@@ -48,7 +48,7 @@ def app_show(
     print_payload(ctx, response.model_dump(mode="json"), title="App")
 
 
-@app_app.command("pause")
+@app_app.command("pause", help="Pause an application's workloads.")
 def app_pause(
     ctx: typer.Context,
     app_id: str,
@@ -58,7 +58,7 @@ def app_pause(
     print_payload(ctx, response.model_dump(mode="json"), title="App paused", tone="success")
 
 
-@app_app.command("resume")
+@app_app.command("resume", help="Resume a paused application.")
 def app_resume(
     ctx: typer.Context,
     app_id: str,
@@ -68,7 +68,7 @@ def app_resume(
     print_payload(ctx, response.model_dump(mode="json"), title="App resumed", tone="success")
 
 
-@app_app.command("delete")
+@app_app.command("delete", help="Delete a deployed application.")
 def app_delete(
     ctx: typer.Context,
     app_id: str,

@@ -119,9 +119,12 @@ def _ordered_registry(
 
 def build_public_cli(
     extensions: Sequence[PublicCliExtension] = (),
+    *,
+    help: str = "Deploy, run, and manage workloads on lazycloud.",
 ) -> typer.Typer:
     """Build an isolated public command tree and apply this build's extensions."""
     application = typer.Typer(
+        help=help,
         context_settings={"help_option_names": ["-h", "--help"]},
         no_args_is_help=True,
         rich_markup_mode="rich",

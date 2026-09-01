@@ -243,7 +243,7 @@ def login(
     )
 
 
-@profile_app.command("list")
+@profile_app.command("list", help="List configured client profiles.")
 def profile_list(ctx: typer.Context) -> None:
     profiles = list_profiles()
     active = _active_profile_name_or_default()
@@ -273,13 +273,13 @@ def profile_list(ctx: typer.Context) -> None:
     )
 
 
-@profile_app.command("current")
+@profile_app.command("current", help="Show the active client profile.")
 def profile_current(ctx: typer.Context) -> None:
     profile = get_profile(apply_env=False)
     print_payload(ctx, {**profile_payload(profile), "active": True})
 
 
-@profile_app.command("show")
+@profile_app.command("show", help="Show a client profile.")
 def profile_show(
     ctx: typer.Context,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
@@ -288,7 +288,7 @@ def profile_show(
     print_payload(ctx, profile_payload(selected))
 
 
-@profile_app.command("set")
+@profile_app.command("set", help="Create or update a client profile.")
 def profile_set(
     ctx: typer.Context,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
@@ -317,7 +317,7 @@ def profile_set(
     print_payload(ctx, profile_payload(saved))
 
 
-@profile_app.command("activate")
+@profile_app.command("activate", help="Make a profile active.")
 def profile_activate(ctx: typer.Context, name: str) -> None:
     profile = activate_profile(name)
     print_payload(
@@ -328,7 +328,7 @@ def profile_activate(ctx: typer.Context, name: str) -> None:
     )
 
 
-@profile_app.command("delete")
+@profile_app.command("delete", help="Delete a client profile.")
 def profile_delete(ctx: typer.Context, name: str) -> None:
     delete_profile(name)
     print_payload(
@@ -339,7 +339,7 @@ def profile_delete(ctx: typer.Context, name: str) -> None:
     )
 
 
-@token_app.command("set")
+@token_app.command("set", help="Save an access token for a profile.")
 def token_set(
     ctx: typer.Context,
     value: str,
@@ -360,7 +360,7 @@ def token_set(
     )
 
 
-@token_app.command("show")
+@token_app.command("show", help="Show whether a profile has an access token.")
 def token_show(
     ctx: typer.Context,
     profile: Annotated[str | None, typer.Option("--profile")] = None,

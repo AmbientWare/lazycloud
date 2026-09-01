@@ -84,7 +84,7 @@ def create_app(
     )
 
 
-@example_app.command("download")
+@example_app.command("download", help="Write an example app to disk.")
 def example_download(
     ctx: typer.Context,
     name: str,
@@ -107,7 +107,7 @@ def example_download(
     print_payload(ctx, {"name": name, "path": str(target), "files": written})
 
 
-@example_app.command("list")
+@example_app.command("list", help="List available example apps.")
 def example_list(ctx: typer.Context) -> None:
     rows = [
         [template.name, template.description, bytes_count(template.size_bytes)]

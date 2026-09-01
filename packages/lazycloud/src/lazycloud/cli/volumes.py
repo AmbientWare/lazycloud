@@ -19,7 +19,7 @@ VOLUME_SCHEME = "lazycloud://"
 volume_app = typer.Typer(help="Manage volumes.")
 
 
-@volume_app.command("list")
+@volume_app.command("list", help="List workspace volumes.")
 def volume_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -40,7 +40,7 @@ def volume_list(
     console.print(table("Volumes", ["name", "size", "workspace", "updated"], rows))
 
 
-@volume_app.command("create")
+@volume_app.command("create", help="Create a volume.")
 def volume_create(
     ctx: typer.Context,
     name: str,
@@ -57,7 +57,7 @@ def volume_create(
     )
 
 
-@volume_app.command("delete")
+@volume_app.command("delete", help="Delete a volume and its files.")
 def volume_delete(
     ctx: typer.Context,
     name: str,

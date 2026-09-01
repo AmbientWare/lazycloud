@@ -60,7 +60,7 @@ compute_policy_app = typer.Typer(help="Inspect and update workspace scheduling d
 compute_app.add_typer(compute_policy_app, name="policy")
 
 
-@compute_app.command("status")
+@compute_app.command("status", help="Show workspace compute capacity and policy.")
 def compute_status(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -81,7 +81,7 @@ def compute_status(
     console.print(table("Compute", ["field", "value"], rows))
 
 
-@compute_app.command("instances")
+@compute_app.command("instances", help="List provisioned compute instances.")
 def compute_instances(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -139,7 +139,7 @@ def compute_units(
     console.print(table("Compute pools", ["name", "default", "providers", "units", "gpus"], rows))
 
 
-@compute_app.command("workloads")
+@compute_app.command("workloads", help="List workload-to-pool assignments.")
 def compute_workloads(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -152,7 +152,7 @@ def compute_workloads(
     console.print(table("Compute workloads", ["name", "kind", "pool"], rows))
 
 
-@compute_policy_app.command("show")
+@compute_policy_app.command("show", help="Show the workspace compute policy.")
 def compute_policy_show(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -161,7 +161,7 @@ def compute_policy_show(
     print_payload(ctx, response.model_dump(mode="json"))
 
 
-@compute_policy_app.command("update")
+@compute_policy_app.command("update", help="Update the workspace compute policy.")
 def compute_policy_update(
     ctx: typer.Context,
     default_pool: Annotated[str, typer.Option("--default-pool")],
@@ -179,7 +179,7 @@ def compute_policy_update(
     print_payload(ctx, response.model_dump(mode="json"))
 
 
-@cloud_compute_app.command("show")
+@cloud_compute_app.command("show", help="Show connected-account compute settings.")
 def cloud_compute_show(ctx: typer.Context) -> None:
     """Show how capacity is provisioned in the connected account."""
     connection = compute_client().current_connection()
@@ -188,7 +188,7 @@ def cloud_compute_show(ctx: typer.Context) -> None:
     print_payload(ctx, connection.compute.model_dump(mode="json"))
 
 
-@cloud_compute_app.command("update")
+@cloud_compute_app.command("update", help="Update connected-account compute settings.")
 def cloud_compute_update(
     ctx: typer.Context,
     default_region: Annotated[str | None, typer.Option("--default-region")] = None,
@@ -585,7 +585,7 @@ def _connection_summary(response: AwsConnectionResponse) -> dict[str, object]:
     return summary
 
 
-@task_app.command("list")
+@task_app.command("list", help="List recent tasks.")
 def task_list(
     ctx: typer.Context,
     limit: Annotated[int, typer.Option("--limit", min=1)] = 100,
@@ -609,7 +609,7 @@ def task_list(
     console.print(table("Tasks", ["workload", "status", "requested", "container", "id"], rows))
 
 
-@task_app.command("stop")
+@task_app.command("stop", help="Stop one or more tasks.")
 def task_stop(
     ctx: typer.Context,
     task_ids: Annotated[list[str], typer.Argument()],
@@ -619,7 +619,7 @@ def task_stop(
     print_payload(ctx, response.model_dump(mode="json"))
 
 
-@task_app.command("show")
+@task_app.command("show", help="Show one task and its current state.")
 def task_show(
     ctx: typer.Context,
     task_id: str,
@@ -629,7 +629,7 @@ def task_show(
     print_payload(ctx, task.model_dump(mode="json"), title="Task")
 
 
-@task_app.command("result")
+@task_app.command("result", help="Wait for and display a task result.")
 def task_result(
     ctx: typer.Context,
     task_id: str,
@@ -671,7 +671,7 @@ def task_result(
     print_payload(ctx, task.model_dump(mode="json"), title="Task pending", tone="info")
 
 
-@task_app.command("logs")
+@task_app.command("logs", help="Print logs for one task.")
 def task_logs(
     ctx: typer.Context,
     task_id: str,
@@ -689,7 +689,7 @@ def task_logs(
         write_stream(entry.message if entry.message.endswith("\n") else f"{entry.message}\n")
 
 
-@task_app.command("cancel")
+@task_app.command("cancel", help="Cancel a task.")
 def task_cancel(
     ctx: typer.Context,
     task_id: str,
@@ -699,7 +699,7 @@ def task_cancel(
     print_payload(ctx, response.model_dump(mode="json"))
 
 
-@container_app.command("list")
+@container_app.command("list", help="List recent containers.")
 def container_list(
     ctx: typer.Context,
     limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
@@ -728,7 +728,7 @@ def container_list(
     console.print(table("Containers", ["name", "status", "image", "exit", "id"], rows))
 
 
-@container_app.command("attach")
+@container_app.command("attach", help="Attach to a container's output until it exits.")
 def container_attach(
     ctx: typer.Context,
     container_id: str,
@@ -763,7 +763,7 @@ def container_attach(
         raise typer.Exit(terminal.exit_code)
 
 
-@container_app.command("checkpoint")
+@container_app.command("checkpoint", help="Create a container checkpoint.")
 def container_checkpoint(
     ctx: typer.Context,
     container_id: str,
@@ -776,7 +776,7 @@ def container_checkpoint(
     print_payload(ctx, response.model_dump(mode="json"))
 
 
-@container_app.command("stop")
+@container_app.command("stop", help="Stop one or more containers.")
 def container_stop(
     ctx: typer.Context,
     container_ids: Annotated[list[str], typer.Argument()],
@@ -790,7 +790,7 @@ def container_stop(
     print_payload(ctx, results, title="Containers stopped", tone="success")
 
 
-@machine_app.command("list")
+@machine_app.command("list", help="List joined machines.")
 def machine_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -804,7 +804,7 @@ def machine_list(
     console.print(table("Machines", ["status", "gpu", "id"], rows))
 
 
-@machine_app.command("join")
+@machine_app.command("join", help="Join this machine to a compute pool.")
 def machine_join(
     ctx: typer.Context,
     ttl: Annotated[str, typer.Option("--ttl", help="Join token lifetime.")] = "",
@@ -913,7 +913,7 @@ def machine_join(
     )
 
 
-@machine_app.command("remove")
+@machine_app.command("remove", help="Remove a joined machine.")
 def machine_remove(
     ctx: typer.Context,
     machine_id: str,
