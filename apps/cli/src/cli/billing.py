@@ -8,6 +8,7 @@ from database.repositories.billing_ledger import BillingLedgerRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from lazycloud.cli.components.cards import result_card
 from lazycloud.cli.components.output import emit, table
+from lazycloud.cli.components.results import emit_result
 from provider_stripe import METER_EVENT_BACKFILL_DAYS, PublishedCatalog, StripeSettings
 from rich.console import Group
 from shared.billing_rate_card import (
@@ -19,7 +20,6 @@ from shared.billing_rate_card import (
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
 
-from cli.components.results import emit_result
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 billing_app = typer.Typer(

@@ -13,12 +13,12 @@ from control.service import ControlPlaneService
 from database.context import ServiceContext
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
+from lazycloud.cli.components.results import emit_result
 from lazycloud.json_contracts import validate_json_object
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStorageConfig
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
-from cli.components.results import emit_result
 from database import (
     ControlPlaneRecoveryFence,
     DatabaseApplicationName,

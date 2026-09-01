@@ -6,12 +6,12 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.formatting import bytes_count
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.results import emit_result
 from pydantic import JsonValue
 from shared.bytes_transport import encode_bytes
 from shared.http.storage import CacheCreateRequest, ObjectCreateRequest
 
 from cli.api_client import admin_api_client
-from cli.components.results import emit_result
 
 object_app = typer.Typer(help="Manage object storage records.")
 cache_app = typer.Typer(help="Manage file cache entries.")

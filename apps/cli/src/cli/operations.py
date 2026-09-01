@@ -13,6 +13,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
+from lazycloud.cli.components.results import emit_result
 from lazycloud.json_contracts import JsonValue
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.operations import ImageBuildRequest
@@ -21,7 +22,6 @@ from shared.image_building.context import fingerprint_build_context
 from shared.image_building.requirements import load_requirements_file
 
 from cli.api_client import admin_api_client
-from cli.components.results import emit_result
 from cli.parameters import parse_key_values
 
 image_app = typer.Typer(help="Manage image build records.")

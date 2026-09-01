@@ -18,6 +18,7 @@ from lazycloud.cli.components.output import (
     write_stream,
 )
 from lazycloud.cli.components.progress import print_stream_message
+from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.control import compute_client, control_config
 from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
 from lazycloud.cli.resources import container_attach, container_checkpoint
@@ -39,7 +40,6 @@ from shared.http.compute import (
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
 from cli.api_client import admin_api_client
-from cli.components.results import emit_result
 
 queue_app = typer.Typer(help="Manage queues.")
 map_app = typer.Typer(help="Manage durable maps.")

@@ -6,14 +6,13 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.output import emit
+from lazycloud.cli.components.results import emit_result
 from provider_clients.release import (
     ReleaseManifestSettings,
     fetch_release_manifest,
     materialize_agent_artifact,
 )
 from pydantic import JsonValue
-
-from cli.components.results import emit_result
 
 release_app = typer.Typer(help="Work with the release a deployment runs.")
 

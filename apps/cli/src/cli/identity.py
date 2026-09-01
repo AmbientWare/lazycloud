@@ -10,6 +10,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
+from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.identity import profile_payload
 from lazycloud.config import (
     get_profile,
@@ -22,7 +23,6 @@ from shared.http_transport import HttpChannel
 from shared.identity import PlatformRole
 
 from cli.api_client import AdminApiClient, admin_api_client
-from cli.components.results import emit_result
 
 
 def profile_export(

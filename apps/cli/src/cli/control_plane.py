@@ -5,6 +5,7 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.formatting import duration
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.workspaces import workspace_audit, workspace_rename
 from lazycloud.json_contracts import JsonValue, validate_json_object
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
@@ -20,7 +21,6 @@ from shared.http.workspaces import (
 )
 
 from cli.api_client import admin_api_client
-from cli.components.results import emit_result
 from cli.parameters import parse_key_values
 
 workspace_app = typer.Typer(help="Manage workspaces.")

@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from lazycloud.cli.components.results import emit_result
 
-from cli.components.results import emit_result
 from database import (
     DatabaseApplicationName,
     DatabaseClient,

@@ -20,6 +20,7 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.cards import result_card
 from lazycloud.cli.components.output import emit
+from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.control import compute_client
 from lazycloud.json_contracts import validate_json_object
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
@@ -28,7 +29,6 @@ from shared.http.compute import UnitResponse
 from shared.http.errors import HttpApiError
 
 from cli.api_client import admin_api_client
-from cli.components.results import emit_result
 
 fleet_app = typer.Typer(help="Register the platform's own compute capacity.")
 
