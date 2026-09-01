@@ -14,7 +14,7 @@ from lazycloud.cli.main import (
 from cli.agent import agent_app
 from cli.billing import billing_app
 from cli.components.errors import ADMIN_ERROR_POLICY
-from cli.control_plane import concurrency_app, stub_app, workspace_app
+from cli.control_plane import concurrency_app, stub_app, workspace_configure
 from cli.database import database_app
 from cli.execution import events, invoke
 from cli.fleet import fleet_app
@@ -119,7 +119,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_root_command("events", _register_events)
     registry.extend_group("profile", _register_profile_extensions)
     registry.extend_group("token", _register_token_extensions)
-    registry.replace_group("workspace", workspace_app)
+    registry.extend_group("workspace", _register_workspace_extensions)
     registry.replace_group("container", container_app)
     registry.extend_group("machine", register_machine_extensions)
 
@@ -164,6 +164,13 @@ def _register_token_extensions(group: typer.Typer) -> None:
     group.command("create", help="Create an access token.")(token_create)
     group.command("list", help="List access tokens.")(token_list)
     group.command("revoke", help="Revoke an access token.")(token_revoke)
+
+
+def _register_workspace_extensions(group: typer.Typer) -> None:
+    group.command(
+        "configure",
+        help="Configure operator-owned workspace storage and identity settings.",
+    )(workspace_configure)
 
 
 if __name__ == "__main__":

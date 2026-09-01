@@ -21,7 +21,7 @@ import typer
 from lazycloud.cli.components.cards import result_card
 from lazycloud.cli.components.output import emit
 from lazycloud.cli.components.results import emit_result
-from lazycloud.cli.control import compute_client
+from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.json_contracts import validate_json_object
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
 from shared.contracts import ContractModel
@@ -255,7 +255,7 @@ def _every_unit() -> list[tuple[str, UnitResponse]]:
     provisioning.
     """
     found: list[tuple[str, UnitResponse]] = []
-    for workspace in admin_api_client().list_workspaces().workspaces:
+    for workspace in workspace_client().list().workspaces:
         for unit in admin_api_client(workspace.id).list_units().pools:
             found.append((workspace.id, unit))
     return found

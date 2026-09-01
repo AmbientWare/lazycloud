@@ -3,18 +3,14 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.formatting import duration
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.cli.components.results import emit_result
-from lazycloud.cli.workspaces import workspace_audit, workspace_rename
 from lazycloud.json_contracts import JsonValue, validate_json_object
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
 from shared.deployments import StubKind
 from shared.http.concurrency import ConcurrencyLimitSetRequest
-from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.http.stubs import StubCreateRequest
 from shared.http.workspaces import (
-    WorkspaceCreateRequest,
     WorkspaceResponse,
     WorkspaceSetRequest,
     WorkspaceStorageResponse,
@@ -23,7 +19,6 @@ from shared.http.workspaces import (
 from cli.api_client import admin_api_client
 from cli.parameters import parse_key_values
 
-workspace_app = typer.Typer(help="Manage workspaces.")
 stub_app = typer.Typer(help="Manage deployed stubs.")
 concurrency_app = typer.Typer(help="Manage concurrency limits.")
 
@@ -33,12 +28,6 @@ def _parse_metadata(values: list[str]) -> dict[str, JsonValue]:
 
 
 def _workspace_payload(record: WorkspaceResponse) -> dict[str, JsonValue]:
-    return validate_json_object(record.model_dump(mode="json"))
-
-
-def _source_cache_cleanup_payload(
-    record: SourceCacheCleanupStatusResponse,
-) -> dict[str, JsonValue]:
     return validate_json_object(record.model_dump(mode="json"))
 
 
@@ -58,26 +47,9 @@ def _show_workspace(ctx: typer.Context, record: WorkspaceResponse, *, title: str
     )
 
 
-@workspace_app.command("create")
-def workspace_create(
+def workspace_configure(
     ctx: typer.Context,
-    name: Annotated[str | None, typer.Argument()] = None,
-) -> None:
-    """Create a workspace along with the storage it needs to run anything.
-
-    `set` records a name and a storage document; this is what actually creates the
-    bucket that document describes, so a workspace made with `set` alone accepts work
-    and then cannot run it.
-    """
-
-    record = admin_api_client().create_workspace(WorkspaceCreateRequest(name=name))
-    _show_workspace(ctx, record, title="Workspace created")
-
-
-@workspace_app.command("set")
-def workspace_set(
-    ctx: typer.Context,
-    name: Annotated[str, typer.Argument()] = "default",
+    name: Annotated[str, typer.Argument()],
     storage_backend: Annotated[str, typer.Option("--storage-backend")] = "local",
     storage_bucket: Annotated[str | None, typer.Option("--storage-bucket")] = None,
     storage_prefix: Annotated[str, typer.Option("--storage-prefix")] = "",
@@ -92,6 +64,7 @@ def workspace_set(
         typer.Option("--metadata", help="Workspace metadata as KEY=VALUE."),
     ] = None,
 ) -> None:
+    """Configure operator-owned workspace storage and identity settings."""
     record = admin_api_client().upsert_workspace(
         name,
         WorkspaceSetRequest(
@@ -107,62 +80,7 @@ def workspace_set(
             metadata=_parse_metadata(metadata or []),
         ),
     )
-    _show_workspace(ctx, record, title="Workspace saved")
-
-
-@workspace_app.command("list")
-def workspace_list(
-    ctx: typer.Context,
-    include_deleted: Annotated[bool, typer.Option("--all")] = False,
-) -> None:
-    records = admin_api_client().list_workspaces(include_deleted=include_deleted).workspaces
-    if json_output_enabled(ctx):
-        print_payload(ctx, [_workspace_payload(item) for item in records])
-        return
-    rows = [[item.name, item.status.value, item.storage.backend, item.id] for item in records]
-    console.print(table("Workspaces", ["name", "status", "storage", "id"], rows))
-
-
-@workspace_app.command("show")
-def workspace_show(
-    ctx: typer.Context,
-    workspace_id_or_name: Annotated[str, typer.Argument()] = "default",
-) -> None:
-    record = admin_api_client().get_workspace(workspace_id_or_name)
-    _show_workspace(ctx, record, title="Workspace")
-
-
-@workspace_app.command("cleanup-status")
-def workspace_cleanup_status(
-    ctx: typer.Context,
-    workspace_id_or_name: Annotated[str, typer.Argument()] = "default",
-) -> None:
-    record = admin_api_client().get_source_cache_cleanup_status(workspace_id_or_name)
-    if json_output_enabled(ctx):
-        print_payload(ctx, _source_cache_cleanup_payload(record))
-        return
-    emit_result(
-        ctx,
-        payload=_source_cache_cleanup_payload(record),
-        title="Source cache cleanup",
-        fields={
-            "complete": record.complete,
-            "pending": record.pending_count,
-            "claimed": record.claimed_count,
-            "failing": record.failing_count,
-            "oldest pending": (
-                duration(record.oldest_pending_age_seconds)
-                if record.oldest_pending_age_seconds is not None
-                else "none"
-            ),
-            "error": record.last_error_code.value if record.last_error_code else "none",
-        },
-        tone="success" if record.complete else "warning",
-    )
-
-
-workspace_app.command("rename")(workspace_rename)
-workspace_app.command("audit")(workspace_audit)
+    _show_workspace(ctx, record, title="Workspace configured")
 
 
 @stub_app.command("create")
