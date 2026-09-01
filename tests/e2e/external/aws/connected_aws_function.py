@@ -29,7 +29,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from examples.connected_aws_function import connected_aws_probe
 from lazycloud.cli.control import compute_client, control_config, resource_client, task_client
 from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.resource.control import ResourceControlClient
@@ -46,9 +45,10 @@ from shared.http.compute_policy import WorkspaceComputeInstanceResponse
 from shared.http.tasks import TaskResponse
 from shared.tasks import is_terminal_task_status
 from tests.e2e.external import _support
+from tests.e2e.external.aws.connected_aws_probe import connected_aws_probe
 
 _RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
-_EXAMPLES_ROOT = Path(__file__).resolve().parents[4] / "examples"
+_SOURCE_ROOT = Path(__file__).resolve().parent
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if recovered is None:
             probe_app = connected_aws_probe(args.app_slug)
-            probe_app.app.deploy(source_root=_EXAMPLES_ROOT)
+            probe_app.app.deploy(source_root=_SOURCE_ROOT)
             call = probe_app.probe.spawn(marker, 21)
             task_id = call.task_id
         _support.emit_evidence(

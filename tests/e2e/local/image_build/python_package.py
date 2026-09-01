@@ -10,10 +10,10 @@ from collections.abc import Callable
 from uuid import uuid4
 
 import httpx
-from examples.python_image_functions import python_image_functions
 from lazycloud.abstractions.function import Function
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
+from tests.e2e.local.image_build.python_functions import python_image_functions
 
 BLOCKED = 77
 APP_NAME = f"e2e_image_python_{uuid4().hex[:10]}"
