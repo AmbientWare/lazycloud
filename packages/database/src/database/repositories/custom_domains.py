@@ -73,25 +73,6 @@ class CustomDomainRepository:
         ).scalar_one_or_none()
         return CustomDomain.model_validate(row.payload) if row is not None else None
 
-    def covering(self, hostname: str, *, user_id: str) -> CustomDomain | None:
-        """The account's registration a concrete hostname may be served under.
-
-        Scoped to one account on purpose: this answers whether *this* owner may claim
-        the name, so another owner's registration must not satisfy it. Any workspace
-        the owner belongs to satisfies it, which is what makes one registration serve
-        all of them.
-        """
-        candidates = self.session.execute(
-            select(CustomDomainTable)
-            .where(CustomDomainTable.user_id == user_id)
-            .where(CustomDomainTable.deleted_at.is_(None))
-        ).scalars()
-        for row in candidates:
-            domain = CustomDomain.model_validate(row.payload)
-            if domain.covers(hostname):
-                return domain
-        return None
-
     def due_for_check(self, *, before: datetime, limit: int = 50) -> list[CustomDomain]:
         """Registrations the reconciler should re-read from the provider.
 

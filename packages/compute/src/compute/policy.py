@@ -26,6 +26,7 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineReadinessPhase,
     MachineServiceState,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_policy import (
     ComputeResourceRequirements,
@@ -584,6 +585,7 @@ def _compute_instance_view(
 ) -> ComputeInstanceView:
     phase = record.bootstrap_phase
     failure_reason = record.bootstrap_failure_reason
+    failure_detail = record.bootstrap_failure_detail
     observed_at = record.bootstrap_observed_at
     serving = False
     if record.status == ReservationStatus.Terminating.value:
@@ -600,7 +602,15 @@ def _compute_instance_view(
             record.machine_id,
             pool=pool,
         )
-        if machine_serves_workloads(
+        if (
+            enrollment is not None
+            and enrollment.network_phase is PrivateNetworkEnrollmentPhase.Failed
+        ):
+            phase = MachineBootstrapPhase.Failed
+            failure_reason = MachineBootstrapFailureReason.NetworkJoinFailed
+            failure_detail = enrollment.network_failure_detail
+            observed_at = max(observed_at, enrollment.updated_at)
+        elif machine_serves_workloads(
             enrollment,
             machine_id=record.machine_id,
             worker_state=worker_state,
@@ -633,7 +643,7 @@ def _compute_instance_view(
             served_before=record.first_served_at is not None,
         ),
         bootstrap_failure_reason=failure_reason,
-        bootstrap_failure_detail=record.bootstrap_failure_detail,
+        bootstrap_failure_detail=failure_detail,
         bootstrap_observed_at=observed_at,
         booted_template_version=_provider_booted_template_version(record),
     )

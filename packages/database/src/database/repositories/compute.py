@@ -213,6 +213,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     network_public_key: str = ""
     network_address: str = ""
     network_verified_at: datetime | None = None
+    network_failure_detail: str = Field(default="", max_length=512)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -258,6 +259,7 @@ class ComputeMachineEnrollmentCreate(ContractModel):
     network_public_key: str = ""
     network_address: str = ""
     network_verified_at: datetime | None = None
+    network_failure_detail: str = Field(default="", max_length=512)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None

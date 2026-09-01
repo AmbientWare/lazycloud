@@ -33,6 +33,9 @@ class WireGuardGatewayPeer(Protocol):
     @property
     def address(self) -> str: ...
 
+    @property
+    def generation(self) -> int: ...
+
 
 @dataclass(slots=True)
 class WireGuardGatewayRuntime:
@@ -40,6 +43,7 @@ class WireGuardGatewayRuntime:
     interface: str = WIREGUARD_INTERFACE
     listen_port: int = WIREGUARD_DEFAULT_PORT
     runner: WireGuardCommandRunner = field(default_factory=SubprocessWireGuardCommandRunner)
+    _applied_generations: dict[str, int] = field(default_factory=dict, init=False)
 
     def public_key(self) -> str:
         try:
@@ -111,9 +115,19 @@ class WireGuardGatewayRuntime:
                 ["wg", "set", self.interface, "peer", public_key, "remove"],
                 "remove revoked WireGuard peer",
             )
+            self._applied_generations.pop(public_key, None)
         for public_key, peer in sorted(desired.items()):
-            if existing.get(public_key) == (peer.address,):
+            if (
+                existing.get(public_key) == (peer.address,)
+                and self._applied_generations.get(public_key) == peer.generation
+            ):
                 continue
+            if public_key in existing:
+                _run(
+                    self.runner,
+                    ["wg", "set", self.interface, "peer", public_key, "remove"],
+                    "reset WireGuard peer generation",
+                )
             _run(
                 self.runner,
                 [
@@ -127,6 +141,7 @@ class WireGuardGatewayRuntime:
                 ],
                 "reconcile WireGuard peer",
             )
+            self._applied_generations[public_key] = peer.generation
 
     def handshakes(self) -> dict[str, datetime]:
         result = self.runner.run(["wg", "show", self.interface, "latest-handshakes"])
@@ -144,6 +159,7 @@ class WireGuardGatewayRuntime:
 
     def close(self) -> None:
         self.runner.run(["ip", "link", "delete", "dev", self.interface])
+        self._applied_generations.clear()
 
     def _reconcile_firewall(self) -> None:
         self.runner.run(["iptables", "-N", _FIREWALL_CHAIN])

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from agent.operations import (
     AGENT_RUNTIME_READY_FILE,
+    AGENT_SOURCE_CACHE_RELATIVE_PATH,
     AgentBootstrap,
     AgentHostStatus,
     AgentState,
@@ -682,7 +683,7 @@ def test_remote_leave_authenticates_with_saved_machine_credential() -> None:
 
 def test_leave_cache_destruction_receipt_survives_gateway_retry(tmp_path: Path) -> None:
     state_dir = tmp_path / "state" / "agent"
-    cache_root = state_dir / "cache"
+    cache_root = state_dir / AGENT_SOURCE_CACHE_RELATIVE_PATH
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",

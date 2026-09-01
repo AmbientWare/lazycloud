@@ -48,9 +48,11 @@ from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_enrollment import (
+    MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
     MachineServiceState,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -355,6 +357,28 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     serving = next(item for item in current.data if item.status == "serving")
     assert serving.service_state is MachineServiceState.Serving
     assert serving.bootstrap_phase is not MachineBootstrapPhase.Failed
+
+    with isolated_services.context.database.session() as session:
+        enrollments = ComputeMachineEnrollmentRepository(session)
+        enrollment = enrollments.by_machine(workspace_id, ready_machine_id, for_update=True)
+        assert enrollment is not None
+        enrollments.save(
+            enrollment.model_copy(
+                update={
+                    "network_phase": PrivateNetworkEnrollmentPhase.Failed,
+                    "network_failure_detail": "allow TCP 29443 from 100.96.0.0/24",
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+        )
+
+    failed_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
+        client.get("/api/v1/compute/instances").content
+    )
+    failed = next(item for item in failed_inventory.data if item.machine_id == ready_machine_id)
+    assert failed.service_state is MachineServiceState.Failed
+    assert failed.bootstrap_failure_reason is MachineBootstrapFailureReason.NetworkJoinFailed
+    assert failed.bootstrap_failure_detail == "allow TCP 29443 from 100.96.0.0/24"
 
     with isolated_services.context.database.session() as session:
         instances = ComputeProviderInstanceRepository(session)

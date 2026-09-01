@@ -20,6 +20,7 @@ WIREGUARD_AGENT_NETWORK = WIREGUARD_OVERLAY
 WIREGUARD_GATEWAY_ADDRESS = ipaddress.IPv4Address("100.96.0.1")
 WIREGUARD_KEEPALIVE_SECONDS = 25
 WIREGUARD_DEFAULT_PORT = 51820
+WIREGUARD_AGENT_ROUTE_PROXY_PORT = 29443
 WIREGUARD_PLATFORM_PEER_LIMIT = 32
 _AGENT_FIRST_ADDRESS = int(ipaddress.IPv4Address("100.96.1.1"))
 _AGENT_LAST_ADDRESS = int(WIREGUARD_OVERLAY.broadcast_address) - 1
@@ -188,6 +189,18 @@ class WireGuardClientRuntime:
         _validate_no_overlay_route_conflict(self.runner, self.interface)
         private_key_path = self._ensure_private_key()
         _ensure_interface(self.runner, self.interface)
+        _run(
+            self.runner,
+            [
+                "wg",
+                "set",
+                self.interface,
+                "peer",
+                configuration.server_public_key,
+                "remove",
+            ],
+            "reset WireGuard server peer",
+        )
         _run(
             self.runner,
             ["ip", "address", "replace", configuration.address, "dev", self.interface],

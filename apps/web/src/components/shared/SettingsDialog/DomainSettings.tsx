@@ -65,7 +65,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
             <Input
               value={hostname}
               onChange={(event) => setHostname(event.target.value)}
-              placeholder="acme.com or *.acme.com"
+              placeholder="app.acme.com"
               aria-label="Domain to register"
               className="h-8 w-56"
               disabled={pending}

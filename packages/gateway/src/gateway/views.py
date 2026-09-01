@@ -23,6 +23,7 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     MachineReadinessPhase,
+    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus
 from shared.compute_policy import ComputeUnitRecord
@@ -82,12 +83,19 @@ def private_pool_from_compute_state(state: ComputeUnitState) -> PrivateUnitState
 def machine_view(
     machine: Machine,
     agent_state: ComputeAgentTokenState | None = None,
+    *,
+    network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured,
+    network_failure_detail: str = "",
 ) -> UnitMachineResponse:
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or machine.labels.get("gpu", "")
     gpu_count = int(machine.labels.get("gpu_count", "1") or 1) if gpu else 0
     telemetry = agent_telemetry_state(agent_state) if agent_state is not None else None
-    readiness_phase = _machine_readiness_phase(machine, agent_state, telemetry)
+    readiness_phase = (
+        MachineReadinessPhase.Blocked
+        if network_phase is PrivateNetworkEnrollmentPhase.Failed
+        else _machine_readiness_phase(machine, agent_state, telemetry)
+    )
     preflight_checks = [
         ComputePreflightCheck(
             name=check.name,
@@ -101,6 +109,19 @@ def machine_view(
         for check in (agent_state.preflight if agent_state is not None else [])
     ]
     remediation = [check.remediation for check in preflight_checks if check.remediation]
+    if network_failure_detail:
+        remediation.append(network_failure_detail)
+    readiness_message = network_failure_detail
+    if not readiness_message and network_phase is PrivateNetworkEnrollmentPhase.AwaitingHandshake:
+        readiness_message = "Waiting for the private network to connect"
+    if not readiness_message and agent_state is not None and agent_state.capacity_reason:
+        readiness_message = agent_state.capacity_reason
+    if not readiness_message:
+        readiness_message = _machine_readiness_message(
+            readiness_phase,
+            preflight_checks,
+            telemetry,
+        )
     return UnitMachineResponse(
         id=machine.id,
         cpu=int((machine.cpu or 0) * 1000),
@@ -111,11 +132,7 @@ def machine_view(
         pool=machine.pool,
         provider_name=machine.provider,
         readiness_phase=readiness_phase,
-        readiness_message=(
-            agent_state.capacity_reason
-            if agent_state is not None and agent_state.capacity_reason
-            else _machine_readiness_message(readiness_phase, preflight_checks, telemetry)
-        ),
+        readiness_message=readiness_message,
         schedulable=(
             readiness_phase is MachineReadinessPhase.Ready
             and (agent_state is None or agent_state.schedulable)

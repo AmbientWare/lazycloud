@@ -51,6 +51,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
     PreflightSeverity,
+    PrivateNetworkEnrollmentPhase,
     WireGuardGateway,
 )
 from shared.compute_fleet import ResourceStatus
@@ -75,11 +76,27 @@ from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
 
+class _ProbeConnection:
+    def close(self) -> None:
+        return None
+
+
+class _PrivateNetworkConnector:
+    def __init__(self) -> None:
+        self.reachable = True
+
+    def connect(self, _address: str, _timeout_seconds: float) -> _ProbeConnection:
+        if not self.reachable:
+            raise TimeoutError("route proxy is unreachable")
+        return _ProbeConnection()
+
+
 def _gateway(
     services: ApiServices,
     *,
     key_prefix: str,
     redis: RedisClient | None = None,
+    private_network_connector: _PrivateNetworkConnector | None = None,
 ) -> GatewayControlService:
     selected_redis = redis or RedisClient(FakeRedis(), key_prefix=key_prefix)
     _publish_wireguard_gateway(services)
@@ -93,6 +110,7 @@ def _gateway(
             RedisCapacityReservationRepository(selected_redis),
             lambda: [],
         ),
+        private_network_connector=private_network_connector or _PrivateNetworkConnector(),
     )
 
 
@@ -269,6 +287,101 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
 
     with pytest.raises(ConflictError, match="machine limit"):
         gateway.join_agent(_join_request(bootstrap.token, fingerprint="other-host"))
+
+
+def test_private_network_registration_requires_a_fresh_handshake(
+    isolated_services: ApiServices,
+) -> None:
+    workspace_id = _workspace_id(isolated_services)
+    isolated_services.compute.create_unit(
+        UnitName("fresh-private-network"),
+        provider="agent",
+        workspace=workspace_id,
+    )
+    connector = _PrivateNetworkConnector()
+    gateway = _gateway(
+        isolated_services,
+        key_prefix="fresh-private-network",
+        private_network_connector=connector,
+    )
+    bootstrap = _create_join_token(gateway, MachinePool("fresh-private-network"), workspace_id)
+    joined = gateway.join_agent(_join_request(bootstrap.token))
+    public_key = _wireguard_public_key(joined.machine_id)
+
+    first = gateway.register_agent_private_network(
+        RegisterAgentPrivateNetworkRequest(
+            agent_token=joined.agent_token,
+            public_key=public_key,
+        )
+    )
+    with isolated_services.context.database.session() as session:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id,
+            joined.machine_id,
+            for_update=True,
+        )
+        assert enrollment is not None
+        peers = WireGuardPeerRepository(session)
+        peer = peers.by_enrollment(enrollment.id, for_update=True)
+        assert peer is not None
+        peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
+    assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
+
+    second = gateway.register_agent_private_network(
+        RegisterAgentPrivateNetworkRequest(
+            agent_token=joined.agent_token,
+            public_key=public_key,
+        )
+    )
+
+    assert second.generation == first.generation + 1
+    with isolated_services.context.database.session() as session:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id,
+            joined.machine_id,
+        )
+        assert enrollment is not None
+        peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
+    assert enrollment.network_phase is PrivateNetworkEnrollmentPhase.AwaitingHandshake
+    assert enrollment.network_verified_at is None
+    assert not enrollment.schedulable
+    assert peer is not None
+    assert peer.last_handshake_at is None
+    rejected = gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token))
+    assert not rejected.ok
+    assert rejected.retryable
+    assert rejected.err_msg == "agent WireGuard handshake has not been observed"
+
+    with isolated_services.context.database.session() as session:
+        peers = WireGuardPeerRepository(session)
+        current = peers.by_enrollment(enrollment.id, for_update=True)
+        assert current is not None
+        peers.save(current.model_copy(update={"last_handshake_at": utc_now()}))
+    connector.reachable = False
+    rejected = gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token))
+    assert not rejected.ok
+    assert rejected.retryable
+    assert "could not reach TCP 29443" in rejected.err_msg
+    [machine] = _pool_machines(
+        gateway,
+        MachinePool("fresh-private-network"),
+        workspace_id,
+    )
+    assert machine.readiness_phase is MachineReadinessPhase.Blocked
+    assert machine.readiness_message in machine.remediation
+    assert "100.96.0.0/24" in machine.readiness_message
+
+    connector.reachable = True
+    assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
+    with isolated_services.context.database.session() as session:
+        connected = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id,
+            joined.machine_id,
+        )
+    assert connected is not None
+    assert connected.network_phase is PrivateNetworkEnrollmentPhase.Connected
+    assert connected.network_verified_at is not None
+    assert connected.network_failure_detail == ""
 
 
 def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
