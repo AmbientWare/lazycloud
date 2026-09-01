@@ -60,7 +60,7 @@ def card(
 ) -> RenderableType:
     panel = Panel(
         body,
-        title=_title(title, tone),
+        title=Text(title, style=theme.EMPHASIS),
         title_align="left",
         border_style=_tone_style(tone),
         padding=(1, 2),
@@ -86,17 +86,6 @@ def _sequence(items: list[JsonValue]) -> RenderableType:
             line.append(str(item))
             parts.append(line)
     return Group(*parts)
-
-
-def _title(title: str, tone: CardTone) -> Text:
-    prefix = {
-        "neutral": "",
-        "info": "Info · ",
-        "success": "Done · ",
-        "warning": "Warning · ",
-        "error": "Error · ",
-    }[tone]
-    return Text(f"{prefix}{title}", style=theme.EMPHASIS)
 
 
 def _tone_style(tone: CardTone) -> Style:

@@ -144,7 +144,7 @@ def test_handler_argument_named_json_does_not_enable_machine_output(
     assert raised.value.code == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "Error · Unexpected error" in captured.err
+    assert "Unexpected error" in captured.err
     assert "handler args" in captured.err
 
 
