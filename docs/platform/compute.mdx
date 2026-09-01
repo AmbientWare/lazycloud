@@ -103,8 +103,8 @@ Idle instances are reclaimed after `--idle-timeout` seconds (60–86400).
 
 ## Self-hosted machines
 
-Join any Linux server — an on-prem GPU box, a bare-metal host, a VM — to your
-account as schedulable capacity:
+Join a supported Linux server to your account as schedulable capacity. This can
+be an on-premises GPU box, a bare-metal host, or a VM:
 
 ```bash
 lazycloud machine join --pool on-prem --gpu a100-80 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
@@ -115,11 +115,42 @@ and it serves only the workspaces your account owns. Point a workspace at it
 with `compute policy update --default-pool`, or name the pool on the workload.
 
 `machine join` generates a single-use join token (lifetime `--ttl`) and
-installs the agent on the current machine — as a background service by
+installs the agent on the current machine as a background service by
 default (`--service-manager`, `--service-name`, `--state-dir` to customize)
 or in the foreground with `--foreground`. Use `--print-only` to print the
 generated join command for running on another host. `--gpu-ids` limits which
 GPU devices are exposed.
+
+### Host requirements
+
+A supported host has:
+
+- Linux on amd64 or arm64.
+- systemd and root or sudo access for the default background installation.
+- a rootful Docker daemon.
+- WireGuard, `ip`, and `iptables` command-line tools. When you run the installer
+  as root, it can install missing WireGuard tools through `apt-get` or `dnf`.
+
+The host must allow:
+
+- DNS lookups and outbound HTTPS to the hosted LazyCloud control plane,
+  installation artifacts, container registries, and sources used by your
+  workloads.
+- outbound UDP port `51820` to the LazyCloud WireGuard gateway, including
+  stateful return traffic.
+- traffic arriving on `wg-lazycloud` from `100.96.0.0/24` to TCP port `29443`.
+
+The WireGuard connection starts from your host. You do not need a public
+inbound port, port forwarding, or a static public IP.
+
+### Reserved networks
+
+The host cannot have an existing route that overlaps the LazyCloud WireGuard
+overlay, `100.96.0.0/11`. The agent rejects enrollment when it finds one.
+
+Workers create a local bridge with `192.168.0.0/20` for IPv4 and
+`fd00:abcd::/64` for IPv6 by default. These ranges must not conflict with the
+host's LAN, VPN, or container networks.
 
 ```bash
 lazycloud machine list

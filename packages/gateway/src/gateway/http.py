@@ -180,6 +180,7 @@ class StreamAgentRequest(HttpModel):
 class StreamAgentResponse(HttpModel):
     ok: bool = True
     err_msg: str = ""
+    retryable: bool = False
     credential_id: str = ""
     credential_generation: int = Field(default=1, ge=1)
     capacity_state: AgentCapacityState = AgentCapacityState.Available

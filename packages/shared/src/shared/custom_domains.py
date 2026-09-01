@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
@@ -71,6 +71,11 @@ class CustomDomain(ContractModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     deleted_at: datetime | None = None
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, value: str) -> str:
+        return normalize_registrable_domain(value)
 
     def covers(self, hostname: str) -> bool:
         """Whether a deployment may claim this exact registered hostname."""

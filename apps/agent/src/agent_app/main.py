@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agent.operations import (
+    AGENT_SOURCE_CACHE_RELATIVE_PATH,
     AgentCapacityOptions,
     AgentHostStatus,
     AgentResourceDetection,
@@ -732,9 +733,13 @@ def _prepare_source_cache_destruction(
             ) from exc
         if receipt.storage_id != storage_id:
             raise RuntimeError("source cache destruction receipt does not match saved machine")
-        destroy_source_cache_storage(state_dir / "cache", receipt)
+        destroy_source_cache_storage(
+            state_dir / AGENT_SOURCE_CACHE_RELATIVE_PATH,
+            receipt,
+        )
         return receipt
-    receipt = source_cache_destruction_receipt(state_dir / "cache", storage_id=storage_id)
+    cache_root = state_dir / AGENT_SOURCE_CACHE_RELATIVE_PATH
+    receipt = source_cache_destruction_receipt(cache_root, storage_id=storage_id)
     if receipt is None:
         return None
     temporary = receipt_path.with_name(f".{receipt_path.name}.tmp-{os.getpid()}")
@@ -752,7 +757,7 @@ def _prepare_source_cache_destruction(
             os.close(directory_descriptor)
     finally:
         temporary.unlink(missing_ok=True)
-    destroy_source_cache_storage(state_dir / "cache", receipt)
+    destroy_source_cache_storage(cache_root, receipt)
     return receipt
 
 

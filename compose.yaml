@@ -421,7 +421,7 @@ services:
       LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/server/private-key
       LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
       LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
-      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT:-host.docker.internal:51820}"
+      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT:-tunnel-gateway:51820}"
     cap_add:
       - NET_ADMIN
     sysctls:

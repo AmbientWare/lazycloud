@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, suppress
@@ -80,8 +81,11 @@ from execution.tasks import TaskService
 from identity.auth import AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
+from networking.dialer import BackendConnector, SocketBackendConnector
 from networking.routing import BackendRouteAuthenticator
 from networking.wireguard import (
+    WIREGUARD_AGENT_ROUTE_PROXY_PORT,
+    WIREGUARD_INTERFACE,
     WIREGUARD_KEEPALIVE_SECONDS,
     WIREGUARD_PLATFORM_NETWORK,
     WireGuardPeerConfiguration,
@@ -338,6 +342,8 @@ each pass writes a disconnect that takes those rows out of the next scan, so a
 larger backlog drains over consecutive passes instead of holding one lease for
 the whole fleet."""
 
+PRIVATE_NETWORK_PROBE_TIMEOUT_SECONDS = 2.0
+
 
 def _domain_error(exc: KeyError | ValueError) -> DomainError:
     if isinstance(exc, KeyError):
@@ -366,6 +372,7 @@ class GatewayControlService:
     # actually reachable, and a value captured at construction would outlive a
     # device rename that every agent picks up on its next poll.
     runtime_origin: Callable[[], str]
+    private_network_connector: BackendConnector = field(default_factory=SocketBackendConnector)
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
     route_authenticator: BackendRouteAuthenticator | None = None
     agent_cluster_name: str = AGENT_NAME
@@ -1312,8 +1319,8 @@ class GatewayControlService:
         machines = self.services.compute.list_machines(workspace=workspace_id)
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
-            agent_states = {
-                enrollment.machine_id: _agent_state_from_enrollment(enrollment)
+            enrollment_by_machine = {
+                enrollment.machine_id: enrollment
                 for machine in machines
                 if (
                     enrollment := enrollments.by_machine(
@@ -1325,7 +1332,24 @@ class GatewayControlService:
                 is not None
                 and enrollment.status is ComputeMachineEnrollmentStatus.Active
             }
-        return [machine_view(machine, agent_states.get(machine.id)) for machine in machines]
+        views: list[UnitMachineResponse] = []
+        for machine in machines:
+            enrollment = enrollment_by_machine.get(machine.id)
+            views.append(
+                machine_view(
+                    machine,
+                    _agent_state_from_enrollment(enrollment),
+                    network_phase=(
+                        enrollment.network_phase
+                        if enrollment is not None
+                        else PrivateNetworkEnrollmentPhase.Unconfigured
+                    ),
+                    network_failure_detail=(
+                        enrollment.network_failure_detail if enrollment is not None else ""
+                    ),
+                )
+            )
+        return views
 
     def require_workspace_self_hosted_decommissioned(self, workspace_id: str) -> None:
         # Scoped by workspace id rather than resolved through the tenant-facing
@@ -1922,21 +1946,35 @@ class GatewayControlService:
                     }
                 )
             else:
-                generation = peer.generation
+                generation = max(peer.generation, enrollment.network_generation) + 1
+                peer = peer.model_copy(
+                    update={
+                        "generation": generation,
+                        "last_handshake_at": None,
+                        "updated_at": now,
+                    }
+                )
             saved_peer = peers.save(peer)
             enrollments.save(
                 enrollment.model_copy(
                     update={
+                        "heartbeat_confirmed": False,
+                        "schedulable": False,
+                        "readiness_phase": MachineReadinessPhase.Joining,
                         "network_generation": generation,
                         "network_phase": PrivateNetworkEnrollmentPhase.AwaitingHandshake,
                         "network_peer_id": saved_peer.id,
                         "network_public_key": saved_peer.public_key,
                         "network_address": saved_peer.address,
                         "network_verified_at": None,
+                        "network_failure_detail": "",
                         "updated_at": now,
                     }
                 )
             )
+        self.compute_states.save_agent_token_state(
+            state.model_copy(update={"heartbeat_confirmed": False, "schedulable": False})
+        )
         configuration = WireGuardPeerConfiguration(
             peer_id=saved_peer.id,
             address=saved_peer.address,
@@ -2048,7 +2086,10 @@ class GatewayControlService:
             current_state = snapshot.current.state
             if not snapshot.current.accepted or current_state is None:
                 return StreamAgentResponse(ok=False, err_msg=snapshot.current.err_msg)
-            self._require_verified_private_network_identity(current_state)
+            try:
+                self._require_verified_private_network_identity(current_state)
+            except ValueError as exc:
+                return StreamAgentResponse(ok=False, err_msg=str(exc), retryable=True)
             heartbeat = plan_agent_heartbeat_touch(current_state)
             if heartbeat.should_save and heartbeat.state is not None:
                 response_state = self._persist_agent_state(heartbeat.state)
@@ -2840,6 +2881,33 @@ class GatewayControlService:
         self,
         state: ComputeAgentTokenState,
     ) -> ComputeMachineEnrollmentRecord:
+        enrollment, peer = self._private_network_identity(state)
+        if enrollment.network_phase is PrivateNetworkEnrollmentPhase.Connected:
+            return enrollment
+        target = (
+            f"{ipaddress.ip_interface(enrollment.network_address).ip}:"
+            f"{WIREGUARD_AGENT_ROUTE_PROXY_PORT}"
+        )
+        try:
+            connection = self.private_network_connector.connect(
+                target,
+                PRIVATE_NETWORK_PROBE_TIMEOUT_SECONDS,
+            )
+        except OSError as exc:
+            detail = (
+                "WireGuard connected, but LazyCloud could not reach TCP "
+                f"{WIREGUARD_AGENT_ROUTE_PROXY_PORT} on {WIREGUARD_INTERFACE}; allow traffic "
+                f"from {WIREGUARD_PLATFORM_NETWORK}"
+            )
+            self._record_private_network_failure(
+                state,
+                peer_id=peer.id,
+                generation=peer.generation,
+                detail=detail,
+            )
+            raise ValueError(detail) from exc
+        connection.close()
+
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrollment = enrollments.by_machine(
@@ -2865,16 +2933,76 @@ class GatewayControlService:
                 raise ValueError("agent WireGuard peer does not match its enrollment")
             if peer.last_handshake_at is None:
                 raise ValueError("agent WireGuard handshake has not been observed")
-            if enrollment.network_phase is PrivateNetworkEnrollmentPhase.Connected:
-                return enrollment
+            verified_at = utc_now()
             verified = enrollment.model_copy(
                 update={
                     "network_phase": PrivateNetworkEnrollmentPhase.Connected,
-                    "network_verified_at": peer.last_handshake_at,
-                    "updated_at": utc_now(),
+                    "network_verified_at": verified_at,
+                    "network_failure_detail": "",
+                    "updated_at": verified_at,
                 }
             )
             return enrollments.save(verified)
+
+    def _private_network_identity(
+        self,
+        state: ComputeAgentTokenState,
+    ) -> tuple[ComputeMachineEnrollmentRecord, WireGuardPeer]:
+        with self.services.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(
+                state.workspace_id,
+                state.machine_id,
+                pool=state.pool,
+            )
+            if enrollment is None or not enrollment.network_peer_id:
+                raise ValueError("agent WireGuard peer is not registered")
+            peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
+        if (
+            peer is None
+            or peer.status is not WireGuardPeerStatus.Active
+            or peer.id != enrollment.network_peer_id
+            or peer.public_key != enrollment.network_public_key
+            or peer.address != enrollment.network_address
+            or peer.generation != enrollment.network_generation
+        ):
+            raise ValueError("agent WireGuard peer does not match its enrollment")
+        if peer.last_handshake_at is None:
+            raise ValueError("agent WireGuard handshake has not been observed")
+        return enrollment, peer
+
+    def _record_private_network_failure(
+        self,
+        state: ComputeAgentTokenState,
+        *,
+        peer_id: str,
+        generation: int,
+        detail: str,
+    ) -> None:
+        with self.services.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(
+                state.workspace_id,
+                state.machine_id,
+                pool=state.pool,
+                for_update=True,
+            )
+            if (
+                enrollment is None
+                or enrollment.network_peer_id != peer_id
+                or enrollment.network_generation != generation
+            ):
+                return
+            enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "network_phase": PrivateNetworkEnrollmentPhase.Failed,
+                        "network_verified_at": None,
+                        "network_failure_detail": detail,
+                        "updated_at": utc_now(),
+                    }
+                )
+            )
 
     def _remove_enrollment_private_network_identity(
         self,

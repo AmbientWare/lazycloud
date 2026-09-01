@@ -51,8 +51,8 @@ this tunnel. One-time setup on the zone:
    `LAZYCLOUD_CLOUDFLARE_API_TOKEN` and `LAZYCLOUD_CLOUDFLARE_ZONE_ID` in the
    deployment `.env`. Compose passes both to the control plane and the scheduler.
 
-A workspace then registers `example.com` or `*.example.com`, publishes the CNAME
-the platform reports, and claims a hostname under it with `domain=` on the
+A workspace then registers an exact hostname such as `app.example.com`, publishes
+the CNAME the platform reports, and claims that hostname with `domain=` on the
 resource. Without the two variables the stack still serves every platform
 hostname; only the domain operations fail, and they name what is missing.
 

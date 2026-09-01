@@ -131,16 +131,15 @@ class CustomDomainService:
         """Retire a registration, refusing while a deployment still serves under it.
 
         The only destructive step in this feature: it discards a certificate and
-        takes every hostname under the domain offline. Deployments are checked first
-        so it cannot happen as a surprise consequence of tidying up.
+        takes the registered hostname offline. Deployments are checked first so it
+        cannot happen as a surprise consequence of tidying up.
         """
 
         domain = self.get(hostname, user_id=user_id)
         with self.context.database.session() as session:
             workspace_ids = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
-            # Every workspace the account owns, because the registration serves all of
-            # them: a deployment in one would go dark if another workspace's tidy-up
-            # retired the domain out from under it.
+            # Every workspace the account owns may use the registration, so removing
+            # it from one workspace must not strand a deployment in another.
             claimants = {
                 name
                 for workspace_id in workspace_ids
@@ -243,8 +242,7 @@ class CustomDomainService:
 
     def _reject_platform_domain(self, hostname: str) -> None:
         base = self.platform_base_domain
-        bare = hostname.removeprefix("*.")
-        if base and (bare == base or bare.endswith(f".{base}")):
+        if base and (hostname == base or hostname.endswith(f".{base}")):
             raise InvalidInputError(
                 f"{base} is this platform's own domain; every deployment already has a "
                 f"hostname under it"

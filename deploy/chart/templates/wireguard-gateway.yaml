@@ -75,12 +75,6 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.wireguard.resources | nindent 12 }}
-          readinessProbe:
-            exec:
-              command: ["test", "-f", "/tmp/lazycloud-tunnel-gateway.ready"]
-            periodSeconds: 2
-            timeoutSeconds: 2
-            failureThreshold: 3
 ---
 apiVersion: v1
 kind: Service
@@ -92,6 +86,8 @@ metadata:
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
 spec:
+  # Both replicas must stay registered as UDP targets. The TCP health listener on
+  # port 8080 selects the current lease holder at the NLB.
   type: LoadBalancer
   loadBalancerClass: eks.amazonaws.com/nlb
   externalTrafficPolicy: Local

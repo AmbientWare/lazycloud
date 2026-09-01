@@ -394,14 +394,14 @@ def _claimed_hostname(
     owner = WorkspaceMemberRepository(session).owner(workspace_id)
     if owner is not None:
         admission.assert_may_use_custom_domains(session, user_id=owner.user_id)
-    covering = (
-        CustomDomainRepository(session).covering(domain, user_id=owner.user_id)
+    registered = (
+        CustomDomainRepository(session).get_by_hostname(domain, user_id=owner.user_id)
         if owner is not None
         else None
     )
-    if covering is None:
+    if registered is None:
         raise InvalidInputError(
-            f"no domain registered to this account covers {domain}; "
+            f"{domain} is not registered to this account; "
             f"register it before a deployment can serve it"
         )
     return domain

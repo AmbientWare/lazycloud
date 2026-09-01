@@ -18,7 +18,6 @@ from coordination.token_lock import (
 from database.client import DatabaseClient
 from database.repositories.compute import (
     PRIMARY_WIREGUARD_GATEWAY_ID,
-    ComputeMachineEnrollmentRepository,
     WireGuardGatewayRepository,
     WireGuardPeerRepository,
 )
@@ -29,7 +28,7 @@ from observability.process_logs import configure_process_logging
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
-from shared.compute_enrollment import PrivateNetworkEnrollmentPhase, WireGuardGateway
+from shared.compute_enrollment import WireGuardGateway
 from shared.timestamps import utc_now
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +69,7 @@ class TunnelGatewaySettings(BaseSettings):
 class StaticWireGuardPeer:
     public_key: str
     address: str
+    generation: int = 1
 
 
 class _TcpHealthListener:
@@ -343,7 +343,6 @@ class TunnelGatewayProcess:
         changed = 0
         with self.database.session() as session:
             peer_repository = WireGuardPeerRepository(session)
-            enrollments = ComputeMachineEnrollmentRepository(session)
             for peer in peers:
                 observed = handshakes.get(peer.public_key)
                 if observed is None or peer.last_handshake_at is not None:
@@ -352,6 +351,7 @@ class TunnelGatewayProcess:
                 if (
                     current is None
                     or current.public_key != peer.public_key
+                    or current.generation != peer.generation
                     or current.last_handshake_at is not None
                 ):
                     continue
@@ -364,21 +364,6 @@ class TunnelGatewayProcess:
                         }
                     )
                 )
-                enrollment = enrollments.by_machine(
-                    peer.workspace_id,
-                    peer.machine_id,
-                    for_update=True,
-                )
-                if enrollment is not None and enrollment.network_peer_id == peer.id:
-                    enrollments.save(
-                        enrollment.model_copy(
-                            update={
-                                "network_phase": PrivateNetworkEnrollmentPhase.Connected,
-                                "network_verified_at": observed,
-                                "updated_at": now,
-                            }
-                        )
-                    )
                 changed += 1
         return len(peers), changed
 

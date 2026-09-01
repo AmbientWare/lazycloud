@@ -627,8 +627,8 @@ const computePaths = [
     command: "lazycloud cloud connect aws",
   },
   {
-    title: "Any Linux machine",
-    body: "Join a Linux VM, bare-metal server, or on-premises GPU.",
+    title: "Supported Linux machines",
+    body: "Join a systemd-based amd64 or arm64 VM, bare-metal server, or on-premises GPU.",
     command: "lazycloud machine join",
   },
 ];

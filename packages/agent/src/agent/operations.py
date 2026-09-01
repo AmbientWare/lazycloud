@@ -65,6 +65,8 @@ from agent.service_manager import (
     PreflightCheckName,
 )
 
+AGENT_SOURCE_CACHE_RELATIVE_PATH = Path("cache") / "source-code"
+
 # Named because the agent both stamps these and searches by them: a worker
 # container outlives its process so its logs can be read, and the label is the
 # only way to find one whose slot the control plane has forgotten.
@@ -1383,6 +1385,7 @@ def build_agent_worker_config(
             image_mount_root="/images/mounts",
             image_build_root=Path("/builds"),
             cache_root=Path("/cache"),
+            source_cache_root=Path("/") / AGENT_SOURCE_CACHE_RELATIVE_PATH,
             checkpoint_root="/checkpoints",
         ),
         monitoring=WorkerMonitoringConfiguration(

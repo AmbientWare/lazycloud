@@ -182,7 +182,9 @@ jobs:
               return annotations.get("lazycloud.dev/needs-control-plane") == "true"
 
           problems = []
-          workloads = [d for d in documents if d["kind"] == "Deployment"]
+          workloads = [
+              d for d in documents if d["kind"] in ("Deployment", "StatefulSet")
+          ]
           candidates = [d for d in documents if d["kind"] in ("Job", "ExternalSecret", "StorageClass")]
           earlier = [d for d in candidates if not needs_control_plane(d)]
           later = [d for d in candidates if needs_control_plane(d)]
@@ -191,14 +193,16 @@ jobs:
                   if wave(prerequisite) >= wave(workload):
                       problems.append(
                           f"{prerequisite['kind']}/{prerequisite['metadata']['name']} is in wave "
-                          f"{wave(prerequisite)} and Deployment/{workload['metadata']['name']} is in "
+                          f"{wave(prerequisite)} and {workload['kind']}/"
+                          f"{workload['metadata']['name']} is in "
                           f"wave {wave(workload)}; the workload must come after what it depends on"
                       )
               for dependent in later:
                   if wave(dependent) <= wave(workload):
                       problems.append(
                           f"{dependent['kind']}/{dependent['metadata']['name']} reaches the control "
-                          f"plane, so it belongs after Deployment/{workload['metadata']['name']} "
+                          f"plane, so it belongs after {workload['kind']}/"
+                          f"{workload['metadata']['name']} "
                           f"rather than in wave {wave(dependent)}"
                       )
 
@@ -246,6 +250,115 @@ jobs:
           print(
               f"{len(workloads)} workloads after {len(earlier)} prerequisites "
               f"and before {len(later)} that reach the control plane"
+          )
+          PY
+
+      # Kubernetes readiness controls Service endpoint membership. The NLB's
+      # TCP target health says which replica owns the lease and may receive UDP.
+      # Using lease ownership as pod readiness made the standby unready and left a
+      # two-replica Deployment permanently short of one available pod. Sending
+      # platform traffic to the ClusterIP instead bypassed the NLB signal and
+      # allowed kube-proxy to choose that standby.
+      - name: WireGuard failover routing holds
+        run: |
+          python - <<'PY'
+          import sys, yaml
+
+          documents = [d for d in yaml.safe_load_all(open("rendered.yaml")) if d]
+          expected_endpoint = "wireguard.example.invalid:51820"
+          problems = []
+
+          def document(kind, name):
+              return next(
+                  (
+                      item
+                      for item in documents
+                      if item["kind"] == kind and item["metadata"]["name"] == name
+                  ),
+                  None,
+              )
+
+          def container(workload, name):
+              if workload is None:
+                  return None
+              pod = workload.get("spec", {}).get("template", {}).get("spec", {})
+              return next(
+                  (item for item in pod.get("containers", []) if item["name"] == name),
+                  None,
+              )
+
+          control_plane = document("StatefulSet", "control-plane")
+          if control_plane is None:
+              problems.append(
+                  "StatefulSet/control-plane is absent; stable platform peer ordinals are required"
+              )
+          platform = container(control_plane, "wireguard-platform")
+          if platform is None:
+              problems.append("StatefulSet/control-plane has no wireguard-platform sidecar")
+          else:
+              endpoint = next(
+                  (
+                      entry.get("value")
+                      for entry in platform.get("env", [])
+                      if entry.get("name") == "LAZYCLOUD_WIREGUARD_GATEWAY_ENDPOINT"
+                  ),
+                  None,
+              )
+              if endpoint != expected_endpoint:
+                  problems.append(
+                      "StatefulSet/control-plane/wireguard-platform reaches "
+                      f"{endpoint or 'no gateway endpoint'}; it must use the public endpoint "
+                      f"{expected_endpoint} so target health selects the lease holder"
+                  )
+
+          gateway = document("Deployment", "tunnel-gateway")
+          gateway_container = container(gateway, "tunnel-gateway")
+          if gateway_container is None:
+              problems.append("Deployment/tunnel-gateway has no tunnel-gateway container")
+          else:
+              if "readinessProbe" in gateway_container:
+                  problems.append(
+                      "Deployment/tunnel-gateway uses pod readiness for the active lease; "
+                      "the standby must remain Kubernetes-ready"
+                  )
+              health_ports = {
+                  (port.get("name"), port.get("containerPort"), port.get("protocol", "TCP"))
+                  for port in gateway_container.get("ports", [])
+              }
+              if ("health", 8080, "TCP") not in health_ports:
+                  problems.append(
+                      "Deployment/tunnel-gateway does not expose the active-only TCP health "
+                      "listener on port 8080"
+                  )
+
+          service = document("Service", "tunnel-gateway")
+          if service is None:
+              problems.append("Service/tunnel-gateway is absent")
+          else:
+              annotations = service["metadata"].get("annotations") or {}
+              if annotations.get(
+                  "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol"
+              ) != "TCP":
+                  problems.append("Service/tunnel-gateway NLB health protocol must be TCP")
+              if annotations.get(
+                  "service.beta.kubernetes.io/aws-load-balancer-healthcheck-port"
+              ) != "8080":
+                  problems.append("Service/tunnel-gateway NLB health port must be 8080")
+              wireguard_ports = {
+                  (port.get("port"), port.get("targetPort"), port.get("protocol", "TCP"))
+                  for port in service.get("spec", {}).get("ports", [])
+              }
+              if (51820, "wireguard", "UDP") not in wireguard_ports:
+                  problems.append(
+                      "Service/tunnel-gateway does not carry UDP 51820 to the WireGuard port"
+                  )
+
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              raise SystemExit(1)
+          print(
+              "control-plane platform peers and agents share the active-health-filtered "
+              "WireGuard endpoint"
           )
           PY
 

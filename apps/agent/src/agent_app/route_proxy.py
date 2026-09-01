@@ -17,6 +17,7 @@ from gateway.http import (
     UpdateAgentRouteStatusResponse,
 )
 from networking.routing import BACKEND_ROUTE_PREFACE, parse_backend_route_preface
+from networking.wireguard import WIREGUARD_AGENT_ROUTE_PROXY_PORT
 from pydantic import TypeAdapter, field_validator
 from shared.app_identity import AGENT_NAME
 from shared.contracts import ContractModel
@@ -35,7 +36,7 @@ DEFAULT_ROUTE_PROXY_PREFACE_TIMEOUT_SECONDS = 10.0
 DEFAULT_ROUTE_PROXY_LOCAL_DIAL_TIMEOUT_SECONDS = 2.0
 DEFAULT_ROUTE_PROXY_READY_DIAL_TIMEOUT_SECONDS = 0.25
 DEFAULT_ROUTE_PROXY_MAX_CONSECUTIVE_FAILURES = 3
-DEFAULT_ROUTE_PROXY_PORT = 29443
+DEFAULT_ROUTE_PROXY_PORT = WIREGUARD_AGENT_ROUTE_PROXY_PORT
 ROUTE_PROXY_READ_BUFFER_BYTES = 64 * 1024
 ROUTE_PROXY_MAX_PREFACE_BYTES = 4096
 _IPV4_SOCKET_ADDRESS_ADAPTER = TypeAdapter(tuple[str, int])

@@ -12,7 +12,6 @@ import { accountQueryKeys } from "./workspace-keys";
 
 const COLLECTION = "/api/v1/custom-domains";
 
-/** A registered domain may be a wildcard, and `*` is not path-safe. */
 function domainPath(hostname: string): string {
   return `${COLLECTION}/${encodeURIComponent(hostname)}`;
 }
