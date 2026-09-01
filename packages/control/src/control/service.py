@@ -35,7 +35,6 @@ from shared.app_identity import DEFAULT_RESOURCE_TYPE
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
-from shared.env import STUB_ID_ENV
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.pods import (
     SandboxCreatedBucket,
@@ -1321,11 +1320,17 @@ class ControlPlaneService:
             for stub in self.list_stubs(workspace=workspace_record.id)
             if stub.kind is StubKind.Sandbox and (app_id is None or stub.app_id == app_id)
         ]
+        row_limit = max(min(limit, 200), 1)
+        sandbox_stubs.sort(key=lambda item: item.created_at, reverse=True)
+        sandbox_stubs = sandbox_stubs[:row_limit]
         with self.context.database.session() as session:
-            containers = ContainerRepository(session).records.list(workspace_id=workspace_record.id)
+            containers = ContainerRepository(session).latest_for_stubs(
+                workspace_id=workspace_record.id,
+                stub_ids=[stub.id for stub in sandbox_stubs],
+            )
         rows: list[SandboxRow] = []
         for stub in sandbox_stubs:
-            container = _container_for_stub(containers, stub)
+            container = containers.get(stub.id)
             created_at = stub.created_at
             rows.append(
                 SandboxRow(
@@ -1347,8 +1352,7 @@ class ControlPlaneService:
                     else None,
                 )
             )
-        rows.sort(key=lambda item: item.created_at, reverse=True)
-        return SandboxListResponse(data=tuple(rows[: max(min(limit, 200), 1)]))
+        return SandboxListResponse(data=tuple(rows))
 
     def sandbox_stats(
         self,
@@ -1394,12 +1398,19 @@ class ControlPlaneService:
             msg = f"stub is not a sandbox: {stub_id_or_name}"
             raise InvalidInputError(msg)
         with self.context.database.session() as session:
-            containers = ContainerRepository(session).records.list(workspace_id=stub.workspace_id)
-        container = (
-            next((item for item in containers if item.id == container_id), None)
-            if container_id
-            else _container_for_stub(containers, stub)
-        )
+            repository = ContainerRepository(session)
+            container = (
+                repository.get_for_stub(
+                    container_id,
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                )
+                if container_id
+                else repository.latest_for_stubs(
+                    workspace_id=stub.workspace_id,
+                    stub_ids=(stub.id,),
+                ).get(stub.id)
+            )
         created_at = stub.created_at
         started_at = _container_started_at(container)
         ended_at = _container_finished_at(container)
@@ -1588,21 +1599,6 @@ def _stub_ports(stub: StubRecord, *, port: int | None = None) -> list[int]:
     if port is not None:
         return [port]
     return list(stub.config.ports.values()) or list(stub.config.runtime.ports.values())
-
-
-def _container_for_stub(
-    containers: list[ContainerRecord],
-    stub: StubRecord,
-) -> ContainerRecord | None:
-    candidates = [
-        item
-        for item in containers
-        if item.env.get(STUB_ID_ENV) == stub.id or item.name == stub.name
-    ]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: item.started_at or item.created_at, reverse=True)
-    return candidates[0]
 
 
 def _container_started_at(container: ContainerRecord | None) -> datetime | None:

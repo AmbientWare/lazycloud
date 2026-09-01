@@ -1,9 +1,10 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from control.service import ControlPlaneService
 from database.records.apps import StubRecord
 from database.repositories.orchestration import ContainerRepository
-from execution.endpoints.dispatch import ACTIVE_ENDPOINT_DISPATCH_STATUSES
 from execution.endpoints.service import EndpointDispatchStateRepository
 from scheduler.autoscaling import EndpointAutoscalingDispatchObservation
 from shared.containers import ContainerStatus
@@ -16,18 +17,29 @@ from database import DatabaseClient
 class EndpointDispatchAutoscalingReader:
     repository: EndpointDispatchStateRepository
 
-    def active_count(self, stub_id: str) -> int:
-        return self.repository.active_count(stub_id)
+    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        return self.repository.active_counts_by_stub(stub_ids)
 
-    def list_by_stub(self, stub_id: str) -> list[EndpointAutoscalingDispatchObservation]:
-        return [
-            EndpointAutoscalingDispatchObservation(
-                container_id=record.container_id,
-                active=record.status in ACTIVE_ENDPOINT_DISPATCH_STATUSES,
-                finished_at=record.finished_at,
-            )
-            for record in self.repository.list_by_stub(stub_id)
-        ]
+    def observations_by_stub(
+        self,
+        stub_ids: Sequence[str],
+        *,
+        finished_since: datetime,
+    ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]:
+        return {
+            stub_id: [
+                EndpointAutoscalingDispatchObservation(
+                    container_id=record.container_id,
+                    active=record.active,
+                    finished_at=record.finished_at,
+                )
+                for record in records
+            ]
+            for stub_id, records in self.repository.observations_by_stub(
+                stub_ids,
+                finished_since=finished_since,
+            ).items()
+        }
 
 
 @dataclass(frozen=True, slots=True)

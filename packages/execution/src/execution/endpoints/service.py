@@ -3,10 +3,17 @@ from __future__ import annotations
 import json
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from control.service import ControlPlaneService, StubKind, StubRecord
+from database.records.endpoint_dispatch import (
+    EndpointDispatchObservationRecord,
+    EndpointDispatchStateRecord,
+)
+from database.repositories.apps import StubRepository
+from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
@@ -56,9 +63,7 @@ from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
 from execution.endpoints.config import EndpointStubConfig
 from execution.endpoints.dispatch import (
-    ACTIVE_ENDPOINT_DISPATCH_STATUSES,
     DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-    ENDPOINT_DISPATCH_TASK_KEY,
     TERMINAL_ENDPOINT_DISPATCH_STATUSES,
     EndpointBackendUnreachable,
     EndpointDispatchError,
@@ -105,6 +110,14 @@ class EndpointIngressDispatchSession:
     target: EndpointDispatchTarget
     headers: dict[str, list[str]]
     wait_timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointDispatchAdmission:
+    stub: StubRecord
+    task: Task
+    record: EndpointDispatchRecord
+    settings: EndpointDispatchSettings
 
 
 @dataclass(slots=True)
@@ -279,11 +292,10 @@ class EndpointControlService:
     ) -> EndpointForwardResponse:
         try:
             stub = self.control_plane.get_stub(request.stub_id)
-            config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
             if stub.kind is StubKind.Endpoint:
-                return self._forward_function_endpoint(stub, config, request)
+                return self._forward_function_endpoint(stub, request)
             if stub.kind is StubKind.Asgi:
-                return self._forward_asgi_endpoint(stub, config, request)
+                return self._forward_asgi_endpoint(stub, request)
             return error_response(404, f"stub is not an endpoint: {stub.id}")
         except NotFoundError:
             return error_response(404, "endpoint not found")
@@ -366,41 +378,30 @@ class EndpointControlService:
         if stub.kind is not StubKind.Asgi:
             msg = f"stub is not an ASGI endpoint: {stub.id}"
             raise EndpointDispatchUnavailable(msg)
-        repository = EndpointDispatchStateRepository(self.services)
-        config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
-        settings = _dispatch_settings(config)
-        if not _endpoint_request_capacity_available(repository, stub, settings):
-            self._record_request_rejected(stub)
-            raise EndpointWebSocketDispatchRejected(
-                ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE,
-                status_code=ENDPOINT_BACKPRESSURE_STATUS_CODE,
-            )
-        task = self.services.tasks.create(
-            f"asgi-{stub.name}",
-            workspace_id=stub.workspace_id,
-            app_id=stub.app_id,
-            stub_id=stub.id,
-            deployment_id=stub.deployment_id,
-            handler=stub.handler,
-            kwargs={
+        admission = self._admit_dispatch_task(
+            stub,
+            request,
+            task_kwargs={
                 "method": request.method,
                 "path": request.path,
                 "websocket": websocket,
             },
         )
+        if admission is None:
+            self._record_request_rejected(stub)
+            raise EndpointWebSocketDispatchRejected(
+                ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE,
+                status_code=ENDPOINT_BACKPRESSURE_STATUS_CODE,
+            )
+        stub = admission.stub
+        task = admission.task
+        settings = admission.settings
+        repository = EndpointDispatchStateRepository(self.services)
         self._record_endpoint_request_usage(stub, task)
         forwarded = request.model_copy(
             update={"headers": _headers_with_task_id(request.headers, task.id)}
         )
-        record = repository.attach(
-            task,
-            stub=stub,
-            request=forwarded,
-            wait_timeout_seconds=settings.wait_timeout_seconds,
-            max_pending_requests=settings.max_pending_requests,
-            max_inflight_per_container=settings.max_inflight_per_container,
-        )
-        self._emit_dispatch_lifecycle(stub, record)
+        self._emit_dispatch_lifecycle(stub, admission.record)
 
         dispatcher = self.dispatcher
         if dispatcher is None:
@@ -562,32 +563,30 @@ class EndpointControlService:
     def _forward_function_endpoint(
         self,
         stub: StubRecord,
-        config: EndpointStubConfig,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse:
-        settings = _dispatch_settings(config)
-        if not self._request_capacity_available(stub, settings):
+        try:
+            payload = serialize_http_task_payload(request.body, query_params=request.query_params)
+        except ValueError as exc:
+            return error_response(400, str(exc))
+        admission = self._admit_dispatch_task(
+            stub,
+            request,
+            task_args=payload.args or [],
+            task_kwargs=payload.kwargs,
+            retry=True,
+        )
+        if admission is None:
             self._record_request_rejected(stub)
             return error_response(
                 ENDPOINT_BACKPRESSURE_STATUS_CODE,
                 ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE,
             )
-        try:
-            payload = serialize_http_task_payload(request.body, query_params=request.query_params)
-        except ValueError as exc:
-            return error_response(400, str(exc))
-        task = self.services.tasks.create(
-            f"endpoint-{stub.name}",
-            workspace_id=stub.workspace_id,
-            app_id=stub.app_id,
-            stub_id=stub.id,
-            deployment_id=stub.deployment_id,
-            handler=stub.handler,
-            args=payload.args or [],
-            kwargs=payload.kwargs,
-            retry_policy=config.effective_retry_policy,
-        )
+        stub = admission.stub
+        task = admission.task
+        settings = admission.settings
         self._record_endpoint_request_usage(stub, task)
+        self._emit_dispatch_lifecycle(stub, admission.record)
         forwarded = request.model_copy(
             update={
                 "body": _endpoint_payload_body(payload.args or [], payload.kwargs),
@@ -613,33 +612,89 @@ class EndpointControlService:
     def _forward_asgi_endpoint(
         self,
         stub: StubRecord,
-        config: EndpointStubConfig,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse:
-        settings = _dispatch_settings(config)
-        if not self._request_capacity_available(stub, settings):
+        admission = self._admit_dispatch_task(
+            stub,
+            request,
+            task_kwargs={
+                "method": request.method,
+                "path": request.path,
+            },
+        )
+        if admission is None:
             self._record_request_rejected(stub)
             return error_response(
                 ENDPOINT_BACKPRESSURE_STATUS_CODE,
                 ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE,
             )
-        task = self.services.tasks.create(
-            f"asgi-{stub.name}",
-            workspace_id=stub.workspace_id,
-            app_id=stub.app_id,
-            stub_id=stub.id,
-            deployment_id=stub.deployment_id,
-            handler=stub.handler,
-            kwargs={
-                "method": request.method,
-                "path": request.path,
-            },
-        )
+        stub = admission.stub
+        task = admission.task
+        settings = admission.settings
         self._record_endpoint_request_usage(stub, task)
+        self._emit_dispatch_lifecycle(stub, admission.record)
         forwarded = request.model_copy(
             update={"headers": _headers_with_task_id(request.headers, task.id)}
         )
         return self._dispatch_task(stub, task, forwarded, settings)
+
+    def _admit_dispatch_task(
+        self,
+        stub: StubRecord,
+        request: EndpointForwardRequest,
+        *,
+        task_args: list[JsonValue] | None = None,
+        task_kwargs: dict[str, JsonValue] | None = None,
+        retry: bool = False,
+    ) -> EndpointDispatchAdmission | None:
+        with self.services.context.database.session() as session:
+            locked_stub = StubRepository(session).get_for_update(
+                stub.id,
+                workspace_id=stub.workspace_id,
+            )
+            if locked_stub is None:
+                raise NotFoundError(f"stub not found: {stub.id}")
+            config = EndpointStubConfig.model_validate(
+                locked_stub.config,
+                from_attributes=True,
+            )
+            settings = _dispatch_settings(config)
+            now = utc_now()
+            dispatches = EndpointDispatchRepository(session)
+            if dispatches.active_count(locked_stub.id, at=now) >= settings.max_pending_requests:
+                return None
+            task = self.services.tasks.create_in_transaction(
+                session,
+                f"{locked_stub.kind.value}-{locked_stub.name}",
+                workspace_id=locked_stub.workspace_id,
+                app_id=locked_stub.app_id,
+                stub_id=locked_stub.id,
+                deployment_id=locked_stub.deployment_id,
+                handler=locked_stub.handler,
+                args=task_args,
+                kwargs=task_kwargs,
+                retry_policy=config.effective_retry_policy if retry else None,
+            )
+            record = EndpointDispatchRecord(
+                task_id=task.id,
+                stub_id=locked_stub.id,
+                workspace_id=locked_stub.workspace_id,
+                method=request.method,
+                path=request.path,
+                wait_timeout_seconds=settings.wait_timeout_seconds,
+                max_pending_requests=settings.max_pending_requests,
+                max_inflight_per_container=settings.max_inflight_per_container,
+                heartbeat_at=now,
+                expires_at=now + timedelta(seconds=max(settings.wait_timeout_seconds, 1.0)),
+            )
+            persisted = _dispatch_record(dispatches.create(_dispatch_state(record)))
+        self.services.tasks.publish_created(task)
+        return EndpointDispatchAdmission(
+            stub=locked_stub,
+            task=task,
+            record=persisted,
+            settings=settings,
+        )
 
     def _request_capacity_available(
         self,
@@ -667,22 +722,19 @@ class EndpointControlService:
         settings: EndpointDispatchSettings,
     ) -> EndpointForwardResponse:
         dispatcher = self.dispatcher
+        repository = EndpointDispatchStateRepository(self.services)
         if dispatcher is None:
+            record = repository.transition(
+                task,
+                EndpointDispatchStatus.Failed,
+                error="endpoint dispatcher is not configured",
+            )
+            self._emit_dispatch_lifecycle(stub, record)
             return self._fail_task(
                 task,
                 error="endpoint dispatcher is not configured",
                 status_code=503,
             )
-        repository = EndpointDispatchStateRepository(self.services)
-        record = repository.attach(
-            task,
-            stub=stub,
-            request=request,
-            wait_timeout_seconds=settings.wait_timeout_seconds,
-            max_pending_requests=settings.max_pending_requests,
-            max_inflight_per_container=settings.max_inflight_per_container,
-        )
-        self._emit_dispatch_lifecycle(stub, record)
         try:
             response = self._wait_for_dispatch(
                 dispatcher,
@@ -715,15 +767,10 @@ class EndpointControlService:
             return self._fail_task(task, error=str(exc), status_code=500)
 
         _add_task_headers(response.headers, task.id)
-        record_status = (
-            EndpointDispatchStatus.Complete
-            if _forward_response_succeeded(response)
-            else EndpointDispatchStatus.Failed
-        )
         forward_error = _forward_response_error(response)
-        record = repository.transition(task, record_status, error=forward_error)
-        self._emit_dispatch_lifecycle(stub, record)
         if _forward_response_succeeded(response):
+            record = repository.transition(task, EndpointDispatchStatus.Complete)
+            self._emit_dispatch_lifecycle(stub, record)
             self.services.tasks.transition(
                 task,
                 TaskStatus.Complete,
@@ -732,13 +779,23 @@ class EndpointControlService:
                 exit_code=0,
             )
         else:
-            self.services.tasks.finish_with_retry(
+            outcome = self.services.tasks.finish_with_retry(
                 task.id,
                 TaskStatus.Failed,
                 result=_task_result(response),
                 error=forward_error,
                 exit_code=1,
             )
+            record = (
+                repository.requeue(outcome.task)
+                if outcome.retry_decision.should_retry
+                else repository.transition(
+                    task,
+                    EndpointDispatchStatus.Failed,
+                    error=forward_error,
+                )
+            )
+            self._emit_dispatch_lifecycle(stub, record)
         return response
 
     def _raise_if_capacity_is_dead(
@@ -1138,35 +1195,6 @@ class EndpointDispatchSettings:
 class EndpointDispatchStateRepository:
     services: ExecutionServices
 
-    def attach(
-        self,
-        task: Task,
-        *,
-        stub: StubRecord,
-        request: EndpointForwardRequest,
-        wait_timeout_seconds: float,
-        max_pending_requests: int,
-        max_inflight_per_container: int,
-    ) -> EndpointDispatchRecord:
-        record = EndpointDispatchRecord(
-            task_id=task.id,
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            method=request.method,
-            path=request.path,
-            wait_timeout_seconds=wait_timeout_seconds,
-            max_pending_requests=max_pending_requests,
-            max_inflight_per_container=max_inflight_per_container,
-            heartbeat_at=utc_now(),
-        )
-        return self.save(task, record)
-
-    def save(self, task: Task, record: EndpointDispatchRecord) -> EndpointDispatchRecord:
-        payload = record.model_dump(mode="json")
-        task.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = payload
-        self.services.tasks.merge_kwargs(task.id, ENDPOINT_DISPATCH_TASK_KEY, payload)
-        return record
-
     def transition(
         self,
         task: Task,
@@ -1175,59 +1203,125 @@ class EndpointDispatchStateRepository:
         container_id: str | None = None,
         error: str | None = None,
     ) -> EndpointDispatchRecord:
-        record = self.for_task(task)
-        if status is EndpointDispatchStatus.Inflight:
-            record.attempts += 1
-        record.transition(status, container_id=container_id, error=error)
-        return self.save(task, record)
+        with self.services.context.database.session() as session:
+            repository = EndpointDispatchRepository(session)
+            state = repository.get_for_update(task.id)
+            if state is None:
+                msg = f"endpoint dispatch state is missing for task {task.id}"
+                raise NotFoundError(msg)
+            record = _dispatch_record(state)
+            if status is EndpointDispatchStatus.Inflight:
+                record.attempts += 1
+            record.transition(status, container_id=container_id, error=error)
+            return _dispatch_record(repository.update(_dispatch_state(record)))
+
+    def requeue(self, task: Task) -> EndpointDispatchRecord:
+        with self.services.context.database.session() as session:
+            repository = EndpointDispatchRepository(session)
+            state = repository.get_for_update(task.id)
+            if state is None:
+                msg = f"endpoint dispatch state is missing for task {task.id}"
+                raise NotFoundError(msg)
+            record = _dispatch_record(state).requeue()
+            return _dispatch_record(repository.update(_dispatch_state(record)))
 
     def heartbeat(self, task: Task) -> EndpointDispatchRecord:
-        record = self.for_task(task)
-        record.transition(record.status)
-        return self.save(task, record)
+        with self.services.context.database.session() as session:
+            repository = EndpointDispatchRepository(session)
+            state = repository.get_for_update(task.id)
+            if state is None:
+                msg = f"endpoint dispatch state is missing for task {task.id}"
+                raise NotFoundError(msg)
+            record = _dispatch_record(state)
+            record.transition(record.status)
+            return _dispatch_record(repository.update(_dispatch_state(record)))
 
     def for_task(self, task: Task) -> EndpointDispatchRecord:
-        try:
-            raw = task.kwargs[ENDPOINT_DISPATCH_TASK_KEY]
-        except KeyError as exc:
+        with self.services.context.database.session() as session:
+            state = EndpointDispatchRepository(session).get(task.id)
+        if state is None:
             msg = f"endpoint dispatch state is missing for task {task.id}"
-            raise NotFoundError(msg) from exc
-        return EndpointDispatchRecord.model_validate(raw)
+            raise NotFoundError(msg)
+        return _dispatch_record(state)
 
     def active_count(self, stub_id: str, *, exclude_task_id: str | None = None) -> int:
-        return sum(
-            1
-            for record in self.list_by_stub(stub_id)
-            if record.task_id != exclude_task_id
-            and record.status in ACTIVE_ENDPOINT_DISPATCH_STATUSES
-            and not _dispatch_record_expired(record)
-        )
+        with self.services.context.database.session() as session:
+            return EndpointDispatchRepository(session).active_count(
+                stub_id,
+                at=utc_now(),
+                exclude_task_id=exclude_task_id,
+            )
+
+    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        with self.services.context.database.session() as session:
+            return EndpointDispatchRepository(session).active_counts_by_stub(
+                stub_ids,
+                at=utc_now(),
+            )
 
     def inflight_counts(self, stub_id: str) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for record in self.list_by_stub(stub_id):
-            if (
-                record.status is EndpointDispatchStatus.Inflight
-                and record.container_id is not None
-                and not _dispatch_record_expired(record)
-            ):
-                counts[record.container_id] = counts.get(record.container_id, 0) + 1
-        return counts
+        with self.services.context.database.session() as session:
+            return EndpointDispatchRepository(session).inflight_counts(
+                stub_id,
+                at=utc_now(),
+            )
 
-    def list_by_stub(self, stub_id: str) -> list[EndpointDispatchRecord]:
-        records: list[EndpointDispatchRecord] = []
-        for task in self.services.tasks.list():
-            if ENDPOINT_DISPATCH_TASK_KEY not in task.kwargs:
-                continue
-            try:
-                record = EndpointDispatchRecord.model_validate(
-                    task.kwargs[ENDPOINT_DISPATCH_TASK_KEY]
-                )
-            except ValueError:
-                continue
-            if record.stub_id == stub_id:
-                records.append(record)
-        return records
+    def observations_by_stub(
+        self,
+        stub_ids: Sequence[str],
+        *,
+        finished_since: datetime,
+    ) -> dict[str, list[EndpointDispatchObservationRecord]]:
+        with self.services.context.database.session() as session:
+            return EndpointDispatchRepository(session).observations_by_stub(
+                stub_ids,
+                at=utc_now(),
+                finished_since=finished_since,
+            )
+
+
+def _dispatch_state(record: EndpointDispatchRecord) -> EndpointDispatchStateRecord:
+    return EndpointDispatchStateRecord(
+        task_id=record.task_id,
+        workspace_id=record.workspace_id,
+        stub_id=record.stub_id,
+        container_id=record.container_id,
+        method=record.method,
+        path=record.path,
+        status=record.status.value,
+        wait_timeout_seconds=record.wait_timeout_seconds,
+        max_pending_requests=record.max_pending_requests,
+        max_inflight_per_container=record.max_inflight_per_container,
+        attempts=record.attempts,
+        enqueued_at=record.enqueued_at,
+        started_at=record.started_at,
+        heartbeat_at=record.heartbeat_at,
+        expires_at=record.expires_at,
+        finished_at=record.finished_at,
+        error=record.error,
+    )
+
+
+def _dispatch_record(state: EndpointDispatchStateRecord) -> EndpointDispatchRecord:
+    return EndpointDispatchRecord(
+        task_id=state.task_id,
+        workspace_id=state.workspace_id,
+        stub_id=state.stub_id,
+        container_id=state.container_id,
+        method=state.method,
+        path=state.path,
+        status=EndpointDispatchStatus(state.status),
+        wait_timeout_seconds=state.wait_timeout_seconds,
+        max_pending_requests=state.max_pending_requests,
+        max_inflight_per_container=state.max_inflight_per_container,
+        attempts=state.attempts,
+        enqueued_at=state.enqueued_at,
+        started_at=state.started_at,
+        heartbeat_at=state.heartbeat_at,
+        expires_at=state.expires_at,
+        finished_at=state.finished_at,
+        error=state.error,
+    )
 
 
 class EndpointDispatchCancelled(RuntimeError):
@@ -1266,13 +1360,6 @@ def _dispatch_settings(config: EndpointStubConfig) -> EndpointDispatchSettings:
             DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
         ),
     )
-
-
-def _dispatch_record_expired(record: EndpointDispatchRecord) -> bool:
-    if record.status in TERMINAL_ENDPOINT_DISPATCH_STATUSES:
-        return False
-    deadline = record.heartbeat_at or record.enqueued_at
-    return (utc_now() - deadline).total_seconds() > max(record.wait_timeout_seconds, 1.0)
 
 
 def _endpoint_request_capacity_available(

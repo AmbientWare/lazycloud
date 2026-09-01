@@ -43,7 +43,8 @@ class CronJobRunResponse(HttpModel):
 
 
 class CronJobRunListResponse(HttpModel):
-    runs: list[CronJobRunResponse] = Field(default_factory=list)
+    data: list[CronJobRunResponse] = Field(default_factory=list)
+    next: str = ""
 
 
 class SchedulerContainerDispatchResponse(HttpModel):

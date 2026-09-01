@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,7 +17,10 @@ from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from coordination.wake_signal import WakeSignalWaiter
 from database.records.apps import AppRecord
 from database.repositories.apps import CronJobRepository
-from database.repositories.execution import CronJobRunRepository
+from database.repositories.execution import (
+    CronJobRunCursor,
+    CronJobRunRepository,
+)
 from identity.auth import AuthService
 from identity.device_auth import DeviceAuthorizationService
 from observability.usage import WorkerEventService
@@ -23,6 +28,7 @@ from pydantic import Field, JsonValue
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord, CronJobRun, next_cron_run
+from shared.errors import InvalidInputError
 from shared.events import EventLevel
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
@@ -42,7 +48,9 @@ from scheduler.agent_pool import (
 from scheduler.autoscaling import (
     AutoscaleResult,
     AutoscalingDriver,
+    AutoscalingPlacementSnapshot,
     PodControl,
+    load_autoscaling_placement_snapshot,
 )
 from scheduler.capacity_reservations import (
     CapacityProvisioningReservation,
@@ -305,15 +313,6 @@ def next_run_after(expression: str, now: datetime | None = None) -> datetime:
     return next_cron_run(expression, now)
 
 
-def is_due(cron_job: CronJobRecord, now: datetime | None = None) -> bool:
-    current = now or utc_now()
-    if not cron_job.enabled:
-        return False
-    if cron_job.next_run_at is None:
-        return True
-    return cron_job.next_run_at <= current
-
-
 class CronJobRunDraft(ContractModel):
     workspace_id: str
     cron_job: str
@@ -321,6 +320,40 @@ class CronJobRunDraft(ContractModel):
     message_id: str | None = None
     task_id: str | None = None
     reason: str | None = None
+
+
+class CronJobRunCursorPayload(ContractModel):
+    created_at: datetime
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerCronJobRunPage:
+    data: tuple[CronJobRun, ...]
+    next: str = ""
+
+
+def _encode_cron_job_run_cursor(cursor: CronJobRunCursor | None) -> str:
+    if cursor is None:
+        return ""
+    payload = CronJobRunCursorPayload(
+        created_at=cursor.created_at,
+        id=cursor.id,
+    ).model_dump_json()
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+
+def _decode_cron_job_run_cursor(value: str | None) -> CronJobRunCursor | None:
+    if not value:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        payload = CronJobRunCursorPayload.model_validate_json(
+            base64.urlsafe_b64decode(padded.encode())
+        )
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise InvalidInputError("invalid cron job run cursor") from exc
+    return CronJobRunCursor(created_at=payload.created_at, id=payload.id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,12 +544,15 @@ class Scheduler:
             raise RuntimeError(msg)
         return service
 
-    def tick(self, now: datetime | None = None) -> list[CronJobRun]:
+    def tick(self, now: datetime | None = None, *, limit: int = 100) -> list[CronJobRun]:
         current = (now or utc_now()).astimezone(UTC)
         runs: list[CronJobRun] = []
-        for cron_job in self.runtime_services.cron_jobs.list_all():
-            if not is_due(cron_job, current):
-                continue
+        with self.runtime_services.context.database.session() as session:
+            due = CronJobRepository(session).due_across_workspaces(
+                now=current,
+                limit=max(limit, 0),
+            )
+        for cron_job in due:
             run = self._run_cron_job(cron_job, current)
             runs.append(run)
         return runs
@@ -645,14 +681,66 @@ class Scheduler:
 
         if not include_containers:
             return SchedulerRunResult()
+        function_driver = self.workloads.function_autoscaler
+        endpoint_driver = self.workloads.endpoints
+        pod_driver = self.workloads.pods
+        drivers = tuple(
+            driver
+            for driver in (function_driver, endpoint_driver, pod_driver)
+            if driver is not None
+        )
+        snapshot = AutoscalingPlacementSnapshot(
+            stubs=(),
+            active_by_stub={},
+            containers_by_stub={},
+            scheduler_statuses={},
+        )
+        if drivers:
+            try:
+                stubs = tuple(
+                    stub
+                    for stub in self.runtime_services.scheduler_workloads.list_stubs()
+                    if any(driver.workload.selects(stub) for driver in drivers)
+                )
+                snapshot = load_autoscaling_placement_snapshot(
+                    self.runtime_services,
+                    drivers[0].container_states,
+                    stubs,
+                    now=now,
+                )
+            except Exception:
+                LOGGER.exception("scheduler placement snapshot failed")
         return SchedulerRunResult(
-            function_autoscaling=self._best_effort_reconcile_functions(
-                now=now, limit=container_limit
+            function_autoscaling=(
+                self._best_effort_reconcile_snapshot(
+                    function_driver,
+                    snapshot,
+                    now=now,
+                    limit=container_limit,
+                )
+                if function_driver is not None
+                else []
             ),
-            endpoint_autoscaling=self._best_effort_reconcile_endpoints(
-                now=now, limit=container_limit
+            endpoint_autoscaling=(
+                self._best_effort_reconcile_snapshot(
+                    endpoint_driver,
+                    snapshot,
+                    now=now,
+                    limit=container_limit,
+                )
+                if endpoint_driver is not None
+                else []
             ),
-            pod_autoscaling=self._best_effort_reconcile_pods(now=now, limit=container_limit),
+            pod_autoscaling=(
+                self._best_effort_reconcile_snapshot(
+                    pod_driver,
+                    snapshot,
+                    now=now,
+                    limit=container_limit,
+                )
+                if pod_driver is not None
+                else []
+            ),
             function_retries=self._best_effort_schedule_function_retries(
                 now=now, limit=container_limit
             ),
@@ -679,7 +767,7 @@ class Scheduler:
         """
 
         billing_enforcement = self._best_effort_enforce_billing(now=now)
-        cron_job_runs = self.tick(now=now) if include_cron_jobs else []
+        cron_job_runs = self.tick(now=now, limit=container_limit) if include_cron_jobs else []
         if not include_containers:
             return SchedulerRunResult(
                 cron_job_runs=cron_job_runs,
@@ -1229,40 +1317,18 @@ class Scheduler:
             LOGGER.exception("scheduler agent pool reconciliation failed")
             return []
 
-    def _best_effort_reconcile_functions(
+    def _best_effort_reconcile_snapshot(
         self,
+        driver: AutoscalingDriver,
+        snapshot: AutoscalingPlacementSnapshot,
         *,
         now: datetime | None,
         limit: int,
     ) -> list[AutoscaleResult]:
         try:
-            return self.reconcile_functions(now=now, limit=limit)
+            return driver.reconcile_snapshot(snapshot, now=now, limit=limit)
         except Exception:
-            LOGGER.exception("scheduler function autoscaling failed")
-            return []
-
-    def _best_effort_reconcile_endpoints(
-        self,
-        *,
-        now: datetime | None,
-        limit: int,
-    ) -> list[AutoscaleResult]:
-        try:
-            return self.reconcile_endpoints(now=now, limit=limit)
-        except Exception:
-            LOGGER.exception("scheduler endpoint autoscaling failed")
-            return []
-
-    def _best_effort_reconcile_pods(
-        self,
-        *,
-        now: datetime | None,
-        limit: int,
-    ) -> list[AutoscaleResult]:
-        try:
-            return self.reconcile_pods(now=now, limit=limit)
-        except Exception:
-            LOGGER.exception("scheduler pod autoscaling failed")
+            LOGGER.exception("scheduler %s autoscaling failed", driver.workload.identity.kind.value)
             return []
 
     def _best_effort_expire_pods(
@@ -1539,11 +1605,23 @@ class Scheduler:
     def _release_cron_job_lock(self, key: str, token: str) -> None:
         release_token_lock(self.cron_job_locks, key, token)
 
-    def list_cron_job_runs(self, *, limit: int | None = None) -> list[CronJobRun]:
+    def list_cron_job_runs(
+        self,
+        *,
+        workspace_id: str,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> SchedulerCronJobRunPage:
         with self.runtime_services.context.database.session() as session:
-            runs = CronJobRunRepository(session).records.list_across_workspaces()
-        runs.sort(key=lambda item: item.created_at, reverse=True)
-        return runs[:limit] if limit is not None else runs
+            page = CronJobRunRepository(session).page(
+                workspace_id=workspace_id,
+                cursor=_decode_cron_job_run_cursor(cursor),
+                limit=min(max(limit, 1), 1_000),
+            )
+        return SchedulerCronJobRunPage(
+            data=page.data,
+            next=_encode_cron_job_run_cursor(page.next),
+        )
 
     def _agent_pool_configs(self) -> list[AgentPoolConfig]:
         configs = self.capacity.agent_pool_configs

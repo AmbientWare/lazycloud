@@ -22,7 +22,12 @@ class GatewayTaskLogEntry(Protocol):
 
 
 class GatewayTaskLogProvider(Protocol):
-    def logs(self, task_id: str) -> Iterable[GatewayTaskLogEntry]: ...
+    def logs(
+        self,
+        task_id: str,
+        *,
+        limit: int,
+    ) -> Iterable[GatewayTaskLogEntry]: ...
 
 
 class GatewayContainerLogProvider(Protocol):
@@ -65,7 +70,7 @@ def container_output(
     if container.task_id:
         task_output = "\n".join(
             entry.message
-            for entry in source.tasks.logs(container.task_id)
+            for entry in source.tasks.logs(container.task_id, limit=CONTAINER_OUTPUT_LOG_LIMIT)
             if entry.stream in {"stdout", "stderr"}
         )
         if task_output:

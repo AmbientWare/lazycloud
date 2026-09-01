@@ -465,10 +465,16 @@ class ObjectRepository:
         workspace_id: str,
         bucket: str | None = None,
     ) -> ObjectRecord | None:
-        for record in self.records.list(workspace_id=workspace_id):
-            if record.sha256 == sha256 and (bucket is None or record.bucket == bucket):
-                return record
-        return None
+        statement = select(ObjectTable).where(
+            ObjectTable.workspace_id == workspace_id,
+            ObjectTable.sha256 == sha256,
+        )
+        if bucket is not None:
+            statement = statement.where(ObjectTable.bucket == bucket)
+        row = self.session.scalars(
+            statement.order_by(ObjectTable.created_at.desc(), ObjectTable.id.asc()).limit(1)
+        ).first()
+        return ObjectRecord.model_validate(row.payload) if row is not None else None
 
     def list(self, *, workspace_id: str) -> list[ObjectRecord]:
         return [

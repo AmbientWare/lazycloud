@@ -134,6 +134,8 @@ class SchedulerContainerService(Protocol):
         *,
         workspace_id: str | None = None,
         statuses: tuple[ContainerStatus, ...] = (),
+        app_id: str | None = None,
+        stub_ids: tuple[str, ...] = (),
     ) -> list[ContainerRecord]: ...
 
     def stop(

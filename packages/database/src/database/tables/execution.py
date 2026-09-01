@@ -155,8 +155,8 @@ class TaskDependencyTable(IdPayloadTable, DatabaseBase):
 class LogTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "logs"
     __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_logs_task_created", "task_id", "created_at"),
-        Index("ix_logs_workspace_created", "workspace_id", "created_at"),
+        Index("ix_logs_task_created", "task_id", "created_at", "id"),
+        Index("ix_logs_workspace_created", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -259,8 +259,8 @@ class PodUrlTable(IdTable, DatabaseBase):
 class CronJobRunTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "cron_job_runs"
     __table_args__: tuple[SchemaItem, ...] = (
-        Index("ix_cron_job_runs_cron_job_created", "cron_job", "created_at"),
-        Index("ix_cron_job_runs_workspace_created", "workspace_id", "created_at"),
+        Index("ix_cron_job_runs_cron_job_created", "cron_job", "created_at", "id"),
+        Index("ix_cron_job_runs_workspace_created", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[str] = mapped_column(

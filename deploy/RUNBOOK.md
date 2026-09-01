@@ -422,6 +422,20 @@ transaction pooler that lock is released when the backend is recycled, the fence
 stops fencing **without erroring**, and offline recovery can mint an
 administrator credential while replicas are still serving.
 
+### Database query and egress watch
+
+Keep the provider's query-insights view and public-egress metric enabled for the
+production database. Alert when either departs from the deployment's normal
+hourly rate, and keep a hard alert at 50 GiB per day until ordinary customer
+traffic justifies a higher reviewed limit. A scheduler that reads task or
+container history every 250 ms can cross that limit before API latency changes.
+
+On PostgreSQL installations the platform owns, preload and enable
+`pg_stat_statements`. Rank statements by calls, rows, and total execution time
+after each deployment. Placement reads must stay proportional to current stubs
+and live containers, never to the number of tasks or containers retained in the
+database.
+
 ### Secrets
 
 The External Secrets Operator reads them from Secrets Manager as itself, through

@@ -35,18 +35,14 @@ export function logHistoryQueryOptions(workspaceId: string, scope: LogScope) {
     queryFn: ({ pageParam }) => {
       const params = logScopeParams(scope);
       params.set("limit", String(LOG_PAGE_SIZE));
-      params.set("page", String(pageParam));
+      if (pageParam) params.set("cursor", pageParam);
       return apiRequest(
         withWorkspace(`/api/v1/logs?${params.toString()}`, workspaceId),
         logQuerySchema,
       );
     },
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) => {
-      if (!lastPage.next) return undefined;
-      const nextPage = Number(lastPage.next);
-      return Number.isInteger(nextPage) && nextPage >= 0 ? nextPage : undefined;
-    },
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next || undefined,
   });
 }
 

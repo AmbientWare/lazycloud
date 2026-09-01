@@ -58,6 +58,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -143,6 +144,31 @@ class DetailedTaskRecord(RelatedTaskRecord):
 class RelatedTaskPage(BaseModel):
     data: list[RelatedTaskRecord]
     next: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LogPageCursor:
+    created_at: datetime
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
+class LogPageRecord:
+    entry: LogEntry
+    cursor: LogPageCursor
+    workspace_id: str
+    app_id: str = ""
+    deployment_id: str = ""
+    stub_id: str = ""
+    container_id: str = ""
+    machine_id: str = ""
+    worker_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LogPage:
+    data: tuple[LogPageRecord, ...]
+    next: LogPageCursor | None = None
 
 
 DEFAULT_DURATION_SAMPLE_LIMIT = 10_000
@@ -402,25 +428,45 @@ class TaskRepository:
         )
         return [Task.model_validate(row.payload) for row in rows]
 
-    def count_unclaimed_for_stub(self, stub_id: str) -> int:
-        """Runnable work for this stub that no container has taken.
-
-        The same three predicates the claim uses, so what this counts is exactly
-        what a claim would find. Anything else would decide capacity from a
-        different population than the one being served.
-        """
-
-        return int(
-            self.session.scalar(
-                select(func.count(TaskTable.id)).where(
-                    TaskTable.stub_id == stub_id,
-                    TaskTable.status == TaskStatus.Pending.value,
-                    TaskTable.container_id.is_(None),
-                    TaskTable.claimable_at.is_not(None),
-                )
+    def count_unclaimed_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        """Runnable, unclaimed work for several stubs in one grouped query."""
+        ids = tuple(dict.fromkeys(stub_id for stub_id in stub_ids if stub_id))
+        counts = dict.fromkeys(ids, 0)
+        if not ids:
+            return counts
+        rows = self.session.execute(
+            select(TaskTable.stub_id, func.count(TaskTable.id))
+            .where(
+                TaskTable.stub_id.in_(ids),
+                TaskTable.status == TaskStatus.Pending.value,
+                TaskTable.container_id.is_(None),
+                TaskTable.claimable_at.is_not(None),
             )
-            or 0
+            .group_by(TaskTable.stub_id)
         )
+        for stub_id, count in rows:
+            if stub_id is not None:
+                counts[str(stub_id)] = int(count)
+        return counts
+
+    def due_retry_tasks(self, *, now: datetime, limit: int) -> list[Task]:
+        """Due retry work in the order the retry scheduler consumes it."""
+        if limit <= 0:
+            return []
+        due_at = case(
+            (TaskTable.next_retry_at.is_(None), TaskTable.created_at),
+            else_=TaskTable.next_retry_at,
+        )
+        rows = self.session.scalars(
+            select(TaskTable)
+            .where(
+                TaskTable.status == TaskStatus.Retry.value,
+                or_(TaskTable.next_retry_at.is_(None), TaskTable.next_retry_at <= now),
+            )
+            .order_by(due_at, TaskTable.created_at, TaskTable.id)
+            .limit(limit)
+        )
+        return [Task.model_validate(row.payload) for row in rows]
 
     def count_inflight_for_stub(self, stub_id: str) -> int:
         """Everything for this stub that has not finished, claimed or not.
@@ -920,50 +966,163 @@ class LogRepository:
         """System-authority write; runner/worker logs may be cluster-level."""
         return self.records.upsert_across_workspaces(entry, workspace_id=workspace_id)
 
-    def list_for_task(self, task_id: str) -> list[LogEntry]:
-        """System listing filtered to a task the caller already authorized."""
-        statement = (
-            select(LogTable)
-            .where(LogTable.task_id == task_id)
-            .order_by(LogTable.created_at.asc(), LogTable.id.asc())
+    def page(
+        self,
+        query: LogStreamQuery,
+        *,
+        workspace_id: str,
+        limit: int,
+        cursor: LogPageCursor | None = None,
+    ) -> LogPage:
+        """Read the latest matching logs, then page toward older history."""
+        return self._page(
+            query,
+            workspace_id=workspace_id,
+            limit=limit,
+            before=cursor,
         )
-        return [LogEntry.model_validate(row.payload) for row in self.session.scalars(statement)]
 
-    def list_across_workspaces(self, query: LogStreamQuery | None = None) -> list[LogEntry]:
-        """System/admin log stream over every workspace; operator surfaces only."""
-        entries = self.records.list_across_workspaces()
-        if query is None:
-            entries.sort(key=lambda item: item.created_at)
-            return entries
+    def page_after(
+        self,
+        query: LogStreamQuery,
+        *,
+        workspace_id: str,
+        limit: int,
+        cursor: LogPageCursor,
+    ) -> LogPage:
+        """Read matching logs after a durable follow cursor."""
+        return self._page(
+            query,
+            workspace_id=workspace_id,
+            limit=limit,
+            after=cursor,
+        )
+
+    def _page(
+        self,
+        query: LogStreamQuery,
+        *,
+        workspace_id: str,
+        limit: int,
+        before: LogPageCursor | None = None,
+        after: LogPageCursor | None = None,
+    ) -> LogPage:
+        if not workspace_id:
+            raise ValueError("log queries require workspace_id")
+        page_limit = min(max(limit, 1), 1_000)
+        identifiers = (
+            query.task_id,
+            query.stub_id,
+            query.app_id,
+            query.deployment_id,
+            query.container_id,
+            query.machine_id,
+            query.worker_id,
+        )
+        if any(identifier and not _is_uuid_text(identifier) for identifier in identifiers):
+            return LogPage(data=())
+        statement = (
+            select(
+                LogTable,
+                TaskTable.app_id,
+                TaskTable.deployment_id,
+                TaskTable.stub_id,
+                TaskTable.container_id,
+                ContainerTable.machine_id,
+                ContainerTable.worker_id,
+            )
+            .join(TaskTable, LogTable.task_id == TaskTable.id)
+            .outerjoin(ContainerTable, TaskTable.container_id == ContainerTable.id)
+            .where(
+                LogTable.workspace_id == workspace_id,
+                TaskTable.workspace_id == workspace_id,
+            )
+        )
         if query.task_id:
-            entries = [item for item in entries if item.task_id == query.task_id]
-        if query.object_type == "task" and query.object_id:
-            entries = [item for item in entries if item.task_id == query.object_id]
+            statement = statement.where(TaskTable.id == query.task_id)
+        if query.stub_id:
+            statement = statement.where(TaskTable.stub_id == query.stub_id)
+        if query.app_id:
+            statement = statement.where(TaskTable.app_id == query.app_id)
+        if query.deployment_id:
+            statement = statement.where(TaskTable.deployment_id == query.deployment_id)
         if query.container_id:
-            tasks = {
-                task.id: task
-                for task in TaskRepository(self.session).records.list_across_workspaces()
-            }
-            entries = [
-                item
-                for item in entries
-                if _task_container_id(tasks.get(item.task_id)) == query.container_id
-            ]
+            statement = statement.where(TaskTable.container_id == query.container_id)
+        if query.machine_id:
+            statement = statement.where(ContainerTable.machine_id == query.machine_id)
+        if query.worker_id:
+            statement = statement.where(ContainerTable.worker_id == query.worker_id)
         if query.query:
-            needle = query.query.lower()
-            entries = [item for item in entries if needle in item.message.lower()]
+            statement = statement.where(
+                func.lower(LogTable.message).contains(query.query.lower(), autoescape=True)
+            )
         if query.start_time is not None:
-            entries = [item for item in entries if item.created_at >= query.start_time]
+            statement = statement.where(LogTable.created_at >= query.start_time)
         if query.end_time is not None:
-            entries = [item for item in entries if item.created_at < query.end_time]
-        entries.sort(key=lambda item: item.created_at)
-        return entries
+            statement = statement.where(LogTable.created_at < query.end_time)
+        if before is not None:
+            statement = statement.where(
+                or_(
+                    LogTable.created_at < before.created_at,
+                    and_(LogTable.created_at == before.created_at, LogTable.id < before.id),
+                )
+            )
+        if after is not None:
+            statement = statement.where(
+                or_(
+                    LogTable.created_at > after.created_at,
+                    and_(LogTable.created_at == after.created_at, LogTable.id > after.id),
+                )
+            )
+        descending = after is None
+        ordering = (
+            (LogTable.created_at.desc(), LogTable.id.desc())
+            if descending
+            else (LogTable.created_at.asc(), LogTable.id.asc())
+        )
+        rows = list(self.session.execute(statement.order_by(*ordering).limit(page_limit + 1)))
+        page_rows = rows[:page_limit]
+        next_cursor = None
+        if len(rows) > page_limit and page_rows:
+            boundary = page_rows[-1][0]
+            next_cursor = LogPageCursor(
+                created_at=_utc_datetime(boundary.created_at),
+                id=str(boundary.id),
+            )
+        records = tuple(self._record_from_row(row) for row in page_rows)
+        if descending:
+            records = tuple(reversed(records))
+        return LogPage(data=records, next=next_cursor)
 
-
-def _task_container_id(task: Task | None) -> str:
-    if task is None:
-        return ""
-    return str(task.kwargs.get("container_id") or "")
+    @staticmethod
+    def _record_from_row(
+        row: Row[
+            tuple[
+                LogTable,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+            ]
+        ],
+    ) -> LogPageRecord:
+        log, app_id, deployment_id, stub_id, container_id, machine_id, worker_id = row
+        return LogPageRecord(
+            entry=LogEntry.model_validate(log.payload),
+            cursor=LogPageCursor(
+                created_at=_utc_datetime(log.created_at),
+                id=str(log.id),
+            ),
+            workspace_id=str(log.workspace_id),
+            app_id=str(app_id) if app_id is not None else "",
+            deployment_id=str(deployment_id) if deployment_id is not None else "",
+            stub_id=str(stub_id) if stub_id is not None else "",
+            container_id=str(container_id) if container_id is not None else "",
+            machine_id=str(machine_id) if machine_id is not None else "",
+            worker_id=str(worker_id) if worker_id is not None else "",
+        )
 
 
 @dataclass(slots=True)
@@ -1423,3 +1582,56 @@ class CronJobRunRepository:
             self.session,
             TableRepositoryConfig(CronJobRunTable, CronJobRun),
         )
+
+    def page(
+        self,
+        *,
+        workspace_id: str,
+        cursor: CronJobRunCursor | None,
+        limit: int,
+    ) -> CronJobRunPage:
+        """Read one descending workspace page without offset drift."""
+        page_limit = max(limit, 1)
+        statement = select(CronJobRunTable).where(CronJobRunTable.workspace_id == workspace_id)
+        if cursor is not None:
+            statement = statement.where(
+                or_(
+                    CronJobRunTable.created_at < cursor.created_at,
+                    and_(
+                        CronJobRunTable.created_at == cursor.created_at,
+                        CronJobRunTable.id < cursor.id,
+                    ),
+                )
+            )
+        rows = list(
+            self.session.scalars(
+                statement.order_by(
+                    CronJobRunTable.created_at.desc(),
+                    CronJobRunTable.id.desc(),
+                ).limit(page_limit + 1)
+            )
+        )
+        page_rows = rows[:page_limit]
+        next_cursor = None
+        if len(rows) > page_limit and page_rows:
+            last = page_rows[-1]
+            next_cursor = CronJobRunCursor(
+                created_at=_utc_datetime(last.created_at),
+                id=str(last.id),
+            )
+        return CronJobRunPage(
+            data=tuple(CronJobRun.model_validate(row.payload) for row in page_rows),
+            next=next_cursor,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CronJobRunCursor:
+    created_at: datetime
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CronJobRunPage:
+    data: tuple[CronJobRun, ...]
+    next: CronJobRunCursor | None = None

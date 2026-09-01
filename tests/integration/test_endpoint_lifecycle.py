@@ -17,8 +17,11 @@ import websockets.asyncio.server
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubRecord
+from database.records.endpoint_dispatch import EndpointDispatchStateRecord
+from database.repositories.endpoint_dispatch import EndpointDispatchRepository
+from database.repositories.orchestration import ContainerRepository
 from execution.endpoints.dispatch import (
-    ENDPOINT_DISPATCH_TASK_KEY,
+    DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
     EndpointDispatchRecord,
     EndpointDispatchStatus,
     EndpointDispatchTarget,
@@ -26,6 +29,7 @@ from execution.endpoints.dispatch import (
 )
 from execution.endpoints.service import (
     EndpointControlService,
+    EndpointDispatchStateRepository,
     EndpointWebSocketDispatchRejected,
 )
 from fastapi.testclient import TestClient
@@ -46,15 +50,17 @@ from shared.container_requests import (
     CONTAINER_INNER_PORT,
     WorkerContainerRequestPayload,
 )
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.errors import NotFoundError
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
 )
 from shared.http.gateway_tasks import AppendTaskLogRequest, AppendTaskLogResponse
 from shared.http_transport import HttpChannel
-from shared.tasks import Task, TaskStatus
+from shared.tasks import RetryPolicy, Task, TaskStatus
 from starlette.websockets import WebSocketDisconnect
 from tests.metric_helpers import metric_value
 from tests.real_redis import RealRedisActors
@@ -165,6 +171,11 @@ async def app(scope, receive, send):
     _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=2)
 
     with _serve_asgi_handler(f"{handler_file}:app") as served:
+        _record_dispatch_container(
+            isolated_services,
+            stub,
+            _STREAMING_ASGI_CONTAINER_ID,
+        )
         containers = _EndpointContainers(
             states=[
                 SchedulerContainerState(
@@ -244,6 +255,7 @@ def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
         )
     )
     stub = _stub_for_deployment(isolated_services, deployment.id)
+    _record_dispatch_container(isolated_services, stub, _HEARTBEAT_CONTAINER_ID)
     containers = _EndpointContainers(
         states=[
             SchedulerContainerState(
@@ -269,11 +281,11 @@ def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
         )
     )
     task = isolated_services.tasks.get(session.task_id)
-    before = _dispatch_record(task).heartbeat_at
+    before = _dispatch_record(isolated_services, task).heartbeat_at
 
     service.heartbeat_asgi_websocket(session.task_id)
     task = isolated_services.tasks.get(session.task_id)
-    after = _dispatch_record(task).heartbeat_at
+    after = _dispatch_record(isolated_services, task).heartbeat_at
     service.finish_asgi_websocket(session.task_id)
 
     finished = isolated_services.tasks.get(session.task_id)
@@ -283,7 +295,7 @@ def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
     assert after is not None
     assert after >= before
     assert finished.status is TaskStatus.Complete
-    assert _dispatch_record(finished).status is EndpointDispatchStatus.Complete
+    assert _dispatch_record(isolated_services, finished).status is EndpointDispatchStatus.Complete
 
 
 def test_endpoint_service_without_running_container_schedules_warmup(
@@ -318,7 +330,7 @@ def test_endpoint_service_without_running_container_schedules_warmup(
     assert payload.ports == [CONTAINER_INNER_PORT]
     assert payload.requested_ports == [CONTAINER_INNER_PORT]
     task = isolated_services.tasks.list()[0]
-    dispatch = _dispatch_record(task)
+    dispatch = _dispatch_record(isolated_services, task)
     assert dispatch.status is EndpointDispatchStatus.Timeout
 
 
@@ -366,6 +378,7 @@ def predict():
     ) as served:
         thread.start()
         _wait_until(lambda: len(scheduler.requests) == 1)
+        _record_dispatch_container(isolated_services, stub, _WARM_CONTAINER_ID)
         containers.states.append(
             SchedulerContainerState(
                 container_id=_WARM_CONTAINER_ID,
@@ -383,9 +396,53 @@ def predict():
     assert response.status_code == 200
     assert response.body == b"ready"
     task = isolated_services.tasks.list()[0]
-    dispatch = _dispatch_record(task)
+    dispatch = _dispatch_record(isolated_services, task)
     assert dispatch.status is EndpointDispatchStatus.Complete
     assert dispatch.container_id == _WARM_CONTAINER_ID
+
+
+def test_endpoint_retry_requeues_the_relational_dispatch(
+    isolated_services: ApiServices,
+) -> None:
+    deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="retry-dispatch",
+            kind=DeploymentKind.Endpoint,
+            handler="module:handler",
+            retry_policy=RetryPolicy(max_attempts=2),
+        )
+    )
+    stub = _stub_for_deployment(isolated_services, deployment.id)
+    _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=1)
+    container_id = str(uuid5(NAMESPACE_URL, "lazycloud:test:retry-container"))
+    _record_dispatch_container(isolated_services, stub, container_id)
+    dispatcher = _RetryingEndpointDispatcher(
+        _EndpointContainers(
+            states=[
+                SchedulerContainerState(
+                    container_id=container_id,
+                    stub_id=stub.id,
+                    workspace_id=stub.workspace_id,
+                    status=SchedulerContainerStatus.Running,
+                )
+            ],
+            addresses={container_id: "127.0.0.1:1"},
+        ),
+        readiness_probe=_ServingContainers(),
+    )
+
+    response = EndpointControlService(
+        isolated_services,
+        dispatcher=dispatcher,
+    ).forward_endpoint_request(EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"))
+
+    task = next(task for task in isolated_services.tasks.list() if task.stub_id == stub.id)
+    dispatch = _dispatch_record(isolated_services, task)
+    assert response.status_code == 200
+    assert dispatcher.attempts == 2
+    assert task.status is TaskStatus.Complete
+    assert dispatch.status is EndpointDispatchStatus.Complete
+    assert dispatch.attempts == 2
 
 
 def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_full(
@@ -421,7 +478,10 @@ def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_fu
         assert response.status_code == 429
         assert response.headers.get("X-Task-Id") is None
         assert {task.id for task in isolated_services.tasks.list()} == task_ids_before
-        assert _dispatch_record(existing).status is EndpointDispatchStatus.WaitingCapacity
+        assert (
+            _dispatch_record(isolated_services, existing).status
+            is EndpointDispatchStatus.WaitingCapacity
+        )
         assert (
             metric_value(
                 "endpoint_admission_rejected_total",
@@ -431,6 +491,59 @@ def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_fu
             )
             == 1
         )
+
+
+def test_concurrent_endpoint_admission_creates_only_one_run_at_the_buffer_limit(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _RecordingScheduler()
+    isolated_services.containers.scheduler = scheduler
+    deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="concurrent-admission",
+            kind=DeploymentKind.Endpoint,
+            handler="module:handler",
+        )
+    )
+    stub = _stub_for_deployment(isolated_services, deployment.id)
+    _set_endpoint_dispatch_limits(
+        isolated_services,
+        stub,
+        timeout_seconds=0.1,
+        max_pending=1,
+    )
+    barrier = threading.Barrier(2)
+    responses: list[EndpointForwardResponse] = []
+
+    def invoke(service: EndpointControlService) -> None:
+        barrier.wait()
+        responses.append(
+            service.forward_endpoint_request(
+                EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+            )
+        )
+
+    services = [
+        EndpointControlService(
+            isolated_services,
+            dispatcher=EndpointInstanceDispatcher(
+                _EndpointContainers(),
+                readiness_probe=_ServingContainers(),
+            ),
+        )
+        for _ in range(2)
+    ]
+    threads = [threading.Thread(target=invoke, args=(service,)) for service in services]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(response.status_code for response in responses) == [429, 504]
+    tasks = [task for task in isolated_services.tasks.list() if task.stub_id == stub.id]
+    assert len(tasks) == 1
+    assert _dispatch_record(isolated_services, tasks[0]).status is EndpointDispatchStatus.Timeout
 
 
 def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is_full(
@@ -462,7 +575,10 @@ def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is_full(
     assert exc_info.value.status_code == 429
     assert exc_info.value.task_id == ""
     assert {task.id for task in isolated_services.tasks.list()} == task_ids_before
-    assert _dispatch_record(existing).status is EndpointDispatchStatus.WaitingCapacity
+    assert (
+        _dispatch_record(isolated_services, existing).status
+        is EndpointDispatchStatus.WaitingCapacity
+    )
     assert (
         metric_value(
             "endpoint_admission_rejected_total",
@@ -491,27 +607,23 @@ def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
     )
     stub = _stub_for_deployment(services, deployment.id)
     _set_endpoint_dispatch_limits(services, stub, timeout_seconds=0.1, max_pending=1)
-    existing = services.tasks.create("endpoint-stale-busy", kwargs={})
+    existing = services.tasks.create(
+        "endpoint-stale-busy",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        kwargs={},
+    )
     stale_at = existing.created_at - timedelta(seconds=5)
-    existing.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = {
-        "task_id": existing.id,
-        "stub_id": stub.id,
-        "workspace_id": stub.workspace_id,
-        "method": "POST",
-        "path": "/",
-        "status": EndpointDispatchStatus.WaitingCapacity.value,
-        "container_id": None,
-        "wait_timeout_seconds": 0.1,
-        "max_pending_requests": 1,
-        "max_inflight_per_container": 1,
-        "attempts": 0,
-        "enqueued_at": stale_at.isoformat(),
-        "started_at": None,
-        "heartbeat_at": stale_at.isoformat(),
-        "finished_at": None,
-        "error": None,
-    }
-    services.tasks.save(existing)
+    _insert_dispatch_state(
+        services,
+        existing,
+        stub=stub,
+        status=EndpointDispatchStatus.WaitingCapacity,
+        at=stale_at,
+        wait_timeout_seconds=0.1,
+        max_pending_requests=1,
+        max_inflight_per_container=1,
+    )
 
     response = EndpointControlService(
         services,
@@ -522,7 +634,7 @@ def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
 
     assert response.status_code == 504
     newest_task = services.tasks.list()[0]
-    assert _dispatch_record(newest_task).status is EndpointDispatchStatus.Timeout
+    assert _dispatch_record(services, newest_task).status is EndpointDispatchStatus.Timeout
 
 
 def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
@@ -557,7 +669,7 @@ def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
     assert task is not None
     cancelled = services.tasks.get(task.id)
     assert cancelled.status is TaskStatus.Cancelled
-    assert _dispatch_record(cancelled).status is EndpointDispatchStatus.Cancelled
+    assert _dispatch_record(services, cancelled).status is EndpointDispatchStatus.Cancelled
 
 
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
@@ -575,31 +687,87 @@ def _json_object(value: JsonValue) -> dict[str, JsonValue]:
     return value
 
 
-def _dispatch_record(task: Task) -> EndpointDispatchRecord:
-    return EndpointDispatchRecord.model_validate(task.kwargs[ENDPOINT_DISPATCH_TASK_KEY])
+def _dispatch_record(services: ApiServices, task: Task) -> EndpointDispatchRecord:
+    return EndpointDispatchStateRepository(services).for_task(task)
 
 
 def _record_active_dispatch(services: ApiServices, stub: StubRecord) -> Task:
-    task = services.tasks.create(f"{stub.kind.value}-{stub.name}", kwargs={})
-    task.kwargs[ENDPOINT_DISPATCH_TASK_KEY] = {
-        "task_id": task.id,
-        "stub_id": stub.id,
-        "workspace_id": stub.workspace_id,
-        "method": "POST",
-        "path": "/",
-        "status": EndpointDispatchStatus.WaitingCapacity.value,
-        "container_id": None,
-        "wait_timeout_seconds": 1,
-        "max_pending_requests": 1,
-        "max_inflight_per_container": 1,
-        "attempts": 0,
-        "enqueued_at": task.created_at.isoformat(),
-        "started_at": None,
-        "heartbeat_at": task.created_at.isoformat(),
-        "finished_at": None,
-        "error": None,
-    }
-    return services.tasks.save(task)
+    task = services.tasks.create(
+        f"{stub.kind.value}-{stub.name}",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        kwargs={},
+    )
+    _insert_dispatch_state(
+        services,
+        task,
+        stub=stub,
+        status=EndpointDispatchStatus.Queued,
+        at=task.created_at,
+        wait_timeout_seconds=1,
+        max_pending_requests=1,
+        max_inflight_per_container=1,
+    )
+    EndpointDispatchStateRepository(services).transition(
+        task,
+        EndpointDispatchStatus.WaitingCapacity,
+    )
+    return task
+
+
+def _insert_dispatch_state(
+    services: ApiServices,
+    task: Task,
+    *,
+    stub: StubRecord,
+    status: EndpointDispatchStatus,
+    at: datetime,
+    wait_timeout_seconds: float,
+    max_pending_requests: int,
+    max_inflight_per_container: int,
+) -> None:
+    with services.context.database.session() as session:
+        EndpointDispatchRepository(session).create(
+            EndpointDispatchStateRecord(
+                task_id=task.id,
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                container_id=None,
+                method="POST",
+                path="/",
+                status=status.value,
+                wait_timeout_seconds=wait_timeout_seconds,
+                max_pending_requests=max_pending_requests,
+                max_inflight_per_container=max_inflight_per_container,
+                attempts=0,
+                enqueued_at=at,
+                started_at=None,
+                heartbeat_at=at,
+                expires_at=at + timedelta(seconds=max(wait_timeout_seconds, 1.0)),
+                finished_at=None,
+                error=None,
+            )
+        )
+
+
+def _record_dispatch_container(
+    services: ApiServices,
+    stub: StubRecord,
+    container_id: str,
+) -> ContainerRecord:
+    with services.context.database.session() as session:
+        return ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name=f"endpoint-{container_id}",
+                image="endpoint-image",
+                command=["python", "-m", "runner.serve"],
+                workspace_id=stub.workspace_id,
+                app_id=stub.app_id,
+                stub_id=stub.id,
+                status=ContainerStatus.Running,
+            )
+        )
 
 
 def _set_endpoint_dispatch_limits(
@@ -643,7 +811,11 @@ def _wait_for_endpoint_task(
     def task_created() -> bool:
         nonlocal task
         for candidate in services.tasks.list():
-            if ENDPOINT_DISPATCH_TASK_KEY in candidate.kwargs:
+            try:
+                EndpointDispatchStateRepository(services).for_task(candidate)
+            except NotFoundError:
+                continue
+            else:
                 task = candidate
                 return True
         return False
@@ -814,6 +986,23 @@ class _CancellingEndpointDispatcher(EndpointInstanceDispatcher):
             self.cancelled_task = _wait_for_endpoint_task(self.runtime)
             self.runtime.tasks.cancel(self.cancelled_task.id)
         return super().select_target(stub_id)
+
+
+class _RetryingEndpointDispatcher(EndpointInstanceDispatcher):
+    attempts = 0
+
+    def forward_target(
+        self,
+        target: EndpointDispatchTarget,
+        request: EndpointForwardRequest,
+        *,
+        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
+    ) -> EndpointForwardResponse:
+        del target, request, timeout_seconds
+        self.attempts += 1
+        if self.attempts == 1:
+            return EndpointForwardResponse(status_code=500, body=b"retry")
+        return EndpointForwardResponse(status_code=200, body=b"complete")
 
 
 @dataclass
