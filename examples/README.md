@@ -27,18 +27,6 @@ root. Examples use importable module targets such as
 `examples.openai_compatible_llm.app:app`; they do not require changing into the
 example directory.
 
-## GPU probe
-
-`examples.gpu_probe` reports what a GPU container can reach, layer by layer:
-device nodes, driver libraries, whether `libcuda.so.1` loads, and whether
-`cuInit` reaches a card through the sandbox. Each layer is reported rather than
-raised on, so a broken node names the layer that is missing instead of the call
-that happened to touch it first.
-
-```sh
-uv run lazycloud run examples.gpu_probe:probe
-```
-
 ## All workloads
 
 `examples.all_workloads` is one app that makes every currently deployable

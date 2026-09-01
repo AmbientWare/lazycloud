@@ -44,15 +44,4 @@ def connected_aws_probe(app_slug: str) -> ConnectedAwsProbeApp:
     return ConnectedAwsProbeApp(app=app, probe=probe)
 
 
-app = App("connected_aws_smoke")
-deterministic_probe = app.function(
-    _deterministic_probe,
-    name="deterministic-probe",
-    image=Image(python_version="3.12"),
-    cpu=0.25,
-    memory="128Mi",
-    timeout_seconds=600,
-)
-
-
-__all__ = ["ConnectedAwsProbeApp", "connected_aws_probe", "deterministic_probe"]
+__all__ = ["ConnectedAwsProbeApp", "connected_aws_probe"]

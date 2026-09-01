@@ -598,7 +598,7 @@ def test_deployment_manifest_route_serves_invoke_schema(
         DeploymentSpec(
             name="square",
             kind=DeploymentKind.Function,
-            handler="examples.demo.main:square",
+            handler="pkg:square",
             metadata={
                 "app": "demo",
                 "inputs": {"fields": {"value": {"type": "integer"}}},
