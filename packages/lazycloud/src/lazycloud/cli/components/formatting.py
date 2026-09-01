@@ -49,7 +49,7 @@ def value(item: JsonValue, *, key: str = "") -> RenderableType:
 
 
 def fields(items: dict[str, JsonValue]) -> Table:
-    grid = Table.grid(padding=(0, 2), expand=True)
+    grid = Table.grid(padding=(0, 2), expand=False)
     grid.add_column(style=theme.MUTED, no_wrap=True)
     grid.add_column(ratio=1, overflow="fold")
     for key, item in _flatten_fields(items):

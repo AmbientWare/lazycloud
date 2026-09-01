@@ -11,13 +11,13 @@ from dataclasses import dataclass
 import typer
 from pydantic import JsonValue
 from rich.console import Console
-from rich.panel import Panel
 from rich.text import Text
 from shared.app_identity import ENV_PREFIX
 from shared.http.errors import HttpApiError
 from typer import _click as click
 
 from lazycloud.cli.components import theme
+from lazycloud.cli.components.cards import card
 from lazycloud.cli.components.output import error_console, print_json_line
 from lazycloud.json_contracts import parse_json_value
 
@@ -194,15 +194,7 @@ def render_error(details: ClientErrorDetails, *, console: Console = error_consol
         body.append("\n\n")
         body.append("Next step  ", style=theme.MUTED)
         body.append(mask_secrets(details.hint))
-    console.print(
-        Panel(
-            body,
-            title=Text(f"Error · {details.title}", style=theme.EMPHASIS),
-            title_align="left",
-            border_style=theme.ERROR,
-            padding=(1, 2),
-        )
-    )
+    console.print(card(details.title, body, tone="error"))
 
 
 def mask_secrets(value: str) -> str:

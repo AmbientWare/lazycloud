@@ -6,13 +6,15 @@ from typing import Literal
 
 from pydantic import JsonValue
 from rich.console import Group, RenderableType
+from rich.constrain import Constrain
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
 
 from lazycloud.cli.components import formatting, theme
 
-CardTone = Literal["neutral", "info", "success", "warning"]
+CardTone = Literal["neutral", "info", "success", "warning", "error"]
+CARD_MAX_WIDTH = 88
 
 
 def result_card(
@@ -21,7 +23,7 @@ def result_card(
     *,
     tone: CardTone = "neutral",
     message: str = "",
-) -> Panel:
+) -> RenderableType:
     parts: list[RenderableType] = []
     if message:
         parts.append(formatting.text(message))
@@ -33,13 +35,7 @@ def result_card(
         parts.append(formatting.value(payload))
     if not parts:
         parts.append(formatting.text("Done", style=theme.SUCCESS))
-    return Panel(
-        Group(*parts),
-        title=_title(title, tone),
-        title_align="left",
-        border_style=_tone_style(tone),
-        padding=(1, 2),
-    )
+    return card(title, Group(*parts), tone=tone)
 
 
 def notice_card(
@@ -48,21 +44,32 @@ def notice_card(
     *,
     hint: str = "",
     tone: CardTone = "info",
-) -> Panel:
+) -> RenderableType:
     body = Text(message)
     if hint:
         body.append("\n\nNext step  ", style=theme.MUTED)
         body.append(hint)
-    return Panel(
+    return card(title, body, tone=tone)
+
+
+def card(
+    title: str,
+    body: RenderableType,
+    *,
+    tone: CardTone = "neutral",
+) -> RenderableType:
+    panel = Panel(
         body,
         title=_title(title, tone),
         title_align="left",
         border_style=_tone_style(tone),
         padding=(1, 2),
+        expand=False,
     )
+    return Constrain(panel, width=CARD_MAX_WIDTH)
 
 
-def empty_state(title: str, message: str) -> Panel:
+def empty_state(title: str, message: str) -> RenderableType:
     return notice_card(title, message, tone="neutral")
 
 
@@ -87,6 +94,7 @@ def _title(title: str, tone: CardTone) -> Text:
         "info": "Info · ",
         "success": "Done · ",
         "warning": "Warning · ",
+        "error": "Error · ",
     }[tone]
     return Text(f"{prefix}{title}", style=theme.EMPHASIS)
 
@@ -97,7 +105,15 @@ def _tone_style(tone: CardTone) -> Style:
         "info": theme.INFO,
         "success": theme.SUCCESS,
         "warning": theme.WARNING,
+        "error": theme.ERROR,
     }[tone]
 
 
-__all__ = ["CardTone", "empty_state", "notice_card", "result_card"]
+__all__ = [
+    "CARD_MAX_WIDTH",
+    "CardTone",
+    "card",
+    "empty_state",
+    "notice_card",
+    "result_card",
+]
