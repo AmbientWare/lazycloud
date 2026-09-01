@@ -579,8 +579,7 @@ def _image_verify_client(client: ImageBuildClient) -> ImageVerifyClient | None:
 def _write_reused_image_response(terminal: Terminal | None) -> None:
     if terminal is None:
         return
-    terminal.write("Image already exists\n")
-    terminal.success("Build complete")
+    terminal.success("Using cached image")
 
 
 def _credential_values(

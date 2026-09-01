@@ -40,7 +40,6 @@ def usage_list(
     rows = [
         [
             record.created_at.isoformat(),
-            record.workspace_id,
             record.metric.value,
             str(record.quantity),
             record.unit.value,
@@ -51,13 +50,13 @@ def usage_list(
     ]
     console.print(
         table(
-            "Usage Records",
-            ["time", "workspace", "metric", "quantity", "unit", "type", "resource"],
+            "Usage records",
+            ["time", "metric", "quantity", "unit", "type", "resource"],
             rows,
         )
     )
     if page.next:
-        console.print(f"Next cursor: {page.next}")
+        console.print(f"More results  --cursor {page.next}", highlight=False, markup=False)
 
 
 @usage_app.command("summary")
@@ -84,12 +83,9 @@ def usage_summary(
         return
     console.print(
         table(
-            "Usage Summary",
-            ["workspace", "metric", "quantity", "unit"],
-            [
-                [row.workspace_id, row.metric.value, str(row.quantity), row.unit.value]
-                for row in rows
-            ],
+            "Usage summary",
+            ["metric", "quantity", "unit"],
+            [[row.metric.value, str(row.quantity), row.unit.value] for row in rows],
         )
     )
 

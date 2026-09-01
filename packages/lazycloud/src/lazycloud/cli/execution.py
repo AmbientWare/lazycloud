@@ -1,26 +1,30 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Protocol, runtime_checkable
-from uuid import UUID
 
 import typer
 from shared.compute_policy import MachinePool
 
-from lazycloud.abstractions.app import App
+from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
+from lazycloud.cli.apps import resolve_app_id
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.context import current_workspace
 from lazycloud.cli.components.output import (
     console,
+    emit,
+    json_default,
     json_output_enabled,
     parse_json_argument,
     payload_data,
     print_payload,
     table,
 )
+from lazycloud.cli.components.progress import attach_terminal
 from lazycloud.cli.control import resource_client
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
@@ -102,6 +106,7 @@ def deploy(
         except HandlerLoadError as exc:
             raise typer.BadParameter(str(exc)) from exc
         user_object: object = apply_handler_reference(user_object, handler)
+        _attach_workflow_terminal(user_object)
         deployment_image = _deployment_image(overrides)
         if isinstance(user_object, Pod):
             _configure_pod(user_object, overrides)
@@ -157,7 +162,19 @@ def deploy(
                     "source_root": source_root,
                 },
             )
-    print_payload(ctx, payload_data(response))
+    payload = payload_data(response)
+    if isinstance(user_object, (App, Function, Pod)):
+        emit(
+            ctx,
+            payload=payload,
+            view=result_card(
+                "App deployed" if isinstance(response, AppDeployResult) else "Deployment created",
+                json_default(_deployment_summary(response, handler=handler, name=name)),
+                tone="success",
+            ),
+        )
+        return
+    print_payload(ctx, payload, title="Deployment result", tone="success")
 
 
 def run(
@@ -213,6 +230,7 @@ def run(
             raise typer.BadParameter(msg)
         payload_args = [parse_json_argument(item) for item in args[1:]]
         target = apply_handler_reference(user_object, args[0])
+        _attach_workflow_terminal(target)
         if isinstance(target, Pod):
             _configure_pod(target, overrides)
             response = target.run(*args[1:], workspace=selected_workspace)
@@ -239,7 +257,7 @@ def run(
         else:
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
-    print_payload(ctx, payload_data(response))
+    print_payload(ctx, payload_data(response), title="Run result")
 
 
 def shell(
@@ -264,6 +282,7 @@ def shell(
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
+    _require_interactive_output(ctx)
     if handler is None:
         if container_id is None:
             raise typer.BadParameter("handler or --container-id is required")
@@ -299,6 +318,7 @@ def shell(
         raise typer.BadParameter(str(exc)) from exc
     if isinstance(user_object, Pod):
         _configure_pod(user_object, overrides)
+    _attach_workflow_terminal(user_object)
     response = invoke_handler_method(
         apply_handler_reference(user_object, handler),
         "shell",
@@ -307,7 +327,7 @@ def shell(
     if isinstance(response, ShellSession):
         open_shell_session(ctx, response, workspace=workspace)
         return
-    print_payload(ctx, response)
+    print_payload(ctx, response, title="Shell session")
 
 
 def open_existing_shell(
@@ -352,27 +372,7 @@ def _exit_with_shell_status(exit_code: int) -> None:
         raise typer.Exit(exit_code)
 
 
-def _resolve_app_id(app: str, *, workspace: str | None) -> str:
-    """Accept an app name or id for `--app`.
-
-    Apps are addressed by name everywhere a user can see one, and no command
-    prints an app id, so a name has to resolve here rather than reach the API as
-    a malformed identifier.
-    """
-    try:
-        UUID(app)
-    except ValueError:
-        pass
-    else:
-        return app
-    apps = resource_client(workspace=workspace).list_apps()
-    matches = [item for item in apps.data if item.name == app]
-    if not matches:
-        raise typer.BadParameter(f"no app named {app!r} in workspace {workspace or 'default'}")
-    return matches[0].id
-
-
-@deployment_app.command("list")
+@deployment_app.command("list", help="List deployments, optionally filtered by app.")
 def deployment_list(
     ctx: typer.Context,
     app: Annotated[str | None, typer.Option("--app")] = None,
@@ -380,7 +380,9 @@ def deployment_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     selected_workspace = current_workspace(workspace)
-    app_id = _resolve_app_id(app, workspace=selected_workspace) if app else None
+    app_id = (
+        resolve_app_id(app, client=resource_client(workspace=selected_workspace)) if app else None
+    )
     deployments = DeploymentClient(workspace=selected_workspace).list(
         filters={"app_id": [app_id]} if app_id else None,
         limit=limit,
@@ -389,13 +391,13 @@ def deployment_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in deployments])
         return
     rows: list[list[Any]] = [
-        [item.id, item.name, item.kind.value, item.version, item.app_id or "", item.active]
+        [item.name, item.kind.value, item.version, "active" if item.active else "stopped"]
         for item in deployments
     ]
-    console.print(table("Deployments", ["id", "name", "kind", "version", "app", "active"], rows))
+    console.print(table("Deployments", ["name", "kind", "version", "status"], rows))
 
 
-@deployment_app.command("stop")
+@deployment_app.command("stop", help="Stop one or more deployments.")
 def deployment_stop(
     ctx: typer.Context,
     deployment_ids_or_names: Annotated[list[str], typer.Argument()],
@@ -407,20 +409,36 @@ def deployment_stop(
     for deployment_id in deployment_ids_or_names:
         response = client.stop(deployment_id, workspace=selected_workspace)
         responses.append(response.model_dump(mode="json"))
-    print_payload(ctx, responses)
+    emit(
+        ctx,
+        payload=responses,
+        view=notice_card(
+            "Deployments stopped",
+            f"Stopped {len(responses)} deployment{'s' if len(responses) != 1 else ''}.",
+            tone="success",
+        ),
+    )
 
 
-@deployment_app.command("start")
+@deployment_app.command("start", help="Start a stopped deployment.")
 def deployment_start(
     ctx: typer.Context,
     deployment_id_or_name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = DeploymentClient(workspace=current_workspace(workspace)).start(deployment_id_or_name)
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Deployment started",
+            f"Started {response.name}.",
+            tone="success",
+        ),
+    )
 
 
-@deployment_app.command("scale")
+@deployment_app.command("scale", help="Set a deployment's container count.")
 def deployment_scale(
     ctx: typer.Context,
     deployment_id_or_name: str,
@@ -431,17 +449,67 @@ def deployment_scale(
         deployment_id_or_name,
         containers,
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(
+            "Deployment scaled",
+            f"Set {response.name} to {containers} containers.",
+            tone="success",
+        ),
+    )
 
 
-@deployment_app.command("delete")
+@deployment_app.command("delete", help="Delete a deployment.")
 def deployment_delete(
     ctx: typer.Context,
     deployment_id_or_name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     DeploymentClient(workspace=current_workspace(workspace)).delete(deployment_id_or_name)
-    print_payload(ctx, {"deployment_id": deployment_id_or_name, "deleted": True})
+    emit(
+        ctx,
+        payload={"deployment_id": deployment_id_or_name, "deleted": True},
+        view=notice_card(
+            "Deployment deleted",
+            f"Deleted {deployment_id_or_name}.",
+            tone="success",
+        ),
+    )
+
+
+def _attach_workflow_terminal(target: object) -> None:
+    attach_terminal(target)
+
+
+def _deployment_summary(
+    response: object,
+    *,
+    handler: str,
+    name: str | None,
+) -> dict[str, object]:
+    if isinstance(response, AppDeployResult):
+        summary: dict[str, object] = {
+            "app": response.app,
+            "workloads": len(response.resources),
+        }
+        urls = [
+            invoke_url
+            for resource in response.resources
+            if (invoke_url := getattr(resource, "invoke_url", ""))
+        ]
+        if urls:
+            summary["urls"] = urls
+        return summary
+
+    summary = {"name": name or handler}
+    version = getattr(response, "version", 0)
+    if version:
+        summary["version"] = version
+    invoke_url = getattr(response, "invoke_url", "")
+    if invoke_url:
+        summary["url"] = invoke_url
+    return summary
 
 
 def _load_run_target(reference: str) -> object | None:

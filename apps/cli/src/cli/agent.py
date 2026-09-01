@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.results import emit_notice, emit_result
+from lazycloud.json_contracts import validate_json_object
 from shared.app_identity import AGENT_NAME, STATE_DIR
 from shared.compute_policy import MachinePool
 from shared.http.operations import AgentLeaseRequest, AgentRegisterRequest
@@ -62,7 +66,20 @@ def agent_install(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    print_payload(ctx, result.model_dump(mode="json"))
+    payload = result.model_dump(mode="json")
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Agent service planned" if result.dry_run else "Agent service installed",
+        fields={
+            "state": result.state.value,
+            "service": result.service_name,
+            "manager": result.manager.value,
+            "scope": result.scope.value,
+            "reason": result.reason,
+        },
+        tone="info" if result.dry_run else "success",
+    )
 
 
 @agent_app.command("join")
@@ -96,12 +113,26 @@ def agent_join(
             labels=request.labels,
         )
     )
-    print_payload(
-        ctx,
+    command = build_join_command(request)
+    payload = validate_json_object(
         {
             "agent": record.model_dump(mode="json"),
-            "command": build_join_command(request),
+            "command": command,
+        }
+    )
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Agent registered",
+        fields={
+            "name": record.name,
+            "pool": str(record.pool),
+            "status": record.status.value,
+            "id": record.id,
+            "command": shlex.join(command),
         },
+        tone="success",
+        message="Run the command on the agent host.",
     )
 
 
@@ -113,7 +144,12 @@ def agent_preflight(
     from agent.service_manager import run_preflight_checks
 
     checks = run_preflight_checks(paths or [])
-    print_payload(ctx, [item.model_dump(mode="json") for item in checks])
+    payload = [item.model_dump(mode="json") for item in checks]
+    if json_output_enabled(ctx):
+        print_payload(ctx, payload)
+        return
+    rows = [[item.name, item.status.value, item.message] for item in checks]
+    console.print(table("Agent preflight", ["check", "status", "result"], rows))
 
 
 @agent_app.command("status")
@@ -124,7 +160,16 @@ def agent_status(ctx: typer.Context) -> None:
     agents = client.list_agents().agents
     leases = client.list_leases(include_inactive=False).leases
     summary = summarize_agent_status([item.pool for item in agents], len(leases))
-    print_payload(ctx, summary.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=summary.model_dump(mode="json"),
+        title="Agent status",
+        fields={
+            "agents": summary.agents,
+            "active leases": summary.active_leases,
+            "pools": ", ".join(f"{name} {count}" for name, count in summary.pools.items()),
+        },
+    )
 
 
 @agent_app.command("register")
@@ -137,13 +182,34 @@ def agent_register(
     record = admin_api_client().register_agent(
         AgentRegisterRequest(name=name, pool=MachinePool(pool), version=version)
     )
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Agent registered",
+        fields={
+            "name": record.name,
+            "pool": str(record.pool),
+            "status": record.status.value,
+            "id": record.id,
+        },
+        tone="success",
+    )
 
 
 @agent_app.command("heartbeat")
 def agent_heartbeat(ctx: typer.Context, agent_id: str) -> None:
     record = admin_api_client().heartbeat_agent(agent_id)
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Heartbeat recorded",
+        fields={
+            "agent": record.name,
+            "status": record.status.value,
+            "last seen": timestamp(record.last_seen_at) if record.last_seen_at else "unknown",
+        },
+        tone="success",
+    )
 
 
 @agent_app.command("list")
@@ -152,8 +218,8 @@ def agent_list(ctx: typer.Context) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.id, item.name, str(item.pool), item.status.value] for item in records]
-        console.print(table("Agents", ["id", "name", "pool", "status"], rows))
+        rows = [[item.name, str(item.pool), item.status.value, item.id] for item in records]
+        console.print(table("Agents", ["name", "pool", "status", "id"], rows))
 
 
 @agent_app.command("lease")
@@ -172,7 +238,19 @@ def agent_lease(
             ttl_seconds=ttl_seconds,
         ),
     )
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Lease created",
+        fields={
+            "agent": record.agent_id,
+            "resource": f"{record.resource_type}/{record.resource_id}",
+            "status": record.status.value,
+            "expires": timestamp(record.expires_at),
+            "id": record.id,
+        },
+        tone="success",
+    )
 
 
 @agent_app.command("leases")
@@ -184,17 +262,41 @@ def agent_leases(
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.id, item.agent_id, item.resource_type, item.status.value] for item in records]
-        console.print(table("Leases", ["id", "agent", "resource", "status"], rows))
+        rows = [
+            [
+                item.agent_id,
+                f"{item.resource_type}/{item.resource_id}",
+                item.status.value,
+                timestamp(item.expires_at),
+                item.id,
+            ]
+            for item in records
+        ]
+        console.print(table("Leases", ["agent", "resource", "status", "expires", "id"], rows))
 
 
 @agent_app.command("release")
 def agent_release(ctx: typer.Context, lease_id: str) -> None:
     record = admin_api_client().release_lease(lease_id)
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Lease released",
+        fields={
+            "agent": record.agent_id,
+            "resource": f"{record.resource_type}/{record.resource_id}",
+            "status": record.status.value,
+        },
+        tone="success",
+    )
 
 
 @agent_app.command("delete")
-def agent_delete(agent_id: str) -> None:
+def agent_delete(ctx: typer.Context, agent_id: str) -> None:
     admin_api_client().delete_agent(agent_id)
-    console.print(f"deleted agent {agent_id}")
+    emit_notice(
+        ctx,
+        payload={"agent_id": agent_id, "deleted": True},
+        title="Agent deleted",
+        message=f"Deleted {agent_id}.",
+    )

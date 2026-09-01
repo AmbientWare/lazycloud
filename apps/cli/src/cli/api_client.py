@@ -58,7 +58,6 @@ from shared.http.operations import (
     ImageBuildResponse,
     SchedulerContainerDispatchListResponse,
 )
-from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.http.storage import (
     CacheContentResponse,
     CacheCreateRequest,
@@ -85,8 +84,6 @@ from shared.http.users import (
 )
 from shared.http.workspaces import (
     WorkspaceConfigExportResponse,
-    WorkspaceCreateRequest,
-    WorkspaceListResponse,
     WorkspaceResponse,
     WorkspaceSetRequest,
 )
@@ -128,39 +125,12 @@ class AdminApiClient:
             self.channel.get(self._workspace_path("/api/v1/maps"))
         )
 
-    def create_workspace(self, request: WorkspaceCreateRequest) -> WorkspaceResponse:
-        return WorkspaceResponse.model_validate(
-            self.channel.post("/api/v1/workspaces", request.model_dump(mode="json"))
-        )
-
     def upsert_workspace(self, name: str, request: WorkspaceSetRequest) -> WorkspaceResponse:
         return WorkspaceResponse.model_validate(
             self.channel.request(
                 "PUT",
                 f"/api/v1/workspaces/{url_path_segment(name)}",
                 payload=request.model_dump(mode="json"),
-            )
-        )
-
-    def list_workspaces(self, *, include_deleted: bool = False) -> WorkspaceListResponse:
-        return WorkspaceListResponse.model_validate(
-            self.channel.get(
-                f"/api/v1/workspaces?{urlencode({'include_deleted': include_deleted})}"
-            )
-        )
-
-    def get_workspace(self, workspace_id_or_name: str) -> WorkspaceResponse:
-        return WorkspaceResponse.model_validate(
-            self.channel.get(f"/api/v1/workspaces/{url_path_segment(workspace_id_or_name)}")
-        )
-
-    def get_source_cache_cleanup_status(
-        self,
-        workspace_id_or_name: str,
-    ) -> SourceCacheCleanupStatusResponse:
-        return SourceCacheCleanupStatusResponse.model_validate(
-            self.channel.get(
-                f"/api/v1/workspaces/{url_path_segment(workspace_id_or_name)}/source-cache-cleanup"
             )
         )
 

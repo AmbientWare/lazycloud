@@ -43,6 +43,7 @@ from lazycloud.session.deployment import (
     DeploymentControlClient,
     DeploymentResourceClient,
 )
+from lazycloud.terminal import Terminal
 
 
 class PodClient(Protocol):
@@ -130,6 +131,7 @@ class Container:
     endpoint: str | None = None
     token: str | None = None
     timeout_seconds: float = 10.0
+    terminal: Terminal | None = None
 
     @property
     def control_client(self) -> ContainerAttachClient:
@@ -165,7 +167,7 @@ class Container:
                 if response.output:
                     output.append(response.output)
                     if not hide_logs:
-                        print(response.output, end="")
+                        (self.terminal or Terminal()).write(response.output)
                 if response.done:
                     terminal = response
                     break
@@ -230,6 +232,7 @@ class Pod(ControlClientConfigMixin):
     endpoint: str | None = field(default=None, init=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False)
+    terminal: Terminal | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.volumes = volume_mounts(self.volumes)
@@ -368,6 +371,7 @@ class Pod(ControlClientConfigMixin):
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
                 sync_source=True,
+                terminal=self.terminal,
             ).prepare(self.spec(), workspace=workspace or self.workspace, image=self.image)
         except RuntimeError as exc:
             raise PodOperationError(str(exc)) from exc
@@ -452,6 +456,7 @@ class Pod(ControlClientConfigMixin):
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
                 sync_source=True,
+                terminal=self.terminal,
             ).create(
                 self.spec(),
                 workspace=workspace or self.workspace,

@@ -3,10 +3,18 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.http.errors import HttpApiError
 from shared.http.secrets import SecretWireRecord
 
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud.cli.components.formatting import timestamp
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_default,
+    json_output_enabled,
+    print_payload,
+    table,
+)
 from lazycloud.cli.control import secret_client
 
 MASKED_SECRET_VALUE = "********"
@@ -14,7 +22,7 @@ MASKED_SECRET_VALUE = "********"
 secret_app = typer.Typer(help="Manage secrets.")
 
 
-@secret_app.command("list")
+@secret_app.command("list", help="List secret names and update times.")
 def secret_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -26,56 +34,58 @@ def secret_list(
     rows = [
         [
             item.name,
-            item.updated_at.isoformat(),
-            item.created_at.isoformat(),
+            timestamp(item.updated_at),
         ]
         for item in response.secrets
     ]
-    console.print(table("Secrets", ["name", "updated", "created"], rows))
+    console.print(table("Secrets", ["name", "updated"], rows))
 
 
-@secret_app.command("create")
+@secret_app.command("create", help="Create a secret.")
 def secret_create(
     ctx: typer.Context,
     name: str,
     value: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    try:
-        response = secret_client(workspace=workspace).create(name, value)
-    except HttpApiError as exc:
-        raise typer.BadParameter(exc.detail or "secret create failed") from exc
-    print_payload(ctx, {"id": response.id, "name": response.name})
+    response = secret_client(workspace=workspace).create(name, value)
+    emit(
+        ctx,
+        payload={"id": response.id, "name": response.name},
+        view=notice_card("Secret created", f"Created {response.name}.", tone="success"),
+    )
 
 
-@secret_app.command("modify")
+@secret_app.command("modify", help="Replace a secret value.")
 def secret_modify(
     ctx: typer.Context,
     name: str,
     value: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    try:
-        secret_client(workspace=workspace).update(name, value)
-    except HttpApiError as exc:
-        raise typer.BadParameter(exc.detail or "secret modify failed") from exc
-    print_payload(ctx, {"name": name})
+    secret_client(workspace=workspace).update(name, value)
+    emit(
+        ctx,
+        payload={"name": name, "updated": True},
+        view=notice_card("Secret updated", f"Updated {name}.", tone="success"),
+    )
 
 
-@secret_app.command("delete")
+@secret_app.command("delete", help="Delete a secret.")
 def secret_delete(
     ctx: typer.Context,
     name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    try:
-        secret_client(workspace=workspace).delete(name)
-    except HttpApiError as exc:
-        raise typer.BadParameter(exc.detail or "secret delete failed") from exc
-    print_payload(ctx, {"name": name})
+    secret_client(workspace=workspace).delete(name)
+    emit(
+        ctx,
+        payload={"name": name, "deleted": True},
+        view=notice_card("Secret deleted", f"Deleted {name}.", tone="success"),
+    )
 
 
-@secret_app.command("show")
+@secret_app.command("show", help="Show a secret, masked unless explicitly revealed.")
 def secret_show(
     ctx: typer.Context,
     name: str,
@@ -85,17 +95,24 @@ def secret_show(
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    try:
-        response = secret_client(workspace=workspace).get(name)
-    except HttpApiError as exc:
-        raise typer.BadParameter(exc.detail or f"secret not found: {name}") from exc
+    response = secret_client(workspace=workspace).get(name)
     if response.secret is None:
         raise typer.BadParameter(f"secret not found: {name}")
     payload = _secret_payload(response.secret, reveal=reveal)
-    if json_output_enabled(ctx):
-        print_payload(ctx, payload)
-        return
-    console.print(table("Secret", ["name", "value"], [[payload["name"], payload["value"]]]))
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Secret",
+            json_default(
+                {
+                    "name": response.secret.name,
+                    "value": payload["value"],
+                    "updated": timestamp(response.secret.updated_at),
+                }
+            ),
+        ),
+    )
 
 
 def _secret_payload(record: SecretWireRecord, *, reveal: bool = False) -> dict[str, object]:

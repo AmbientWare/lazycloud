@@ -4,11 +4,7 @@ import sys
 
 import typer
 from foundation.environment_file import load_environment_file
-from lazycloud.cli.components.errors import (
-    debug_errors_enabled,
-    json_errors_enabled,
-    render_exception,
-)
+from lazycloud.cli.components.runner import run_cli
 from lazycloud.cli.main import (
     PublicCliRegistry,
     build_public_cli,
@@ -18,7 +14,7 @@ from lazycloud.cli.main import (
 from cli.agent import agent_app
 from cli.billing import billing_app
 from cli.components.errors import ADMIN_ERROR_POLICY
-from cli.control_plane import concurrency_app, stub_app, workspace_app
+from cli.control_plane import concurrency_app, stub_app, workspace_configure
 from cli.database import database_app
 from cli.execution import events, invoke
 from cli.fleet import fleet_app
@@ -101,25 +97,21 @@ _ADMIN_GROUP_ORDER = (
 
 
 def build_admin_cli() -> typer.Typer:
-    return build_public_cli((_register_operator_cli,))
+    return build_public_cli(
+        (_register_operator_cli,),
+        help="Operate lazycloud services, resources, and platform infrastructure.",
+    )
 
 
 def start(args: list[str] | None = None, prog_name: str | None = None) -> None:
     load_environment_file()
     effective_args = normalize_global_flags(list(sys.argv[1:] if args is None else args))
-    try:
-        build_admin_cli()(args=effective_args, prog_name=prog_name)
-    except SystemExit:
-        raise
-    except Exception as exc:
-        if debug_errors_enabled(effective_args):
-            raise
-        exit_code = render_exception(
-            exc,
-            json_output=json_errors_enabled(effective_args),
-            policy=ADMIN_ERROR_POLICY,
-        )
-        raise SystemExit(exit_code) from None
+    run_cli(
+        build_admin_cli(),
+        args=effective_args,
+        prog_name=prog_name,
+        policy=ADMIN_ERROR_POLICY,
+    )
 
 
 def _register_operator_cli(registry: PublicCliRegistry) -> None:
@@ -127,7 +119,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_root_command("events", _register_events)
     registry.extend_group("profile", _register_profile_extensions)
     registry.extend_group("token", _register_token_extensions)
-    registry.replace_group("workspace", workspace_app)
+    registry.extend_group("workspace", _register_workspace_extensions)
     registry.replace_group("container", container_app)
     registry.extend_group("machine", register_machine_extensions)
 
@@ -165,13 +157,20 @@ def _register_events(application: typer.Typer) -> None:
 
 
 def _register_profile_extensions(group: typer.Typer) -> None:
-    group.command("export")(profile_export)
+    group.command("export", help="Export a profile for another environment.")(profile_export)
 
 
 def _register_token_extensions(group: typer.Typer) -> None:
-    group.command("create")(token_create)
-    group.command("list")(token_list)
-    group.command("revoke")(token_revoke)
+    group.command("create", help="Create an access token.")(token_create)
+    group.command("list", help="List access tokens.")(token_list)
+    group.command("revoke", help="Revoke an access token.")(token_revoke)
+
+
+def _register_workspace_extensions(group: typer.Typer) -> None:
+    group.command(
+        "configure",
+        help="Configure operator-owned workspace storage and identity settings.",
+    )(workspace_configure)
 
 
 if __name__ == "__main__":

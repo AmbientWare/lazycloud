@@ -10,7 +10,6 @@ from typing import Annotated
 
 import typer
 from pydantic import JsonValue
-from rich.text import Text
 from shared.http.device_auth import (
     DeviceCodeCreateResponse,
     DeviceCodeTokenResponse,
@@ -18,14 +17,17 @@ from shared.http.device_auth import (
 from shared.http_transport import HttpChannel
 from shared.identity import DeviceAuthorizationStatus
 
-from lazycloud.cli.components import theme
+from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
     console,
+    emit,
     error_console,
     json_output_enabled,
     print_payload,
     table,
 )
+from lazycloud.clients.workspace import WorkspaceControlClient
 from lazycloud.config import (
     DEFAULT_PROFILE,
     ClientProfile,
@@ -59,7 +61,7 @@ class DeviceLoginResult:
 def endpoint_url(endpoint: str, *, tls: bool) -> str:
     selected = endpoint.strip()
     if not selected:
-        msg = "control plane endpoint must not be empty"
+        msg = "Control plane endpoint cannot be empty."
         raise ConfigError(msg)
     if "://" in selected:
         return selected.rstrip("/")
@@ -86,22 +88,21 @@ def resolve_login_endpoint(endpoint: str | None, existing: ClientProfile) -> str
 
 def resolve_login_token(
     token: str | None,
-    existing: ClientProfile,
 ) -> tuple[str, str]:
     """Resolve the login credential without requiring a secret command argument.
 
-    An explicit ``--token`` remains authoritative, including an explicitly empty
-    value that requests device authorization. Otherwise the canonical
-    ``LAZYCLOUD_TOKEN`` setting wins over the stored profile so self-hosted
-    bootstrap credentials can enter through the process environment instead of
-    argv.
+    An explicit ``--token`` remains authoritative, including an empty value that
+    requests device authorization. Otherwise ``LAZYCLOUD_TOKEN`` supplies a
+    non-interactive credential without exposing it in process arguments. With
+    neither source, login starts device authorization. The stored token remains
+    untouched until the new credential works.
     """
     if token is not None:
         return token, "provided"
     environment_token = settings().token.strip()
     if environment_token:
         return environment_token, "environment"
-    return existing.token, "stored"
+    return "", "device"
 
 
 def device_login_client_name() -> str:
@@ -149,9 +150,13 @@ def device_login(
             continue
         if claim.status is DeviceAuthorizationStatus.Approved:
             return DeviceLoginResult(token=claim.token)
-        msg = f"device login {claim.status.value}"
+        msg = (
+            "The sign-in request was denied."
+            if claim.status is DeviceAuthorizationStatus.Denied
+            else "The sign-in code expired."
+        )
         raise DeviceLoginError(msg)
-    msg = "device login expired before it was approved"
+    msg = "The sign-in code expired."
     raise DeviceLoginError(msg)
 
 
@@ -163,22 +168,20 @@ def _device_request(
     try:
         return channel.post(path, payload)
     except urllib.error.URLError as exc:
-        msg = f"control plane unreachable at {channel.endpoint}: {exc.reason}"
+        msg = f"Could not reach {channel.endpoint}: {exc.reason}"
         raise DeviceLoginError(msg) from exc
 
 
 def announce_device_login(started: DeviceCodeCreateResponse) -> None:
     error_console.print(
-        Text.assemble(
-            "To sign in, open ",
-            (started.verification_uri_complete, theme.EMPHASIS),
-            " and confirm code ",
-            (started.user_code, theme.EMPHASIS),
-            ".",
+        notice_card(
+            "Sign in to lazycloud",
+            f"Open {started.verification_uri_complete}",
+            hint=(
+                f"Confirm code {started.user_code}. "
+                f"It expires in {started.expires_in_seconds // 60} minutes."
+            ),
         )
-    )
-    error_console.print(
-        f"Waiting for approval (expires in {started.expires_in_seconds // 60} minutes)..."
     )
 
 
@@ -205,20 +208,29 @@ def login(
     selected_endpoint = resolve_login_endpoint(endpoint, existing)
     selected_workspace = workspace or existing.workspace
     selected_tls = tls if tls is not None else existing.tls
-    selected_token, token_source = resolve_login_token(token, existing)
+    selected_token, token_source = resolve_login_token(token)
+    selected_endpoint_url = endpoint_url(selected_endpoint, tls=selected_tls)
     if not selected_token:
         try:
             result = device_login(
-                endpoint_url(selected_endpoint, tls=selected_tls),
+                selected_endpoint_url,
                 client_name=device_login_client_name(),
                 announce=announce_device_login,
             )
         except DeviceLoginError as exc:
-            error_console.print(theme.styled(str(exc), theme.ERROR))
-            raise typer.Exit(1) from exc
+            raise ClientError(
+                str(exc),
+                type="login_failed",
+                title="Login failed",
+            ) from exc
         selected_token = result.token
         token_source = "device"
 
+    WorkspaceControlClient.from_endpoint(
+        selected_endpoint_url,
+        token=selected_token,
+        workspace=selected_workspace,
+    ).current()
     saved = set_profile(
         ClientProfile(
             name=profile_name,
@@ -230,17 +242,28 @@ def login(
         activate=activate,
         replace_legacy=True,
     )
-    print_payload(
+    payload: dict[str, object] = {
+        **profile_payload(saved),
+        "activated": activate,
+        "token_source": token_source,
+    }
+    emit(
         ctx,
-        {
-            **profile_payload(saved),
-            "activated": activate,
-            "token_source": token_source,
-        },
+        payload=payload,
+        view=notice_card(
+            "Signed in" if activate else "Profile saved",
+            (
+                f"Profile {saved.name} is active."
+                if activate
+                else f"Saved profile {saved.name} without making it active."
+            ),
+            hint=("" if activate else f"Run `lazycloud profile activate {saved.name}` to use it."),
+            tone="success",
+        ),
     )
 
 
-@profile_app.command("list")
+@profile_app.command("list", help="List configured client profiles.")
 def profile_list(ctx: typer.Context) -> None:
     profiles = list_profiles()
     active = _active_profile_name_or_default()
@@ -248,10 +271,6 @@ def profile_list(ctx: typer.Context) -> None:
         [
             item.name,
             "yes" if item.name == active else "",
-            item.endpoint,
-            item.workspace,
-            "yes" if item.tls else "no",
-            "set" if item.token else "",
         ]
         for item in profiles
     ]
@@ -264,28 +283,52 @@ def profile_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Profiles",
-            ["name", "active", "endpoint", "workspace", "tls", "token"],
+            ["name", "active"],
             rows,
+            expand=False,
         )
     )
 
 
-@profile_app.command("current")
+@profile_app.command("current", help="Show the active client profile.")
 def profile_current(ctx: typer.Context) -> None:
     profile = get_profile(apply_env=False)
-    print_payload(ctx, {**profile_payload(profile), "active": True})
+    payload: dict[str, object] = {**profile_payload(profile), "active": True}
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Current profile",
+            {
+                "name": profile.name,
+                "endpoint": profile.resolved_endpoint(),
+                "workspace": profile.workspace,
+            },
+        ),
+    )
 
 
-@profile_app.command("show")
+@profile_app.command("show", help="Show a client profile.")
 def profile_show(
     ctx: typer.Context,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
 ) -> None:
     selected = get_profile(profile)
-    print_payload(ctx, profile_payload(selected))
+    emit(
+        ctx,
+        payload=profile_payload(selected),
+        view=result_card(
+            "Profile",
+            {
+                "name": selected.name,
+                "endpoint": selected.resolved_endpoint(),
+                "workspace": selected.workspace,
+            },
+        ),
+    )
 
 
-@profile_app.command("set")
+@profile_app.command("set", help="Create or update a client profile.")
 def profile_set(
     ctx: typer.Context,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
@@ -311,23 +354,54 @@ def profile_set(
         activate=activate,
         replace_legacy=True,
     )
-    print_payload(ctx, profile_payload(saved))
+    payload = profile_payload(saved)
+    emit(
+        ctx,
+        payload=payload,
+        view=notice_card(
+            "Profile saved",
+            (
+                f"Profile {saved.name} is active."
+                if activate
+                else f"Saved profile {saved.name} without making it active."
+            ),
+            tone="success",
+        ),
+    )
 
 
-@profile_app.command("activate")
+@profile_app.command("activate", help="Make a profile active.")
 def profile_activate(ctx: typer.Context, name: str) -> None:
     profile = activate_profile(name)
-    print_payload(ctx, f"using profile {profile.name}")
+    payload: dict[str, object] = {**profile_payload(profile), "active": True}
+    emit(
+        ctx,
+        payload=payload,
+        view=notice_card(
+            "Profile activated",
+            f"Using profile {profile.name}.",
+            tone="success",
+        ),
+    )
 
 
-@profile_app.command("delete")
-def profile_delete(name: str) -> None:
+@profile_app.command("delete", help="Delete a client profile.")
+def profile_delete(ctx: typer.Context, name: str) -> None:
     delete_profile(name)
-    console.print(f"deleted profile {name}")
+    emit(
+        ctx,
+        payload={"name": name, "deleted": True},
+        view=notice_card(
+            "Profile deleted",
+            f"Deleted profile {name}.",
+            tone="success",
+        ),
+    )
 
 
-@token_app.command("set")
+@token_app.command("set", help="Save an access token for a profile.")
 def token_set(
+    ctx: typer.Context,
     value: str,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
 ) -> None:
@@ -338,13 +412,33 @@ def token_set(
         activate=profile_name == _active_profile_name_or_default(),
         replace_legacy=True,
     )
-    console.print("token set")
+    emit(
+        ctx,
+        payload={"profile": profile_name, "token": "set"},
+        view=notice_card(
+            "Token saved",
+            f"Saved the token for profile {profile_name}.",
+            tone="success",
+        ),
+    )
 
 
-@token_app.command("show")
-def token_show(profile: Annotated[str | None, typer.Option("--profile")] = None) -> None:
+@token_app.command("show", help="Show whether a profile has an access token.")
+def token_show(
+    ctx: typer.Context,
+    profile: Annotated[str | None, typer.Option("--profile")] = None,
+) -> None:
     selected = get_profile(profile)
-    console.print("set" if selected.token else "")
+    emit(
+        ctx,
+        payload={"profile": selected.name, "token": "set" if selected.token else "not set"},
+        view=notice_card(
+            "Token status",
+            f"Profile {selected.name} has "
+            f"{'a saved token.' if selected.token else 'no saved token.'}",
+            tone="neutral",
+        ),
+    )
 
 
 def _target_profile_name(name: str | None) -> str:

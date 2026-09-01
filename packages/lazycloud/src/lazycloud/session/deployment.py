@@ -310,7 +310,7 @@ class DeploymentClient(ControlClientConfigMixin):
             source_root=selected_root,
             archive_prefix=archive_prefix,
         )
-        self._progress("Preparing deployment stub")
+        self._progress("Creating deployment")
         response = self.control_client.get_or_create_stub(
             _stub_request_from_spec(
                 prepared_spec,
@@ -318,7 +318,7 @@ class DeploymentClient(ControlClientConfigMixin):
                 object_id=source_object_id,
             )
         )
-        self._progress(f"Deployment stub ready <{response.stub_id}>")
+        self._progress("Deployment created")
         return response
 
     def list(

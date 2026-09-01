@@ -4,12 +4,15 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import print_payload
+from lazycloud.cli.components.cards import notice_card
+from lazycloud.cli.components.output import emit
+from lazycloud.cli.components.results import emit_result
 from provider_clients.release import (
     ReleaseManifestSettings,
     fetch_release_manifest,
     materialize_agent_artifact,
 )
+from pydantic import JsonValue
 
 release_app = typer.Typer(help="Work with the release a deployment runs.")
 
@@ -36,7 +39,15 @@ def release_fetch_agent(
 
     settings = ReleaseManifestSettings()
     if not settings.manifest_url:
-        print_payload(ctx, {"fetched": False, "reason": "this deployment names no release"})
+        payload: dict[str, JsonValue] = {
+            "fetched": False,
+            "reason": "this deployment names no release",
+        }
+        emit(
+            ctx,
+            payload=payload,
+            view=notice_card("No release configured", "There is no agent binary to fetch."),
+        )
         return
 
     manifest = fetch_release_manifest(
@@ -44,14 +55,21 @@ def release_fetch_agent(
         timeout_seconds=settings.fetch_timeout_seconds,
     )
     path = materialize_agent_artifact(manifest, into=into)
-    print_payload(
+    emit_result(
         ctx,
-        {
+        payload={
             "fetched": True,
             "release": manifest.release_version,
             "version": manifest.agent_artifact_version,
             "path": str(path),
         },
+        title="Agent binary fetched",
+        fields={
+            "release": manifest.release_version,
+            "agent": manifest.agent_artifact_version,
+            "path": str(path),
+        },
+        tone="success",
     )
 
 

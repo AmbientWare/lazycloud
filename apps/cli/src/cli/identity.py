@@ -3,12 +3,14 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import (
     console,
     json_output_enabled,
     print_payload,
     table,
 )
+from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.identity import profile_payload
 from lazycloud.config import (
     get_profile,
@@ -55,7 +57,17 @@ def profile_export(
             },
         },
     }
-    print_payload(ctx, payload)
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Profile exported",
+        fields={
+            "profile": selected.name,
+            "token": "included" if include_token else "omitted",
+        },
+        tone="success",
+        message="Run this command with --json for the complete export.",
+    )
 
 
 user_app = typer.Typer(help="Manage accounts.")
@@ -87,7 +99,18 @@ def user_create(
             role=PlatformRole.Administrator if administrator else PlatformRole.Member,
         )
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Account created",
+        fields={
+            "name": response.display_name or response.github_login or response.id,
+            "role": response.role.value,
+            "status": response.status.value,
+            "id": response.id,
+        },
+        tone="success",
+    )
 
 
 def user_set_role(
@@ -110,7 +133,16 @@ def user_set_role(
         user_id,
         UserRoleRequest(role=PlatformRole.Administrator if administrator else PlatformRole.Member),
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Account role updated",
+        fields={
+            "account": response.display_name or response.github_login or response.id,
+            "role": response.role.value,
+        },
+        tone="success",
+    )
 
 
 def user_list(ctx: typer.Context) -> None:
@@ -119,10 +151,15 @@ def user_list(ctx: typer.Context) -> None:
         print_payload(ctx, [item.model_dump(mode="json") for item in users])
         return
     rows = [
-        [item.id, item.display_name, item.github_login, item.role.value, item.status.value]
+        [
+            item.display_name or item.github_login or item.id,
+            item.role.value,
+            item.status.value,
+            item.id,
+        ]
         for item in users
     ]
-    console.print(table("Accounts", ["id", "name", "github", "role", "status"], rows))
+    console.print(table("Accounts", ["name", "role", "status", "id"], rows))
 
 
 def token_create(
@@ -147,7 +184,22 @@ def token_create(
         if user is not None
         else client.create_token(request)
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Token created",
+        fields={
+            "name": response.record.name,
+            "token": response.token,
+            "expires": (
+                timestamp(response.record.expires_at)
+                if response.record.expires_at is not None
+                else "never"
+            ),
+        },
+        tone="success",
+        message="Copy this token now. It cannot be shown again.",
+    )
 
 
 def token_list(ctx: typer.Context) -> None:
@@ -172,24 +224,27 @@ def token_list(ctx: typer.Context) -> None:
     else:
         rows = [
             [
-                item.id,
                 item.name,
                 item.kind.value,
-                item.workspace_id,
                 item.status.value,
-                ",".join(item.scopes),
+                timestamp(item.expires_at) if item.expires_at else "never",
+                item.id,
             ]
             for item in tokens
         ]
-        console.print(
-            table("Tokens", ["id", "name", "kind", "workspace", "status", "scopes"], rows)
-        )
+        console.print(table("Tokens", ["name", "kind", "status", "expires", "id"], rows))
 
 
 def token_revoke(ctx: typer.Context, token_id_or_name: str) -> None:
     """End a credential the acting account holds."""
     record = admin_api_client().revoke_token(token_id_or_name)
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Token revoked",
+        fields={"name": record.name},
+        tone="success",
+    )
 
 
 user_app.command("create")(user_create)

@@ -42,9 +42,8 @@ def _missing_setting_details(
                 title="Configuration missing",
                 message=message,
                 hint=(
-                    f"Export `{item.variable}` or set it in the `.env` the stack "
-                    f"reads; `{ADMIN_CLI_NAME}` connects to backends directly and "
-                    "does not inherit a container's environment."
+                    f"Set `{item.variable}` in this shell or the stack's `.env`. "
+                    f"`{ADMIN_CLI_NAME}` connects to the backend directly."
                 ),
             )
     return None
@@ -69,32 +68,23 @@ def _connection_hint(exc: BaseException) -> str:
     """Name the connection knob for the backend that actually failed."""
     modules = [type(item).__module__ for item in exception_chain(exc)]
     if any(name.startswith(("psycopg", "sqlalchemy")) for name in modules):
-        return (
-            f"Check that PostgreSQL is running and that `{ENV_PREFIX}_DATABASE_URL` "
-            "points at it; the admin CLI connects to the database directly."
-        )
+        return f"Start PostgreSQL and check `{ENV_PREFIX}_DATABASE_URL`."
     if any(name.startswith("redis") for name in modules):
-        return (
-            f"Check that Redis is running and that `{ENV_PREFIX}_REDIS_URL` "
-            "points at it; the admin CLI connects to Redis directly."
-        )
+        return f"Start Redis and check `{ENV_PREFIX}_REDIS_URL`."
     if any(name.startswith(("botocore", "boto3")) for name in modules):
         return (
-            "Check that the object store is running and that "
+            "Start the object store and check "
             f"`{ENV_PREFIX}_OBJECT_STORE_ENDPOINT_URL`, "
             f"`{ENV_PREFIX}_OBJECT_STORE_ACCESS_KEY_ID`, and "
-            f"`{ENV_PREFIX}_OBJECT_STORE_SECRET_ACCESS_KEY` match it."
+            f"`{ENV_PREFIX}_OBJECT_STORE_SECRET_ACCESS_KEY`."
         )
     if any(name.startswith("urllib") for name in modules):
-        return (
-            "Check that the control plane is running and that the active profile "
-            "endpoint is correct."
-        )
+        return "Start the control plane or correct the active profile endpoint."
     return (
-        "Check that the target service is running: the active profile endpoint for "
-        f"control-plane commands, or `{ENV_PREFIX}_DATABASE_URL`, "
+        "Check the active profile endpoint. Direct commands use "
+        f"`{ENV_PREFIX}_DATABASE_URL`, "
         f"`{ENV_PREFIX}_REDIS_URL`, and `{ENV_PREFIX}_OBJECT_STORE_ENDPOINT_URL` "
-        "for direct backend commands."
+        "instead."
     )
 
 
@@ -108,7 +98,7 @@ _DOMAIN_ERROR_DETAILS: dict[type[DomainError], tuple[str, str]] = {
 ADMIN_ERROR_POLICY = CliErrorPolicy(
     auth_hint=f"Run `{ADMIN_CLI_NAME} login` to refresh credentials.",
     connection_hint=_connection_hint,
-    timeout_hint="Retry the command or check the service logs if the operation keeps timing out.",
+    timeout_hint="Retry once. If it times out again, check the service logs.",
     debug_hint="Run the command again with `--debug` to see the full traceback.",
     classifiers=(_missing_setting_details, _domain_error_details, _operation_error_details),
 )

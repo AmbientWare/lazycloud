@@ -49,6 +49,13 @@ def test_output_channels_preserve_json_cleanliness_and_restore_human_state(
     assert "deployed handler" in captured.out
     assert captured.err == ""
 
+    print_payload(_context(json_output=False), {"phase": "ready", "attempts": 2})
+    captured = capsys.readouterr()
+    assert "Result" in captured.out
+    assert "Phase" in captured.out
+    assert "ready" in captured.out
+    assert "{'phase'" not in captured.out
+
     set_json_output(True)
     console.print("Tip: run lazycloud cloud validate next.")
     print_payload(_context(json_output=True), {"phase": "ready"})
@@ -67,6 +74,19 @@ def test_output_channels_preserve_json_cleanliness_and_restore_human_state(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "problem detail" in captured.err
+
+
+def test_stream_output_preserves_rich_looking_user_text(
+    capsys: pytest.CaptureFixture[str],
+    human_output_mode: None,
+) -> None:
+    from lazycloud.cli.components.output import write_stream
+
+    write_stream("[red]literal[/red]\n")
+
+    captured = capsys.readouterr()
+    assert captured.out == "[red]literal[/red]\n"
+    assert captured.err == ""
 
 
 def _transport_error(body: str, *, status: int, url: str) -> HttpApiError:
@@ -134,7 +154,9 @@ def test_normalize_exception_preserves_safe_actionable_details(case: str) -> Non
             "authentication_failed",
             "unauthorized",
         )
-        assert (forbidden.type, forbidden.message) == ("authentication_failed", "forbidden")
+        assert (forbidden.type, forbidden.message) == ("permission_denied", "Forbidden")
+        assert forbidden.title == "Access denied"
+        assert "workspace" in forbidden.hint
         assert invalid.message == "invalid token"
         assert "lazycloud login" in unauthorized.hint
     elif case == "timeout":

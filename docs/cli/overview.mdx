@@ -17,6 +17,23 @@ lazycloud [--json] [--debug] COMMAND [ARGS]...
 | `--install-completion` / `--show-completion` | Shell completion management. |
 | `-h`, `--help` | Help for any command. |
 
+## Output modes
+
+Human output is the default. Finite commands use labeled cards for records and
+completed actions, tables for collections, and semantic status text. Styling is
+removed automatically when output is redirected.
+
+`--json` reserves standard output for machine data. A finite command writes one
+JSON document to stdout; progress stays on stderr. Command errors write one JSON
+error document to stderr and return a nonzero exit code. Place the flag before
+`--`: arguments after `--` belong to the invoked handler.
+
+Log-follow commands write newline-delimited JSON in `--json` mode because each
+event is a separate record. Human log and container streams remain exact text so
+bracketed content, whitespace, and line endings are not interpreted as terminal
+markup. Interactive commands such as `shell`, `dev`, and `serve` reject
+`--json`.
+
 ## Handler references
 
 Commands that take a `HANDLER` accept `<file-or-module>:<object>`:

@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import typer
+from lazycloud.abstractions.shell import ShellSession
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
+from lazycloud.cli.workflow_options import DeploymentOverrides
 from shared.http.secrets import GetSecretResponse, SecretWireRecord
 from shared.http.tasks import TaskPageResponse, TaskResponse
 from typer.testing import CliRunner
@@ -60,8 +63,8 @@ def test_task_list_filters_by_exact_app_id(
             "--json",
             "task",
             "list",
-            "--app-id",
-            "app-1",
+            "--app",
+            "11111111-1111-4111-8111-111111111111",
             "--workspace",
             "team",
         ],
@@ -69,7 +72,7 @@ def test_task_list_filters_by_exact_app_id(
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)[0]["id"] == "task-1"
-    assert resources.app_ids == ["app-1"]
+    assert resources.app_ids == ["11111111-1111-4111-8111-111111111111"]
 
 
 def test_public_cli_opens_an_existing_container_shell_without_a_handler(
@@ -98,6 +101,47 @@ def test_public_cli_opens_an_existing_container_shell_without_a_handler(
     assert calls == [("container-1", "team")]
 
 
+def test_development_session_connects_without_printing_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = ShellSession(
+        container_id="container-1",
+        stub_id="stub-1",
+        username="shell",
+        password="fixture-shell-secret",
+    )
+    opened: list[ShellSession] = []
+
+    class FakePod:
+        workspace: str | None = None
+
+        def shell(self, *, workspace: str | None, sync_dir: str) -> ShellSession:
+            assert workspace == "team"
+            assert sync_dir == "./"
+            return session
+
+    def open_session(
+        _ctx: typer.Context,
+        selected: ShellSession,
+        *,
+        workspace: str | None = None,
+    ) -> None:
+        assert workspace == "team"
+        opened.append(selected)
+
+    def default_dev_pod(_overrides: DeploymentOverrides) -> FakePod:
+        return FakePod()
+
+    monkeypatch.setattr("lazycloud.cli.development._default_dev_pod", default_dev_pod)
+    monkeypatch.setattr("lazycloud.cli.development.open_shell_session", open_session)
+
+    result = CliRunner().invoke(client_cli, ["dev", "--workspace", "team"])
+
+    assert result.exit_code == 0, result.output
+    assert opened == [session]
+    assert "fixture-shell-secret" not in result.output
+
+
 def test_interactive_shell_rejects_json_output_before_creating_a_session() -> None:
     result = CliRunner().invoke(
         client_cli,
@@ -106,6 +150,45 @@ def test_interactive_shell_rejects_json_output_before_creating_a_session() -> No
 
     assert result.exit_code != 0
     assert "--json cannot be used with an interactive shell" in result.output
+
+
+def test_public_entrypoint_formats_usage_errors_as_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        client_start(args=["--json", "does-not-exist"], prog_name="lazycloud")
+
+    assert raised.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"]["type"] == "invalid_usage"
+    assert "does-not-exist" in payload["error"]["message"]
+
+
+def test_handler_argument_named_json_does_not_enable_machine_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = tmp_path / "handler_args.py"
+    module.write_text(
+        "def inspect(*args):\n    raise RuntimeError(f'handler args: {args!r}')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        client_start(
+            args=["run", "handler_args:inspect", "--", "--json"],
+            prog_name="lazycloud",
+        )
+
+    assert raised.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Unexpected error" in captured.err
+    assert "handler args" in captured.err
 
 
 def test_secret_show_masks_secret_value_by_default(
