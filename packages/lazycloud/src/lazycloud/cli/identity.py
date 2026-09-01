@@ -271,8 +271,6 @@ def profile_list(ctx: typer.Context) -> None:
         [
             item.name,
             "yes" if item.name == active else "",
-            item.resolved_endpoint(),
-            item.workspace,
         ]
         for item in profiles
     ]
@@ -285,8 +283,9 @@ def profile_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Profiles",
-            ["name", "active", "endpoint", "workspace"],
+            ["name", "active"],
             rows,
+            expand=False,
         )
     )
 

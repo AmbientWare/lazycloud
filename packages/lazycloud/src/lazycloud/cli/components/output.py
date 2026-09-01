@@ -170,8 +170,20 @@ def payload_data(value: object) -> object:
     return value
 
 
-def table(title: str, columns: list[str], rows: list[list[Any]]) -> RenderableType:
-    return resource_table(title, columns, rows, empty="No items found.")
+def table(
+    title: str,
+    columns: list[str],
+    rows: list[list[Any]],
+    *,
+    expand: bool = True,
+) -> RenderableType:
+    return resource_table(
+        title,
+        columns,
+        rows,
+        empty="No items found.",
+        expand=expand,
+    )
 
 
 def _command_title(ctx: typer.Context) -> str:
