@@ -27,15 +27,15 @@ def app_list(
         return
     rows: list[list[str]] = [
         [
-            item.id,
             item.name,
             item.lifecycle_state.value,
             str(item.version),
             str(item.public),
+            item.id,
         ]
         for item in response.data
     ]
-    console.print(table("Apps", ["id", "name", "state", "version", "public"], rows))
+    console.print(table("Apps", ["name", "state", "version", "public", "id"], rows))
 
 
 @app_app.command("show")
@@ -45,7 +45,7 @@ def app_show(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).app(app_id)
-    print_payload(ctx, response.model_dump(mode="json"))
+    print_payload(ctx, response.model_dump(mode="json"), title="App")
 
 
 @app_app.command("pause")
@@ -55,7 +55,7 @@ def app_pause(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).pause_app(app_id)
-    print_payload(ctx, response.model_dump(mode="json"))
+    print_payload(ctx, response.model_dump(mode="json"), title="App paused", tone="success")
 
 
 @app_app.command("resume")
@@ -65,7 +65,7 @@ def app_resume(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).resume_app(app_id)
-    print_payload(ctx, response.model_dump(mode="json"))
+    print_payload(ctx, response.model_dump(mode="json"), title="App resumed", tone="success")
 
 
 @app_app.command("delete")
@@ -75,7 +75,12 @@ def app_delete(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     resource_client(workspace=workspace).delete_app(app_id)
-    print_payload(ctx, {"app_id": app_id, "deleted": True})
+    print_payload(
+        ctx,
+        {"app_id": app_id, "deleted": True},
+        title="App deleted",
+        tone="success",
+    )
 
 
 __all__ = ["app_app"]

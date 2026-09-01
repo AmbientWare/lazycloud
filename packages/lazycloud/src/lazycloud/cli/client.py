@@ -32,7 +32,7 @@ def get_client(
         )
     except ClientGenerationError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    print_payload(ctx, payload)
+    print_payload(ctx, payload, title="Client generated", tone="success")
 
 
 @client_app.command("remove")
@@ -41,7 +41,12 @@ def remove_client(
     app: Annotated[str, typer.Argument(help="App slug to remove.")],
     output: Annotated[Path, typer.Option("--output", "-o")] = CLIENT_PACKAGE_ROOT,
 ) -> None:
-    print_payload(ctx, remove_client_package(app=app, output=output))
+    print_payload(
+        ctx,
+        remove_client_package(app=app, output=output),
+        title="Client removed",
+        tone="success",
+    )
 
 
 __all__ = ["client_app"]

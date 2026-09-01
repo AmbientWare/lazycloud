@@ -22,7 +22,7 @@ def _client(profile: ClientProfile) -> WorkspaceControlClient:
 @workspace_app.command("show")
 def workspace_show(ctx: typer.Context) -> None:
     profile = get_profile()
-    print_payload(ctx, _client(profile).current().model_dump(mode="json"))
+    print_payload(ctx, _client(profile).current().model_dump(mode="json"), title="Workspace")
 
 
 @workspace_app.command("rename")
@@ -34,7 +34,12 @@ def workspace_rename(ctx: typer.Context, name: str) -> None:
         activate=True,
         replace_legacy=True,
     )
-    print_payload(ctx, workspace.model_dump(mode="json"))
+    print_payload(
+        ctx,
+        workspace.model_dump(mode="json"),
+        title="Workspace renamed",
+        tone="success",
+    )
 
 
 @workspace_app.command("audit")

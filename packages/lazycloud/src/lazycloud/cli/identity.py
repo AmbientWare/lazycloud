@@ -10,7 +10,6 @@ from typing import Annotated
 
 import typer
 from pydantic import JsonValue
-from rich.text import Text
 from shared.http.device_auth import (
     DeviceCodeCreateResponse,
     DeviceCodeTokenResponse,
@@ -18,7 +17,8 @@ from shared.http.device_auth import (
 from shared.http_transport import HttpChannel
 from shared.identity import DeviceAuthorizationStatus
 
-from lazycloud.cli.components import theme
+from lazycloud.cli.components.cards import notice_card
+from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
     console,
     error_console,
@@ -169,16 +169,14 @@ def _device_request(
 
 def announce_device_login(started: DeviceCodeCreateResponse) -> None:
     error_console.print(
-        Text.assemble(
-            "To sign in, open ",
-            (started.verification_uri_complete, theme.EMPHASIS),
-            " and confirm code ",
-            (started.user_code, theme.EMPHASIS),
-            ".",
+        notice_card(
+            "Device sign-in",
+            (f"Open {started.verification_uri_complete} and confirm code {started.user_code}."),
+            hint=(
+                "Approve the request in your browser. "
+                f"This code expires in {started.expires_in_seconds // 60} minutes."
+            ),
         )
-    )
-    error_console.print(
-        f"Waiting for approval (expires in {started.expires_in_seconds // 60} minutes)..."
     )
 
 
@@ -214,8 +212,11 @@ def login(
                 announce=announce_device_login,
             )
         except DeviceLoginError as exc:
-            error_console.print(theme.styled(str(exc), theme.ERROR))
-            raise typer.Exit(1) from exc
+            raise ClientError(
+                str(exc),
+                type="login_failed",
+                title="Login failed",
+            ) from exc
         selected_token = result.token
         token_source = "device"
 
@@ -237,6 +238,8 @@ def login(
             "activated": activate,
             "token_source": token_source,
         },
+        title="Signed in",
+        tone="success",
     )
 
 
@@ -317,17 +320,28 @@ def profile_set(
 @profile_app.command("activate")
 def profile_activate(ctx: typer.Context, name: str) -> None:
     profile = activate_profile(name)
-    print_payload(ctx, f"using profile {profile.name}")
+    print_payload(
+        ctx,
+        {**profile_payload(profile), "active": True},
+        title="Profile activated",
+        tone="success",
+    )
 
 
 @profile_app.command("delete")
-def profile_delete(name: str) -> None:
+def profile_delete(ctx: typer.Context, name: str) -> None:
     delete_profile(name)
-    console.print(f"deleted profile {name}")
+    print_payload(
+        ctx,
+        {"name": name, "deleted": True},
+        title="Profile deleted",
+        tone="success",
+    )
 
 
 @token_app.command("set")
 def token_set(
+    ctx: typer.Context,
     value: str,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
 ) -> None:
@@ -338,13 +352,25 @@ def token_set(
         activate=profile_name == _active_profile_name_or_default(),
         replace_legacy=True,
     )
-    console.print("token set")
+    print_payload(
+        ctx,
+        {"profile": profile_name, "token": "set"},
+        title="Token saved",
+        tone="success",
+    )
 
 
 @token_app.command("show")
-def token_show(profile: Annotated[str | None, typer.Option("--profile")] = None) -> None:
+def token_show(
+    ctx: typer.Context,
+    profile: Annotated[str | None, typer.Option("--profile")] = None,
+) -> None:
     selected = get_profile(profile)
-    console.print("set" if selected.token else "")
+    print_payload(
+        ctx,
+        {"profile": selected.name, "token": "set" if selected.token else "not set"},
+        title="Token status",
+    )
 
 
 def _target_profile_name(name: str | None) -> str:

@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 
+from lazycloud.cli.components.formatting import bytes_count
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 
 example_app = typer.Typer(help="Manage example apps.")
@@ -59,7 +60,12 @@ def quickstart(
     force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
 ) -> None:
     _write_file(output, QUICKSTART_TEMPLATE, force=force)
-    print_payload(ctx, {"path": str(output), "written": True})
+    print_payload(
+        ctx,
+        {"path": str(output), "written": True},
+        title="Quickstart written",
+        tone="success",
+    )
 
 
 def create_app(
@@ -70,7 +76,12 @@ def create_app(
 ) -> None:
     target = output or Path(name)
     written = _write_template(name, target, force=force)
-    print_payload(ctx, {"name": name, "path": str(target), "files": written})
+    print_payload(
+        ctx,
+        {"name": name, "path": str(target), "files": written},
+        title="App scaffold created",
+        tone="success",
+    )
 
 
 @example_app.command("download")
@@ -99,7 +110,7 @@ def example_download(
 @example_app.command("list")
 def example_list(ctx: typer.Context) -> None:
     rows = [
-        [template.name, template.description, _format_bytes(template.size_bytes)]
+        [template.name, template.description, bytes_count(template.size_bytes)]
         for template in TEMPLATES.values()
     ]
     if json_output_enabled(ctx):
@@ -136,10 +147,6 @@ def _write_file(path: Path, content: str, *, force: bool) -> None:
         raise typer.BadParameter(f"file already exists: {selected}")
     selected.parent.mkdir(parents=True, exist_ok=True)
     selected.write_text(content, encoding="utf-8")
-
-
-def _format_bytes(value: int) -> str:
-    return f"{value} B"
 
 
 __all__ = ["create_app", "example_app", "quickstart"]

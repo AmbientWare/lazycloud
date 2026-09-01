@@ -6,6 +6,7 @@ import typer
 from shared.custom_domains import CustomDomainPhase
 from shared.http.custom_domains import CustomDomainResponse
 
+from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.cli.control import domain_client
 
@@ -24,18 +25,11 @@ def _payload(domain: CustomDomainResponse) -> dict[str, object]:
 
 
 def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
+    print_payload(ctx, _payload(domain), title="Domain")
     if json_output_enabled(ctx):
-        print_payload(ctx, _payload(domain))
         return
-    console.print(
-        table(
-            "Domain",
-            ["hostname", "status"],
-            [[domain.hostname, domain.phase.value]],
-        )
-    )
     if domain.error_message:
-        console.print(f"[red]{domain.error_message}[/red]")
+        console.print(notice_card("Domain error", domain.error_message, tone="warning"))
     if domain.phase is not CustomDomainPhase.Ready and domain.cname_target:
         _print_dns_record(domain)
 
@@ -43,7 +37,6 @@ def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
 def _print_dns_record(domain: CustomDomainResponse) -> None:
     """Print the record to create, named the way a DNS form asks for it."""
 
-    console.print("\nAdd this record where you manage DNS for this domain:")
     console.print(
         table(
             "DNS record",
@@ -72,7 +65,13 @@ def domain_add(
     registered = domain_client(workspace=workspace).register(domain)
     _print(ctx, registered)
     if not json_output_enabled(ctx):
-        console.print(f"Then run `lazycloud domain status {registered.hostname}`.")
+        console.print(
+            notice_card(
+                "Next step",
+                "Wait for DNS to propagate, then check the domain status.",
+                hint=f"Run lazycloud domain status {registered.hostname}",
+            )
+        )
 
 
 @domain_app.command("list")
@@ -112,10 +111,12 @@ def domain_remove(
     """Retire a domain, discarding its certificate."""
 
     domain_client(workspace=workspace).remove(hostname)
-    if json_output_enabled(ctx):
-        print_payload(ctx, {"hostname": hostname, "removed": True})
-        return
-    console.print(f"Removed {hostname}.")
+    print_payload(
+        ctx,
+        {"hostname": hostname, "removed": True},
+        title="Domain removed",
+        tone="success",
+    )
 
 
 __all__ = ["domain_app"]

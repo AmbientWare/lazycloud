@@ -118,15 +118,20 @@ def print_payload(
     ctx: typer.Context,
     payload: Any,
     *,
-    title: str = "Result",
-    tone: CardTone = "neutral",
+    title: str | None = None,
+    tone: CardTone | None = None,
     message: str = "",
 ) -> None:
     normalized = json_default(payload)
     emit(
         ctx,
         payload=normalized,
-        view=result_card(title, normalized, tone=tone, message=message),
+        view=result_card(
+            title or _command_title(ctx),
+            normalized,
+            tone=tone or _command_tone(ctx),
+            message=message,
+        ),
     )
 
 
@@ -166,7 +171,50 @@ def payload_data(value: object) -> object:
 
 
 def table(title: str, columns: list[str], rows: list[list[Any]]) -> RenderableType:
-    return resource_table(title, columns, rows)
+    return resource_table(title, columns, rows, empty="No items found.")
+
+
+def _command_title(ctx: typer.Context) -> str:
+    names = [part.replace("-", " ") for part in ctx.command_path.split()[1:]]
+    if not names:
+        return "Result"
+    return " ".join(names).title()
+
+
+def _command_tone(ctx: typer.Context) -> CardTone:
+    command = (ctx.info_name or "").replace("-", "_")
+    if command in {
+        "activate",
+        "add",
+        "cancel",
+        "checkpoint",
+        "connect",
+        "cp",
+        "create",
+        "create_app",
+        "delete",
+        "deploy",
+        "disconnect",
+        "download",
+        "get",
+        "modify",
+        "move",
+        "mv",
+        "pause",
+        "quickstart",
+        "remove",
+        "rename",
+        "resume",
+        "retry",
+        "rm",
+        "scale",
+        "set",
+        "start",
+        "stop",
+        "update",
+    }:
+        return "success"
+    return "neutral"
 
 
 def event_table(title: str, events: Sequence[Event]) -> RenderableType:
