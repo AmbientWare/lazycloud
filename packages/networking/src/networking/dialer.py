@@ -179,17 +179,6 @@ def split_host_port(address: str) -> tuple[str, int]:
     return (host.strip("[]"), port)
 
 
-def proxy_target_host(address: str) -> str:
-    host, _port = split_host_port(address)
-    return host.rstrip(".")
-
-
-def join_host_port(host: str, port: int) -> str:
-    if ":" in host and not host.startswith("["):
-        return f"[{host}]:{port}"
-    return f"{host}:{port}"
-
-
 def _remaining_seconds(deadline: float) -> float:
     return max(deadline - time.monotonic(), 0.001)
 

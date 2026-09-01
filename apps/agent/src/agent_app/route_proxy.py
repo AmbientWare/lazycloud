@@ -16,7 +16,7 @@ from gateway.http import (
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from networking.routing import BACKEND_ROUTE_PREFACE, parse_backend_route_preface
+from networking.routing import parse_backend_route_preface
 from networking.wireguard import WIREGUARD_AGENT_ROUTE_PROXY_PORT
 from pydantic import TypeAdapter, field_validator
 from shared.app_identity import AGENT_NAME
@@ -31,7 +31,6 @@ from agent_app.telemetry import (
     AgentTelemetryStream,
 )
 
-ROUTE_PROXY_PREFACE = BACKEND_ROUTE_PREFACE
 DEFAULT_ROUTE_PROXY_PREFACE_TIMEOUT_SECONDS = 10.0
 DEFAULT_ROUTE_PROXY_LOCAL_DIAL_TIMEOUT_SECONDS = 2.0
 DEFAULT_ROUTE_PROXY_READY_DIAL_TIMEOUT_SECONDS = 0.25
@@ -56,7 +55,6 @@ class AgentRouteStatusClient(Protocol):
 
 
 class AgentRouteProxyConfig(ContractModel):
-    enabled: bool = True
     bind_host: str = "127.0.0.1"
     bind_port: int = DEFAULT_ROUTE_PROXY_PORT
     advertise_host: str = ""
@@ -92,20 +90,6 @@ class AgentRouteProxyConfig(ContractModel):
             msg = "agent route proxy failure threshold must be positive"
             raise ValueError(msg)
         return value
-
-
-class RouteProxyConnectionResult(ContractModel):
-    route_id: str = ""
-    local_target: str = ""
-    proxied: bool = False
-    dial_latency_ms: int = 0
-    error: str = ""
-
-
-class AgentRouteProxyReconcileResult(ContractModel):
-    tracked_routes: int = 0
-    ready_updates: int = 0
-    removed_routes: int = 0
 
 
 @dataclass(slots=True)
@@ -144,7 +128,7 @@ class AgentRouteProxyService:
         return _join_host_port(host, port)
 
     def start(self) -> AgentRouteProxyService:
-        if not self.config.enabled or self._listener is not None:
+        if self._listener is not None:
             return self
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -182,13 +166,10 @@ class AgentRouteProxyService:
         _ = exc_type, exc_value, traceback
         self.close()
 
-    def reconcile_routes(self, routes: list[AgentRoute]) -> AgentRouteProxyReconcileResult:
-        if not self.config.enabled:
-            return AgentRouteProxyReconcileResult()
+    def reconcile_routes(self, routes: list[AgentRoute]) -> int:
         if self._listener is None:
             self.start()
         seen: set[str] = set()
-        ready_updates = 0
         for route in routes:
             if not route.route_id or not route.local_target or not route.proxy_auth_token:
                 continue
@@ -203,13 +184,8 @@ class AgentRouteProxyService:
             if not ok:
                 continue
             self._update_route_ready(route.route_id, route.local_target, latency_ms)
-            ready_updates += 1
-        removed = self.delete_routes_not_in(seen)
-        return AgentRouteProxyReconcileResult(
-            tracked_routes=self.route_count(),
-            ready_updates=ready_updates,
-            removed_routes=removed,
-        )
+        self.delete_routes_not_in(seen)
+        return self.route_count()
 
     def set_route(self, route_id: str, local_target: str, credential: str) -> None:
         if not credential:
@@ -221,25 +197,17 @@ class AgentRouteProxyService:
             if previous and previous != target:
                 self._failure_counts.pop(route_id, None)
 
-    def delete_routes_not_in(self, route_ids: set[str]) -> int:
-        removed = 0
+    def delete_routes_not_in(self, route_ids: set[str]) -> None:
         with self._lock:
             for route_id in list(self._routes):
                 if route_id in route_ids:
                     continue
                 self._routes.pop(route_id, None)
                 self._failure_counts.pop(route_id, None)
-                removed += 1
-        return removed
 
     def route_count(self) -> int:
         with self._lock:
             return len(self._routes)
-
-    def local_target(self, route_id: str) -> str:
-        with self._lock:
-            target = self._routes.get(route_id)
-            return target.local_target if target is not None else ""
 
     def authorize_route(self, route_id: str, credential: str) -> str:
         with self._lock:
@@ -248,20 +216,18 @@ class AgentRouteProxyService:
                 return ""
             return target.local_target
 
-    def handle_connection(self, connection: socket.socket) -> RouteProxyConnectionResult:
+    def handle_connection(self, connection: socket.socket) -> None:
         with connection:
             line = self._read_preface_line(connection)
             if line is None:
-                return RouteProxyConnectionResult(error="missing route preface")
+                return
             text, remainder = line
             preface = self._parse_route_preface(text, remainder)
             if preface is None:
-                return RouteProxyConnectionResult(error="missing route preface")
+                return
             local_target = self.authorize_route(preface.route_id, preface.credential)
             if not local_target:
-                return RouteProxyConnectionResult(
-                    error="unauthorized route preface",
-                )
+                return
             started = time.monotonic()
             try:
                 local = dial_local_target(
@@ -271,24 +237,12 @@ class AgentRouteProxyService:
             except OSError as exc:
                 latency_ms = int((time.monotonic() - started) * 1000)
                 self.record_route_failure(preface.route_id, local_target, latency_ms, exc)
-                return RouteProxyConnectionResult(
-                    route_id=preface.route_id,
-                    local_target=local_target,
-                    dial_latency_ms=latency_ms,
-                    error=str(exc),
-                )
-            latency_ms = int((time.monotonic() - started) * 1000)
+                return
             with local:
                 if preface.remainder:
                     local.sendall(preface.remainder)
                 _copy_both(connection, local)
             self.reset_route_failures(preface.route_id)
-            return RouteProxyConnectionResult(
-                route_id=preface.route_id,
-                local_target=local_target,
-                proxied=True,
-                dial_latency_ms=latency_ms,
-            )
 
     def record_route_failure(
         self,
@@ -519,9 +473,8 @@ def _connect_within(host: str, port: int, timeout_seconds: float) -> socket.sock
     """Bound how long the dial may take, but not how long the connection may live.
 
     ``create_connection`` leaves its timeout on the socket it returns, so it would
-    go on applying to every later ``recv``. A proxied connection that stays quiet
-    for longer than the dial budget—an idle terminal, a stream between messages—
-    would then fail mid-session and tear the tunnel down.
+    apply to every later ``recv``. An idle terminal or a stream between messages may
+    stay quiet past the dial budget. That must not tear the tunnel down.
     """
     connection = socket.create_connection((host, port), timeout=timeout_seconds)
     connection.settimeout(None)

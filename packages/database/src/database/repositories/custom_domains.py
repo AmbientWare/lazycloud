@@ -55,9 +55,6 @@ class CustomDomainRepository:
             status=domain.phase.value,
         )
 
-    def get(self, domain_id: str, *, user_id: str) -> CustomDomain | None:
-        return self.records.get(domain_id, user_id=user_id)
-
     def list(self, *, user_id: str) -> list[CustomDomain]:
         return [
             domain for domain in self.records.list(user_id=user_id) if domain.deleted_at is None

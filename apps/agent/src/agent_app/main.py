@@ -67,7 +67,7 @@ from agent_app.daemon import (
     ProviderInstanceIdentityMode,
     build_agent_daemon_service,
 )
-from agent_app.route_proxy import DEFAULT_ROUTE_PROXY_PORT, AgentRouteProxyConfig
+from agent_app.route_proxy import AgentRouteProxyConfig
 
 
 class AgentCommandArgs(argparse.Namespace):
@@ -96,10 +96,6 @@ class AgentCommandArgs(argparse.Namespace):
     docker_binary: str
     stream_interval_seconds: float
     http_timeout_seconds: float
-    route_proxy: bool
-    route_proxy_bind_host: str
-    route_proxy_bind_port: int
-    route_proxy_advertise_host: str
     once: bool
     target: str
     service_name: str
@@ -261,10 +257,6 @@ def _add_daemon_options(
     parser.add_argument("--docker-binary", default="docker")
     parser.add_argument("--stream-interval-seconds", type=float, default=5.0)
     parser.add_argument("--http-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--route-proxy", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--route-proxy-bind-host", default="127.0.0.1")
-    parser.add_argument("--route-proxy-bind-port", type=int, default=DEFAULT_ROUTE_PROXY_PORT)
-    parser.add_argument("--route-proxy-advertise-host", default="")
     if include_run_flags:
         parser.add_argument("--once", action="store_true")
 
@@ -309,12 +301,7 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
         stream_interval_seconds=args.stream_interval_seconds,
         http_timeout_seconds=args.http_timeout_seconds,
         once=args.once,
-        route_proxy=AgentRouteProxyConfig(
-            enabled=args.route_proxy,
-            bind_host=args.route_proxy_bind_host,
-            bind_port=args.route_proxy_bind_port,
-            advertise_host=args.route_proxy_advertise_host,
-        ),
+        route_proxy=AgentRouteProxyConfig(),
         capacity=AgentCapacityOptions(
             max_cpu=args.max_cpu,
             max_memory=args.max_memory,
@@ -431,14 +418,6 @@ def _install_service_command(
         command.extend(["--gpu-ids", args.gpu_ids])
     if args.docker_binary != "docker":
         command.extend(["--docker-binary", args.docker_binary])
-    if not args.route_proxy:
-        command.append("--no-route-proxy")
-    if args.route_proxy_bind_host != "127.0.0.1":
-        command.extend(["--route-proxy-bind-host", args.route_proxy_bind_host])
-    if args.route_proxy_bind_port != DEFAULT_ROUTE_PROXY_PORT:
-        command.extend(["--route-proxy-bind-port", str(args.route_proxy_bind_port)])
-    if args.route_proxy_advertise_host:
-        command.extend(["--route-proxy-advertise-host", args.route_proxy_advertise_host])
     return command
 
 
