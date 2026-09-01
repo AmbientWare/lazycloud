@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Protocol, runtime_checkable
-from uuid import UUID
 
 import typer
 from shared.compute_policy import MachinePool
@@ -12,6 +11,7 @@ from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
+from lazycloud.cli.apps import resolve_app_id
 from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.context import current_workspace
 from lazycloud.cli.components.output import (
@@ -359,26 +359,6 @@ def _exit_with_shell_status(exit_code: int) -> None:
         raise typer.Exit(exit_code)
 
 
-def _resolve_app_id(app: str, *, workspace: str | None) -> str:
-    """Accept an app name or id for `--app`.
-
-    Apps are addressed by name everywhere a user can see one, and no command
-    prints an app id, so a name has to resolve here rather than reach the API as
-    a malformed identifier.
-    """
-    try:
-        UUID(app)
-    except ValueError:
-        pass
-    else:
-        return app
-    apps = resource_client(workspace=workspace).list_apps()
-    matches = [item for item in apps.data if item.name == app]
-    if not matches:
-        raise typer.BadParameter(f"no app named {app!r} in workspace {workspace or 'default'}")
-    return matches[0].id
-
-
 @deployment_app.command("list", help="List deployments, optionally filtered by app.")
 def deployment_list(
     ctx: typer.Context,
@@ -387,7 +367,9 @@ def deployment_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     selected_workspace = current_workspace(workspace)
-    app_id = _resolve_app_id(app, workspace=selected_workspace) if app else None
+    app_id = (
+        resolve_app_id(app, client=resource_client(workspace=selected_workspace)) if app else None
+    )
     deployments = DeploymentClient(workspace=selected_workspace).list(
         filters={"app_id": [app_id]} if app_id else None,
         limit=limit,

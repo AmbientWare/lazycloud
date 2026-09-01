@@ -18,7 +18,7 @@ def resource_table(
     rows: Sequence[Sequence[object]],
     *,
     empty: str | None = None,
-    expand: bool = True,
+    expand: bool = False,
 ) -> RenderableType:
     if not rows and empty:
         return empty_state(title, empty)

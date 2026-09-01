@@ -175,7 +175,7 @@ def table(
     columns: list[str],
     rows: list[list[Any]],
     *,
-    expand: bool = True,
+    expand: bool = False,
 ) -> RenderableType:
     return resource_table(
         title,
@@ -241,7 +241,12 @@ def event_table(title: str, events: Sequence[Event]) -> RenderableType:
         ]
         for item in events
     ]
-    return table(title, ["time", "level", "action", "type", "resource", "message"], rows)
+    return table(
+        title,
+        ["time", "level", "action", "type", "resource", "message"],
+        rows,
+        expand=True,
+    )
 
 
 def print_events_table(title: str, events: Sequence[Event]) -> None:

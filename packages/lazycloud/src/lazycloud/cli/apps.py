@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 import typer
 
@@ -13,6 +14,7 @@ from lazycloud.cli.components.output import (
     table,
 )
 from lazycloud.cli.control import resource_client
+from lazycloud.clients.resource.control import ResourceControlClient
 
 app_app = typer.Typer(help="Manage deployed applications.")
 
@@ -38,20 +40,35 @@ def app_list(
             item.lifecycle_state.value,
             item.version,
             item.public,
-            item.id,
         ]
         for item in response.data
     ]
-    console.print(table("Apps", ["name", "state", "version", "public", "id"], rows))
+    console.print(table("Apps", ["name", "state", "version", "public"], rows))
+
+
+def resolve_app_id(value: str, *, client: ResourceControlClient) -> str:
+    """Resolve the app name shown by the CLI while still accepting an exact id."""
+    try:
+        UUID(value)
+    except ValueError:
+        pass
+    else:
+        return value
+    apps = client.list_apps()
+    match = next((item for item in apps.data if item.name == value), None)
+    if match is None:
+        raise typer.BadParameter(f"no app named {value!r} in this workspace")
+    return match.id
 
 
 @app_app.command("show", help="Show one deployed application.")
 def app_show(
     ctx: typer.Context,
-    app_id: str,
+    app: Annotated[str, typer.Argument(help="App name or ID.")],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = resource_client(workspace=workspace).app(app_id)
+    client = resource_client(workspace=workspace)
+    response = client.app(resolve_app_id(app, client=client))
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -70,10 +87,11 @@ def app_show(
 @app_app.command("pause", help="Pause an application's workloads.")
 def app_pause(
     ctx: typer.Context,
-    app_id: str,
+    app: Annotated[str, typer.Argument(help="App name or ID.")],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = resource_client(workspace=workspace).pause_app(app_id)
+    client = resource_client(workspace=workspace)
+    response = client.pause_app(resolve_app_id(app, client=client))
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -88,10 +106,11 @@ def app_pause(
 @app_app.command("resume", help="Resume a paused application.")
 def app_resume(
     ctx: typer.Context,
-    app_id: str,
+    app: Annotated[str, typer.Argument(help="App name or ID.")],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = resource_client(workspace=workspace).resume_app(app_id)
+    client = resource_client(workspace=workspace)
+    response = client.resume_app(resolve_app_id(app, client=client))
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -106,15 +125,17 @@ def app_resume(
 @app_app.command("delete", help="Delete a deployed application.")
 def app_delete(
     ctx: typer.Context,
-    app_id: str,
+    app: Annotated[str, typer.Argument(help="App name or ID.")],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    resource_client(workspace=workspace).delete_app(app_id)
+    client = resource_client(workspace=workspace)
+    app_id = resolve_app_id(app, client=client)
+    client.delete_app(app_id)
     emit(
         ctx,
         payload={"app_id": app_id, "deleted": True},
-        view=notice_card("App deleted", f"Deleted {app_id}.", tone="success"),
+        view=notice_card("App deleted", f"Deleted {app}.", tone="success"),
     )
 
 
-__all__ = ["app_app"]
+__all__ = ["app_app", "resolve_app_id"]
