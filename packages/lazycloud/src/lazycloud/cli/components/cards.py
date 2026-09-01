@@ -69,18 +69,16 @@ def empty_state(title: str, message: str) -> Panel:
 def _sequence(items: list[JsonValue]) -> RenderableType:
     if not items:
         return formatting.text(None)
-    lines: list[Text] = []
-    for item in items:
-        line = Text("• ", style=theme.MUTED)
+    parts: list[RenderableType] = []
+    for index, item in enumerate(items, start=1):
         if isinstance(item, dict):
-            summary = ", ".join(
-                f"{formatting.label(str(key))}: {value}" for key, value in item.items()
-            )
-            line.append(summary)
+            parts.append(Text(f"Result {index}", style=theme.MUTED + theme.EMPHASIS))
+            parts.append(formatting.fields(item))
         else:
+            line = Text("• ", style=theme.MUTED)
             line.append(str(item))
-        lines.append(line)
-    return Group(*lines)
+            parts.append(line)
+    return Group(*parts)
 
 
 def _title(title: str, tone: CardTone) -> Text:

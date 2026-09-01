@@ -5,6 +5,7 @@ from typing import Annotated
 import typer
 from shared.http.secrets import SecretWireRecord
 
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.cli.control import secret_client
 
@@ -25,8 +26,8 @@ def secret_list(
     rows = [
         [
             item.name,
-            item.updated_at.isoformat(),
-            item.created_at.isoformat(),
+            timestamp(item.updated_at),
+            timestamp(item.created_at),
         ]
         for item in response.secrets
     ]

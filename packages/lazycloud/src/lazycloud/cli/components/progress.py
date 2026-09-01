@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
 
 from rich.progress import (
     BarColumn,
@@ -115,6 +116,27 @@ class CliTerminal(Terminal):
         output.console.print(theme.styled(message, output_style(message)))
 
 
+@runtime_checkable
+class TerminalAware(Protocol):
+    terminal: Terminal | None
+
+
+@runtime_checkable
+class TerminalResourceCollection(Protocol):
+    @property
+    def resources(self) -> tuple[object, ...]: ...
+
+
+def attach_terminal(target: object, terminal: CliTerminal | None = None) -> CliTerminal:
+    selected = terminal or CliTerminal()
+    if isinstance(target, TerminalAware):
+        target.terminal = selected
+    if isinstance(target, TerminalResourceCollection):
+        for resource in target.resources:
+            attach_terminal(resource, selected)
+    return selected
+
+
 def output_style(message: str) -> Style:
     text = message.strip()
     lower = text.lower()
@@ -148,4 +170,4 @@ def print_stream_message(stream: str, message: str) -> None:
     )
 
 
-__all__ = ["CliTerminal", "output_style", "print_stream_message"]
+__all__ = ["CliTerminal", "attach_terminal", "output_style", "print_stream_message"]

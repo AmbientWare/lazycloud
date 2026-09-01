@@ -4,6 +4,8 @@ from typing import Annotated
 
 import typer
 
+from lazycloud.cli.components import theme
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.clients.workspace import WorkspaceControlClient
 from lazycloud.config import ClientProfile, get_profile, set_profile
@@ -55,7 +57,7 @@ def workspace_audit(
         return
     rows = [
         [
-            event.created_at.isoformat(),
+            timestamp(event.created_at),
             event.actor_name,
             event.summary,
         ]
@@ -63,7 +65,7 @@ def workspace_audit(
     ]
     console.print(table("Workspace audit", ["time", "actor", "change"], rows))
     if response.next:
-        console.print(f"Next cursor: {response.next}")
+        console.print(theme.styled(f"Next cursor: {response.next}", theme.MUTED))
 
 
 __all__ = ["workspace_app", "workspace_audit", "workspace_rename", "workspace_show"]

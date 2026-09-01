@@ -9,7 +9,7 @@ import typer
 from shared.http.volumes import DeletePathRequest, ListPathRequest, MovePathRequest
 
 from lazycloud.abstractions.volume import Volume, VolumeOperationError
-from lazycloud.cli.components.formatting import bytes_count
+from lazycloud.cli.components.formatting import bytes_count, timestamp
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import volume_client
@@ -33,7 +33,7 @@ def volume_list(
             item.name,
             bytes_count(item.size),
             item.workspace_name,
-            item.updated_at.isoformat(),
+            timestamp(item.updated_at),
         ]
         for item in response.volumes
     ]
@@ -91,7 +91,7 @@ def volume_ls(
         [
             Path(item.path).name + ("/" if item.is_dir else ""),
             "" if item.is_dir else bytes_count(item.size),
-            item.mod_time.isoformat(),
+            timestamp(item.mod_time),
             "yes" if item.is_dir else "no",
         ]
         for item in response.path_infos

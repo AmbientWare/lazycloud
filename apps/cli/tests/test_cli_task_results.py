@@ -78,8 +78,11 @@ def test_task_result_human_presents_structured_json_value(
     result = CliRunner().invoke(full_cli, ["task", "result", response.id, "--no-wait"])
 
     assert result.exit_code == 0
-    assert "'status': 'healthy'" in result.stdout
-    assert "'details': ['ready', 2]" in result.stdout
+    assert "Status" in result.stdout
+    assert "healthy" in result.stdout
+    assert "Details" in result.stdout
+    assert "ready, 2" in result.stdout
+    assert "'status': 'healthy'" not in result.stdout
     assert "value_base64" not in result.stdout
 
 

@@ -21,8 +21,20 @@ from shared.http.gateway import (
     AttachToContainerResponse,
     CheckpointContainerRequest,
 )
+from shared.tasks import is_terminal_task_status
 
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud.cli.components.cards import empty_state, notice_card, result_card
+from lazycloud.cli.components.errors import ClientError
+from lazycloud.cli.components.formatting import timestamp
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    json_default,
+    json_output_enabled,
+    print_payload,
+    table,
+    write_stream,
+)
 from lazycloud.cli.components.theme import state_style, styled
 from lazycloud.cli.control import (
     compute_client,
@@ -330,18 +342,25 @@ def cloud_connect_aws(
     )
     if open_console and response.authorization.url is not None:
         webbrowser.open(response.authorization.url)
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-        return
-    console.print(f"AWS account {account_id} is awaiting authorization.")
-    if response.authorization.url is not None:
-        console.print(response.authorization.url, highlight=False)
-        console.print("Complete the AWS action, then run `cloud validate`.")
-        return
-    console.print("Configure the role trust with this external ID, then run `cloud validate`:")
-    if response.authorization.external_id is None:
+    if response.authorization.url is None and response.authorization.external_id is None:
         raise RuntimeError("existing-role authorization did not return its external ID")
-    console.print(response.authorization.external_id, highlight=False)
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "AWS authorization required",
+            json_default(
+                {
+                    "account_id": account_id,
+                    "phase": response.connection.phase.value,
+                    "authorization_url": response.authorization.url,
+                    "external_id": response.authorization.external_id,
+                    "next_step": "Complete authorization, then run `cloud validate`.",
+                }
+            ),
+            tone="info",
+        ),
+    )
 
 
 @cloud_app.command("reconnect")
@@ -361,16 +380,23 @@ def cloud_reconnect(
     account_id = response.connection.account_id
     if open_console and response.authorization.url is not None:
         webbrowser.open(response.authorization.url)
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-        return
-    console.print(f"AWS account {account_id} replacement authorization is pending.")
-    if response.authorization.url is not None:
-        console.print(response.authorization.url, highlight=False)
-        console.print("Complete the AWS action, then run `cloud validate`.")
-    elif response.authorization.external_id is not None:
-        console.print("Keep this external ID in the connected role trust:")
-        console.print(response.authorization.external_id, highlight=False)
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "Replacement authorization required",
+            json_default(
+                {
+                    "account_id": account_id,
+                    "phase": response.connection.phase.value,
+                    "authorization_url": response.authorization.url,
+                    "external_id": response.authorization.external_id,
+                    "next_step": "Complete authorization, then run `cloud validate`.",
+                }
+            ),
+            tone="info",
+        ),
+    )
 
 
 @cloud_app.command("validate")
@@ -381,18 +407,22 @@ def cloud_validate(
     response = compute_client().validate_connection()
     account_id = response.account_id
     failure = _aws_validation_failure(response)
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-    else:
-        console.print(
-            f"AWS account {account_id}:",
-            styled(response.phase.value, state_style(response.phase)),
-        )
-        if failure is None:
-            console.print("AWS authorization validated.")
-        else:
-            error_code, message = failure
-            console.print(f"Validation failed ({error_code}): {message}")
+    summary: dict[str, object] = {
+        "account_id": account_id,
+        "phase": response.phase.value,
+        "detail": response.detail,
+    }
+    if failure is not None:
+        summary["error"] = f"{failure[0]}: {failure[1]}"
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "AWS authorization validated" if failure is None else "AWS validation failed",
+            json_default(summary),
+            tone="success" if failure is None else "warning",
+        ),
+    )
     if failure is not None:
         raise typer.Exit(code=1)
 
@@ -416,10 +446,7 @@ def cloud_status(
     client = compute_client()
     response = client.current_connection()
     if response is None:
-        if json_output_enabled(ctx):
-            print_payload(ctx, {"connection": None})
-        else:
-            console.print("Cloud connection: not connected")
+        print_payload(ctx, {"connection": None}, title="Cloud connection")
         return
     account_id = response.account_id
     if watch:
@@ -444,7 +471,11 @@ def cloud_status(
             if current is None:
                 raise RuntimeError("the AWS account connection was removed while waiting")
             response = current
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card("Cloud connection", json_default(_connection_summary(response))),
+    )
 
 
 @cloud_app.command("disconnect")
@@ -488,28 +519,25 @@ def cloud_disconnect(
                 raise RuntimeError(f"timed out waiting for AWS account {account_id} removal")
             time.sleep(interval_seconds)
             connection = client.current_connection()
-    if json_output_enabled(ctx):
-        print_payload(
-            ctx,
-            {
-                "connection": (
-                    connection.model_dump(mode="json") if connection is not None else None
-                )
-            },
-        )
-        return
-    if connection is None:
-        console.print(f"AWS account {account_id} removed.")
-        return
-    console.print(
-        f"AWS account {account_id}:",
-        styled(connection.phase.value, state_style(connection.phase)),
+    payload: dict[str, object] = {
+        "connection": connection.model_dump(mode="json") if connection is not None else None
+    }
+    summary = (
+        {"account_id": account_id, "status": "removed"}
+        if connection is None
+        else _connection_summary(connection)
     )
-    console.print(connection.detail)
-    if connection.customer_action is not None:
-        console.print(connection.customer_action.label)
-        if connection.customer_action.url is not None:
-            console.print(connection.customer_action.url, highlight=False)
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "AWS account removed" if connection is None else "AWS disconnect status",
+            json_default(summary),
+            tone="success" if connection is None else "info",
+        ),
+    )
+    if connection is None:
+        return
     if connection.phase is AwsAccountConnectionPhase.ActionRequired:
         if (
             open_console
@@ -518,8 +546,6 @@ def cloud_disconnect(
         ):
             webbrowser.open(connection.customer_action.url)
         return
-    if not wait:
-        console.print("Run `cloud disconnect --wait` to follow removal.")
 
 
 @cloud_app.command("cancel-reconnect")
@@ -547,6 +573,18 @@ def _aws_validation_failure(response: AwsConnectionResponse) -> tuple[str, str] 
     return None
 
 
+def _connection_summary(response: AwsConnectionResponse) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "account_id": response.account_id,
+        "phase": response.phase.value,
+        "detail": response.detail,
+    }
+    if response.customer_action is not None:
+        summary["action"] = response.customer_action.label
+        summary["action_url"] = response.customer_action.url
+    return summary
+
+
 @task_app.command("list")
 def task_list(
     ctx: typer.Context,
@@ -560,15 +598,15 @@ def task_list(
         return
     rows: list[list[str]] = [
         [
-            item.id,
+            item.workload.name if item.workload is not None else item.name,
             item.status.value,
+            timestamp(item.created_at),
             item.container_id or "",
-            item.workload.name if item.workload is not None else "",
-            item.workspace_id or "",
+            item.id,
         ]
         for item in response.data
     ]
-    console.print(table("Tasks", ["id", "status", "container", "stub", "workspace"], rows))
+    console.print(table("Tasks", ["workload", "status", "requested", "container", "id"], rows))
 
 
 @task_app.command("stop")
@@ -588,20 +626,7 @@ def task_show(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     task = task_client(workspace=workspace).detail(task_id)
-    if json_output_enabled(ctx):
-        print_payload(ctx, task.model_dump(mode="json"))
-        return
-    rows = [
-        ["id", task.id],
-        ["name", task.name],
-        ["status", task.status.value],
-        ["attempt", f"{task.attempt_number}/{task.max_attempts}"],
-        ["created", task.created_at.isoformat()],
-        ["started", task.started_at.isoformat() if task.started_at else ""],
-        ["finished", task.finished_at.isoformat() if task.finished_at else ""],
-        ["error", task.error or ""],
-    ]
-    console.print(table("Task", ["field", "value"], rows))
+    print_payload(ctx, task.model_dump(mode="json"), title="Task")
 
 
 @task_app.command("result")
@@ -613,17 +638,37 @@ def task_result(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client = task_client(workspace=workspace)
-    result = client.handle(task_id).result(
-        wait=wait,
-        timeout_seconds=timeout_seconds,
-    )
-    if json_output_enabled(ctx):
-        print_payload(ctx, client.detail(task_id).model_dump(mode="json"))
-        return
+    if wait and not json_output_enabled(ctx):
+        with console.status(f"Waiting for task {task_id}…"):
+            result = client.handle(task_id).result(
+                wait=True,
+                timeout_seconds=timeout_seconds,
+            )
+    else:
+        result = client.handle(task_id).result(
+            wait=wait,
+            timeout_seconds=timeout_seconds,
+        )
+    task = client.detail(task_id)
     if result.ok:
-        print_payload(ctx, task_result_human_value(client.detail(task_id)))
+        emit(
+            ctx,
+            payload=task.model_dump(mode="json"),
+            view=result_card(
+                "Task result",
+                json_default(task_result_human_value(task)),
+                tone="success",
+            ),
+        )
         return
-    console.print(result.error or f"task {task_id} finished with status {result.status.value}")
+    if is_terminal_task_status(result.status):
+        raise ClientError(
+            result.error or f"task {task_id} finished with status {result.status.value}",
+            type="task_failed",
+            title="Task failed",
+            exit_code=result.exit_code or 1,
+        )
+    print_payload(ctx, task.model_dump(mode="json"), title="Task pending", tone="info")
 
 
 @task_app.command("logs")
@@ -638,12 +683,10 @@ def task_logs(
         print_payload(ctx, [entry.model_dump(mode="json") for entry in logs])
         return
     if not logs:
-        console.print("No logs found.")
+        console.print(empty_state("Task logs", "No log entries found."))
         return
     for entry in logs:
-        console.print(
-            entry.message, highlight=False, end="" if entry.message.endswith("\n") else "\n"
-        )
+        write_stream(entry.message if entry.message.endswith("\n") else f"{entry.message}\n")
 
 
 @task_app.command("cancel")
@@ -680,10 +723,9 @@ def container_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in containers])
         return
     rows: list[list[Any]] = [
-        [item.id, item.name, item.image, item.status.value, item.exit_code or ""]
-        for item in containers
+        [item.name, item.status.value, item.image, item.exit_code, item.id] for item in containers
     ]
-    console.print(table("Containers", ["id", "name", "image", "status", "exit"], rows))
+    console.print(table("Containers", ["name", "status", "image", "exit", "id"], rows))
 
 
 @container_app.command("attach")
@@ -701,17 +743,24 @@ def container_attach(
         if response.output:
             chunks.append(response.output)
             if not json_output:
-                console.print(response.output, highlight=False, end="")
+                write_stream(response.output)
         if response.done:
             terminal = response
             break
     if terminal is None:
         raise typer.BadParameter("container attach stream ended before the container completed")
     terminal = terminal.model_copy(update={"output": "".join(chunks)})
-    if json_output:
-        print_payload(ctx, terminal.model_dump(mode="json"))
-        return
-    console.print(f"exit code: {terminal.exit_code}")
+    emit(
+        ctx,
+        payload=terminal.model_dump(mode="json"),
+        view=result_card(
+            "Container finished",
+            {"container_id": container_id, "exit_code": terminal.exit_code},
+            tone="success" if terminal.exit_code == 0 else "warning",
+        ),
+    )
+    if terminal.exit_code:
+        raise typer.Exit(terminal.exit_code)
 
 
 @container_app.command("checkpoint")
@@ -738,11 +787,7 @@ def container_stop(
     for container_id in container_ids:
         client.stop_container(container_id)
         results.append({"container_id": container_id})
-    if json_output_enabled(ctx):
-        print_payload(ctx, results)
-        return
-    for item in results:
-        console.print(f"stopped container {item['container_id']}")
+    print_payload(ctx, results, title="Containers stopped", tone="success")
 
 
 @machine_app.command("list")
@@ -755,8 +800,8 @@ def machine_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in machines])
         return
-    rows: list[list[str]] = [[item.id, item.status.value, item.gpu or ""] for item in machines]
-    console.print(table("Machines", ["id", "status", "gpu"], rows))
+    rows: list[list[str]] = [[item.status.value, item.gpu or "", item.id] for item in machines]
+    console.print(table("Machines", ["status", "gpu", "id"], rows))
 
 
 @machine_app.command("join")
@@ -843,7 +888,14 @@ def machine_join(
         print_payload(ctx, payload)
         return
     if print_only:
-        console.print(command)
+        console.print(
+            notice_card(
+                "Machine join command",
+                command,
+                hint="This command contains a short-lived credential. Do not share it.",
+                tone="warning",
+            )
+        )
         return
     try:
         exit_code = subprocess.call(command, shell=True)
@@ -853,7 +905,12 @@ def machine_join(
         return
     if exit_code:
         raise typer.Exit(exit_code)
-    console.print("Agent is running.")
+    print_payload(
+        ctx,
+        {"status": "running"},
+        title="Agent is running",
+        tone="success",
+    )
 
 
 @machine_app.command("remove")
@@ -864,7 +921,9 @@ def machine_remove(
 ) -> None:
     """Remove a machine this account joined."""
     compute_client(workspace=workspace).remove_machine(machine_id)
-    if json_output_enabled(ctx):
-        print_payload(ctx, {"machine_id": machine_id})
-        return
-    console.print(f"removed machine {machine_id}")
+    print_payload(
+        ctx,
+        {"machine_id": machine_id, "removed": True},
+        title="Machine removed",
+        tone="success",
+    )

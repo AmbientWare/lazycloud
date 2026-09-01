@@ -22,7 +22,7 @@ from rich.console import Console, RenderableType
 from shared.events import Event
 from shared.serialization import to_json_value
 
-from lazycloud.cli.components.cards import CardTone, result_card
+from lazycloud.cli.components.cards import CardTone, empty_state, result_card
 from lazycloud.cli.components.tables import resource_table
 from lazycloud.json_contracts import parse_json_value
 
@@ -234,7 +234,7 @@ def event_table(title: str, events: Sequence[Event]) -> RenderableType:
 
 def print_events_table(title: str, events: Sequence[Event]) -> None:
     if not events:
-        console.print("No events found.")
+        console.print(empty_state(title, "No events found."))
         return
     console.print(event_table(title, events))
 

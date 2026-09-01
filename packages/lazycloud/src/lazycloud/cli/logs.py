@@ -5,8 +5,14 @@ from typing import Annotated
 import typer
 from shared.http.observability import LogObjectType, LogQueryRequest, LogRecord
 
+from lazycloud.cli.components.cards import empty_state
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload
+from lazycloud.cli.components.output import (
+    console,
+    json_output_enabled,
+    print_payload,
+    write_stream,
+)
 from lazycloud.cli.control import observability_client
 
 
@@ -57,11 +63,11 @@ def logs(
         return
     records = [_log_record_line(item) for item in response.data]
     if not records:
-        console.print("No logs found.")
+        console.print(empty_state("Logs", "No log entries found."))
         return
     for timestamp, message in records:
         line = f"[{timestamp}] {message}" if show_timestamp else message
-        console.print(line, highlight=False, end="" if line.endswith("\n") else "\n")
+        write_stream(line if line.endswith("\n") else f"{line}\n")
 
 
 def _selected_log_target(
@@ -96,7 +102,7 @@ def _print_log_item(
         return
     timestamp, message = _log_record_line(item)
     line = f"[{timestamp}] {message}" if show_timestamp else message
-    console.print(line, highlight=False, end="" if line.endswith("\n") else "\n")
+    write_stream(line if line.endswith("\n") else f"{line}\n")
 
 
 def _log_record_line(item: LogRecord) -> tuple[str, str]:

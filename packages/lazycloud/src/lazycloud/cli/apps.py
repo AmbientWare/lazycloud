@@ -25,12 +25,12 @@ def app_list(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    rows: list[list[str]] = [
+    rows: list[list[object]] = [
         [
             item.name,
             item.lifecycle_state.value,
-            str(item.version),
-            str(item.public),
+            item.version,
+            item.public,
             item.id,
         ]
         for item in response.data

@@ -21,6 +21,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
+from lazycloud.cli.components.progress import attach_terminal
 from lazycloud.cli.control import resource_client
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
@@ -102,6 +103,7 @@ def deploy(
         except HandlerLoadError as exc:
             raise typer.BadParameter(str(exc)) from exc
         user_object: object = apply_handler_reference(user_object, handler)
+        _attach_workflow_terminal(user_object)
         deployment_image = _deployment_image(overrides)
         if isinstance(user_object, Pod):
             _configure_pod(user_object, overrides)
@@ -157,7 +159,7 @@ def deploy(
                     "source_root": source_root,
                 },
             )
-    print_payload(ctx, payload_data(response))
+    print_payload(ctx, payload_data(response), title="Deployment complete", tone="success")
 
 
 def run(
@@ -213,6 +215,7 @@ def run(
             raise typer.BadParameter(msg)
         payload_args = [parse_json_argument(item) for item in args[1:]]
         target = apply_handler_reference(user_object, args[0])
+        _attach_workflow_terminal(target)
         if isinstance(target, Pod):
             _configure_pod(target, overrides)
             response = target.run(*args[1:], workspace=selected_workspace)
@@ -239,7 +242,7 @@ def run(
         else:
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
-    print_payload(ctx, payload_data(response))
+    print_payload(ctx, payload_data(response), title="Run result")
 
 
 def shell(
@@ -264,6 +267,7 @@ def shell(
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
+    _require_interactive_output(ctx)
     if handler is None:
         if container_id is None:
             raise typer.BadParameter("handler or --container-id is required")
@@ -299,6 +303,7 @@ def shell(
         raise typer.BadParameter(str(exc)) from exc
     if isinstance(user_object, Pod):
         _configure_pod(user_object, overrides)
+    _attach_workflow_terminal(user_object)
     response = invoke_handler_method(
         apply_handler_reference(user_object, handler),
         "shell",
@@ -307,7 +312,7 @@ def shell(
     if isinstance(response, ShellSession):
         open_shell_session(ctx, response, workspace=workspace)
         return
-    print_payload(ctx, response)
+    print_payload(ctx, response, title="Shell session")
 
 
 def open_existing_shell(
@@ -389,10 +394,10 @@ def deployment_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in deployments])
         return
     rows: list[list[Any]] = [
-        [item.id, item.name, item.kind.value, item.version, item.app_id or "", item.active]
+        [item.name, item.kind.value, item.version, item.active, item.app_id or "", item.id]
         for item in deployments
     ]
-    console.print(table("Deployments", ["id", "name", "kind", "version", "app", "active"], rows))
+    console.print(table("Deployments", ["name", "kind", "version", "active", "app", "id"], rows))
 
 
 @deployment_app.command("stop")
@@ -407,7 +412,7 @@ def deployment_stop(
     for deployment_id in deployment_ids_or_names:
         response = client.stop(deployment_id, workspace=selected_workspace)
         responses.append(response.model_dump(mode="json"))
-    print_payload(ctx, responses)
+    print_payload(ctx, responses, title="Deployments stopped", tone="success")
 
 
 @deployment_app.command("start")
@@ -417,7 +422,12 @@ def deployment_start(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = DeploymentClient(workspace=current_workspace(workspace)).start(deployment_id_or_name)
-    print_payload(ctx, response.model_dump(mode="json"))
+    print_payload(
+        ctx,
+        response.model_dump(mode="json"),
+        title="Deployment started",
+        tone="success",
+    )
 
 
 @deployment_app.command("scale")
@@ -431,7 +441,12 @@ def deployment_scale(
         deployment_id_or_name,
         containers,
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    print_payload(
+        ctx,
+        response.model_dump(mode="json"),
+        title="Deployment scaled",
+        tone="success",
+    )
 
 
 @deployment_app.command("delete")
@@ -441,7 +456,16 @@ def deployment_delete(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     DeploymentClient(workspace=current_workspace(workspace)).delete(deployment_id_or_name)
-    print_payload(ctx, {"deployment_id": deployment_id_or_name, "deleted": True})
+    print_payload(
+        ctx,
+        {"deployment_id": deployment_id_or_name, "deleted": True},
+        title="Deployment deleted",
+        tone="success",
+    )
+
+
+def _attach_workflow_terminal(target: object) -> None:
+    attach_terminal(target)
 
 
 def _load_run_target(reference: str) -> object | None:

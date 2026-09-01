@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 from enum import Enum
 
@@ -51,9 +52,8 @@ def fields(items: dict[str, JsonValue]) -> Table:
     grid = Table.grid(padding=(0, 2), expand=True)
     grid.add_column(style=theme.MUTED, no_wrap=True)
     grid.add_column(ratio=1, overflow="fold")
-    for key, item in items.items():
-        key_text = str(key)
-        grid.add_row(label(key_text), value(item, key=key_text))
+    for key, item in _flatten_fields(items):
+        grid.add_row(label(key).replace(".", " · "), value(item, key=key.rsplit(".", 1)[-1]))
     return grid
 
 
@@ -98,6 +98,27 @@ def _scalar(value: object) -> str:
     if isinstance(value, Enum):
         return str(value.value)
     return str(value)
+
+
+def _flatten_fields(
+    items: dict[str, JsonValue],
+    *,
+    prefix: str = "",
+) -> Iterator[tuple[str, JsonValue]]:
+    for key, item in items.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(item, dict) and item:
+            yield from _flatten_fields(item, prefix=path)
+            continue
+        if isinstance(item, list) and any(isinstance(member, dict | list) for member in item):
+            for index, member in enumerate(item, start=1):
+                indexed_path = f"{path}.{index}"
+                if isinstance(member, dict):
+                    yield from _flatten_fields(member, prefix=indexed_path)
+                else:
+                    yield indexed_path, member
+            continue
+        yield path, item
 
 
 __all__ = [

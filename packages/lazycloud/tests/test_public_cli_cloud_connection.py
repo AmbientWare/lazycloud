@@ -182,7 +182,7 @@ def test_cloud_disconnect_opens_only_terminal_recovery_action(
     result = CliRunner().invoke(cli, ["cloud", "disconnect", "--open"])
 
     assert result.exit_code == 0, result.output
-    assert "action_required" in result.stdout
+    assert "action required" in result.stdout
     assert "Review cleanup in AWS" in result.stdout
     assert opened == ["https://console.aws.amazon.com/cloudformation/final"]
 
