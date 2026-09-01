@@ -331,7 +331,6 @@ class TunnelGatewayProcess:
         release: bool,
     ) -> None:
         lease.close()
-        self.runtime.close()
         if release:
             release_token_lock(self.redis, lease_key, token)
 

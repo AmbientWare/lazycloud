@@ -53,14 +53,11 @@ class PlatformClientSettings(BaseSettings):
             raise ValueError("WireGuard platform index or pod name is required")
         return self
 
-    def index(self) -> int:
-        return wireguard_platform_index(self.platform_index, pod_name=self.pod_name)
-
 
 def main() -> None:
     configure_process_logging()
     settings = PlatformClientSettings()
-    index = settings.index()
+    index = wireguard_platform_index(settings.platform_index, pod_name=settings.pod_name)
     runtime = WireGuardClientRuntime(settings.private_key_file.parent)
     server_public_key = validate_wireguard_public_key(
         settings.server_public_key_file.read_text(encoding="utf-8")
@@ -70,16 +67,10 @@ def main() -> None:
             peer_id=f"platform-{index}",
             address=f"{wireguard_platform_address(index)}/32",
             server_public_key=server_public_key,
-            endpoint=settings.gateway_endpoint.strip(),
+            endpoint=settings.gateway_endpoint,
             allowed_ips=(str(WIREGUARD_AGENT_NETWORK),),
             generation=1,
         )
-    )
-    subprocess.run(
-        ["ping", "-c", "1", "-W", "1", str(WIREGUARD_GATEWAY_ADDRESS)],
-        check=False,
-        capture_output=True,
-        text=True,
     )
     stop = threading.Event()
 

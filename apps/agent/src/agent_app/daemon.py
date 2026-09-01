@@ -109,7 +109,7 @@ from shared.http.provider_nodes import (
 )
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
-from shared.routing import BackendRouteState, BackendRouteTransport
+from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from worker.configuration import WorkerConfiguration, serialize_worker_configuration
 
@@ -117,7 +117,6 @@ from agent_app.metrics import agent_metric_snapshot, physical_memory_mb
 from agent_app.route_proxy import (
     AgentRouteProxyConfig,
     AgentRouteProxyService,
-    local_target_ready,
 )
 from agent_app.telemetry import (
     AgentTelemetryBuffer,
@@ -866,8 +865,7 @@ class AgentDaemonService:
                 state,
                 private_network_address=private_network_address,
             )
-            if route_proxy is not None:
-                route_proxy.start()
+            route_proxy.start()
             while True:
                 next_iteration = iterations + 1
                 try:
@@ -978,7 +976,7 @@ class AgentDaemonService:
         state: AgentState,
         *,
         current_iterations: int = 1,
-        route_proxy: AgentRouteProxyService | None = None,
+        route_proxy: AgentRouteProxyService,
         private_network_started: bool = False,
         private_network_address: str = "",
     ) -> AgentDaemonRunResult:
@@ -1006,7 +1004,7 @@ class AgentDaemonService:
             os_name=agent_worker_reconcile_os(self.options.os_name),
         )
         applied = self.worker_controller.apply(plan, state.bootstrap)
-        route_count = self._reconcile_routes(state, stream, route_proxy)
+        route_count = route_proxy.reconcile_routes(stream.routes)
         telemetry_sent = self._send_telemetry(
             state,
             desired_worker_count=len(desired_slots),
@@ -1018,7 +1016,7 @@ class AgentDaemonService:
             machine_id=state.machine_id,
             stream_iterations=current_iterations,
             route_count=route_count,
-            route_proxy_target=route_proxy.proxy_target if route_proxy is not None else "",
+            route_proxy_target=route_proxy.proxy_target,
             desired_worker_count=len(desired_slots),
             slot_action_count=len(applied),
             telemetry_sent=telemetry_sent,
@@ -1293,36 +1291,6 @@ class AgentDaemonService:
         if token_path == installer_token_path:
             token_path.unlink(missing_ok=True)
 
-    def _reconcile_routes(
-        self,
-        state: AgentState,
-        stream: StreamAgentResponse,
-        route_proxy: AgentRouteProxyService | None,
-    ) -> int:
-        if route_proxy is not None:
-            return route_proxy.reconcile_routes(stream.routes).tracked_routes
-        ready_count = 0
-        for route in stream.routes:
-            if not route.route_id or not route.local_target:
-                continue
-            ok, latency_ms = local_target_ready(route.local_target)
-            if not ok:
-                continue
-            self.client.update_agent_route_status(
-                UpdateAgentRouteStatusRequest(
-                    agent_token=state.agent_token,
-                    route_id=route.route_id,
-                    state=BackendRouteState.Ready,
-                    proxy_target=route.proxy_target or route.local_target,
-                    attrs={
-                        "local_target": route.local_target,
-                        "local_dial_ms": str(latency_ms),
-                    },
-                )
-            )
-            ready_count += 1
-        return ready_count
-
     def _send_telemetry(
         self,
         state: AgentState,
@@ -1426,9 +1394,7 @@ class AgentDaemonService:
         state: AgentState,
         *,
         private_network_address: str = "",
-    ) -> AgentRouteProxyService | None:
-        if not self.options.route_proxy.enabled:
-            return None
+    ) -> AgentRouteProxyService:
         config = self.options.route_proxy
         if private_network_address and _agent_uses_private_network(state.bootstrap.transport):
             update: dict[str, str] = {}

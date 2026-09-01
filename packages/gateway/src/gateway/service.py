@@ -1933,27 +1933,22 @@ class GatewayControlService:
                     created_at=now,
                     updated_at=now,
                 )
-            elif peer.public_key != public_key or peer.status is WireGuardPeerStatus.Revoked:
-                generation = max(peer.generation, enrollment.network_generation) + 1
-                peer = peer.model_copy(
-                    update={
-                        "public_key": public_key,
-                        "generation": generation,
-                        "status": WireGuardPeerStatus.Active,
-                        "last_handshake_at": None,
-                        "revoked_at": None,
-                        "updated_at": now,
-                    }
-                )
             else:
                 generation = max(peer.generation, enrollment.network_generation) + 1
-                peer = peer.model_copy(
-                    update={
-                        "generation": generation,
-                        "last_handshake_at": None,
-                        "updated_at": now,
-                    }
-                )
+                updates: dict[str, object] = {
+                    "generation": generation,
+                    "last_handshake_at": None,
+                    "updated_at": now,
+                }
+                if peer.public_key != public_key or peer.status is WireGuardPeerStatus.Revoked:
+                    updates.update(
+                        {
+                            "public_key": public_key,
+                            "status": WireGuardPeerStatus.Active,
+                            "revoked_at": None,
+                        }
+                    )
+                peer = peer.model_copy(update=updates)
             saved_peer = peers.save(peer)
             enrollments.save(
                 enrollment.model_copy(
@@ -2922,14 +2917,7 @@ class GatewayControlService:
                 enrollment.id,
                 for_update=True,
             )
-            if (
-                peer is None
-                or peer.status is not WireGuardPeerStatus.Active
-                or peer.id != enrollment.network_peer_id
-                or peer.public_key != enrollment.network_public_key
-                or peer.address != enrollment.network_address
-                or peer.generation != enrollment.network_generation
-            ):
+            if peer is None or not _wireguard_peer_matches_enrollment(peer, enrollment):
                 raise ValueError("agent WireGuard peer does not match its enrollment")
             if peer.last_handshake_at is None:
                 raise ValueError("agent WireGuard handshake has not been observed")
@@ -2958,14 +2946,7 @@ class GatewayControlService:
             if enrollment is None or not enrollment.network_peer_id:
                 raise ValueError("agent WireGuard peer is not registered")
             peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
-        if (
-            peer is None
-            or peer.status is not WireGuardPeerStatus.Active
-            or peer.id != enrollment.network_peer_id
-            or peer.public_key != enrollment.network_public_key
-            or peer.address != enrollment.network_address
-            or peer.generation != enrollment.network_generation
-        ):
+        if peer is None or not _wireguard_peer_matches_enrollment(peer, enrollment):
             raise ValueError("agent WireGuard peer does not match its enrollment")
         if peer.last_handshake_at is None:
             raise ValueError("agent WireGuard handshake has not been observed")
@@ -3023,6 +3004,19 @@ class GatewayControlService:
                     }
                 )
             )
+
+
+def _wireguard_peer_matches_enrollment(
+    peer: WireGuardPeer,
+    enrollment: ComputeMachineEnrollmentRecord,
+) -> bool:
+    return (
+        peer.status is WireGuardPeerStatus.Active
+        and peer.id == enrollment.network_peer_id
+        and peer.public_key == enrollment.network_public_key
+        and peer.address == enrollment.network_address
+        and peer.generation == enrollment.network_generation
+    )
 
 
 def _join_token_state(

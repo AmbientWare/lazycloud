@@ -1393,18 +1393,5 @@ def _transport(value: BackendRouteTransport | str) -> BackendRouteTransport:
     return normalize_backend_route_transport(str(value))
 
 
-def _proxy_target_host(proxy_target: str) -> str:
-    target = proxy_target.strip()
-    if target == "":
-        return ""
-    if target.startswith("[") and "]" in target:
-        return target[1 : target.index("]")].strip().rstrip(".")
-    if ":" in target:
-        host, maybe_port = target.rsplit(":", 1)
-        if maybe_port.isdigit():
-            target = host
-    return target.strip().rstrip(".")
-
-
 def _utc(value: datetime | None) -> datetime:
     return utc_now() if value is None else to_utc(value)
