@@ -6,8 +6,10 @@ from typing import Annotated
 import typer
 from database.repositories.billing_ledger import BillingLedgerRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
-from lazycloud.cli.components.output import print_payload
+from lazycloud.cli.components.cards import result_card
+from lazycloud.cli.components.output import emit, table
 from provider_stripe import METER_EVENT_BACKFILL_DAYS, PublishedCatalog, StripeSettings
+from rich.console import Group
 from shared.billing_rate_card import (
     METERED_RATE_VERSION,
     PUBLISHED_COMPUTE_RATES,
@@ -17,6 +19,7 @@ from shared.billing_rate_card import (
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
 
+from cli.components.results import emit_result
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 billing_app = typer.Typer(
@@ -75,8 +78,8 @@ def publish_rates(
         "effective_at": moment.isoformat(),
         "compute_rates": compute_rates,
         # Both units. The stored rate is what the ledger multiplies, and the
-        # whole-unit figure beside it is what the pricing page states — an
-        # operator checking a cutover against the page should not have to
+        # whole-unit figure beside it is what the pricing page states. An operator
+        # checking a cutover against the page should not have to
         # multiply by 2,783,138,807,808,000 to find a factor-of-ten error.
         #
         # Plain decimals, never exponents: `Decimal` renders a figure this small
@@ -94,9 +97,9 @@ def publish_rates(
         # against a version its neighbours do not share.
         #
         # Attempted either way, and kept only on `--confirm`. Everything that can
-        # refuse this — a boundary that would reach back over frozen usage, a
-        # figure this instant already holds at another number — refuses inside
-        # the write, so a dry run that skipped it would report a plan it could
+        # refuse this does so inside the write. That includes a boundary that
+        # reaches back over frozen usage or a figure this instant already holds at
+        # another number. A dry run that skipped it would report a plan it could
         # not carry out and exit zero doing so. The operator running this before
         # a cutover is asking exactly that question.
         with client.session() as session:
@@ -136,7 +139,47 @@ def publish_rates(
                 session.rollback()
     finally:
         client.dispose()
-    print_payload(ctx, payload)
+    emit(
+        ctx,
+        payload=payload,
+        view=Group(
+            result_card(
+                "Rates published" if confirm else "Rate preview",
+                {
+                    "effective": moment.isoformat(),
+                    "pricing version": METERED_RATE_VERSION,
+                    "compute rates": len(compute_rates),
+                    "platform rate": str(payload["platform_rate_state"]),
+                },
+                tone="success" if confirm else "info",
+                message="No changes were written." if not confirm else "",
+            ),
+            table(
+                "Compute rates",
+                ["owner", "gpu", "container/hour", "cpu/hour", "memory/hour", "gpu/hour", "state"],
+                [
+                    [
+                        rate["billing_owner"],
+                        rate["gpu_type"],
+                        rate["nanos_per_container_hour"],
+                        rate["nanos_per_cpu_core_hour"],
+                        rate["nanos_per_memory_gib_hour"],
+                        rate["nanos_per_gpu_card_hour"],
+                        rate["state"],
+                    ]
+                    for rate in compute_rates
+                ],
+            ),
+            table(
+                "Platform rates",
+                ["meter", "nanodollars"],
+                [
+                    ["egress/GiB", payload["nanos_per_egress_gib"]],
+                    ["volume/GiB-month", payload["nanos_per_volume_gib_month"]],
+                ],
+            ),
+        ),
+    )
 
 
 @billing_app.command("publish-catalog")
@@ -175,8 +218,8 @@ def publish_catalog(
 
     Run before the first person signs in, and before shipping a new plan. Signing
     in provisions a subscription on the free plan and fails closed if it cannot,
-    and a subscription resolves its prices by lookup key — so an account whose
-    catalog is unpublished refuses every sign-in it receives, and a plan whose
+    and a subscription resolves its prices by lookup key. An account whose catalog
+    is unpublished refuses every sign-in it receives, and a plan whose
     price is missing refuses everyone the code puts on it.
     """
 
@@ -201,7 +244,20 @@ def publish_catalog(
     # account being confirmed is not. The operator publishing a catalog is
     # entitled to know which of those they are looking at.
     payload["live_mode"] = settings.live_mode
-    print_payload(ctx, payload)
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Catalog published" if confirm else "Catalog preview",
+        fields={
+            "account": published.account_id,
+            "mode": "live" if settings.live_mode else "test",
+            "present": sum(entry.present for entry in published.entries),
+            "missing": [entry.name for entry in published.missing],
+            "repriced": [entry.name for entry in published.stale],
+        },
+        tone="success" if confirm else "info",
+        message="No changes were written." if not confirm else "",
+    )
 
 
 def _catalog_payload(catalog: PublishedCatalog, *, written: bool) -> dict[str, object]:
@@ -274,7 +330,7 @@ def price_unpriced(
     # Pricing usage the provider will refuse to meter is the silent revenue loss
     # this subsystem exists to prevent, arriving one layer later: the ledger would
     # hold a cost that no meter event can carry and no invoice can charge.
-    # Observed against the account, not assumed — see the provider's AGENTS.md.
+    # Observed against the account rather than assumed. See the provider's AGENTS.md.
     oldest = utc_now() - timedelta(days=METER_EVENT_BACKFILL_DAYS)
     if started_at < oldest:
         raise typer.BadParameter(
@@ -304,7 +360,19 @@ def price_unpriced(
         payload["skipped"] = skipped
     finally:
         client.dispose()
-    print_payload(ctx, payload)
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Usage priced" if confirm else "Usage pricing preview",
+        fields={
+            "from": started_at.isoformat(),
+            "to": ended_at.isoformat(),
+            "priced": priced,
+            "skipped": skipped,
+        },
+        tone="success" if confirm else "info",
+        message="No changes were written." if not confirm else "",
+    )
 
 
 def _instant(value: str) -> datetime:

@@ -51,13 +51,13 @@ def usage_list(
     ]
     console.print(
         table(
-            "Usage Records",
+            "Usage records",
             ["time", "workspace", "metric", "quantity", "unit", "type", "resource"],
             rows,
         )
     )
     if page.next:
-        console.print(f"Next cursor: {page.next}")
+        console.print(f"More results  --cursor {page.next}", highlight=False, markup=False)
 
 
 @usage_app.command("summary")
@@ -84,7 +84,7 @@ def usage_summary(
         return
     console.print(
         table(
-            "Usage Summary",
+            "Usage summary",
             ["workspace", "metric", "quantity", "unit"],
             [
                 [row.workspace_id, row.metric.value, str(row.quantity), row.unit.value]

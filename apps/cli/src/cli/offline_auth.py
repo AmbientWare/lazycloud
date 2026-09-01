@@ -13,11 +13,12 @@ from control.service import ControlPlaneService
 from database.context import ServiceContext
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
-from lazycloud.cli.components.output import print_payload
+from lazycloud.json_contracts import validate_json_object
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStorageConfig
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
+from cli.components.results import emit_result
 from database import (
     ControlPlaneRecoveryFence,
     DatabaseApplicationName,
@@ -123,20 +124,34 @@ def bootstrap_admin(
     finally:
         storage_client.close()
         database.dispose()
-    print_payload(
-        ctx,
+    payload = validate_json_object(
         {
             "status": "already_published" if result.replayed else "created",
             "request_id": request_id,
             "workspace": workspace,
             "user_id": result.user_id,
             "token_id": result.record.id,
-            "credential_source": "configured_file" if configured_token is not None else "generated",
+            "credential_source": (
+                "configured_file" if configured_token is not None else "generated"
+            ),
             "output": str(publication.resolved_output) if publication is not None else None,
             "mode": "0600" if publication is not None else None,
             "workspace_storage_bucket": storage.bucket,
             "workspace_storage_backend": storage.backend,
+        }
+    )
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Administrator ready",
+        fields={
+            "status": payload["status"],
+            "workspace": workspace,
+            "credential": (
+                str(publication.resolved_output) if publication is not None else "configured file"
+            ),
         },
+        tone="success",
     )
 
 
@@ -184,8 +199,8 @@ def recover_admin(
     """Re-establish administrator access for the bootstrapped account.
 
     It takes no selector for which account to restore. The account is the one the
-    bootstrap credential was minted against, so recovery cannot name the wrong one —
-    which matters when there is no second credential left to undo a mistake with.
+    bootstrap credential was minted against, so recovery cannot name the wrong one.
+    That matters when there is no second credential left to undo a mistake with.
     """
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin)
@@ -215,17 +230,25 @@ def recover_admin(
             service.mark_admin_token_published(request_id=request_id, recovery=True)
     finally:
         database.dispose()
-    print_payload(
+    payload = {
+        "status": "already_published" if result.replayed else "created",
+        "request_id": request_id,
+        "workspace": workspace,
+        "user_id": result.user_id,
+        "token_id": result.record.id,
+        "output": str(publication.resolved_output),
+        "mode": "0600",
+    }
+    emit_result(
         ctx,
-        {
-            "status": "already_published" if result.replayed else "created",
-            "request_id": request_id,
+        payload=payload,
+        title="Administrator recovered",
+        fields={
+            "status": payload["status"],
             "workspace": workspace,
-            "user_id": result.user_id,
-            "token_id": result.record.id,
-            "output": str(publication.resolved_output),
-            "mode": "0600",
+            "credential": str(publication.resolved_output),
         },
+        tone="success",
     )
 
 

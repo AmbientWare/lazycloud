@@ -4,12 +4,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from lazycloud.cli.components.formatting import bytes_count
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from pydantic import JsonValue
 from shared.bytes_transport import encode_bytes
 from shared.http.storage import CacheCreateRequest, ObjectCreateRequest
 
 from cli.api_client import admin_api_client
+from cli.components.results import emit_result
 
 object_app = typer.Typer(help="Manage object storage records.")
 cache_app = typer.Typer(help="Manage file cache entries.")
@@ -29,7 +31,17 @@ def object_put(
             value_base64=encode_bytes(source.read_bytes()),
         )
     )
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Object uploaded",
+        fields={
+            "object": f"{record.bucket}/{record.key}",
+            "size": bytes_count(record.size),
+            "id": record.id,
+        },
+        tone="success",
+    )
 
 
 @object_app.command("list")
@@ -42,7 +54,9 @@ def object_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.bucket, item.key, str(item.size), item.sha256[:12]] for item in records]
+        rows = [
+            [item.bucket, item.key, bytes_count(item.size), item.sha256[:12]] for item in records
+        ]
         console.print(table("Objects", ["bucket", "key", "size", "sha256"], rows))
 
 
@@ -90,7 +104,13 @@ def cache_put(
             value_base64=encode_bytes(source.read_bytes()),
         )
     )
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Cache entry uploaded",
+        fields={"key": record.key, "size": bytes_count(record.size)},
+        tone="success",
+    )
 
 
 @cache_app.command("list")
@@ -99,7 +119,7 @@ def cache_list(ctx: typer.Context) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.key[:12], str(item.size), str(item.hits)] for item in records]
+        rows = [[item.key[:12], bytes_count(item.size), str(item.hits)] for item in records]
         console.print(table("Cache", ["key", "size", "hits"], rows))
 
 

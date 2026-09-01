@@ -18,14 +18,17 @@ import time
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import print_payload
+from lazycloud.cli.components.cards import result_card
+from lazycloud.cli.components.output import emit
 from lazycloud.cli.control import compute_client
+from lazycloud.json_contracts import validate_json_object
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
 from shared.contracts import ContractModel
 from shared.http.compute import UnitResponse
 from shared.http.errors import HttpApiError
 
 from cli.api_client import admin_api_client
+from cli.components.results import emit_result
 
 fleet_app = typer.Typer(help="Register the platform's own compute capacity.")
 
@@ -73,14 +76,19 @@ def fleet_ensure(
 
     existing = client.current_connection()
     if existing is not None:
-        # Restated on every deploy, not just the first: a connection made before
-        # the platform could say which account was its own still describes itself
+        # Restated on every deploy. A connection made before the platform could
+        # say which account was its own still describes itself
         # as a customer's, and its machines would serve nobody but us.
         adopted = client.adopt_fleet_account()
-        print_payload(
+        emit_result(
             ctx,
-            adopted.model_dump(mode="json"),
+            payload=adopted.model_dump(mode="json"),
             title="Fleet account connected",
+            fields={
+                "account": adopted.account_id,
+                "phase": adopted.phase.value,
+                "detail": adopted.detail,
+            },
             tone="success" if adopted.phase is AwsAccountConnectionPhase.Ready else "info",
             message=(
                 "Run `cloud validate` to advance the connection."
@@ -107,10 +115,16 @@ def fleet_ensure(
         # serves every customer and bills to the fleet.
         platform_fleet=True,
     )
-    print_payload(
+    connection = response.connection
+    emit_result(
         ctx,
-        response.model_dump(mode="json"),
+        payload=response.model_dump(mode="json"),
         title="Fleet account connected",
+        fields={
+            "account": connection.account_id,
+            "phase": connection.phase.value,
+            "detail": connection.detail,
+        },
         tone="success",
         message="Run `cloud validate` to activate the connection.",
     )
@@ -185,8 +199,8 @@ def fleet_destroy(
     unit is gone is named in the output and left alone: this cannot prove an
     unclaimed resource is one the platform made, and an operator can. Reaching
     past the control plane to delete one is what recreated two of them the last
-    time this was done by hand — the units still existed, so the scheduler
-    rebuilt their groups minutes later.
+    time this was done by hand. The units still existed, so the scheduler rebuilt
+    their groups minutes later.
     """
     if timeout_seconds <= 0:
         raise typer.BadParameter("--timeout must be greater than zero")
@@ -204,14 +218,26 @@ def fleet_destroy(
         for workspace_id, unit in _every_unit()
     ]
     remaining = [outcome for outcome in outcomes if not outcome.deleted]
-    print_payload(
-        ctx,
+    payload = validate_json_object(
         {
             "units": [outcome.model_dump(mode="json") for outcome in outcomes],
             "remaining": len(remaining),
-        },
-        title="Fleet units removed" if not remaining else "Fleet teardown incomplete",
-        tone="success" if not remaining else "warning",
+        }
+    )
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            "Fleet units removed" if not remaining else "Fleet teardown incomplete",
+            {
+                "removed": sum(outcome.deleted for outcome in outcomes),
+                "remaining": len(remaining),
+                "failures": [
+                    f"{outcome.name}: {outcome.reason or 'not removed'}" for outcome in remaining
+                ],
+            },
+            tone="success" if not remaining else "warning",
+        ),
     )
     if remaining:
         # Named, and the command fails. A teardown that reported success with a

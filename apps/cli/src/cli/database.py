@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import print_payload
 
+from cli.components.results import emit_result
 from database import (
     DatabaseApplicationName,
     DatabaseClient,
@@ -31,17 +31,25 @@ def database_check(ctx: typer.Context) -> None:
         }
     finally:
         client.dispose()
-    print_payload(ctx, payload)
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Database connection",
+        fields={"healthy": payload["healthy"], "backend": payload["backend"]},
+        tone="success" if payload["healthy"] else "warning",
+    )
 
 
 @database_app.command("status")
 def database_status(ctx: typer.Context) -> None:
-    print_payload(ctx, _schema_payload(inspect_database_schema()))
+    inspection = inspect_database_schema()
+    _show_schema(ctx, inspection, title="Database schema")
 
 
 @database_app.command("initialize")
 def database_initialize(ctx: typer.Context) -> None:
-    print_payload(ctx, _schema_payload(bootstrap_database()))
+    inspection = bootstrap_database()
+    _show_schema(ctx, inspection, title="Database initialized")
 
 
 @database_app.command("wait")
@@ -73,7 +81,17 @@ def database_wait(
         }
     finally:
         client.dispose()
-    print_payload(ctx, payload)
+    emit_result(
+        ctx,
+        payload=payload,
+        title="Database ready",
+        fields={
+            "revision": readiness.revision,
+            "attempts": readiness.attempts,
+            "elapsed seconds": round(readiness.elapsed_seconds, 2),
+        },
+        tone="success",
+    )
 
 
 def _schema_payload(
@@ -85,6 +103,26 @@ def _schema_payload(
         "observed_revisions": list(inspection.observed_revisions),
         "target_revision": inspection.target_revision,
     }
+
+
+def _show_schema(
+    ctx: typer.Context,
+    inspection: DatabaseSchemaInspection,
+    *,
+    title: str,
+) -> None:
+    payload = _schema_payload(inspection)
+    emit_result(
+        ctx,
+        payload=payload,
+        title=title,
+        fields={
+            "state": inspection.state.value,
+            "current": inspection.current_revision,
+            "target": inspection.target_revision,
+        },
+        tone="success" if inspection.current_revision == inspection.target_revision else "warning",
+    )
 
 
 __all__ = ["database_app"]

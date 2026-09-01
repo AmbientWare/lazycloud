@@ -21,6 +21,7 @@ from shared.image_building.context import fingerprint_build_context
 from shared.image_building.requirements import load_requirements_file
 
 from cli.api_client import admin_api_client
+from cli.components.results import emit_result
 from cli.parameters import parse_key_values
 
 image_app = typer.Typer(help="Manage image build records.")
@@ -123,7 +124,18 @@ def image_build(
         image_id=image_id,
     )
     record = admin_api_client().create_image_build(ImageBuildRequest(image=image, tag=tag))
-    print_payload(ctx, record.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=record.model_dump(mode="json"),
+        title="Image build queued",
+        fields={
+            "status": record.status.value,
+            "phase": record.phase.value,
+            "tag": record.tag or "untagged",
+            "id": record.id,
+        },
+        tone="success",
+    )
 
 
 @image_app.command("list")
@@ -135,7 +147,7 @@ def image_list(ctx: typer.Context) -> None:
         rows = [
             [item.id, item.status.value, item.tag or "", item.fingerprint[:12]] for item in records
         ]
-        console.print(table("Image Builds", ["id", "status", "tag", "fingerprint"], rows))
+        console.print(table("Image builds", ["id", "status", "tag", "fingerprint"], rows))
 
 
 @cron_app.command("list")
@@ -145,7 +157,7 @@ def cron_list(ctx: typer.Context) -> None:
         print_payload(ctx, [item.model_dump(mode="json") for item in cron_jobs])
     else:
         rows = [[item.name, item.cron, item.deployment_id, str(item.enabled)] for item in cron_jobs]
-        console.print(table("Cron Jobs", ["name", "cron", "deployment", "enabled"], rows))
+        console.print(table("Cron jobs", ["name", "cron", "deployment", "enabled"], rows))
 
 
 @cron_app.command("delete")
@@ -182,19 +194,29 @@ def cron_runs(
         ]
         console.print(
             table(
-                "Cron Job Runs",
+                "Cron job runs",
                 ["cron job", "enqueued", "task", "message", "reason"],
                 rows,
             )
         )
         if page.next:
-            console.print(f"Next cursor: {page.next}")
+            console.print(f"More results  --cursor {page.next}", highlight=False, markup=False)
 
 
 @scheduler_app.command("tick")
 def scheduler_tick(ctx: typer.Context) -> None:
     response = admin_api_client().tick_scheduler()
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Scheduler tick complete",
+        fields={
+            "runs": len(response.data),
+            "enqueued": sum(item.enqueued for item in response.data),
+            "skipped": sum(not item.enqueued for item in response.data),
+        },
+        tone="success",
+    )
 
 
 @scheduler_app.command("dispatch-containers")
@@ -203,7 +225,16 @@ def scheduler_dispatch_containers(
     limit: Annotated[int, typer.Option("--limit")] = 100,
 ) -> None:
     response = admin_api_client().dispatch_scheduler_containers(limit=limit)
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Container dispatch complete",
+        fields={
+            "containers": len(response.dispatches),
+            "dispatched": sum(item.status == "dispatched" for item in response.dispatches),
+        },
+        tone="success",
+    )
 
 
 @scheduler_app.command("run")
@@ -219,18 +250,29 @@ def scheduler_run(
         raise typer.BadParameter("--interval-seconds must be positive")
     client = admin_api_client()
 
-    def run_pass() -> dict[str, JsonValue]:
+    def run_pass() -> tuple[dict[str, JsonValue], int, int]:
         payload: dict[str, JsonValue] = {}
+        cron_run_count = 0
+        dispatch_count = 0
         if include_cron_jobs:
-            payload["cron_jobs"] = client.tick_scheduler().model_dump(mode="json")
+            cron_response = client.tick_scheduler()
+            payload["cron_jobs"] = cron_response.model_dump(mode="json")
+            cron_run_count = len(cron_response.data)
         if include_containers:
-            payload["containers"] = client.dispatch_scheduler_containers(
-                limit=container_limit
-            ).model_dump(mode="json")
-        return payload
+            dispatch_response = client.dispatch_scheduler_containers(limit=container_limit)
+            payload["containers"] = dispatch_response.model_dump(mode="json")
+            dispatch_count = len(dispatch_response.dispatches)
+        return payload, cron_run_count, dispatch_count
 
     if once:
-        print_payload(ctx, run_pass())
+        payload, cron_run_count, dispatch_count = run_pass()
+        emit_result(
+            ctx,
+            payload=payload,
+            title="Scheduler pass complete",
+            fields={"cron runs": cron_run_count, "container dispatches": dispatch_count},
+            tone="success",
+        )
         return
     try:
         while True:
@@ -289,7 +331,7 @@ def autoscaler_history(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    print_events_table("Autoscaler History", response.events)
+    print_events_table("Autoscaler history", response.events)
 
 
 @autoscaler_app.command("reconcile")
@@ -303,7 +345,13 @@ def autoscaler_reconcile(
         target_kind=target_kind,
         stub_id=stub_id,
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Autoscalers reconciled",
+        fields={"targets": len(response.results)},
+        tone="success",
+    )
 
 
 @autoscaler_app.command("pause")
@@ -316,7 +364,17 @@ def autoscaler_pause(
         stub_id_or_name,
         action="pause",
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Autoscaler paused",
+        fields={
+            "workload": response.stub.name,
+            "kind": response.target_kind.value,
+            "enabled": response.autoscaling_enabled,
+        },
+        tone="success",
+    )
 
 
 @autoscaler_app.command("resume")
@@ -329,4 +387,14 @@ def autoscaler_resume(
         stub_id_or_name,
         action="resume",
     )
-    print_payload(ctx, response.model_dump(mode="json"))
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Autoscaler resumed",
+        fields={
+            "workload": response.stub.name,
+            "kind": response.target_kind.value,
+            "enabled": response.autoscaling_enabled,
+        },
+        tone="success",
+    )
