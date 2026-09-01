@@ -415,13 +415,13 @@ class AdminApiClient:
                         ),
                         "stub_id": request.stub_id,
                         "app_id": request.app_id,
+                        "deployment_id": request.deployment_id,
                         "task_id": request.task_id,
                         "container_id": request.container_id,
                         "machine_id": request.machine_id,
                         "worker_id": request.worker_id,
                         "query": request.query,
                         "limit": request.limit,
-                        "page": request.page,
                         "start_time": (
                             request.start_time.isoformat()
                             if request.start_time is not None
@@ -478,8 +478,21 @@ class AdminApiClient:
     def delete_cron_job(self, name: str) -> None:
         self.channel.delete(self._workspace_path(f"/api/v1/cron-jobs/{url_path_segment(name)}"))
 
-    def list_cron_job_runs(self) -> CronJobRunListResponse:
-        return CronJobRunListResponse.model_validate(self.channel.get("/api/v1/cron-job-runs"))
+    def list_cron_job_runs(
+        self,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> CronJobRunListResponse:
+        return CronJobRunListResponse.model_validate(
+            self.channel.get(
+                self._workspace_path(
+                    "/api/v1/cron-job-runs",
+                    limit=limit,
+                    cursor=cursor,
+                )
+            )
+        )
 
     def tick_scheduler(self) -> CronJobRunListResponse:
         return CronJobRunListResponse.model_validate(self.channel.post("/api/v1/scheduler/tick"))

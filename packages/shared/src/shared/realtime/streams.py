@@ -66,17 +66,17 @@ class EventHistoryQuery(ContractModel):
 
 
 class LogStreamQuery(ContractModel):
-    workspace_id: str = ""
+    workspace_id: str
     object_id: str = ""
     object_type: str = ""
     stub_id: str = ""
     container_id: str = ""
     task_id: str = ""
     app_id: str = ""
+    deployment_id: str = ""
     machine_id: str = ""
     worker_id: str = ""
     query: str = ""
-    page: int = 0
     limit: int = DEFAULT_LOG_READ_LIMIT
     start_time: datetime | None = None
     end_time: datetime | None = None
@@ -93,6 +93,7 @@ class LogStreamQuery(ContractModel):
         "container_id",
         "task_id",
         "app_id",
+        "deployment_id",
         "machine_id",
         "worker_id",
         "query",
@@ -104,11 +105,6 @@ class LogStreamQuery(ContractModel):
         if value is None:
             return ""
         return str(value).strip()
-
-    @field_validator("page")
-    @classmethod
-    def _non_negative_page(cls, value: int) -> int:
-        return max(value, 0)
 
     @field_validator("limit")
     @classmethod
@@ -145,8 +141,14 @@ class LogStreamQuery(ContractModel):
                         "container_id",
                         self.container_id or self.object_id,
                     )
-                case "app" | "deployment":
+                case "app":
                     object.__setattr__(self, "app_id", self.app_id or self.object_id)
+                case "deployment":
+                    object.__setattr__(
+                        self,
+                        "deployment_id",
+                        self.deployment_id or self.object_id,
+                    )
                 case "machine":
                     object.__setattr__(self, "machine_id", self.machine_id or self.object_id)
                 case "workspace":
@@ -159,6 +161,7 @@ class LogStreamQuery(ContractModel):
                     self.container_id
                     or self.task_id
                     or self.stub_id
+                    or self.deployment_id
                     or self.app_id
                     or self.machine_id
                     or self.worker_id
@@ -183,7 +186,6 @@ class LogPagePlan(ContractModel):
     streams: tuple[str, ...]
     fallback_streams: tuple[str, ...] = ()
     limit: int
-    page: int
     scan_limit: int = LOG_PAGE_SCAN_LIMIT
     chunk_size: int
     next_cursor: str | None = None
@@ -447,20 +449,14 @@ class EventStreamPlanner:
     def plan_log_page(
         self,
         query: LogStreamQuery,
-        *,
-        total_expected: int = 0,
     ) -> LogPagePlan:
         streams = self.resolve_log_streams(query)
-        loaded_through = (query.page + 1) * query.limit
-        next_cursor = str(query.page + 1) if total_expected > loaded_through else None
         return LogPagePlan(
             query=query,
             streams=streams,
             fallback_streams=(),
             limit=query.limit,
-            page=query.page,
             chunk_size=min(max(query.limit, DEFAULT_LOG_READ_LIMIT), MAX_LOG_READ_LIMIT),
-            next_cursor=next_cursor,
         )
 
     def container_stream_name(self, workspace_id: str, stub_id: str, container_id: str) -> str:
@@ -686,6 +682,7 @@ def log_record_headers_skip(record: EventSequencedRecord, query: LogStreamQuery)
         (query.container_id, "container_id"),
         (query.stub_id, "stub_id"),
         (query.app_id, "app_id"),
+        (query.deployment_id, "deployment_id"),
         (query.machine_id, "machine_id"),
         (query.worker_id, "worker_id"),
     ):

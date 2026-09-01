@@ -162,8 +162,8 @@ class Client:
     def task_result(self, task_id: str, *, wait: bool = False) -> object:
         return self.task_client.result(task_id, wait=wait).value
 
-    def task_output(self, task_id: str, *, limit: int = 100, page: int = 0) -> str:
-        return self.task_client.output(task_id, limit=limit, page=page)
+    def task_output(self, task_id: str, *, limit: int = 100, cursor: str | None = None) -> str:
+        return self.task_client.output(task_id, limit=limit, cursor=cursor)
 
     def subscribe_task(self, task_id: str) -> TaskSubscription:
         return self.task_client.subscribe(task_id)

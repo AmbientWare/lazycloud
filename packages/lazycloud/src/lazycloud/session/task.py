@@ -126,7 +126,7 @@ class TaskHandleClient(Protocol):
         *,
         workspace: str | None = None,
         limit: int = 100,
-        page: int = 0,
+        cursor: str | None = None,
     ) -> list[LogRecord]: ...
 
     def subscribe(self, task_id: str) -> TaskSubscription: ...
@@ -205,11 +205,11 @@ class Task:
             poll_interval_seconds=poll_interval_seconds,
         )
 
-    def logs(self, *, limit: int = 100, page: int = 0) -> list[LogRecord]:
-        return self.client.logs(self.task_id, limit=limit, page=page)
+    def logs(self, *, limit: int = 100, cursor: str | None = None) -> list[LogRecord]:
+        return self.client.logs(self.task_id, limit=limit, cursor=cursor)
 
-    def output(self, *, limit: int = 100, page: int = 0) -> str:
-        return "\n".join(entry.message for entry in self.logs(limit=limit, page=page))
+    def output(self, *, limit: int = 100, cursor: str | None = None) -> str:
+        return "\n".join(entry.message for entry in self.logs(limit=limit, cursor=cursor))
 
     def subscribe(self) -> TaskSubscription:
         return self.client.subscribe(self.task_id)
@@ -295,11 +295,11 @@ class FunctionCall(Generic[R]):
             raise TaskOperationError(msg)
         return cast(R, result.value)
 
-    def logs(self, *, limit: int = 100, page: int = 0) -> list[LogRecord]:
-        return self.task.logs(limit=limit, page=page)
+    def logs(self, *, limit: int = 100, cursor: str | None = None) -> list[LogRecord]:
+        return self.task.logs(limit=limit, cursor=cursor)
 
-    def output(self, *, limit: int = 100, page: int = 0) -> str:
-        return self.task.output(limit=limit, page=page)
+    def output(self, *, limit: int = 100, cursor: str | None = None) -> str:
+        return self.task.output(limit=limit, cursor=cursor)
 
     def subscribe(self) -> TaskSubscription:
         return self.task.subscribe()
@@ -458,14 +458,14 @@ class TaskClient(ControlClientConfigMixin):
         *,
         workspace: str | None = None,
         limit: int = 100,
-        page: int = 0,
+        cursor: str | None = None,
     ) -> list[LogRecord]:
         response = self.log_query(
             LogQueryRequest(
                 workspace_id=workspace or self._config().workspace,
                 task_id=task_id,
                 limit=limit,
-                page=page,
+                cursor=cursor,
             )
         )
         return list(response.data)
@@ -495,8 +495,8 @@ class TaskClient(ControlClientConfigMixin):
     def result(self, task_id: str, *, wait: bool = False) -> TaskResult:
         return self.handle(task_id).result(wait=wait)
 
-    def output(self, task_id: str, *, limit: int = 100, page: int = 0) -> str:
-        return self.handle(task_id).output(limit=limit, page=page)
+    def output(self, task_id: str, *, limit: int = 100, cursor: str | None = None) -> str:
+        return self.handle(task_id).output(limit=limit, cursor=cursor)
 
     def subscribe(self, task_id: str) -> TaskSubscription:
         raw = call_with_transient_retry(

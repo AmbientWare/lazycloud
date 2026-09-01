@@ -71,6 +71,8 @@ class RedisTransport(Protocol):
 
     def get(self, name: str) -> RedisCommandResponse: ...
 
+    def mget(self, keys: Iterable[str]) -> RedisCommandResponse: ...
+
     def getdel(self, name: str) -> RedisCommandResponse: ...
 
     def set(
@@ -428,6 +430,14 @@ class RedisClient:
 
     def get(self, key: str) -> RedisWireScalar | None:
         return _optional_scalar(self._transport.get(key), "GET")
+
+    def mget(self, keys: Sequence[str]) -> list[RedisWireScalar | None]:
+        if not keys:
+            return []
+        raw = _sync_response(self._transport.mget(list(keys)), "MGET")
+        if not isinstance(raw, (list, tuple)):
+            raise TypeError("Redis MGET response must be a sequence")
+        return [_optional_scalar(value, "MGET item") for value in raw]
 
     def set_single_use(self, key: str, value: str, *, ttl_seconds: int) -> bool:
         """Store a short-lived value only when its key does not already exist."""

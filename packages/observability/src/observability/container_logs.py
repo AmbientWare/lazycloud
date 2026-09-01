@@ -75,6 +75,7 @@ class ContainerLogIngestionResult:
 class _ContainerLogOwnership:
     container: ContainerRecord
     task_id: str
+    deployment_id: str = ""
 
 
 @dataclass(slots=True)
@@ -151,6 +152,7 @@ class ContainerLogIngestionService:
                     "workspace_id": container.workspace_id,
                     "stub_id": container.stub_id or "",
                     "app_id": container.app_id or "",
+                    "deployment_id": ownership.deployment_id,
                     "task_id": ownership.task_id,
                     "container_id": container.id,
                     "machine_id": attribution.machine_id,
@@ -202,6 +204,7 @@ class ContainerLogIngestionService:
             app = AppRepository(session).get(container.app_id, workspace_id=container.workspace_id)
             if app is None:
                 raise ConflictError("container log app metadata does not match container")
+        deployment_id = ""
         if container.stub_id:
             stub = StubRepository(session).get(
                 container.stub_id,
@@ -211,9 +214,11 @@ class ContainerLogIngestionService:
                 raise ConflictError("container log stub metadata does not match container")
             if stub.app_id != container.app_id:
                 raise ConflictError("container log stub app does not match container")
+            deployment_id = stub.deployment_id or ""
         return _ContainerLogOwnership(
             container=container,
             task_id=cls._validated_task_id(session, container),
+            deployment_id=deployment_id,
         )
 
     @staticmethod

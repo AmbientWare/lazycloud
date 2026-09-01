@@ -29,6 +29,7 @@ from database.repositories.apps import (
 from database.repositories.billing_costs import BillingLedgerCostRepository
 from database.repositories.execution import (
     DetailedTaskRecord,
+    LogPageCursor,
     LogRepository,
     RelatedTaskRecord,
     TaskDurationSample,
@@ -65,7 +66,6 @@ from shared.http.observability import (
     AccountActivitySeriesKind,
     AccountActivityUnit,
     EventQueryResponse,
-    LogObjectType,
     LogQueryResponse,
     LogRecord,
 )
@@ -133,6 +133,11 @@ class DeploymentCursorPayload(ContractModel):
     version_order: int
     created_at: datetime
     deployment_id: str
+
+
+class LogCursorPayload(ContractModel):
+    created_at: datetime
+    id: str
 
 
 class DeploymentUrlResult(ContractModel):
@@ -396,6 +401,29 @@ def _decode_deployment_cursor(value: str | None) -> DeploymentCursor | None:
         raise InvalidInputError(msg) from exc
 
 
+_LOG_CURSOR_PREFIX = "pg."
+
+
+def _encode_log_cursor(cursor: LogPageCursor) -> str:
+    payload = LogCursorPayload(created_at=cursor.created_at, id=cursor.id).model_dump_json()
+    encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    return f"{_LOG_CURSOR_PREFIX}{encoded}"
+
+
+def _decode_log_cursor(value: str | None) -> LogPageCursor | None:
+    if value is None or value == "":
+        return None
+    if not value.startswith(_LOG_CURSOR_PREFIX):
+        raise InvalidInputError("invalid log cursor")
+    encoded = value.removeprefix(_LOG_CURSOR_PREFIX)
+    try:
+        padded = encoded + "=" * (-len(encoded) % 4)
+        payload = LogCursorPayload.model_validate_json(base64.urlsafe_b64decode(padded.encode()))
+        return LogPageCursor(created_at=payload.created_at, id=payload.id)
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise InvalidInputError("invalid log cursor") from exc
+
+
 def _is_uuid(value: str) -> bool:
     try:
         UUID(value)
@@ -461,15 +489,6 @@ def _task_detail_view(record: DetailedTaskRecord, *, can_write: bool) -> TaskDet
         actions=_task_actions(record, can_write=can_write),
         container=record.container,
     )
-
-
-def _log_object_type(value: str | None) -> LogObjectType | None:
-    if not value:
-        return None
-    try:
-        return LogObjectType(value.strip().lower().replace("-", "_").replace("_", ""))
-    except ValueError:
-        return None
 
 
 def _local_package_path(path: str) -> Path | None:
@@ -1808,55 +1827,71 @@ class ManagementService:
         self,
         workspace: str,
         *,
-        object_id: str | None = None,
-        object_type: str | None = None,
         stub_id: str | None = None,
         app_id: str | None = None,
+        deployment_id: str | None = None,
         task_id: str | None = None,
         container_id: str | None = None,
         machine_id: str | None = None,
         worker_id: str | None = None,
         query: str | None = None,
         limit: int = 100,
-        page: int = 0,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
-        seq_num: int | None = None,
-        wait_seconds: float | None = None,
-        clamp: bool | None = None,
+        cursor: str | None = None,
+        after_cursor: bool = False,
     ) -> LogQueryResponse:
-        self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.get_workspace(workspace)
         log_query = LogStreamQuery(
-            workspace_id=workspace,
-            object_id=object_id or "",
-            object_type=object_type or "",
+            workspace_id=workspace_record.id,
             stub_id=stub_id or "",
             app_id=app_id or "",
+            deployment_id=deployment_id or "",
             task_id=task_id or "",
             container_id=container_id or "",
             machine_id=machine_id or "",
             worker_id=worker_id or "",
             query=query or "",
             limit=limit,
-            page=page,
             start_time=start_time,
             end_time=end_time,
-            seq_num=seq_num,
-            wait_seconds=wait_seconds,
-            clamp=clamp,
         )
+        decoded_cursor = _decode_log_cursor(cursor)
         with self.services.context.database.session() as session:
-            entries = LogRepository(session).list_across_workspaces(log_query)
-        offset = log_query.page * log_query.limit
-        data = entries[offset : offset + log_query.limit]
-        next_page = str(log_query.page + 1) if offset + log_query.limit < len(entries) else ""
+            repository = LogRepository(session)
+            if after_cursor:
+                if decoded_cursor is None:
+                    raise InvalidInputError("log follow requires a cursor")
+                page = repository.page_after(
+                    log_query,
+                    workspace_id=workspace_record.id,
+                    limit=log_query.limit,
+                    cursor=decoded_cursor,
+                )
+            else:
+                page = repository.page(
+                    log_query,
+                    workspace_id=workspace_record.id,
+                    limit=log_query.limit,
+                    cursor=decoded_cursor,
+                )
+        data = tuple(
+            LogRecord.from_entry(
+                item.entry,
+                cursor=_encode_log_cursor(item.cursor),
+                workspace_id=item.workspace_id,
+                app_id=item.app_id,
+                deployment_id=item.deployment_id,
+                stub_id=item.stub_id,
+                container_id=item.container_id,
+                machine_id=item.machine_id,
+                worker_id=item.worker_id,
+            )
+            for item in page.data
+        )
         return LogQueryResponse(
-            object_id=log_query.object_id,
-            object_type=_log_object_type(log_query.object_type),
-            data=tuple(LogRecord.from_entry(item, workspace_id=workspace) for item in data),
-            next=next_page,
-            count=len(entries),
-            total_expected=len(entries),
+            data=data,
+            next=_encode_log_cursor(page.next) if page.next is not None else "",
         )
 
     def event_history(

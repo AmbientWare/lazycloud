@@ -196,6 +196,8 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    task = isolated_services.tasks.create("durable-log", workspace_id=workspace_id)
+    isolated_services.tasks.append_log(task.id, "stdout", "needle durable")
     redis = real_redis_actors.client()
     services = _services_with_redis(isolated_services, redis, request)
     repo = RedisEventStreamRepository(redis)
@@ -207,10 +209,7 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
     admin_token, _record = administrator_credential(isolated_services, "root")
 
     history = client.get(
-        f"/api/v1/logs"
-        f"?workspace_id={workspace_id}"
-        "&object_type=container&object_id=container-1&stub_id=stub-1&app_id=app-1"
-        "&machine_id=machine-1&worker_id=worker-1&query=second",
+        f"/api/v1/logs?workspace={workspace_id}&task_id={task.id}&query=durable",
         headers=_auth(admin_token),
     )
     stream = client.get(
@@ -222,8 +221,8 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
 
     assert history.status_code == 200
     payload = history.json()
-    assert [item["message"] for item in payload["data"]] == ["needle second"]
-    assert payload["data"][0]["container_id"] == "container-1"
+    assert [item["message"] for item in payload["data"]] == ["needle durable"]
+    assert payload["data"][0]["task_id"] == task.id
     assert stream.status_code == 200
     assert f"id: {second_cursor}" in stream.text
     assert "needle second" in stream.text
@@ -251,6 +250,14 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
         stub_id=deployment.stub_id,
         app_id=deployment.app_id,
     )
+    task = services.tasks.create(
+        "deployment-log",
+        workspace_id=workspace_id,
+        app_id=deployment.app_id,
+        stub_id=deployment.stub_id,
+        deployment_id=deployment.id,
+    )
+    services.tasks.append_log(task.id, "stdout", "deployment line")
     client = client_stack.enter_context(TestClient(create_app(services)))
     admin_token, _record = administrator_credential(isolated_services, "root")
 
@@ -267,9 +274,7 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
     assert response.status_code == 200
     payload = response.json()
     assert [item["message"] for item in payload["data"]] == ["deployment line"]
-    assert payload["streams"] == [
-        f"events/logs/workspaces/{workspace_id}/stubs/{deployment.stub_id}"
-    ]
+    assert payload["data"][0]["deployment_id"] == deployment.id
 
 
 def _services_with_redis(

@@ -8,6 +8,8 @@ from typing import Protocol
 
 from coordination.redis_client import RedisClient
 from database.records.apps import StubKind, StubRecord
+from database.repositories.apps import AppRepository, DeploymentRepository
+from database.repositories.orchestration import ContainerRepository
 from pydantic import Field, JsonValue
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
@@ -31,7 +33,7 @@ from shared.autoscaling import (
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.errors import DomainError, InvalidInputError, NotFoundError
+from shared.errors import DomainError, InvalidInputError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.scheduling import SchedulerContainerStatus
@@ -83,6 +85,7 @@ FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
 ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
 ENDPOINT_AUTOSCALER_SOURCE = "endpoint.autoscaler"
 POD_AUTOSCALER_SOURCE = "pod.autoscaler"
+_LIVE_CONTAINER_STATUSES = frozenset({ContainerStatus.Pending, ContainerStatus.Running})
 
 
 class PodControl(Protocol):
@@ -110,7 +113,7 @@ class ContainerRequestReader(Protocol):
 class FunctionAutoscaleControl(Protocol):
     def start_function_container(self, stub_id: str) -> bool: ...
 
-    def unclaimed_task_count(self, stub_id: str) -> int: ...
+    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
@@ -130,9 +133,14 @@ class EndpointAutoscalingDispatchObservation:
 
 
 class EndpointAutoscalingDispatchReader(Protocol):
-    def active_count(self, stub_id: str) -> int: ...
+    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
-    def list_by_stub(self, stub_id: str) -> list[EndpointAutoscalingDispatchObservation]: ...
+    def observations_by_stub(
+        self,
+        stub_ids: Sequence[str],
+        *,
+        finished_since: datetime,
+    ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]: ...
 
 
 class AutoscaleAction(ContractModel):
@@ -232,6 +240,20 @@ class ScalePlan:
     tasks_per_container: int = 1
 
 
+@dataclass(frozen=True, slots=True)
+class AutoscalingSignal:
+    value: int
+    endpoint_dispatches: tuple[EndpointAutoscalingDispatchObservation, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AutoscalingPlacementSnapshot:
+    stubs: tuple[StubRecord, ...]
+    active_by_stub: Mapping[str, bool]
+    containers_by_stub: Mapping[str, tuple[ContainerRecord, ...]]
+    scheduler_statuses: Mapping[str, SchedulerContainerStatus]
+
+
 class WorkloadAutoscaler(Protocol):
     """The part of autoscaling that is genuinely per kind.
 
@@ -251,7 +273,7 @@ class WorkloadAutoscaler(Protocol):
 
     def selects(self, stub: StubRecord) -> bool: ...
 
-    def sample(self, stub: StubRecord) -> int: ...
+    def samples(self, stubs: Sequence[StubRecord]) -> Mapping[str, AutoscalingSignal]: ...
 
     def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan: ...
 
@@ -272,6 +294,7 @@ class WorkloadAutoscaler(Protocol):
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
+        signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]: ...
 
@@ -299,21 +322,51 @@ class AutoscalingDriver:
         now: datetime | None = None,
         limit: int = 100,
     ) -> list[AutoscaleResult]:
-        current_time = now or utc_now()
-        stubs = [
+        stubs = tuple(
             stub
             for stub in self.services.scheduler_workloads.list_stubs()
             if self.workload.selects(stub) and _autoscaling_enabled(stub)
-        ]
+        )
+        snapshot = load_autoscaling_placement_snapshot(
+            self.services,
+            self.container_states,
+            stubs,
+            now=now,
+        )
+        return self.reconcile_snapshot(snapshot, now=now, limit=limit)
+
+    def reconcile_snapshot(
+        self,
+        snapshot: AutoscalingPlacementSnapshot,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> list[AutoscaleResult]:
+        current_time = now or utc_now()
+        stubs = [
+            stub
+            for stub in snapshot.stubs
+            if self.workload.selects(stub) and _autoscaling_enabled(stub)
+        ][: max(limit, 0)]
+        signals = self.workload.samples(stubs)
         results: list[AutoscaleResult] = []
-        for stub in stubs[: max(limit, 0)]:
+        for stub in stubs:
             token = token_urlsafe(16)
             lock_key = self._lock_key(stub)
             if not self._acquire_lock(lock_key, token):
                 results.append(self._record_lock_contention(stub, lock_key))
                 continue
             try:
-                results.append(self.reconcile_stub(stub, now=current_time))
+                results.append(
+                    self._reconcile_stub(
+                        stub,
+                        active=snapshot.active_by_stub.get(stub.id, False),
+                        containers=list(snapshot.containers_by_stub.get(stub.id, ())),
+                        scheduler_statuses=snapshot.scheduler_statuses,
+                        signal=signals.get(stub.id, AutoscalingSignal(value=0)),
+                        now=current_time,
+                    )
+                )
             finally:
                 self._release_lock(lock_key, token)
         return results
@@ -324,13 +377,34 @@ class AutoscalingDriver:
         *,
         now: datetime | None = None,
     ) -> AutoscaleResult:
-        current_time = now or utc_now()
-        identity = self.workload.identity
-        active = _deployment_active(self.services, stub)
-        containers = _containers_for_stub(self.services, stub)
-        scheduler_statuses = self.container_states.container_statuses(
-            [container.id for container in _active_containers(containers)]
+        snapshot = load_autoscaling_placement_snapshot(
+            self.services,
+            self.container_states,
+            (stub,),
+            now=now,
         )
+        signals = self.workload.samples((stub,))
+        return self._reconcile_stub(
+            stub,
+            active=snapshot.active_by_stub.get(stub.id, False),
+            containers=list(snapshot.containers_by_stub.get(stub.id, ())),
+            scheduler_statuses=snapshot.scheduler_statuses,
+            signal=signals.get(stub.id, AutoscalingSignal(value=0)),
+            now=now or utc_now(),
+        )
+
+    def _reconcile_stub(
+        self,
+        stub: StubRecord,
+        *,
+        active: bool,
+        containers: list[ContainerRecord],
+        scheduler_statuses: Mapping[str, SchedulerContainerStatus],
+        signal: AutoscalingSignal,
+        now: datetime,
+    ) -> AutoscaleResult:
+        current_time = now
+        identity = self.workload.identity
         holding, stale = _partition_backed_containers(
             containers,
             scheduler_statuses,
@@ -340,8 +414,7 @@ class AutoscalingDriver:
         actions = self._recover(stale)
         current = len(holding)
         pending = _pending_container_count(holding)
-        signal = self.workload.sample(stub)
-        plan = self.workload.plan(stub, signal=signal, current=current)
+        plan = self.workload.plan(stub, signal=signal.value, current=current)
         # A container that fails on startup frees the slot it was counted in, so
         # the signal still reads as unserved and the next tick provisions again.
         # `max_containers` does not bound that — nothing is ever alive to count
@@ -391,6 +464,7 @@ class AutoscalingDriver:
                     -delta,
                     scheduler_statuses=scheduler_statuses,
                     active_instance=active and not failure_threshold_reached,
+                    signal=signal,
                     now=current_time,
                 )
             )
@@ -399,7 +473,7 @@ class AutoscalingDriver:
             stub_id=stub.id,
             workspace_id=stub.workspace_id,
             signal_name=identity.signal_name,
-            signal_value=signal,
+            signal_value=signal.value,
             current_containers=current,
             pending_containers=pending,
             desired_containers=desired,
@@ -634,8 +708,9 @@ class FunctionAutoscaler:
         # it leaves a fan-out being served one container at a time.
         return stub.kind is StubKind.Function
 
-    def sample(self, stub: StubRecord) -> int:
-        return self.functions.unclaimed_task_count(stub.id)
+    def samples(self, stubs: Sequence[StubRecord]) -> Mapping[str, AutoscalingSignal]:
+        counts = self.functions.unclaimed_task_counts([stub.id for stub in stubs])
+        return {stub.id: AutoscalingSignal(value=counts.get(stub.id, 0)) for stub in stubs}
 
     def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan:
         config = _function_autoscaler_config(stub.config)
@@ -670,6 +745,7 @@ class FunctionAutoscaler:
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
+        signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]:
         """Remove containers only where nothing else will.
@@ -685,7 +761,7 @@ class FunctionAutoscaler:
         run is, and a handler that is not idempotent would run it twice.
         """
 
-        del scheduler_statuses, active_instance, now
+        del scheduler_statuses, active_instance, signal, now
         if stub.config.runtime.keep_warm >= 0:
             return []
         # Every container the excess was counted from, starting ones included.
@@ -727,8 +803,25 @@ class EndpointAutoscaler:
     def selects(self, stub: StubRecord) -> bool:
         return stub.kind in {StubKind.Endpoint, StubKind.Asgi} and bool(stub.deployment_id)
 
-    def sample(self, stub: StubRecord) -> int:
-        return self.dispatches.active_count(stub.id)
+    def samples(self, stubs: Sequence[StubRecord]) -> Mapping[str, AutoscalingSignal]:
+        stub_ids = [stub.id for stub in stubs]
+        current_time = utc_now()
+        keep_warm_seconds = max(
+            (_endpoint_autoscaler_config(stub.config).keep_warm_seconds for stub in stubs),
+            default=0,
+        )
+        counts = self.dispatches.active_counts_by_stub(stub_ids)
+        observations = self.dispatches.observations_by_stub(
+            stub_ids,
+            finished_since=current_time - timedelta(seconds=max(keep_warm_seconds, 0)),
+        )
+        return {
+            stub.id: AutoscalingSignal(
+                value=counts.get(stub.id, 0),
+                endpoint_dispatches=tuple(observations.get(stub.id, ())),
+            )
+            for stub in stubs
+        }
 
     def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan:
         config = _endpoint_autoscaler_config(stub.config)
@@ -759,13 +852,13 @@ class EndpointAutoscaler:
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
+        signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]:
         del active_instance
         actions: list[AutoscaleAction] = []
         for container in _stoppable_endpoint_containers(
-            self.dispatches,
-            stub,
+            list(signal.endpoint_dispatches),
             containers,
             scheduler_statuses,
             keep_warm_seconds=_endpoint_autoscaler_config(stub.config).keep_warm_seconds,
@@ -804,8 +897,19 @@ class PodAutoscaler:
             stub.kind is StubKind.Sandbox or bool(stub.deployment_id)
         )
 
-    def sample(self, stub: StubRecord) -> int:
-        return _pod_total_connections(self.redis, stub.workspace_id, stub.id)
+    def samples(self, stubs: Sequence[StubRecord]) -> Mapping[str, AutoscalingSignal]:
+        if not stubs:
+            return {}
+        values = self.redis.mget(
+            [
+                self.redis.key(pod_total_connections_key(stub.workspace_id, stub.id))
+                for stub in stubs
+            ]
+        )
+        return {
+            stub.id: AutoscalingSignal(value=_redis_non_negative_int(value))
+            for stub, value in zip(stubs, values, strict=True)
+        }
 
     def plan(self, stub: StubRecord, *, signal: int, current: int) -> ScalePlan:
         config = _pod_autoscaler_config(stub)
@@ -838,9 +942,10 @@ class PodAutoscaler:
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         active_instance: bool,
+        signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]:
-        del scheduler_statuses
+        del scheduler_statuses, signal
         workspace_id = stub.workspace_id
         # A sandbox is held by its lock rather than by a window, which is the
         # same distinction `keep_warm_lock_authoritative` states below.
@@ -1150,37 +1255,58 @@ def _autoscaler_error(actions: list[dict[str, JsonValue]]) -> str:
     return ""
 
 
-def _deployment_active(services: SchedulerServices, stub: StubRecord) -> bool:
-    if stub.app_id:
-        try:
-            app = services.apps.get(stub.app_id, workspace=stub.workspace_id)
-        except NotFoundError:
-            return False
-        if not app.active:
-            return False
-    if not stub.deployment_id:
-        return True
-    try:
-        deployment = services.deployments.get(stub.deployment_id)
-    except NotFoundError:
-        return False
-    return deployment.active and deployment.deleted_at is None
-
-
-def _containers_for_stub(
+def load_autoscaling_placement_snapshot(
     services: SchedulerServices,
-    stub: StubRecord,
-) -> list[ContainerRecord]:
-    containers = services.containers.list(workspace_id=stub.workspace_id)
-    return [container for container in containers if container.stub_id == stub.id]
+    container_states: SchedulerContainerStateReader,
+    stubs: Sequence[StubRecord],
+    *,
+    now: datetime | None = None,
+) -> AutoscalingPlacementSnapshot:
+    selected = tuple(stubs)
+    if not selected:
+        return AutoscalingPlacementSnapshot(
+            stubs=(),
+            active_by_stub={},
+            containers_by_stub={},
+            scheduler_statuses={},
+        )
+    current_time = now or utc_now()
+    failed_window_seconds = max(
+        (_failed_container_window_seconds(stub.config) for stub in selected),
+        default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
+    )
+    stub_ids = [stub.id for stub in selected]
+    app_ids = [stub.app_id for stub in selected if stub.app_id]
+    deployment_ids = [stub.deployment_id for stub in selected if stub.deployment_id]
+    with services.context.database.session() as session:
+        containers = ContainerRepository(session).autoscaling_candidates(
+            stub_ids=stub_ids,
+            failed_since=current_time - timedelta(seconds=max(failed_window_seconds, 0)),
+        )
+        active_apps = AppRepository(session).active_by_ids(app_ids)
+        active_deployments = DeploymentRepository(session).active_by_ids(deployment_ids)
+    grouped: dict[str, list[ContainerRecord]] = {stub_id: [] for stub_id in stub_ids}
+    for container in containers:
+        if container.stub_id in grouped:
+            grouped[container.stub_id].append(container)
+    active_by_stub = {
+        stub.id: (not stub.app_id or active_apps.get(stub.app_id, False))
+        and (not stub.deployment_id or active_deployments.get(stub.deployment_id, False))
+        for stub in selected
+    }
+    scheduler_statuses = container_states.container_statuses(
+        [container.id for container in containers if container.status in _LIVE_CONTAINER_STATUSES]
+    )
+    return AutoscalingPlacementSnapshot(
+        stubs=selected,
+        active_by_stub=active_by_stub,
+        containers_by_stub={key: tuple(value) for key, value in grouped.items()},
+        scheduler_statuses=scheduler_statuses,
+    )
 
 
 def _active_containers(containers: list[ContainerRecord]) -> list[ContainerRecord]:
-    return [
-        container
-        for container in containers
-        if container.status in {ContainerStatus.Pending, ContainerStatus.Running}
-    ]
+    return [container for container in containers if container.status in _LIVE_CONTAINER_STATUSES]
 
 
 def _partition_backed_containers(
@@ -1288,15 +1414,13 @@ def _recent_failed_container_ids(
 
 
 def _stoppable_endpoint_containers(
-    dispatches: EndpointAutoscalingDispatchReader,
-    stub: StubRecord,
+    dispatch_records: list[EndpointAutoscalingDispatchObservation],
     containers: list[ContainerRecord],
     scheduler_statuses: Mapping[str, SchedulerContainerStatus],
     *,
     keep_warm_seconds: int,
     now: datetime,
 ) -> list[ContainerRecord]:
-    dispatch_records = dispatches.list_by_stub(stub.id)
     candidates = [
         container
         for container in containers

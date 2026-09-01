@@ -102,8 +102,25 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
         ),
         Index("ix_containers_status_created", "status", "created_at", "id"),
         Index("ix_containers_stub", "stub_id"),
+        Index(
+            "ix_containers_stub_autoscaling",
+            "stub_id",
+            "status",
+            "finished_at",
+            "created_at",
+            "id",
+            postgresql_where=text("status IN ('pending', 'running', 'failed')"),
+            sqlite_where=text("status IN ('pending', 'running', 'failed')"),
+        ),
         Index("ix_containers_worker_status", "worker_id", "status"),
         Index("ix_containers_machine_status", "machine_id", "status"),
+        Index(
+            "ix_containers_live_expiry",
+            "expires_at",
+            "id",
+            postgresql_where=text("expires_at IS NOT NULL AND status IN ('pending', 'running')"),
+            sqlite_where=text("expires_at IS NOT NULL AND status IN ('pending', 'running')"),
+        ),
         Index(
             "ix_containers_unsettled_preemption",
             "finished_at",
@@ -153,6 +170,7 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     image: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     termination_reason: Mapped[str] = mapped_column(
         String(80),

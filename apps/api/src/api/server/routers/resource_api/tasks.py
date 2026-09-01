@@ -18,8 +18,6 @@ from shared.http.tasks import (
     TaskCountByDeploymentListResponse,
     TaskCountByDeploymentResponse,
     TaskDetailResponse,
-    TaskLogEntryResponse,
-    TaskLogListResponse,
     TaskMetricsSummaryResponse,
     TaskPageResponse,
     TaskResponse,
@@ -246,22 +244,6 @@ def task_call_graph(
     return FunctionControlService(services).function_call_graph(
         task_id,
         workspace_id=workspace_id,
-    )
-
-
-@router.get(
-    "/api/v1/tasks/{task_id}/logs",
-    response_model=TaskLogListResponse,
-    operation_id="get_task_logs",
-)
-def task_logs(
-    task_id: str,
-    workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-) -> TaskLogListResponse:
-    _management(services).workspace_task(workspace_id, task_id)
-    return TaskLogListResponse(
-        logs=[TaskLogEntryResponse.model_validate(item) for item in services.tasks.logs(task_id)]
     )
 
 

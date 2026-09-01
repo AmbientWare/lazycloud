@@ -39,6 +39,7 @@ from pydantic import BaseModel, JsonValue
 from shared.app_lifecycle import (
     UNFINISHED_APP_LIFECYCLE_STATES,
     AppDeploymentIntentTarget,
+    AppLifecycleState,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRecord
@@ -173,6 +174,22 @@ class AppRepository:
         """
 
         return names_by_id(self.session, AppTable.id, AppTable.name, app_ids)
+
+    def active_by_ids(self, app_ids: Sequence[str]) -> dict[str, bool]:
+        wanted = tuple(dict.fromkeys(app_ids))
+        active = {app_id: False for app_id in wanted}
+        if not wanted:
+            return active
+        rows = self.session.scalars(
+            select(AppTable.id).where(
+                AppTable.id.in_(wanted),
+                AppTable.lifecycle_state == AppLifecycleState.Active.value,
+                AppTable.deleted_at.is_(None),
+            )
+        )
+        for app_id in rows:
+            active[str(app_id)] = True
+        return active
 
     def get_across_workspaces(
         self,
@@ -807,8 +824,8 @@ class DeploymentRepository:
         active: bool | None = None,
         include_deleted: bool = False,
     ) -> list[Deployment]:
-        return _filtered_deployments(
-            self.records.list(workspace_id=workspace_id),
+        return self._list(
+            workspace_id=workspace_id,
             app_id=app_id,
             active=active,
             include_deleted=include_deleted,
@@ -822,28 +839,51 @@ class DeploymentRepository:
         include_deleted: bool = False,
     ) -> list[Deployment]:
         """Operator/system listing over every workspace's deployments."""
-        return _filtered_deployments(
-            self.records.list_across_workspaces(),
+        return self._list(
+            workspace_id=None,
             app_id=app_id,
             active=active,
             include_deleted=include_deleted,
         )
 
+    def active_by_ids(self, deployment_ids: Sequence[str]) -> dict[str, bool]:
+        wanted = tuple(dict.fromkeys(deployment_ids))
+        active = {deployment_id: False for deployment_id in wanted}
+        if not wanted:
+            return active
+        rows = self.session.scalars(
+            select(DeploymentTable.id).where(
+                DeploymentTable.id.in_(wanted),
+                DeploymentTable.active.is_(True),
+                DeploymentTable.deleted_at.is_(None),
+            )
+        )
+        for deployment_id in rows:
+            active[str(deployment_id)] = True
+        return active
 
-def _filtered_deployments(
-    deployments: list[Deployment],
-    *,
-    app_id: str | None,
-    active: bool | None,
-    include_deleted: bool,
-) -> list[Deployment]:
-    if app_id is not None:
-        deployments = [deployment for deployment in deployments if deployment.app_id == app_id]
-    if active is not None:
-        deployments = [deployment for deployment in deployments if deployment.active is active]
-    if include_deleted:
-        return deployments
-    return [deployment for deployment in deployments if deployment.deleted_at is None]
+    def _list(
+        self,
+        *,
+        workspace_id: str | None,
+        app_id: str | None,
+        active: bool | None,
+        include_deleted: bool,
+    ) -> list[Deployment]:
+        statement = select(DeploymentTable)
+        if workspace_id is not None:
+            statement = statement.where(DeploymentTable.workspace_id == workspace_id)
+        if app_id is not None:
+            statement = statement.where(DeploymentTable.app_id == app_id)
+        if active is not None:
+            statement = statement.where(DeploymentTable.active.is_(active))
+        if not include_deleted:
+            statement = statement.where(DeploymentTable.deleted_at.is_(None))
+        statement = statement.order_by(
+            DeploymentTable.created_at.desc(),
+            DeploymentTable.id.asc(),
+        )
+        return [Deployment.model_validate(row.payload) for row in self.session.scalars(statement)]
 
 
 def _visible_deployment(
@@ -1022,3 +1062,28 @@ class CronJobRepository:
     def list_across_workspaces(self) -> list[CronJobRecord]:
         """Scheduler-owned listing over every workspace's cron jobs."""
         return self.records.list_across_workspaces()
+
+    def due_across_workspaces(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[CronJobRecord]:
+        if limit <= 0:
+            return []
+        statement = (
+            select(CronJobTable)
+            .where(
+                CronJobTable.enabled.is_(True),
+                CronJobTable.next_run_at.is_not(None),
+                CronJobTable.next_run_at <= now,
+            )
+            .order_by(
+                CronJobTable.next_run_at.asc().nulls_first(),
+                CronJobTable.id.asc(),
+            )
+            .limit(limit)
+        )
+        return [
+            CronJobRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
